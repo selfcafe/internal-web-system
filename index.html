@@ -4,7 +4,7 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0">
   <title>セルフカフェスタッフ</title>
-  <link rel="manifest" href="/manifest.json">
+  <link rel="manifest" href="manifest.json">
   <link rel="apple-touch-icon" href="/apple-touch-icon.png">
   <meta name="apple-mobile-web-app-capable" content="yes">
   <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -3056,16 +3056,14 @@ function saveStorePw(storeId) {
   const msg = document.getElementById('store-pw-msg');
   if (!pw) { if(msg){msg.style.color='#ef4444';msg.textContent='パスワードを入力してください';setTimeout(()=>{msg.textContent='';},2000);} return; }
   const allPws = JSON.parse(localStorage.getItem(STORE_PW_KEY) || '{}');
-  const defaultMap = _storeToDefaultPw();
   const conflict = Object.entries(STORES).find(([sid]) => {
     if (sid === storeId) return false;
-    return (allPws[sid] || defaultMap[sid]) === pw;
+    return allPws[sid] === pw;
   });
   if (conflict) {
     if(msg){msg.style.color='#ef4444';msg.textContent=`「${esc(STORES[conflict[0]]||conflict[0])}」で使用中のパスワードです`;setTimeout(()=>{msg.textContent='';},3000);}
     return;
   }
-  const allPws = JSON.parse(localStorage.getItem(STORE_PW_KEY) || '{}');
   if (allPws['__admin__'] === pw) {
     if(msg){msg.style.color='#ef4444';msg.textContent='管理者パスワードと同じパスワードは使用できません';setTimeout(()=>{msg.textContent='';},3000);}
     return;
