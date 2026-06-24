@@ -598,6 +598,9 @@ async function initGas() {
     if (!gasKeys.has('deleted_stores')  && localStorage.getItem(DELETED_STORES_KEY)) _syncDeletedStores();
     loadCustomStores();
     loadDeletedStores();
+    // パスワード一覧が開いている場合は再描画
+    const pwList = document.getElementById('store-pw-list');
+    if (pwList && pwList.innerHTML) pwList.innerHTML = buildStorePwList();
   } catch(e) { console.error('GAS init error:', e); }
 }
 
@@ -3126,7 +3129,11 @@ populateLoginStoreSelect();
   if (sessionStorage.getItem('admin_authed') === '1' || isSiteAuthed()) {
     document.getElementById('site-lock').classList.add('hidden');
   }
+  // GAS読み込み中はログインボタンを無効化
+  const loginBtn = document.querySelector('button.btn-pin-submit');
+  if (loginBtn) { loginBtn.disabled = true; loginBtn.textContent = '読み込み中…'; }
   await initGas();
+  if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = 'ログイン'; }
   _initRealtime();
   if (isAuthed()) {
     showPage('admin');
