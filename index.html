@@ -371,12 +371,11 @@
     </div>
   </div>
 
-  <!-- 棚卸表タブ（準備中） -->
+  <!-- 棚卸表タブ -->
   <div id="partner-tab-inventory" class="partner-tab-content">
-    <div class="partner-coming-soon">
-      <div class="soon-icon"></div>
-      <div class="soon-label">棚卸表</div>
-      <div style="font-size:13px;margin-top:6px;color:#bbb">準備中です</div>
+    <div style="max-width:900px">
+      <div style="font-weight:700;font-size:15px;color:#22703d;margin-bottom:12px">棚卸表</div>
+      <div id="inventory-table-wrap"></div>
     </div>
   </div>
 
@@ -849,6 +848,78 @@ function applyTimeMsg() {
   });
 }
 
+/* ===== 棚卸表 ===== */
+const INVENTORY_KEY = 'inventory_data';
+
+function getInventoryData(storeId) {
+  const all = JSON.parse(localStorage.getItem(INVENTORY_KEY) || '{}');
+  return all[storeId] || {};
+}
+function setInventoryData(storeId, data) {
+  const all = JSON.parse(localStorage.getItem(INVENTORY_KEY) || '{}');
+  all[storeId] = data;
+  localStorage.setItem(INVENTORY_KEY, JSON.stringify(all));
+}
+function updateInventoryField(idx, field, value) {
+  const products = getAvailableProducts(storeTab).filter(p => p.name !== 'その他');
+  const p = products[idx];
+  if (!p) return;
+  const data = getInventoryData(storeTab);
+  if (!data[p.name]) data[p.name] = {};
+  data[p.name][field] = value;
+  setInventoryData(storeTab, data);
+}
+
+function renderInventory() {
+  const wrap = document.getElementById('inventory-table-wrap');
+  if (!wrap) return;
+  const products = getAvailableProducts(storeTab).filter(p => p.name !== 'その他');
+  if (!products.length) {
+    wrap.innerHTML = '<div style="color:#aaa;padding:20px">商品が設定されていません</div>';
+    return;
+  }
+  const data = getInventoryData(storeTab);
+  const inputStyle = 'padding:4px 6px;border:1px solid #d1d5db;border-radius:4px;font-size:13px;background:white';
+  const rows = products.map((p, i) => {
+    const d = data[p.name] || {};
+    const caseLabel = p.caseUnit || '―';
+    return `<tr style="border-bottom:1px solid #f0f0f0">
+      <td style="padding:8px 10px;font-size:13px">${esc(p.label)}</td>
+      <td style="padding:8px 10px;font-size:12px;color:#666;white-space:nowrap">${esc(caseLabel)}</td>
+      <td style="padding:6px 8px;text-align:center">
+        <input type="number" min="0" step="1" value="${esc(d.qty||'')}" placeholder="0"
+          style="${inputStyle};width:70px;text-align:right"
+          onchange="updateInventoryField(${i},'qty',this.value)">
+      </td>
+      <td style="padding:6px 8px">
+        <input type="date" value="${esc(d.exp1||'')}" style="${inputStyle}"
+          onchange="updateInventoryField(${i},'exp1',this.value)">
+      </td>
+      <td style="padding:6px 8px">
+        <input type="date" value="${esc(d.exp2||'')}" style="${inputStyle}"
+          onchange="updateInventoryField(${i},'exp2',this.value)">
+      </td>
+      <td style="padding:6px 8px">
+        <input type="date" value="${esc(d.exp3||'')}" style="${inputStyle}"
+          onchange="updateInventoryField(${i},'exp3',this.value)">
+      </td>
+    </tr>`;
+  }).join('');
+  wrap.innerHTML = `<div style="overflow-x:auto">
+    <table style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+      <thead><tr style="background:#22703d;color:white">
+        <th style="padding:9px 12px;font-size:13px;text-align:left;white-space:nowrap">商品名</th>
+        <th style="padding:9px 12px;font-size:13px;text-align:left;white-space:nowrap">ケース・入り数</th>
+        <th style="padding:9px 12px;font-size:13px;text-align:center;white-space:nowrap">数量</th>
+        <th style="padding:9px 12px;font-size:13px;text-align:left;white-space:nowrap">消費期限①</th>
+        <th style="padding:9px 12px;font-size:13px;text-align:left;white-space:nowrap">消費期限②</th>
+        <th style="padding:9px 12px;font-size:13px;text-align:left;white-space:nowrap">消費期限③</th>
+      </tr></thead>
+      <tbody>${rows}</tbody>
+    </table>
+  </div>`;
+}
+
 /* ===== パートナーポータル タブ切り替え ===== */
 let partnerTabCurrent = 'order';
 async function switchPartnerTab(tab) {
@@ -863,6 +934,9 @@ async function switchPartnerTab(tab) {
     renderLostItems(true); // ローディング表示
     await loadLostItemsFromDb(storeTab);
     renderLostItems();
+  }
+  if (tab === 'inventory') {
+    renderInventory();
   }
 }
 
