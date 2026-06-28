@@ -1663,7 +1663,7 @@ function renderStore() {
       const reqCell = showReq ? (isLocked
         ? `<td class="c-req" data-label="依頼日"${rowspanAttr} style="vertical-align:middle;font-size:13px;font-weight:600;text-align:center">${esc(row.requestDate)}</td>`
         : `<td class="c-req" data-label="依頼日"${rowspanAttr} style="vertical-align:middle">
-            <input type="date" value="${esc(row.requestDate)}" onchange="updStoreGroup('${gid}',this.value)">
+            <input type="date" value="${esc(row.requestDate)}" min="${new Date().toLocaleDateString('sv')}" onchange="updStoreGroup('${gid}',this.value)">
           </td>`) : '';
 
       tr.innerHTML = `
