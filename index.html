@@ -807,7 +807,7 @@ function purgeHistory() {
 }
 
 const uid     = () => Date.now().toString(36) + Math.random().toString(36).slice(2);
-const today   = () => new Date().toISOString().slice(0,10);
+const today   = () => new Date().toLocaleDateString('sv');
 const fmtDate = ts => ts ? new Date(ts).toLocaleDateString('ja-JP') : '';
 const overdue = d  => !!d && d < today();
 const esc     = s  => (s == null ? '' : String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
