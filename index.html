@@ -541,7 +541,7 @@ function _dbToRow(r) {
     note: r.note,
     locked: r.locked,
     isNew: r.is_new,
-    requestDate: (r.request_date || '').slice(0, 10),
+    requestDate: (!r.locked && (r.request_date || '').slice(0, 10) < new Date().toLocaleDateString('sv')) ? new Date().toLocaleDateString('sv') : (r.request_date || '').slice(0, 10),
     orderDate: (r.order_date || '').slice(0, 10),
     deliveryDate: (r.delivery_date || '').slice(0, 10),
     createdAt: r.created_at,
