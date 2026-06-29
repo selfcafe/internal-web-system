@@ -299,18 +299,21 @@
   <div class="site-lock-box">
     <h2>セルフカフェ社内ポータル</h2>
     <p>パスワードを入力してください</p>
-    <div style="position:relative">
-      <input class="pin-input" id="site-pw-input" type="password" placeholder="パスワード"
-        onkeydown="if(event.key==='Enter')submitSiteLogin()" style="padding-right:52px">
-      <button type="button" tabindex="-1"
-        style="position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;padding:4px;color:#aaa;font-size:22px;line-height:1;user-select:none"
-        onmousedown="showPwField('site-pw-input',event)" onmouseup="hidePwField('site-pw-input')" onmouseleave="hidePwField('site-pw-input')"
-        ontouchstart="showPwField('site-pw-input',event)" ontouchend="hidePwField('site-pw-input')">
-        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
-      </button>
-    </div>
-    <div class="pin-error" id="site-pw-error"></div>
-    <button class="btn-pin-submit" onclick="submitSiteLogin()">ログイン</button>
+    <form id="site-login-form" onsubmit="submitSiteLogin(); return false;" autocomplete="on">
+      <input type="text" name="username" autocomplete="username" style="display:none" aria-hidden="true">
+      <div style="position:relative">
+        <input class="pin-input" id="site-pw-input" type="password" name="password"
+          autocomplete="current-password" placeholder="パスワード" style="padding-right:52px">
+        <button type="button" tabindex="-1"
+          style="position:absolute;right:12px;top:50%;transform:translateY(-50%);background:none;border:none;cursor:pointer;padding:4px;color:#aaa;font-size:22px;line-height:1;user-select:none"
+          onmousedown="showPwField('site-pw-input',event)" onmouseup="hidePwField('site-pw-input')" onmouseleave="hidePwField('site-pw-input')"
+          ontouchstart="showPwField('site-pw-input',event)" ontouchend="hidePwField('site-pw-input')">
+          <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+        </button>
+      </div>
+      <div class="pin-error" id="site-pw-error"></div>
+      <button type="submit" class="btn-pin-submit">ログイン</button>
+    </form>
   </div>
 </div>
 
@@ -1404,6 +1407,7 @@ function submitSiteLogin() {
       sessionStorage.setItem('admin_authed', '1');
       sessionStorage.setItem('last_active', String(Date.now()));
       document.getElementById('site-lock').classList.add('hidden');
+      _saveCredential('admin', val);
       showPage('admin');
     } else {
       sessionStorage.setItem('site_authed', '1');
@@ -1411,6 +1415,7 @@ function submitSiteLogin() {
       sessionStorage.setItem('last_active', String(Date.now()));
       localStorage.setItem('last_login_store', storeId);
       document.getElementById('site-lock').classList.add('hidden');
+      _saveCredential(STORES[storeId] || storeId, val);
       storeTab = storeId;
       showPage('store');
     }
@@ -1418,6 +1423,16 @@ function submitSiteLogin() {
     err.textContent = 'エラー: ' + e.message;
     console.error('submitSiteLogin:', e);
   }
+}
+
+function _saveCredential(id, password) {
+  if (!window.PasswordCredential) return;
+  try {
+    const usernameInput = document.querySelector('#site-login-form input[name="username"]');
+    if (usernameInput) usernameInput.value = id;
+    const cred = new PasswordCredential({ id, password });
+    navigator.credentials.store(cred).catch(() => {});
+  } catch(_) {}
 }
 
 /* ===== 管理者認証 ===== */
