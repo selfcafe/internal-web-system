@@ -3254,13 +3254,13 @@ function toggleStorePwSettings() {
 
 function getActiveStorePw(sid) {
   const pws = JSON.parse(localStorage.getItem(STORE_PW_KEY) || '{}');
-  return pws[sid] || '—';
+  return pws[sid] || SITE_PW;
 }
 
 function buildStorePwList() {
   const pws = JSON.parse(localStorage.getItem(STORE_PW_KEY) || '{}');
   return Object.entries(STORES).map(([sid, sname]) => {
-    const activePw = pws[sid] || '—';
+    const activePw = pws[sid] || SITE_PW;
     return `<div style="display:flex;gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid #eee;flex-wrap:wrap">
       <span style="flex:1;min-width:100px;font-size:13px">${esc(sname)}</span>
       <span style="font-size:11px;color:#888;white-space:nowrap">現在:</span><span style="font-size:12px;color:#333;background:#fef9c3;border-radius:5px;padding:4px 10px;font-family:monospace;white-space:nowrap">${esc(activePw)}</span>
