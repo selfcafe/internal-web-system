@@ -299,6 +299,7 @@
   <div class="site-lock-box">
     <h2>セルフカフェ社内ポータル</h2>
     <p>パスワードを入力してください</p>
+    <div id="site-sync-warning" style="display:none;background:#fef2f2;border:1px solid #fca5a5;color:#b91c1c;font-size:12.5px;border-radius:8px;padding:10px 12px;margin-bottom:12px;text-align:left;line-height:1.5"></div>
     <form id="site-login-form" onsubmit="submitSiteLogin(); return false;" autocomplete="on">
       <input type="text" name="username" autocomplete="username" style="display:none" aria-hidden="true">
       <div>
@@ -627,7 +628,8 @@ async function initGas() {
     // パスワード一覧が開いている場合は再描画
     const pwList = document.getElementById('store-pw-list');
     if (pwList && pwList.innerHTML) pwList.innerHTML = buildStorePwList();
-  } catch(e) { console.error('GAS init error:', e); }
+    return true;
+  } catch(e) { console.error('GAS init error:', e); return false; }
 }
 
 function _dbToLostItem(r) {
@@ -3355,8 +3357,17 @@ populateLoginStoreSelect();
   // GAS読み込み中はログインボタンを無効化
   const loginBtn = document.querySelector('button.btn-pin-submit');
   if (loginBtn) { loginBtn.disabled = true; loginBtn.textContent = '読み込み中…'; }
-  await initGas();
+  const gasOk = await initGas();
   if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = 'ログイン'; }
+  const syncWarning = document.getElementById('site-sync-warning');
+  if (syncWarning) {
+    if (!gasOk && !isAuthed() && !isSiteAuthed()) {
+      syncWarning.textContent = '⚠ データの同期に失敗しました。パスワードが正しくても認証できない場合があります。Wi-Fiを切ってモバイル回線で開き直すか、通信環境の良い場所で再読み込みしてください。';
+      syncWarning.style.display = 'block';
+    } else {
+      syncWarning.style.display = 'none';
+    }
+  }
   _initRealtime();
   if (isAuthed()) {
     showPage('admin');
