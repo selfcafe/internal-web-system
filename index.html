@@ -1543,7 +1543,7 @@ function filterProd(rowId) {
   const VENDOR_ORDER  = VENDOR_CONFIG.map(v => v.key);
   const usedProducts = new Set(storeRows.filter(r => r.id !== rowId && r.product).map(r => r.product));
   const optHTML = p => {
-    const inUse = usedProducts.has(p.name);
+    const inUse = p.name !== 'その他' && usedProducts.has(p.name);
     return `<div class="prod-option${inUse ? ' prod-in-use' : ''}" data-name="${esc(p.name)}" data-label="${esc(p.label)}"
       ${inUse ? '' : `onclick="selectProd('${rowId}','${esc(p.name)}','${esc(p.label)}')" onmouseenter="focusProdOpt(this)"`}>
       ${esc(p.label)}
