@@ -2187,6 +2187,7 @@ function showAdminTable() {
 
 let adminOverviewOpen = new Set();
 let adminOverviewDropdownStore = '';
+let _overviewStoreDataCache = [];
 
 function renderOverview() {
   document.querySelector('#page-admin .table-wrap').style.display = 'none';
@@ -2251,6 +2252,7 @@ function renderOverview() {
       ? buildStoreOrderDetail(ddStore.sid, ddStore.groups)
       : `<div style="color:#aaa;font-size:13px;padding:12px 0">依頼はありません</div>`;
 
+  _overviewStoreDataCache = storeData;
   const ddOptions =
     `<option value="" ${!adminOverviewDropdownStore ? 'selected' : ''}>――――</option>` +
     storeData.map(({sid, sname, groups}) =>
@@ -2263,7 +2265,9 @@ function renderOverview() {
       : `<div style="color:#aaa;font-size:13px;padding:8px 0;margin-bottom:12px">新着依頼はありません</div>`}
     <div style="font-size:12px;font-weight:700;color:#555;margin:18px 0 10px;letter-spacing:.5px">店舗別に確認</div>
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px;flex-wrap:wrap">
-      <select onchange="adminOverviewDropdownStore=this.value;renderOverview()"
+      <input id="overview-store-search" type="text" placeholder="店舗名で検索..." oninput="filterOverviewStoreSelect()"
+        style="border:1px solid #ddd;border-radius:6px;padding:8px 12px;font-size:14px;font-family:inherit;min-width:180px">
+      <select id="overview-store-select" onchange="adminOverviewDropdownStore=this.value;renderOverview()"
         style="border:1px solid #ddd;border-radius:6px;padding:8px 12px;font-size:14px;font-family:inherit;min-width:180px">
         ${ddOptions}
       </select>
@@ -2271,6 +2275,20 @@ function renderOverview() {
     ${ddDetail}`;
 
   updateBadges();
+}
+
+function filterOverviewStoreSelect() {
+  const q = (document.getElementById('overview-store-search')?.value || '').trim().toLowerCase();
+  const sel = document.getElementById('overview-store-select');
+  if (!sel) return;
+  const prevValue = sel.value;
+  sel.innerHTML =
+    `<option value="">――――</option>` +
+    _overviewStoreDataCache
+      .filter(({sid, sname}) => !q || sname.toLowerCase().includes(q) || sid.toLowerCase().includes(q))
+      .map(({sid, sname, groups}) => `<option value="${esc(sid)}">${esc(sname)}（${groups.length}件）</option>`)
+      .join('');
+  sel.value = [...sel.options].some(o => o.value === prevValue) ? prevValue : '';
 }
 
 function toggleOverviewStore(sid) {
