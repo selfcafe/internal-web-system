@@ -79,6 +79,15 @@ function ensureHeaders(sheet, cols) {
   if (sheet.getLastRow() === 0) sheet.appendRow(cols);
 }
 
+// "YYYY-MM-DD"のような文字列を書き込むと、スプレッドシートが自動的に
+// 日付型セルへ変換してしまい、読み出し時にDate型がUTCへ変換されて
+// 1日ずれることがある（JSTでは日付が1日前になる）。読み出し時にDate型を
+// 検出し、正しいタイムゾーンの文字列へ戻す。
+function _dateStr(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  return v || null;
+}
+
 function sheetRows(sheet, cols) {
   if (sheet.getLastRow() <= 1) return [];
   const data = sheet.getDataRange().getValues();
@@ -107,9 +116,9 @@ function getOrders() {
     note:          r.note          || null,
     locked:        r.locked === true || r.locked === 'TRUE',
     is_new:        r.is_new  === true || r.is_new  === 'TRUE',
-    request_date:  r.request_date  || null,
-    order_date:    r.order_date    || null,
-    delivery_date: r.delivery_date || null,
+    request_date:  _dateStr(r.request_date),
+    order_date:    _dateStr(r.order_date),
+    delivery_date: _dateStr(r.delivery_date),
     created_at:    r.created_at    || null,
     denied:        r.denied === true || r.denied === 'TRUE',
     image_url:     r.image_url     || null,
@@ -134,7 +143,15 @@ function saveOrders(storeId, rows) {
     const newRows = rows.map(r =>
       ORDER_COLS.map(c => (r[c] === undefined || r[c] === null) ? '' : r[c])
     );
-    sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, ORDER_COLS.length).setValues(newRows);
+    const startRow = sheet.getLastRow() + 1;
+    // request_date/order_date/delivery_dateが自動的に日付型セルへ
+    // 変換され、後で読み出す際に1日ずれるのを防ぐため、書き込み前に
+    // 該当列をプレーンテキスト形式に固定しておく
+    ['request_date', 'order_date', 'delivery_date'].forEach(c => {
+      const colIdx = ORDER_COLS.indexOf(c) + 1;
+      sheet.getRange(startRow, colIdx, newRows.length, 1).setNumberFormat('@');
+    });
+    sheet.getRange(startRow, 1, newRows.length, ORDER_COLS.length).setValues(newRows);
   }
 
   return { ok: true };
@@ -172,7 +189,7 @@ function saveSetting(key, value) {
 // ----------------------------------------------------------------
 
 function getLostItems(month, storeId) {
-  let rows = sheetRows(getSheet(SHEET_LOST), LOST_COLS);
+  let rows = sheetRows(getSheet(SHEET_LOST), LOST_COLS).map(r => ({ ...r, found_date: _dateStr(r.found_date) }));
   if (month)   rows = rows.filter(r => r.found_date && String(r.found_date).startsWith(month));
   if (storeId) rows = rows.filter(r => String(r.store_id) === String(storeId));
   return rows;
