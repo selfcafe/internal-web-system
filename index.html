@@ -3467,6 +3467,9 @@ migrateProductRenames();
 purgeHistory();
 applyTimeMsg();
 populateLoginStoreSelect();
+if (!(sessionStorage.getItem('admin_authed') === '1' || isSiteAuthed())) {
+  prefillLastPassword();
+}
 
 (async () => {
   // セッションが有効な場合のみロック画面を隠す（initGasのネットワーク待ちで画面が出るのを防ぐ）
@@ -3494,7 +3497,6 @@ populateLoginStoreSelect();
     showPage('store');
   } else {
     document.getElementById('site-lock').classList.remove('hidden');
-    prefillLastPassword();
     setTimeout(() => document.getElementById('site-pw-input')?.focus(), 100);
   }
 })();
