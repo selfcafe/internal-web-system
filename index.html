@@ -548,12 +548,21 @@ function _dbToRow(r) {
   };
 }
 
-async function _syncStoreToDb(storeId, rows) {
-  try {
-    const dbRows = rows.map(r => _rowToDb(r, storeId));
-    await gasPost('saveOrders', { storeId, rows: dbRows });
-    _fbDb.ref('orders_updated').set(Date.now());
-  } catch(e) { console.error('GAS sync error:', e); }
+/* 同じ店舗への保存が重なると、通信の順序次第で古いスナップショットが
+   後から届いて上書きしてしまう（発注日・納品予定日が戻る不具合）ため、
+   店舗ごとに直列化し、実行時点の最新ORDERS_CACHEを送る */
+const _syncChain = {};
+function _syncStoreToDb(storeId, rows) {
+  const prev = _syncChain[storeId] || Promise.resolve();
+  const run = prev.catch(() => {}).then(async () => {
+    try {
+      const dbRows = (ORDERS_CACHE[storeId] || rows).map(r => _rowToDb(r, storeId));
+      await gasPost('saveOrders', { storeId, rows: dbRows });
+      _fbDb.ref('orders_updated').set(Date.now());
+    } catch(e) { console.error('GAS sync error:', e); }
+  });
+  _syncChain[storeId] = run;
+  return run;
 }
 
 async function _gasSaveSetting(key, value) {
