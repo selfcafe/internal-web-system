@@ -83,8 +83,14 @@ function ensureHeaders(sheet, cols) {
 // 日付型セルへ変換してしまい、読み出し時にDate型がUTCへ変換されて
 // 1日ずれることがある（JSTでは日付が1日前になる）。読み出し時にDate型を
 // 検出し、正しいタイムゾーンの文字列へ戻す。
+// ※Session.getScriptTimeZone()はスクリプトプロジェクトの設定であり、
+//   スプレッドシート自体のタイムゾーンと一致するとは限らないため、
+//   日付型への変換が実際に発生したスプレッドシート側のタイムゾーンを使う。
 function _dateStr(v) {
-  if (v instanceof Date) return Utilities.formatDate(v, Session.getScriptTimeZone(), 'yyyy-MM-dd');
+  if (v instanceof Date) {
+    const tz = SpreadsheetApp.openById(SHEET_ID).getSpreadsheetTimeZone();
+    return Utilities.formatDate(v, tz, 'yyyy-MM-dd');
+  }
   return v || null;
 }
 
