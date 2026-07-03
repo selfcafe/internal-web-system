@@ -551,6 +551,7 @@ function _dbToRow(r) {
 /* 同じ店舗への保存が重なると、通信の順序次第で古いスナップショットが
    後から届いて上書きしてしまう（発注日・納品予定日が戻る不具合）ため、
    店舗ごとに直列化し、実行時点の最新ORDERS_CACHEを送る */
+const _CLIENT_ID = Date.now().toString(36) + Math.random().toString(36).slice(2);
 const _syncChain = {};
 function _syncStoreToDb(storeId, rows) {
   const prev = _syncChain[storeId] || Promise.resolve();
@@ -558,7 +559,7 @@ function _syncStoreToDb(storeId, rows) {
     try {
       const dbRows = (ORDERS_CACHE[storeId] || rows).map(r => _rowToDb(r, storeId));
       await gasPost('saveOrders', { storeId, rows: dbRows });
-      _fbDb.ref('orders_updated').set(Date.now());
+      _fbDb.ref('orders_updated').set({ ts: Date.now(), by: _CLIENT_ID });
     } catch(e) { console.error('GAS sync error:', e); }
   });
   _syncChain[storeId] = run;
@@ -651,8 +652,13 @@ function _notifyLostChanged(storeId) {
 
 function _initRealtime() {
   let first = true;
-  _fbDb.ref('orders_updated').on('value', async () => {
+  _fbDb.ref('orders_updated').on('value', async (snap) => {
     if (first) { first = false; return; }
+    const val = snap.val();
+    // 自分自身の保存で発火した通知は無視する（再取得が保存中の
+    // ORDERS_CACHEを古いスナップショットで上書きし、直後の保存で
+    // 未送信の変更が消えてしまうのを防ぐ）
+    if (val && typeof val === 'object' && val.by === _CLIENT_ID) return;
     try {
       const orders = await gasGet('getOrders');
       Object.keys(ORDERS_CACHE).forEach(k => delete ORDERS_CACHE[k]);
