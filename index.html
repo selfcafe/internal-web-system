@@ -2997,6 +2997,11 @@ function renameVendor(idx) {
   if (!inp) return;
   const newLabel = inp.value.trim();
   if (!newLabel) return;
+  const oldLabel = VENDOR_CONFIG[idx].label;
+  if (oldLabel === '消耗品' && newLabel !== '消耗品') {
+    const ok = confirm('「消耗品」は棚卸表から除外する設定になっているカテゴリ名です。\n名前を変更すると、棚卸表からの除外が効かなくなります。\n変更後は担当者に棚卸表の設定を見直してもらってください。\n\nこのまま名前を変更しますか？');
+    if (!ok) { inp.value = oldLabel; return; }
+  }
   VENDOR_CONFIG[idx].label = newLabel;
   saveVendorConfig();
   refreshVendorRows();
