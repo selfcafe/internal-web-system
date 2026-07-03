@@ -2330,7 +2330,7 @@ function buildStoreOrderDetail(sid, groups) {
           : '';
         rows += `<tr class="${cls}">
           <td rowspan="${N}" style="vertical-align:middle;padding:8px 10px;white-space:nowrap;${topBorder}">${esc(reqDate)||'—'}${photoCell}</td>
-          <td style="padding:6px 8px;${topBorder}"><input type="date" value="${esc(row.orderDate)}" style="font-size:13px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-family:inherit" onchange="adminUpd('${sid}','${row.id}','orderDate',this.value)"></td>
+          <td rowspan="${N}" style="vertical-align:middle;padding:8px 10px;${topBorder}"><input type="date" value="${esc(first.orderDate)}" style="font-size:13px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-family:inherit" onchange="adminUpdGroup('${sid}','${esc(reqDate)}','orderDate',this.value)"></td>
           <td style="padding:6px 8px;${topBorder}"><input type="date" value="${esc(row.deliveryDate)}" style="font-size:13px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-family:inherit" onchange="adminUpd('${sid}','${row.id}','deliveryDate',this.value)"></td>
           <td style="padding:8px 10px;${topBorder}">${esc(pLabel)}</td>
           <td style="padding:8px 10px;white-space:nowrap;${topBorder}">${esc(row.qty)||'—'} <span style="font-size:11px;color:#888">${esc(unitTxt)}</span></td>
@@ -2339,7 +2339,6 @@ function buildStoreOrderDetail(sid, groups) {
         </tr>`;
       } else {
         rows += `<tr class="${cls}">
-          <td style="padding:6px 8px"><input type="date" value="${esc(row.orderDate)}" style="font-size:13px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-family:inherit" onchange="adminUpd('${sid}','${row.id}','orderDate',this.value)"></td>
           <td style="padding:6px 8px"><input type="date" value="${esc(row.deliveryDate)}" style="font-size:13px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-family:inherit" onchange="adminUpd('${sid}','${row.id}','deliveryDate',this.value)"></td>
           <td style="padding:8px 10px;padding-left:18px;border-left:3px solid #b8d8c5">${esc(pLabel)}</td>
           <td style="padding:8px 10px;white-space:nowrap">${esc(row.qty)||'—'} <span style="font-size:11px;color:#888">${esc(unitTxt)}</span></td>
