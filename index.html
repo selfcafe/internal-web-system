@@ -195,6 +195,8 @@
     .drag-handle:active { cursor:grabbing; }
     tr.drag-over td { border-top:2px solid #22703d; }
     tr.dragging { opacity:0.4; }
+    .vrow.drag-over { border-top:2px solid #22703d; }
+    .vrow.dragging { opacity:0.4; }
 
     /* ロック画面 */
     .lock-overlay { display:none; position:fixed; inset:0; background:rgba(15,23,42,.7); z-index:1000; align-items:center; justify-content:center; }
@@ -2893,7 +2895,14 @@ function buildVendorSelect() {
 
 function buildVendorRows() {
   return VENDOR_CONFIG.map((v, i) => `
-    <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+    <div class="vrow" data-vkey="${esc(v.key)}" style="display:flex;gap:6px;align-items:center;margin-bottom:6px"
+      ondragover="vendorDragOver(event)" ondrop="vendorDrop(event,'${esc(v.key)}')">
+      <span class="drag-handle" draggable="true"
+        ondragstart="vendorDragStart(event,'${esc(v.key)}')"
+        ondragend="vendorDragEnd(event)"
+        ontouchstart="vendorTouchStart(event,'${esc(v.key)}')"
+        ontouchmove="vendorTouchMove(event)"
+        ontouchend="vendorTouchEnd(event)">⠿</span>
       <input id="vname-${i}" value="${esc(v.label)}"
         style="border:1px solid #ddd;border-radius:6px;padding:6px 10px;font-size:13px;font-family:inherit;flex:1">
       <button onclick="renameVendor(${i})"
@@ -2901,6 +2910,77 @@ function buildVendorRows() {
       <button onclick="deleteVendor('${esc(v.key)}')"
         style="background:#e0e0e0;color:#555;padding:6px 10px;font-size:12px;border-radius:6px;border:none;cursor:pointer;font-family:inherit">削除</button>
     </div>`).join('');
+}
+
+/* ===== カテゴリドラッグ並び替え ===== */
+let _vendorDragKey = null;
+let _vendorTouchKey = null, _vendorTouchEl = null, _vendorTouchClone = null, _vendorTouchStartY = 0;
+
+function vendorDragStart(e, key) {
+  _vendorDragKey = key;
+  e.dataTransfer.effectAllowed = 'move';
+  setTimeout(() => e.currentTarget.closest('.vrow')?.classList.add('dragging'), 0);
+}
+function vendorDragEnd(e) {
+  e.currentTarget.closest('.vrow')?.classList.remove('dragging');
+  document.querySelectorAll('.vrow.drag-over').forEach(el => el.classList.remove('drag-over'));
+}
+function vendorDragOver(e) {
+  e.preventDefault();
+  document.querySelectorAll('.vrow.drag-over').forEach(el => el.classList.remove('drag-over'));
+  e.currentTarget.closest('.vrow')?.classList.add('drag-over');
+}
+function vendorDrop(e, key) {
+  e.preventDefault();
+  document.querySelectorAll('.vrow.drag-over').forEach(el => el.classList.remove('drag-over'));
+  applyVendorReorder(_vendorDragKey, key);
+  _vendorDragKey = null;
+}
+
+function vendorTouchStart(e, key) {
+  _vendorTouchKey    = key;
+  _vendorTouchEl     = e.currentTarget.closest('.vrow');
+  _vendorTouchStartY = e.touches[0].clientY;
+  const rect         = _vendorTouchEl.getBoundingClientRect();
+  _vendorTouchClone  = _vendorTouchEl.cloneNode(true);
+  Object.assign(_vendorTouchClone.style, {
+    position:'fixed', top:rect.top+'px', left:rect.left+'px', width:rect.width+'px',
+    opacity:'0.85', zIndex:'9999', pointerEvents:'none',
+    background:'white', boxShadow:'0 6px 20px rgba(0,0,0,.25)', borderRadius:'6px'
+  });
+  document.body.appendChild(_vendorTouchClone);
+  _vendorTouchEl.style.opacity = '0.3';
+}
+function vendorTouchMove(e) {
+  if (!_vendorTouchClone) return;
+  e.preventDefault();
+  const dy = e.touches[0].clientY - _vendorTouchStartY;
+  const rect = _vendorTouchEl.getBoundingClientRect();
+  _vendorTouchClone.style.top = (rect.top + dy) + 'px';
+}
+function vendorTouchEnd(e) {
+  if (!_vendorTouchClone) return;
+  const finalY = e.changedTouches[0].clientY;
+  document.body.removeChild(_vendorTouchClone); _vendorTouchClone = null;
+  _vendorTouchEl.style.opacity = '';
+  let targetKey = null;
+  document.querySelectorAll('.vrow[data-vkey]').forEach(row => {
+    const r = row.getBoundingClientRect();
+    if (finalY >= r.top && finalY <= r.bottom) targetKey = row.dataset.vkey;
+  });
+  applyVendorReorder(_vendorTouchKey, targetKey);
+  _vendorTouchKey = _vendorTouchEl = null;
+}
+
+function applyVendorReorder(srcKey, dstKey) {
+  if (!srcKey || !dstKey || srcKey === dstKey) return;
+  const srcIdx = VENDOR_CONFIG.findIndex(v => v.key === srcKey);
+  const dstIdx = VENDOR_CONFIG.findIndex(v => v.key === dstKey);
+  if (srcIdx < 0 || dstIdx < 0) return;
+  const [moved] = VENDOR_CONFIG.splice(srcIdx, 1);
+  VENDOR_CONFIG.splice(VENDOR_CONFIG.indexOf(VENDOR_CONFIG.find(v => v.key === dstKey)), 0, moved);
+  saveVendorConfig();
+  refreshVendorRows();
 }
 
 function refreshVendorRows() {
