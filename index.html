@@ -1569,7 +1569,7 @@ function focusProdOpt(el) {
 }
 
 function selectProd(rowId, name, label) {
-  const duplicate = storeRows.find(r => r.id !== rowId && r.product === name);
+  const duplicate = name !== 'その他' && storeRows.find(r => r.id !== rowId && r.product === name);
   if (duplicate) return;
   const el = document.getElementById('pi-'+rowId);
   if (el) el.innerHTML = label ? esc(label) : '<span class="prod-placeholder">タップして選択</span>';
