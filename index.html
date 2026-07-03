@@ -3139,6 +3139,8 @@ function renderSettings() {
         <div class="settings-accordion-body">
           <div style="font-size:12px;color:#888;margin-bottom:10px">店舗ごとに取り扱う商品を選択してください。未設定の場合は全商品が表示されます。</div>
           <div class="store-prod-cfg-wrap">
+            <input id="store-prod-cfg-search" type="text" placeholder="店舗名で検索..." oninput="filterStoreProdCfgSelect()"
+              style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:100%;margin-bottom:6px;box-sizing:border-box">
             <select id="store-prod-cfg-sel" class="store-prod-cfg-store-sel"
               onchange="renderStoreProdCfg()">
               ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}
@@ -3274,10 +3276,24 @@ function toggleStoreProdSettings() {
   if (open) renderStoreProdCfg();
 }
 
+function filterStoreProdCfgSelect() {
+  const q = (document.getElementById('store-prod-cfg-search')?.value || '').trim().toLowerCase();
+  const sel = document.getElementById('store-prod-cfg-sel');
+  if (!sel) return;
+  const prevValue = sel.value;
+  sel.innerHTML = Object.entries(STORES)
+    .filter(([sid, sname]) => !q || sname.toLowerCase().includes(q) || sid.toLowerCase().includes(q))
+    .map(([sid, sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`)
+    .join('');
+  if ([...sel.options].some(o => o.value === prevValue)) sel.value = prevValue;
+  renderStoreProdCfg();
+}
+
 function renderStoreProdCfg() {
   const sel = document.getElementById('store-prod-cfg-sel');
   const container = document.getElementById('store-prod-cfg-body');
   if (!sel || !container) return;
+  if (!sel.options.length) { container.innerHTML = '<div style="font-size:12px;color:#888">該当する店舗がありません</div>'; return; }
   const sid = sel.value;
   const cfg = getStoreProductConfig(sid);
   const selected = cfg ? new Set(cfg) : null;
