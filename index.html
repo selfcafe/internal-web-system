@@ -1201,7 +1201,7 @@ async function deleteLostItem(storeId, itemId) {
 
 function buildLostTable(items, storeId) {
   if (!items.length) return '<div style="color:#aaa;font-size:13px;padding:10px 0">該当する忘れ物はありません</div>';
-  return `<table style="width:100%;border-collapse:collapse;font-size:13px">
+  return `<table style="width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed">
     <thead><tr style="background:#c2d63a;color:#1a2a05">
       <th style="padding:8px 10px;text-align:left;font-size:12px;width:100px">発見日</th>
       <th style="padding:8px 10px;text-align:left;font-size:12px">備考</th>
@@ -2121,7 +2121,7 @@ async function renderLostAdmin() {
         <span id="admin-lost-month-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
       </div>
       <div id="admin-lost-month-body" style="display:none;padding:0 12px 12px;overflow-x:auto">
-        <table style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+        <table style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);table-layout:fixed">
           <thead><tr style="background:#c2d63a;color:#1a2a05">
             <th style="text-align:left;font-size:13px;padding:9px 10px;width:100px">発見日</th>
             <th style="text-align:left;font-size:13px;padding:9px 10px;width:130px">店舗</th>
@@ -2142,7 +2142,7 @@ async function renderLostAdmin() {
         ${storeOptions}
       </select>
     </div>
-    <table style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(34,112,61,.1)">
+    <table style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(34,112,61,.1);table-layout:fixed">
       <thead><tr style="background:#c2d63a;color:#1a2a05">
         <th style="text-align:left;font-size:13px;padding:9px 10px;width:110px">発見日</th>
         <th style="text-align:left;font-size:13px;padding:9px 10px">備考</th>
