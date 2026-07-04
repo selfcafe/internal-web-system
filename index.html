@@ -605,16 +605,21 @@ async function syncAllStoreDataToGas() {
   }
 }
 
+// 注文データはログインボタンを塞がず裏で読み込み、実際に画面を描画する
+// 直前（showPage）でだけ完了を待つ（ログインパスワード照合はsettingsのみで
+// 完結するため、注文データの取得完了を待つ理由がない）
+let _ordersReady = Promise.resolve();
+
 async function initGas() {
   try {
-    const [orders, settings] = await Promise.all([
-      gasGet('getOrders'),
-      gasGet('getSettings'),
-    ]);
-    (orders || []).forEach(r => {
-      if (!ORDERS_CACHE[r.store_id]) ORDERS_CACHE[r.store_id] = [];
-      ORDERS_CACHE[r.store_id].push(_dbToRow(r));
-    });
+    _ordersReady = gasGet('getOrders').then(orders => {
+      (orders || []).forEach(r => {
+        if (!ORDERS_CACHE[r.store_id]) ORDERS_CACHE[r.store_id] = [];
+        ORDERS_CACHE[r.store_id].push(_dbToRow(r));
+      });
+    }).catch(e => console.error('getOrders error:', e));
+
+    const settings = await gasGet('getSettings');
     const gasKeys = new Set((settings || []).map(r => r.key));
     (settings || []).forEach(r => {
       const clean = v => String(v).replace(/[\x00-\x1f]/g, '');
@@ -1456,8 +1461,9 @@ function _saveCredential(id, password) {
 const getPin   = () => _adminPin;
 const isAuthed = () => sessionStorage.getItem('admin_authed') === '1';
 
-function showPage(p) {
+async function showPage(p) {
   if (p === 'admin' && !isAuthed()) { showLock(); return; }
+  await _ordersReady; // 注文データが揃うまで待ってから描画（未読込のまま空扱いされるのを防ぐ）
   if (p === 'store') {
     const authedStore = sessionStorage.getItem('site_authed_store');
     if (authedStore && STORES[authedStore]) {

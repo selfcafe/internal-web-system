@@ -86,10 +86,17 @@ function ensureHeaders(sheet, cols) {
 // ※Session.getScriptTimeZone()はスクリプトプロジェクトの設定であり、
 //   スプレッドシート自体のタイムゾーンと一致するとは限らないため、
 //   日付型への変換が実際に発生したスプレッドシート側のタイムゾーンを使う。
+// リクエスト内で使い回すため、スプレッドシートのタイムゾーンは初回のみ取得してキャッシュする
+// （_dateStrは行ごとに呼ばれるため、毎回openByIdし直すと行数分だけ無駄な呼び出しが発生し遅くなる）
+let _cachedTz = null;
+function _sheetTz() {
+  if (!_cachedTz) _cachedTz = SpreadsheetApp.openById(SHEET_ID).getSpreadsheetTimeZone();
+  return _cachedTz;
+}
+
 function _dateStr(v) {
   if (v instanceof Date) {
-    const tz = SpreadsheetApp.openById(SHEET_ID).getSpreadsheetTimeZone();
-    return Utilities.formatDate(v, tz, 'yyyy-MM-dd');
+    return Utilities.formatDate(v, _sheetTz(), 'yyyy-MM-dd');
   }
   return v || null;
 }
@@ -206,8 +213,7 @@ function getLostItems(month, storeId) {
 function purgeOldLostItems() {
   const sheet = getSheet(SHEET_LOST);
   if (sheet.getLastRow() <= 1) return;
-  const tz = SpreadsheetApp.openById(SHEET_ID).getSpreadsheetTimeZone();
-  const limitStr = Utilities.formatDate(new Date(Date.now() - 30*24*60*60*1000), tz, 'yyyy-MM-dd');
+  const limitStr = Utilities.formatDate(new Date(Date.now() - 30*24*60*60*1000), _sheetTz(), 'yyyy-MM-dd');
   const data = sheet.getDataRange().getValues();
   const hdrs = data[0].map(String);
   const dateIdx = hdrs.indexOf('found_date');
