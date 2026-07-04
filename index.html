@@ -3573,14 +3573,14 @@ if (!(sessionStorage.getItem('admin_authed') === '1' || isSiteAuthed())) {
   let loadingTimer = null;
   if (loginBtn) {
     loginBtn.disabled = true;
-    const targetMs = 60;
+    const targetMs = 100;
     const startedAt = performance.now();
     loginBtn.textContent = `読み込み中…（${targetMs}ms）`;
     loadingTimer = setInterval(() => {
       const remain = Math.max(0, Math.round(targetMs - (performance.now() - startedAt)));
       loginBtn.textContent = `読み込み中…（${remain}ms）`;
       if (remain <= 0) clearInterval(loadingTimer);
-    }, 10);
+    }, 1);
   }
   const gasOk = await initGas();
   if (loadingTimer) clearInterval(loadingTimer);
