@@ -3573,7 +3573,7 @@ if (!(sessionStorage.getItem('admin_authed') === '1' || isSiteAuthed())) {
   let loadingTimer = null;
   if (loginBtn) {
     loginBtn.disabled = true;
-    const targetMs = 150;
+    const targetMs = 1000;
     const startedAt = performance.now();
     loginBtn.textContent = `読み込み中…（${targetMs}ms）`;
     loadingTimer = setInterval(() => {
