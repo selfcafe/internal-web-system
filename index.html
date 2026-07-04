@@ -2079,7 +2079,7 @@ async function renderLostAdmin() {
   })).sort((a,b) => (b.foundDate||'').localeCompare(a.foundDate||''));
 
   const monthRows = monthAllItems.length ? monthAllItems.map(item => `
-    <tr style="border-bottom:1px solid #eee">
+    <tr style="border-bottom:1px solid #eee" data-store="${esc(item.storeName)}">
       <td style="font-size:13px;padding:7px 10px;white-space:nowrap">${esc(item.foundDate)||'—'}</td>
       <td style="font-size:13px;padding:7px 10px;white-space:nowrap;color:#22703d;font-weight:600">${esc(item.storeName)}</td>
       <td style="font-size:13px;padding:7px 10px;word-break:break-all">${esc(item.note)}</td>
@@ -2121,7 +2121,10 @@ async function renderLostAdmin() {
         <span>月内の忘れ物（全店舗・${thisMonth}）<span id="admin-lost-month-count" style="font-size:12px;color:#888;margin-left:6px">${monthAllItems.length}件</span></span>
         <span id="admin-lost-month-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
       </div>
-      <div id="admin-lost-month-body" style="display:none;padding:0 12px 12px;overflow-x:auto">
+      <div id="admin-lost-month-body" style="display:none;padding:0 12px 12px">
+        <input type="text" id="lost-month-search" placeholder="店舗名で検索..." oninput="filterLostMonthRows(this.value)"
+          style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:6px;padding:8px 10px;font-size:13px;font-family:inherit;margin-bottom:8px">
+        <div style="overflow-x:auto">
         <table style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);table-layout:fixed">
           <thead><tr style="background:#c2d63a;color:#1a2a05">
             <th style="text-align:left;font-size:13px;padding:9px 10px;width:100px">発見日</th>
@@ -2132,13 +2135,16 @@ async function renderLostAdmin() {
           </tr></thead>
           <tbody>${monthRows}</tbody>
         </table>
+        </div>
       </div>
     </div>
 
     <!-- 店舗別一覧 -->
     <div style="display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap">
       <div style="font-weight:700;font-size:15px;color:#22703d">店舗別一覧</div>
-      <select onchange="adminLostStore=this.value;renderLostAdmin()"
+      <input type="text" placeholder="店舗名で検索..." oninput="filterStoreOptions('admin-lost-store-select', this.value)"
+        style="border:1px solid #ddd;border-radius:6px;padding:7px 12px;font-size:13px;font-family:inherit;min-width:140px">
+      <select id="admin-lost-store-select" onchange="adminLostStore=this.value;renderLostAdmin()"
         style="border:1px solid #ddd;border-radius:6px;padding:7px 12px;font-size:14px;font-family:inherit;min-width:160px">
         ${storeOptions}
       </select>
@@ -2154,6 +2160,22 @@ async function renderLostAdmin() {
       <tbody>${rows}</tbody>
     </table>
     </div>`;
+}
+
+/* 店舗選択セレクトの候補を店舗名で絞り込み */
+function filterStoreOptions(selId, query) {
+  const q = query.trim();
+  document.querySelectorAll(`#${selId} option`).forEach(opt => {
+    opt.hidden = !!(opt.value && q && !opt.textContent.includes(q));
+  });
+}
+
+/* 月内の忘れ物（全店舗）テーブルを店舗名で絞り込み */
+function filterLostMonthRows(query) {
+  const q = query.trim();
+  document.querySelectorAll('#admin-lost-month-body tbody tr[data-store]').forEach(tr => {
+    tr.style.display = (!q || tr.dataset.store.includes(q)) ? '' : 'none';
+  });
 }
 
 function toggleAdminLostMonth() {
@@ -2475,7 +2497,9 @@ function renderHistory() {
   container.innerHTML = `
     <div style="font-size:12px;font-weight:700;color:#555;margin-bottom:10px;letter-spacing:.5px">店舗別に確認</div>
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
-      <select onchange="adminHistDropdownStore=this.value;renderHistory()"
+      <input type="text" placeholder="店舗名で検索..." oninput="filterStoreOptions('admin-hist-store-select', this.value)"
+        style="border:1px solid #ddd;border-radius:6px;padding:8px 12px;font-size:13px;font-family:inherit;min-width:140px">
+      <select id="admin-hist-store-select" onchange="adminHistDropdownStore=this.value;renderHistory()"
         style="border:1px solid #ddd;border-radius:6px;padding:8px 12px;font-size:14px;font-family:inherit;min-width:180px">
         ${options}
       </select>
