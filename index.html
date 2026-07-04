@@ -2069,19 +2069,25 @@ async function renderLostAdmin() {
 
   container.innerHTML = `<div style="color:#aaa;font-size:13px;padding:10px 0">読み込み中…</div>`;
 
-  // 月内全店舗 + 選択店舗を並列取得
-  const thisMonth = new Date().toISOString().slice(0, 7);
-  const [monthData] = await Promise.all([
+  // 月内・先月の全店舗分 + 選択店舗を並列取得
+  const now = new Date();
+  const thisMonth = now.toISOString().slice(0, 7);
+  const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const lastMonth = `${lastMonthDate.getFullYear()}-${String(lastMonthDate.getMonth()+1).padStart(2,'0')}`;
+  const [monthData, lastMonthData] = await Promise.all([
     gasGet('getLostItems', { month: thisMonth }),
+    gasGet('getLostItems', { month: lastMonth }),
     loadLostItemsFromDb(adminLostStore),
   ]);
-  const monthAllItems = (monthData || []).map(r => ({
+  const mapLostApiRows = data => (data || []).map(r => ({
     id: r.id, storeId: r.store_id, storeName: STORES[r.store_id] || r.store_id,
     foundDate: r.found_date || '', note: r.note || '',
     imageUrl: r.image_url || null, addedAt: r.added_at || 0,
   })).sort((a,b) => (b.foundDate||'').localeCompare(a.foundDate||''));
+  const monthAllItems     = mapLostApiRows(monthData);
+  const lastMonthAllItems = mapLostApiRows(lastMonthData);
 
-  const monthRows = monthAllItems.length ? monthAllItems.map(item => `
+  const buildAllStoresRows = (allItems, emptyMsg) => allItems.length ? allItems.map(item => `
     <tr style="border-bottom:1px solid #eee" data-store="${esc(item.storeName)}">
       <td style="font-size:13px;padding:7px 10px;white-space:nowrap">${esc(item.foundDate)||'—'}</td>
       <td style="font-size:13px;padding:7px 10px;white-space:nowrap;color:#22703d;font-weight:600">${esc(item.storeName)}</td>
@@ -2097,7 +2103,10 @@ async function renderLostAdmin() {
           style="background:#ef4444;color:white;border:none;border-radius:5px;padding:4px 10px;font-size:12px;cursor:pointer;font-family:inherit">削除</button>
       </td>
     </tr>`).join('')
-    : `<tr><td colspan="5" style="color:#aaa;font-size:13px;padding:14px 10px">今月の忘れ物はありません</td></tr>`;
+    : `<tr><td colspan="5" style="color:#aaa;font-size:13px;padding:14px 10px">${emptyMsg}</td></tr>`;
+
+  const monthRows     = buildAllStoresRows(monthAllItems, '今月の忘れ物はありません');
+  const lastMonthRows = buildAllStoresRows(lastMonthAllItems, '先月の忘れ物はありません');
 
   const items = getLostItems(adminLostStore).slice().sort((a,b) => (b.addedAt||0)-(a.addedAt||0));
   const rows = items.length ? items.map(item => `
@@ -2120,12 +2129,12 @@ async function renderLostAdmin() {
   container.innerHTML = `
     <!-- 月内の忘れ物（全店舗） -->
     <div class="settings-card" style="margin-bottom:16px;padding:0;overflow:hidden">
-      <div class="settings-accordion-hdr" onclick="toggleAdminLostMonth()" style="cursor:pointer">
+      <div class="settings-accordion-hdr" onclick="toggleLostAccordion('admin-lost-month-body','admin-lost-month-arrow')" style="cursor:pointer">
         <span>月内の忘れ物（全店舗・${thisMonth}）<span id="admin-lost-month-count" style="font-size:12px;color:#888;margin-left:6px">${monthAllItems.length}件</span></span>
         <span id="admin-lost-month-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
       </div>
       <div id="admin-lost-month-body" style="display:none;padding:0 12px 12px">
-        <input type="text" id="lost-month-search" placeholder="店舗名で検索..." oninput="filterLostMonthRows(this.value)"
+        <input type="text" id="lost-month-search" placeholder="店舗名で検索..." oninput="filterLostTableRows('admin-lost-month-body', this.value)"
           style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:6px;padding:8px 10px;font-size:13px;font-family:inherit;margin-bottom:8px">
         <div style="overflow-x:auto">
         <table style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);table-layout:fixed">
@@ -2137,6 +2146,30 @@ async function renderLostAdmin() {
             <th style="width:70px"></th>
           </tr></thead>
           <tbody>${monthRows}</tbody>
+        </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- 先月の忘れ物（全店舗） -->
+    <div class="settings-card" style="margin-bottom:16px;padding:0;overflow:hidden">
+      <div class="settings-accordion-hdr" onclick="toggleLostAccordion('admin-lost-lastmonth-body','admin-lost-lastmonth-arrow')" style="cursor:pointer">
+        <span>先月の忘れ物（全店舗・${lastMonth}）<span id="admin-lost-lastmonth-count" style="font-size:12px;color:#888;margin-left:6px">${lastMonthAllItems.length}件</span></span>
+        <span id="admin-lost-lastmonth-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
+      </div>
+      <div id="admin-lost-lastmonth-body" style="display:none;padding:0 12px 12px">
+        <input type="text" id="lost-lastmonth-search" placeholder="店舗名で検索..." oninput="filterLostTableRows('admin-lost-lastmonth-body', this.value)"
+          style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:6px;padding:8px 10px;font-size:13px;font-family:inherit;margin-bottom:8px">
+        <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);table-layout:fixed">
+          <thead><tr style="background:#c2d63a;color:#1a2a05">
+            <th style="text-align:left;font-size:13px;padding:9px 10px;width:100px">発見日</th>
+            <th style="text-align:left;font-size:13px;padding:9px 10px;width:130px">店舗</th>
+            <th style="text-align:left;font-size:13px;padding:9px 10px;width:160px">備考</th>
+            <th style="font-size:13px;padding:9px 10px;width:64px">画像</th>
+            <th style="width:70px"></th>
+          </tr></thead>
+          <tbody>${lastMonthRows}</tbody>
         </table>
         </div>
       </div>
@@ -2173,17 +2206,17 @@ function filterStoreOptions(selId, query) {
   });
 }
 
-/* 月内の忘れ物（全店舗）テーブルを店舗名で絞り込み */
-function filterLostMonthRows(query) {
+/* 月内/先月の忘れ物（全店舗）テーブルを店舗名で絞り込み */
+function filterLostTableRows(bodyId, query) {
   const q = query.trim();
-  document.querySelectorAll('#admin-lost-month-body tbody tr[data-store]').forEach(tr => {
+  document.querySelectorAll(`#${bodyId} tbody tr[data-store]`).forEach(tr => {
     tr.style.display = (!q || tr.dataset.store.includes(q)) ? '' : 'none';
   });
 }
 
-function toggleAdminLostMonth() {
-  const body  = document.getElementById('admin-lost-month-body');
-  const arrow = document.getElementById('admin-lost-month-arrow');
+function toggleLostAccordion(bodyId, arrowId) {
+  const body  = document.getElementById(bodyId);
+  const arrow = document.getElementById(arrowId);
   if (!body) return;
   const open = body.style.display === 'none';
   body.style.display = open ? 'block' : 'none';
