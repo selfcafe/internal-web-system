@@ -1202,10 +1202,10 @@ async function deleteLostItem(storeId, itemId) {
 
 function buildLostTable(items, storeId) {
   if (!items.length) return '<div style="color:#aaa;font-size:13px;padding:10px 0">該当する忘れ物はありません</div>';
-  return `<table style="width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed">
+  return `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px;table-layout:fixed">
     <thead><tr style="background:#c2d63a;color:#1a2a05">
       <th style="padding:8px 10px;text-align:left;font-size:12px;width:100px">発見日</th>
-      <th style="padding:8px 10px;text-align:left;font-size:12px">備考</th>
+      <th style="padding:8px 10px;text-align:left;font-size:12px;width:140px">備考</th>
       <th style="padding:8px 10px;text-align:left;font-size:12px;width:70px">画像</th>
       <th style="padding:8px 10px;width:60px"></th>
     </tr></thead><tbody>
@@ -1222,7 +1222,7 @@ function buildLostTable(items, storeId) {
         <button onclick="deleteLostItem('${storeId}','${item.id}')" style="background:#ef4444;color:white;padding:4px 10px;font-size:12px;border-radius:5px;border:none;cursor:pointer;font-family:inherit">削除</button>
       </td>
     </tr>`).join('')}
-    </tbody></table>`;
+    </tbody></table></div>`;
 }
 
 function renderLostItems(loading = false) {
@@ -2126,7 +2126,7 @@ async function renderLostAdmin() {
           <thead><tr style="background:#c2d63a;color:#1a2a05">
             <th style="text-align:left;font-size:13px;padding:9px 10px;width:100px">発見日</th>
             <th style="text-align:left;font-size:13px;padding:9px 10px;width:130px">店舗</th>
-            <th style="text-align:left;font-size:13px;padding:9px 10px">備考</th>
+            <th style="text-align:left;font-size:13px;padding:9px 10px;width:160px">備考</th>
             <th style="font-size:13px;padding:9px 10px;width:64px">画像</th>
             <th style="width:70px"></th>
           </tr></thead>
@@ -2143,15 +2143,17 @@ async function renderLostAdmin() {
         ${storeOptions}
       </select>
     </div>
+    <div style="overflow-x:auto">
     <table style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(34,112,61,.1);table-layout:fixed">
       <thead><tr style="background:#c2d63a;color:#1a2a05">
         <th style="text-align:left;font-size:13px;padding:9px 10px;width:110px">発見日</th>
-        <th style="text-align:left;font-size:13px;padding:9px 10px">備考</th>
+        <th style="text-align:left;font-size:13px;padding:9px 10px;width:160px">備考</th>
         <th style="font-size:13px;padding:9px 10px;width:70px">画像</th>
         <th style="width:70px"></th>
       </tr></thead>
       <tbody>${rows}</tbody>
-    </table>`;
+    </table>
+    </div>`;
 }
 
 function toggleAdminLostMonth() {
