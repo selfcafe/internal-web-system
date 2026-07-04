@@ -2,6 +2,16 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
+  <!-- ログインに必要な設定データの取得を最優先で開始する。
+       Firebase読み込み(下2行)はHTML解析をブロックするため、
+       ここで先に発火させておかないとgetSettingsの通信開始が
+       Firebase読み込み＋ページ全体の解析完了まで遅れてしまう。
+       URLはメインスクリプト内のGAS_URLと同じ値だが、スコープが
+       別スクリプトのためconstの重複宣言を避けてこちらは直書きする。 -->
+  <script>
+    window.__earlySettings = fetch('https://script.google.com/macros/s/AKfycbzoqu607sj-rpYulIiDwnuyGSCTzoblzSqaq37cb5k5KiGsK7sisZew9sSRSBoYBSwo_A/exec?action=getSettings')
+      .then(r => r.json()).catch(() => null);
+  </script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>セルフカフェスタッフ</title>
   <link rel="manifest" href="manifest.json">
@@ -619,7 +629,8 @@ async function initGas() {
       });
     }).catch(e => console.error('getOrders error:', e));
 
-    const settings = await gasGet('getSettings');
+    // ページ最上部で先行発火済みのgetSettingsがあればそれを使う（早く始まっている分だけ速い）
+    const settings = await (window.__earlySettings || gasGet('getSettings'));
     const gasKeys = new Set((settings || []).map(r => r.key));
     (settings || []).forEach(r => {
       const clean = v => String(v).replace(/[\x00-\x1f]/g, '');
@@ -3557,10 +3568,17 @@ if (!(sessionStorage.getItem('admin_authed') === '1' || isSiteAuthed())) {
   if (sessionStorage.getItem('admin_authed') === '1' || isSiteAuthed()) {
     document.getElementById('site-lock').classList.add('hidden');
   }
-  // GAS読み込み中はログインボタンを無効化
+  // GAS読み込み中はログインボタンを無効化し、経過秒数を表示（待ち時間を可視化して体感を和らげる）
   const loginBtn = document.querySelector('button.btn-pin-submit');
-  if (loginBtn) { loginBtn.disabled = true; loginBtn.textContent = '読み込み中…'; }
+  let loadingTimer = null;
+  if (loginBtn) {
+    loginBtn.disabled = true;
+    let sec = 0;
+    loginBtn.textContent = '読み込み中…';
+    loadingTimer = setInterval(() => { sec++; loginBtn.textContent = `読み込み中…（${sec}秒）`; }, 1000);
+  }
   const gasOk = await initGas();
+  if (loadingTimer) clearInterval(loadingTimer);
   if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = 'ログイン'; }
   const syncWarning = document.getElementById('site-sync-warning');
   if (syncWarning) {
