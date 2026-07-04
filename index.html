@@ -35,6 +35,7 @@
 
     .sub-nav-wrap { background:#c2d63a; padding:8px 10px 0; display:flex; gap:4px; margin-bottom:0; }
     .sub-nav-wrap.last { margin-bottom:16px; }
+    .sub-nav-wrap.nav-disabled { pointer-events:none; opacity:.45; }
     .sub-nav-wrap.level2 { background:#3d8154; padding:6px 10px 0; }
     .sub-nav-wrap.level2 .sub-tab { font-size:12px; padding:7px 8px; color:#fff; background:#22703d; }
     .sub-nav-wrap.level2 .sub-tab:hover { background:#1a5c30; color:#fff; }
@@ -2024,6 +2025,7 @@ function menuSelect(type, val) {
 }
 
 function switchRegion(r) {
+  if (adminView === 'lost') return;
   adminRegion = r; adminPage = 1;
   ['kanto','kansai','tokai'].forEach(k => document.getElementById('sub-'+k)?.classList.toggle('active', k===r));
   updateAdminMenuActive();
@@ -2033,6 +2035,7 @@ function switchRegion(r) {
 function switchAdminView(v) {
   adminView = v; adminPage = 1;
   ['overview','history','lost'].forEach(k => document.getElementById('sub-'+k)?.classList.toggle('active', k===v));
+  document.getElementById('admin-region-nav')?.classList.toggle('nav-disabled', v === 'lost');
   updateAdminMenuActive();
   renderAdmin();
 }
