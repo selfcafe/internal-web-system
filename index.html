@@ -2134,8 +2134,6 @@ async function renderLostAdmin() {
         <span id="admin-lost-month-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
       </div>
       <div id="admin-lost-month-body" style="display:none;padding:0 12px 12px">
-        <input type="text" id="lost-month-search" placeholder="店舗名で検索..." oninput="filterLostTableRows('admin-lost-month-body', this.value)"
-          style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:6px;padding:8px 10px;font-size:13px;font-family:inherit;margin-bottom:8px">
         <div style="overflow-x:auto">
         <table style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);table-layout:fixed">
           <thead><tr style="background:#c2d63a;color:#1a2a05">
@@ -2158,8 +2156,6 @@ async function renderLostAdmin() {
         <span id="admin-lost-lastmonth-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
       </div>
       <div id="admin-lost-lastmonth-body" style="display:none;padding:0 12px 12px">
-        <input type="text" id="lost-lastmonth-search" placeholder="店舗名で検索..." oninput="filterLostTableRows('admin-lost-lastmonth-body', this.value)"
-          style="width:100%;box-sizing:border-box;border:1px solid #ddd;border-radius:6px;padding:8px 10px;font-size:13px;font-family:inherit;margin-bottom:8px">
         <div style="overflow-x:auto">
         <table style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);table-layout:fixed">
           <thead><tr style="background:#c2d63a;color:#1a2a05">
@@ -2203,14 +2199,6 @@ function filterStoreOptions(selId, query) {
   const q = query.trim();
   document.querySelectorAll(`#${selId} option`).forEach(opt => {
     opt.hidden = !!(opt.value && q && !opt.textContent.includes(q));
-  });
-}
-
-/* 月内/先月の忘れ物（全店舗）テーブルを店舗名で絞り込み */
-function filterLostTableRows(bodyId, query) {
-  const q = query.trim();
-  document.querySelectorAll(`#${bodyId} tbody tr[data-store]`).forEach(tr => {
-    tr.style.display = (!q || tr.dataset.store.includes(q)) ? '' : 'none';
   });
 }
 
