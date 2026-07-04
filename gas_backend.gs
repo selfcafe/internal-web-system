@@ -195,10 +195,36 @@ function saveSetting(key, value) {
 // ----------------------------------------------------------------
 
 function getLostItems(month, storeId) {
+  purgeOldLostItems();
   let rows = sheetRows(getSheet(SHEET_LOST), LOST_COLS).map(r => ({ ...r, found_date: _dateStr(r.found_date) }));
   if (month)   rows = rows.filter(r => r.found_date && String(r.found_date).startsWith(month));
   if (storeId) rows = rows.filter(r => String(r.store_id) === String(storeId));
   return rows;
+}
+
+// 発見日から30日経過した忘れ物を自動削除（紐づく画像もDriveから削除）
+function purgeOldLostItems() {
+  const sheet = getSheet(SHEET_LOST);
+  if (sheet.getLastRow() <= 1) return;
+  const tz = SpreadsheetApp.openById(SHEET_ID).getSpreadsheetTimeZone();
+  const limitStr = Utilities.formatDate(new Date(Date.now() - 30*24*60*60*1000), tz, 'yyyy-MM-dd');
+  const data = sheet.getDataRange().getValues();
+  const hdrs = data[0].map(String);
+  const dateIdx = hdrs.indexOf('found_date');
+  const urlIdx  = hdrs.indexOf('image_url');
+  if (dateIdx < 0) return;
+  for (let i = data.length - 1; i >= 1; i--) {
+    const found = _dateStr(data[i][dateIdx]);
+    if (!found || found >= limitStr) continue;
+    const imgUrl = urlIdx >= 0 ? data[i][urlIdx] : '';
+    if (imgUrl && String(imgUrl).includes('drive.google.com')) {
+      try {
+        const m = String(imgUrl).match(/[?&]id=([^&]+)/);
+        if (m) DriveApp.getFileById(m[1]).setTrashed(true);
+      } catch(e) {}
+    }
+    sheet.deleteRow(i + 1);
+  }
 }
 
 function saveLostItem(item, imageBase64, imageMime) {
