@@ -433,6 +433,11 @@
             <input type="file" id="lost-image-input" accept="image/*"
               style="display:none" onchange="previewLostImage(this)">
           </label>
+          <label style="display:inline-flex;align-items:center;gap:6px;background:#f0f7e8;border:1px solid #b8d4a0;border-radius:6px;padding:7px 12px;font-size:13px;cursor:pointer;font-family:inherit;white-space:nowrap">
+            📷 撮影
+            <input type="file" accept="image/*" capture="environment"
+              style="display:none" onchange="previewLostImage(this)">
+          </label>
         </div>
         <button id="lost-add-btn" onclick="addLostItem()"
           style="background:#22703d;color:white;padding:8px 18px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap">追加</button>
@@ -1806,6 +1811,10 @@ function renderStore() {
           <label style="cursor:pointer;font-size:12px;color:#6b7280;background:#f3f4f6;border:1px solid #d1d5db;border-radius:6px;padding:5px 10px;display:inline-flex;align-items:center;gap:4px">
             📷 写真を添付
             <input type="file" accept="image/*" style="display:none" onchange="handleOrderPhotoUpload('${gid}',this)">
+          </label>
+          <label style="cursor:pointer;font-size:12px;color:#6b7280;background:#f3f4f6;border:1px solid #d1d5db;border-radius:6px;padding:5px 10px;display:inline-flex;align-items:center;gap:4px">
+            📷 撮影
+            <input type="file" accept="image/*" capture="environment" style="display:none" onchange="handleOrderPhotoUpload('${gid}',this)">
           </label>
           ${gPhoto ? `<img src="${esc(gPhoto)}" style="height:44px;border-radius:5px;cursor:pointer;border:1px solid #e5e7eb" onclick="showLostImage(this.src)" title="写真を拡大">
             <button onclick="removeOrderPhoto('${gid}')" style="font-size:11px;color:#9ca3af;background:none;border:none;cursor:pointer;padding:2px 4px" title="写真を削除">✕</button>` : ''}
