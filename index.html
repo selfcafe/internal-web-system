@@ -1125,26 +1125,35 @@ function updateChecksheetField(dayKey, itemKey, rawValue, type) {
   updateChecksheetTotals();
 }
 
-// 補充数量列：棚卸表と同じ商品リスト（消耗品カテゴリ・「その他」商品名を除く、店舗別取扱商品設定に連動）をベンダー別に並べる
-// ただし販売品は「水」以外、東海エリア限定お菓子は全て、デイリーカウント対象外
+// デイリーカウント（補充数量）列：棚卸表と同じ商品リストのうち、アペックス100RS／トーヨーベンディング／55D CS3の全商品と、
+// その他のストロー・ペーパータオル、販売品の水のみを対象にする（店舗別取扱商品設定に連動）
+const CHECKSHEET_QTY_VENDOR_ALL = ['apex', 'toyo', 'cs3'];
+const CHECKSHEET_QTY_OTHER_ALLOW = new Set(['ストロー', 'ペーパータオル']);
 function _checksheetProductColumns() {
   const VENDOR_LABELS = Object.fromEntries(VENDOR_CONFIG.map(v => [v.key, v.label]));
-  const products = _inventoryProductList().filter(p =>
-    p.vendor !== 'tokai_snack' && !(p.vendor === 'sales' && p.name !== '水')
-  );
+  const products = _inventoryProductList().filter(p => {
+    if (CHECKSHEET_QTY_VENDOR_ALL.includes(p.vendor)) return true;
+    if (p.vendor === 'other') return CHECKSHEET_QTY_OTHER_ALLOW.has(p.name);
+    if (p.vendor === 'sales') return p.name === '水';
+    return false;
+  });
   return VENDOR_CONFIG.map(v => ({
     key: 'vendor:' + v.key,
     label: VENDOR_LABELS[v.key] || v.key,
     cols: products.filter(p => p.vendor === v.key).map(p => ({ id:'prod:' + p.name, type:'qty', name:p.label || p.name })),
   })).filter(g => g.cols.length);
 }
-function _checksheetColumns(storeId) {
+// 表を「デイリーカウント」「清掃・点検」の2大分類＋その下のベンダー/カテゴリ別サブグループで構成する
+function _checksheetColumnGroups(storeId) {
   const items = getAvailableChecksheetItems(storeId);
   const taskGroups = CHECKSHEET_CATEGORIES.map(c => ({
     key: c.key, label: c.label,
     cols: items.filter(it => it.category === c.key).map(it => ({ id:it.id, type:it.type, name:it.name })),
   })).filter(c => c.cols.length);
-  return [..._checksheetProductColumns(), ...taskGroups];
+  return [
+    { key:'daily_count', label:'デイリーカウント', subgroups: _checksheetProductColumns() },
+    { key:'clean_check', label:'清掃・点検',     subgroups: taskGroups },
+  ].filter(g => g.subgroups.length);
 }
 
 function renderChecksheet() {
@@ -1153,18 +1162,23 @@ function renderChecksheet() {
   const period = getChecksheetPeriod();
   const days = checksheetPeriodDays(period);
   const todayKey = today();
-  const cats = _checksheetColumns(storeTab);
+  const groups = _checksheetColumnGroups(storeTab);
 
-  if (!cats.length) {
+  if (!groups.length) {
     wrap.innerHTML = '<div style="color:#aaa;padding:20px">チェック項目が設定されていません</div>';
     return;
   }
   const data = getChecksheetData(storeTab, period.label);
-  const allCols = cats.flatMap(c => c.cols);
+  const subgroups = groups.flatMap(g => g.subgroups);
+  const allCols = subgroups.flatMap(sg => sg.cols);
   const inputStyle = 'padding:4px 6px;border:1px solid #d1d5db;border-radius:4px;font-size:13px;background:white;width:60px;text-align:right';
 
-  const catHeaderCells = cats.map(c =>
-    `<th colspan="${c.cols.length}" style="padding:6px 8px;font-size:11px;font-weight:700;color:white;background:#1a5730;border-left:2px solid white;white-space:nowrap">${esc(c.label)}</th>`
+  const groupHeaderCells = groups.map(g => {
+    const colCount = g.subgroups.reduce((n, sg) => n + sg.cols.length, 0);
+    return `<th colspan="${colCount}" style="padding:6px 8px;font-size:12px;font-weight:700;color:white;background:#14431f;border-left:2px solid white;white-space:nowrap">${esc(g.label)}</th>`;
+  }).join('');
+  const subHeaderCells = subgroups.map(sg =>
+    `<th colspan="${sg.cols.length}" style="padding:6px 8px;font-size:11px;font-weight:700;color:white;background:#1a5730;border-left:2px solid white;white-space:nowrap">${esc(sg.label)}</th>`
   ).join('');
   const nameHeaderCells = allCols.map(col =>
     `<th style="padding:6px 6px;font-size:11px;font-weight:600;white-space:nowrap;background:#22703d;color:white;border-left:1px solid rgba(255,255,255,.25)">${esc(col.name)}</th>`
@@ -1199,7 +1213,8 @@ function renderChecksheet() {
     <div style="font-size:12px;color:#888;margin-bottom:8px">対象期間：${esc(period.label)}分（${fmtChecksheetDay(period.start)}〜${fmtChecksheetDay(period.end)}）</div>
     <table id="checksheet-table" style="border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);min-width:600px">
       <thead>
-        <tr style="background:#1a5730"><th style="padding:6px 8px;background:#1a5730"></th>${catHeaderCells}</tr>
+        <tr style="background:#14431f"><th style="padding:6px 8px;background:#14431f"></th>${groupHeaderCells}</tr>
+        <tr style="background:#1a5730"><th style="padding:6px 8px;background:#1a5730"></th>${subHeaderCells}</tr>
         <tr><th style="padding:6px 8px;font-size:11px;background:#22703d;color:white;white-space:nowrap">日付</th>${nameHeaderCells}</tr>
       </thead>
       <tbody>${bodyRows}</tbody>
