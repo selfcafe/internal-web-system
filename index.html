@@ -1093,7 +1093,6 @@ const CHECKSHEET_ITEMS = [
   { id:'s_counter',      category:'cleaning', type:'check', name:'サーバーカウンター' },
   { id:'s_table',        category:'cleaning', type:'check', name:'テーブル' },
   { id:'s_vacuum',       category:'cleaning', type:'check', name:'掃除機、掃き掃除' },
-  { id:'s_toiletpaper',  category:'cleaning', type:'check', name:'トイレットペーパー補充' },
   { id:'s_trashcheck',   category:'cleaning', type:'check', name:'ゴミ箱確認・回収' },
   { id:'s_trashbag',     category:'cleaning', type:'qty',   name:'ゴミ出し（可燃・不燃・資源／45L袋 目安月40個）' },
   { id:'s_styrofoam',    category:'cleaning', type:'check', name:'発泡スチロールなど その他ゴミ' },
@@ -1263,9 +1262,9 @@ function stepChecksheetQty(dayKey, itemId, delta) {
 }
 
 // デイリーカウント（補充数量）列：棚卸表と同じ商品リストのうち、アペックス100RS／トーヨーベンディング／55D CS3の全商品と、
-// その他のストロー・ペーパータオル、販売品の水のみを対象にする（店舗別取扱商品設定に連動）
+// その他のストロー・ペーパータオル・トイレットペーパー、販売品の水のみを対象にする（店舗別取扱商品設定に連動）
 const CHECKSHEET_QTY_VENDOR_ALL = ['apex', 'toyo', 'cs3'];
-const CHECKSHEET_QTY_OTHER_ALLOW = new Set(['ストロー', 'ペーパータオル']);
+const CHECKSHEET_QTY_OTHER_ALLOW = new Set(['ストロー', 'ペーパータオル', 'トイレットペーパー']);
 function _checksheetProductColumns() {
   const VENDOR_LABELS = Object.fromEntries(VENDOR_CONFIG.map(v => [v.key, v.label]));
   const products = _inventoryProductList().filter(p => {
