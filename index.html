@@ -648,6 +648,7 @@ async function syncAllStoreDataToGas() {
     _gasSaveSetting('all_products',     localStorage.getItem(ALL_PRODUCTS_KEY)   || '[]'),
     _gasSaveSetting('vendor_config',    localStorage.getItem(VENDOR_CONFIG_KEY)  || '[]'),
     _gasSaveSetting('store_checksheet_cfg', localStorage.getItem(STORE_CHECKSHEET_KEY) || '{}'),
+    _gasSaveSetting('all_checksheet_items', localStorage.getItem(ALL_CHECKSHEET_ITEMS_KEY) || '[]'),
   ]);
   if (msg) {
     msg.style.color = results.every(Boolean) ? '#22703d' : '#ef4444';
@@ -683,11 +684,13 @@ async function initGas() {
       if (r.key === 'all_products')      localStorage.setItem(ALL_PRODUCTS_KEY,    clean(r.value));
       if (r.key === 'vendor_config')     localStorage.setItem(VENDOR_CONFIG_KEY,   clean(r.value));
       if (r.key === 'store_checksheet_cfg') localStorage.setItem(STORE_CHECKSHEET_KEY, clean(r.value));
+      if (r.key === 'all_checksheet_items') localStorage.setItem(ALL_CHECKSHEET_ITEMS_KEY, clean(r.value));
     });
     if (gasKeys.has('all_products') || gasKeys.has('vendor_config')) {
       loadVendorConfig();
       loadProductSettings();
     }
+    if (gasKeys.has('all_checksheet_items')) loadChecksheetItemSettings();
     if (!gasKeys.has('store_passwords')   && localStorage.getItem(STORE_PW_KEY))        _syncStorePw();
     if (!gasKeys.has('custom_stores')     && localStorage.getItem(CUSTOM_STORES_KEY))   _syncCustomStores();
     if (!gasKeys.has('deleted_stores')    && localStorage.getItem(DELETED_STORES_KEY))  _syncDeletedStores();
@@ -695,6 +698,7 @@ async function initGas() {
     if (!gasKeys.has('all_products')      && localStorage.getItem(ALL_PRODUCTS_KEY))    _gasSaveSetting('all_products',  localStorage.getItem(ALL_PRODUCTS_KEY));
     if (!gasKeys.has('vendor_config')     && localStorage.getItem(VENDOR_CONFIG_KEY))   _gasSaveSetting('vendor_config', localStorage.getItem(VENDOR_CONFIG_KEY));
     if (!gasKeys.has('store_checksheet_cfg') && localStorage.getItem(STORE_CHECKSHEET_KEY)) _syncStoreChecksheetCfg();
+    if (!gasKeys.has('all_checksheet_items') && localStorage.getItem(ALL_CHECKSHEET_ITEMS_KEY)) _gasSaveSetting('all_checksheet_items', localStorage.getItem(ALL_CHECKSHEET_ITEMS_KEY));
     loadCustomStores();
     loadDeletedStores();
     // パスワード一覧が開いている場合は再描画
@@ -1098,6 +1102,84 @@ const CHECKSHEET_CATEGORIES = [
   { key:'100rs_clean', label:'100RS清掃' },
   { key:'cleaning',    label:'清掃' },
 ];
+
+// チェック項目マスタ（清掃・点検のみ。デイリーカウントの商品は店舗別取扱商品設定と連動するためここでは編集しない）
+const ALL_CHECKSHEET_ITEMS_KEY = 'all_checksheet_items';
+function saveAllChecksheetItems() {
+  const json = JSON.stringify(CHECKSHEET_ITEMS);
+  localStorage.setItem(ALL_CHECKSHEET_ITEMS_KEY, json);
+  _gasSaveSetting('all_checksheet_items', json);
+}
+function loadChecksheetItemSettings() {
+  const saved = localStorage.getItem(ALL_CHECKSHEET_ITEMS_KEY);
+  if (!saved) return;
+  const savedList = JSON.parse(saved);
+  const savedIds = new Set(savedList.map(it => it.id));
+  const defaults = JSON.parse(JSON.stringify(CHECKSHEET_ITEMS));
+  CHECKSHEET_ITEMS.length = 0;
+  savedList.forEach(it => CHECKSHEET_ITEMS.push(it));
+  defaults.forEach(it => { if (!savedIds.has(it.id)) CHECKSHEET_ITEMS.push(it); });
+}
+function saveChecksheetItemSetting(id, field, value) {
+  const it = CHECKSHEET_ITEMS.find(i => i.id === id);
+  if (!it) return;
+  it[field] = value;
+  saveAllChecksheetItems();
+}
+function addCustomChecksheetItem() {
+  const name     = document.getElementById('new-cs-item-name')?.value.trim();
+  const category = document.getElementById('new-cs-item-category')?.value;
+  const type     = document.getElementById('new-cs-item-type')?.value;
+  const msg      = document.getElementById('cs-item-add-msg');
+  if (!name) { msg.style.color='#ef4444'; msg.textContent='項目名を入力してください'; return; }
+  if (CHECKSHEET_ITEMS.find(it => it.name === name)) { msg.style.color='#ef4444'; msg.textContent='同じ名前の項目が既に存在します'; return; }
+  CHECKSHEET_ITEMS.push({ id:'custom_' + uid(), category, type, name });
+  saveAllChecksheetItems();
+  const nameInp = document.getElementById('new-cs-item-name');
+  if (nameInp) nameInp.value = '';
+  msg.style.color='#22703d'; msg.textContent=`✓ 「${name}」を追加しました`;
+  setTimeout(() => { if(msg) msg.textContent=''; }, 3000);
+  const tbody = document.getElementById('cs-item-tbl-body');
+  if (tbody) tbody.innerHTML = buildChecksheetItemRows();
+}
+function deleteChecksheetItem(id) {
+  const it = CHECKSHEET_ITEMS.find(i => i.id === id);
+  if (!it) return;
+  if (!confirm(`「${it.name}」を削除しますか？`)) return;
+  const i = CHECKSHEET_ITEMS.findIndex(x => x.id === id);
+  if (i >= 0) CHECKSHEET_ITEMS.splice(i, 1);
+  saveAllChecksheetItems();
+  const tbody = document.getElementById('cs-item-tbl-body');
+  if (tbody) tbody.innerHTML = buildChecksheetItemRows();
+}
+function buildChecksheetItemRows() {
+  return CHECKSHEET_CATEGORIES.map(c => {
+    const items = CHECKSHEET_ITEMS.filter(it => it.category === c.key);
+    if (!items.length) return '';
+    const hdr = `<tr class="settings-vendor-hdr"><td colspan="4">${esc(c.label)}</td></tr>`;
+    const rows = items.map(it => `<tr data-csid="${esc(it.id)}">
+      <td data-label="項目名"><input type="text" value="${esc(it.name)}"
+        style="width:100%;border:1px solid #ddd;border-radius:5px;padding:5px 7px;font-size:13px;font-family:inherit"
+        onchange="saveChecksheetItemSetting('${esc(it.id)}','name',this.value)"></td>
+      <td data-label="カテゴリ"><select
+        style="width:100%;border:1px solid #ddd;border-radius:5px;padding:5px 7px;font-size:13px;font-family:inherit"
+        onchange="saveChecksheetItemSetting('${esc(it.id)}','category',this.value); const tb=document.getElementById('cs-item-tbl-body'); if(tb) tb.innerHTML=buildChecksheetItemRows();">
+        ${CHECKSHEET_CATEGORIES.map(c2 => `<option value="${esc(c2.key)}" ${c2.key===it.category?'selected':''}>${esc(c2.label)}</option>`).join('')}
+      </select></td>
+      <td data-label="種別"><select
+        style="width:100%;border:1px solid #ddd;border-radius:5px;padding:5px 7px;font-size:13px;font-family:inherit"
+        onchange="saveChecksheetItemSetting('${esc(it.id)}','type',this.value)">
+        <option value="check" ${it.type==='check'?'selected':''}>チェック</option>
+        <option value="qty" ${it.type==='qty'?'selected':''}>数量</option>
+      </select></td>
+      <td style="text-align:center;white-space:nowrap">
+        <button onclick="deleteChecksheetItem('${esc(it.id)}')"
+          style="background:#ef4444;color:white;border:none;border-radius:5px;padding:4px 10px;font-size:12px;cursor:pointer;font-family:inherit">削除</button>
+      </td>
+    </tr>`).join('');
+    return hdr + rows;
+  }).join('');
+}
 
 const STORE_CHECKSHEET_KEY = 'store_checksheet_cfg';
 function getStoreChecksheetConfig(storeId) {
@@ -3569,6 +3651,48 @@ function renderSettings() {
       </div>
     </div>
 
+    <!-- チェック項目設定（マスタ：追加・編集・削除） -->
+    <div class="settings-card">
+      <div class="settings-accordion-hdr" onclick="toggleChecksheetItemSettings()">
+        <span>チェック項目設定</span>
+        <span id="cs-item-settings-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
+      </div>
+      <div id="cs-item-settings-body" style="display:none">
+        <div class="settings-accordion-body">
+          <div style="font-size:12px;color:#888;margin-bottom:10px">
+            「デイリーカウント」（数量）に表示される商品は「店舗別取扱商品設定」と連動しているため、ここでは編集できません。ここで追加・編集できるのは「清掃・点検」の項目です。
+          </div>
+          <!-- 項目追加フォーム -->
+          <div style="background:#fffef0;border-radius:8px;padding:12px 14px;margin-bottom:14px">
+            <div style="font-weight:600;font-size:12px;color:#888;margin-bottom:8px">チェック項目を追加</div>
+            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+              <input id="new-cs-item-name" placeholder="項目名（必須）"
+                style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;flex:1;min-width:140px">
+              <select id="new-cs-item-category"
+                style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit">
+                ${CHECKSHEET_CATEGORIES.map(c => `<option value="${esc(c.key)}">${esc(c.label)}</option>`).join('')}
+              </select>
+              <select id="new-cs-item-type"
+                style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit">
+                <option value="check">チェック</option>
+                <option value="qty">数量</option>
+              </select>
+              <button onclick="addCustomChecksheetItem()"
+                style="background:#22703d;color:white;padding:8px 16px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap">追加</button>
+            </div>
+            <div id="cs-item-add-msg" style="font-size:12px;margin-top:6px;min-height:18px"></div>
+          </div>
+          <!-- 項目一覧 -->
+          <table class="settings-tbl">
+            <thead><tr>
+              <th>項目名</th><th style="width:120px">カテゴリ</th><th style="width:100px">種別</th><th style="width:52px"></th>
+            </tr></thead>
+            <tbody id="cs-item-tbl-body">${buildChecksheetItemRows()}</tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
     <!-- 店舗別チェックシート項目設定 -->
     <div class="settings-card">
       <div class="settings-accordion-hdr" onclick="toggleChecksheetSettings()">
@@ -3824,6 +3948,14 @@ function toggleChecksheetSettings() {
   body.style.display = open ? 'block' : 'none';
   arrow.textContent  = open ? '▼ 閉じる' : '▶ タップして開く';
   if (open) renderChecksheetCfg();
+}
+
+function toggleChecksheetItemSettings() {
+  const body  = document.getElementById('cs-item-settings-body');
+  const arrow = document.getElementById('cs-item-settings-arrow');
+  const open  = body.style.display === 'none';
+  body.style.display = open ? 'block' : 'none';
+  arrow.textContent  = open ? '▼ 閉じる' : '▶ タップして開く';
 }
 
 function filterChecksheetCfgSelect() {
