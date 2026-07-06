@@ -1159,6 +1159,15 @@ function updateChecksheetField(dayKey, itemKey, rawValue, type) {
   setChecksheetField(storeTab, period.label, dayKey, itemKey, value);
   updateChecksheetTotals();
 }
+// タップで数量をカウント（直接入力も併用可）
+function stepChecksheetQty(dayKey, itemId, delta) {
+  const inp = document.getElementById('cs-qty-' + itemId);
+  if (!inp) return;
+  const val = parseInt(inp.value) || 0;
+  const newVal = Math.max(0, val + delta);
+  inp.value = newVal;
+  updateChecksheetField(dayKey, itemId, newVal, 'qty');
+}
 
 // デイリーカウント（補充数量）列：棚卸表と同じ商品リストのうち、アペックス100RS／トーヨーベンディング／55D CS3の全商品と、
 // その他のストロー・ペーパータオル、販売品の水のみを対象にする（店舗別取扱商品設定に連動）
@@ -1235,8 +1244,12 @@ function renderChecksheetTodayForm(wrap, subgroups) {
         const v = dayData[col.id];
         const input = col.type === 'check'
           ? `<input type="checkbox" ${v ? 'checked' : ''} onchange="updateChecksheetField('${dKey}','${col.id}',this.checked,'check')">`
-          : `<input type="number" min="0" step="1" value="${v == null ? '' : esc(v)}" placeholder="0"
-              onchange="updateChecksheetField('${dKey}','${col.id}',this.value,'qty')">`;
+          : `<div class="qty-wrap">
+              <button class="qty-btn" onclick="stepChecksheetQty('${dKey}','${col.id}',-1)">－</button>
+              <input type="number" min="0" step="1" id="cs-qty-${col.id}" value="${v == null ? '' : esc(v)}" placeholder="0"
+                onchange="updateChecksheetField('${dKey}','${col.id}',this.value,'qty')">
+              <button class="qty-btn" onclick="stepChecksheetQty('${dKey}','${col.id}',1)">＋</button>
+            </div>`;
         return `<div class="checksheet-today-row"><span>${esc(col.name)}</span>${input}</div>`;
       }).join('')}
     </div>`).join('');
