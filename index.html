@@ -308,15 +308,17 @@
     .checksheet-lastmonth-btn:hover { background:rgba(34,112,61,.08); color:#22703d; }
     .checksheet-lastmonth-btn.active { background:#22703d; color:white; border-color:#22703d; }
 
-    /* チェックシート 当日入力フォーム */
-    .checksheet-today-group-hdr { font-size:11px; font-weight:700; color:white; background:#1a5730; padding:6px 10px; margin-top:10px; border-radius:4px; }
+    /* チェックシート 当日入力フォーム（タップしやすいよう行を大きめに） */
+    .checksheet-today-group-hdr { font-size:12px; font-weight:700; color:white; background:#1a5730; padding:8px 12px; margin-top:12px; border-radius:4px; }
     .checksheet-today-list { background:white; border-radius:8px; overflow:hidden; box-shadow:0 1px 4px rgba(0,0,0,.08); }
-    .checksheet-today-row { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:9px 12px; border-bottom:1px solid #f0f0f0; font-size:13px; }
+    .checksheet-today-row { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:16px 14px; border-bottom:1px solid #f0f0f0; font-size:15px; }
     .checksheet-today-row:last-child { border-bottom:none; }
     .checksheet-today-row input[type="number"] { width:70px; text-align:right; padding:6px 8px; border:1px solid #d1d5db; border-radius:4px; font-size:14px; }
-    .checksheet-today-row input[type="checkbox"] { width:22px; height:22px; accent-color:#22703d; flex-shrink:0; }
+    .checksheet-today-row input[type="checkbox"] { width:28px; height:28px; accent-color:#22703d; flex-shrink:0; }
+    .checksheet-today-row .qty-btn { width:36px; height:36px; font-size:18px; }
+    .checksheet-today-row .qty-wrap input[type=number] { width:56px; font-size:16px; }
 
-    /* チェックシート 当月履歴：確認用（編集不可）、俯瞰性重視で行高を最小化 */
+    /* チェックシート 当月/先月履歴：確認用（編集不可）、俯瞰性重視で行高を最小化 */
     #checksheet-table th, #checksheet-table td { padding:1px 3px !important; line-height:1.1; }
 
     /* 店舗別商品設定 */
