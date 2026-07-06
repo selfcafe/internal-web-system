@@ -296,6 +296,9 @@
     .checksheet-view-bar { background:#fffef0; }
     .checksheet-view-btn { flex:1; padding:8px 6px; background:#c98a1a; color:white; font-size:12px; font-weight:600; border-radius:6px; cursor:pointer; font-family:inherit; border:none; text-align:center; }
     .checksheet-view-btn:hover { background:#b07816; }
+    .checksheet-lastmonth-btn { padding:6px 12px; background:transparent; color:#555; font-size:12px; font-weight:600; border-radius:6px; cursor:pointer; font-family:inherit; border:1px solid #ccc; white-space:nowrap; flex-shrink:0; }
+    .checksheet-lastmonth-btn:hover { background:rgba(34,112,61,.08); color:#22703d; }
+    .checksheet-lastmonth-btn.active { background:#22703d; color:white; border-color:#22703d; }
 
     /* チェックシート 当日入力フォーム */
     .checksheet-today-group-hdr { font-size:11px; font-weight:700; color:white; background:#1a5730; padding:6px 10px; margin-top:10px; border-radius:4px; }
@@ -416,7 +419,10 @@
   <!-- チェックシートタブ -->
   <div id="partner-tab-checklist" class="partner-tab-content">
     <div style="max-width:1100px">
-      <div style="font-weight:700;font-size:15px;color:#22703d;margin-bottom:12px">チェックシート</div>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:12px">
+        <div style="font-weight:700;font-size:15px;color:#22703d">チェックシート</div>
+        <button class="checksheet-lastmonth-btn" id="checksheet-lastmonth-btn" onclick="showChecksheetLastMonth()">先月の履歴</button>
+      </div>
       <div class="checksheet-subtab-bar" id="checksheet-cat-bar">
         <button class="checksheet-subtab" id="checksheet-cat-daily_count" onclick="switchChecksheetCategory('daily_count')">デイリーカウント</button>
         <button class="checksheet-subtab" id="checksheet-cat-clean_check" onclick="switchChecksheetCategory('clean_check')">清掃・点検</button>
@@ -1128,6 +1134,11 @@ function getChecksheetDefaultPeriod() {
   if (d.getDate() <= 5) return getChecksheetPeriod(new Date(d.getFullYear(), d.getMonth() - 1, 1));
   return getChecksheetPeriod(d);
 }
+// 実際の今日から見た「先月」（締め日の猶予とは独立に常時参照できる）
+function getChecksheetLastMonthPeriod() {
+  const d = new Date();
+  return getChecksheetPeriod(new Date(d.getFullYear(), d.getMonth() - 1, 1));
+}
 function checksheetPeriodDays(period) {
   const days = [];
   const cur = new Date(period.start);
@@ -1200,13 +1211,17 @@ function _checksheetColumnGroups(storeId) {
   ].filter(g => g.subgroups.length);
 }
 
-// デイリーカウント／清掃・点検の切替、当日入力／当月履歴の切替
+// デイリーカウント／清掃・点検の切替、当日入力／当月履歴／先月履歴の切替
 let checksheetActiveCategory = 'daily_count';
-let checksheetActiveView = 'today';
+let checksheetActiveView = 'today'; // 'today' | 'history'（当月/締め猶予中は前月） | 'last_month'（常に実際の前月）
 function switchChecksheetCategory(cat) { checksheetActiveCategory = cat; renderChecksheet(); }
 // 1つのボタンで当日入力⇔当月履歴をトグル。ボタンには「次に切り替わる先」の名前を表示する
 function toggleChecksheetView() {
   checksheetActiveView = checksheetActiveView === 'today' ? 'history' : 'today';
+  renderChecksheet();
+}
+function showChecksheetLastMonth() {
+  checksheetActiveView = 'last_month';
   renderChecksheet();
 }
 
@@ -1219,6 +1234,7 @@ function renderChecksheet() {
     document.getElementById('checksheet-cat-'+k)?.classList.toggle('active', k === checksheetActiveCategory));
   const viewBtn = document.getElementById('checksheet-view-toggle');
   if (viewBtn) viewBtn.textContent = checksheetActiveView === 'today' ? '当月のチェックシート履歴' : '当日のチェックシート入力';
+  document.getElementById('checksheet-lastmonth-btn')?.classList.toggle('active', checksheetActiveView === 'last_month');
 
   const group = groups.find(g => g.key === checksheetActiveCategory);
   if (!group) {
@@ -1228,7 +1244,8 @@ function renderChecksheet() {
   if (checksheetActiveView === 'today') {
     renderChecksheetTodayForm(wrap, group.subgroups);
   } else {
-    renderChecksheetHistoryTable(wrap, group.subgroups);
+    const period = checksheetActiveView === 'last_month' ? getChecksheetLastMonthPeriod() : getChecksheetDefaultPeriod();
+    renderChecksheetHistoryTable(wrap, group.subgroups, period);
   }
 }
 
@@ -1260,8 +1277,7 @@ function renderChecksheetTodayForm(wrap, subgroups) {
 }
 
 // 履歴は確認用のみ（編集不可）。数値・チェックとも読み取り専用のテキスト/記号表示にする
-function renderChecksheetHistoryTable(wrap, subgroups) {
-  const period = getChecksheetDefaultPeriod();
+function renderChecksheetHistoryTable(wrap, subgroups, period) {
   const days = checksheetPeriodDays(period);
   const todayKey = today();
   const data = getChecksheetData(storeTab, period.label);
@@ -1308,13 +1324,12 @@ function renderChecksheetHistoryTable(wrap, subgroups) {
       </tr></tfoot>
     </table>
   </div>`;
-  updateChecksheetTotals();
+  updateChecksheetTotals(period);
 }
 
-function updateChecksheetTotals() {
+function updateChecksheetTotals(period) {
   const table = document.getElementById('checksheet-table');
   if (!table) return;
-  const period = getChecksheetDefaultPeriod();
   const days = checksheetPeriodDays(period);
   const data = getChecksheetData(storeTab, period.label);
   table.querySelectorAll('.checksheet-total-cell').forEach(td => {
