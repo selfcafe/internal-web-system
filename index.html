@@ -305,13 +305,8 @@
     .checksheet-today-row input[type="number"] { width:70px; text-align:right; padding:6px 8px; border:1px solid #d1d5db; border-radius:4px; font-size:14px; }
     .checksheet-today-row input[type="checkbox"] { width:22px; height:22px; accent-color:#22703d; flex-shrink:0; }
 
-    /* チェックシート 当月履歴：俯瞰性重視で行高を最小化（グローバルなinput最小高さ・モバイルの16px強制を上書き） */
+    /* チェックシート 当月履歴：確認用（編集不可）、俯瞰性重視で行高を最小化 */
     #checksheet-table th, #checksheet-table td { padding:1px 3px !important; line-height:1.1; }
-    #checksheet-table input[type="number"] {
-      min-height:0 !important; height:20px !important; width:32px !important;
-      padding:0 2px !important; font-size:11px !important; border-radius:3px; text-align:right;
-    }
-    #checksheet-table input[type="checkbox"] { width:14px !important; height:14px !important; margin:0; }
 
     /* 店舗別商品設定 */
     .store-prod-cfg-wrap { display:flex; gap:10px; flex-wrap:wrap; align-items:flex-start; }
@@ -1250,13 +1245,13 @@ function renderChecksheetTodayForm(wrap, subgroups) {
     ${body}`;
 }
 
+// 履歴は確認用のみ（編集不可）。数値・チェックとも読み取り専用のテキスト/記号表示にする
 function renderChecksheetHistoryTable(wrap, subgroups) {
   const period = getChecksheetDefaultPeriod();
   const days = checksheetPeriodDays(period);
   const todayKey = today();
   const data = getChecksheetData(storeTab, period.label);
   const allCols = subgroups.flatMap(sg => sg.cols);
-  const inputStyle = 'padding:3px 4px;border:1px solid #d1d5db;border-radius:4px;font-size:13px;background:white;width:50px;text-align:right';
 
   const subHeaderCells = subgroups.map(sg =>
     `<th colspan="${sg.cols.length}" style="padding:5px 6px;font-size:11px;font-weight:700;color:white;background:#1a5730;border-left:2px solid white;white-space:nowrap">${esc(sg.label)}</th>`
@@ -1272,15 +1267,10 @@ function renderChecksheetHistoryTable(wrap, subgroups) {
     const cells = allCols.map(col => {
       const v = dayData[col.id];
       if (col.type === 'check') {
-        return `<td style="padding:2px 4px;text-align:center">
-          <input type="checkbox" ${v ? 'checked' : ''} style="width:16px;height:16px;accent-color:#22703d"
-            onchange="updateChecksheetField('${dKey}','${col.id}',this.checked,'check')">
-        </td>`;
+        const mark = v ? '<span style="color:#22703d;font-weight:700">✓</span>' : '<span style="color:#ddd">－</span>';
+        return `<td style="padding:2px 4px;text-align:center;font-size:12px">${mark}</td>`;
       }
-      return `<td style="padding:2px 4px;text-align:center">
-        <input type="number" min="0" step="1" value="${v == null ? '' : esc(v)}" placeholder="0"
-          style="${inputStyle}" onchange="updateChecksheetField('${dKey}','${col.id}',this.value,'qty')">
-      </td>`;
+      return `<td style="padding:2px 4px;text-align:center;font-size:12px;color:${v == null || v === '' ? '#ddd' : '#333'}">${v == null || v === '' ? '－' : esc(v)}</td>`;
     }).join('');
     return `<tr style="border-bottom:1px solid #f0f0f0;${isToday ? 'background:#fff7cc' : ''}">
       <td style="padding:4px 8px;font-size:12px;white-space:nowrap;font-weight:${isToday ? 700 : 400}">
