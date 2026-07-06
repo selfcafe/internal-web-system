@@ -3639,37 +3639,8 @@ function renderSettings() {
       </div>
       <div id="product-group-body" style="display:none;margin-top:10px">
 
-        <!-- 店舗別取扱商品設定 -->
-        <div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid #e0ede5">
-          <div class="settings-accordion-hdr" onclick="toggleStoreProdSettings()">
-            <span>店舗別取扱商品設定</span>
-            <span id="store-prod-settings-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
-          </div>
-          <div id="store-prod-settings-body" style="display:none">
-            <div class="settings-accordion-body">
-              <div style="font-size:12px;color:#888;margin-bottom:10px">店舗ごとに取り扱う商品を選択してください。未設定の場合は全商品が表示されます。</div>
-              <div class="store-prod-cfg-wrap">
-                <input id="store-prod-cfg-search" type="text" placeholder="店舗名で検索..." oninput="filterStoreProdCfgSelect()"
-                  style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:100%;margin-bottom:6px;box-sizing:border-box">
-                <select id="store-prod-cfg-sel" class="store-prod-cfg-store-sel"
-                  onchange="renderStoreProdCfg()">
-                  ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}
-                </select>
-              </div>
-              <div id="store-prod-cfg-body" style="margin-top:12px"></div>
-              <div style="margin-top:10px;display:flex;gap:8px">
-                <button onclick="saveStoreProdCfg()"
-                  style="background:#22703d;color:white;padding:8px 20px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">保存</button>
-                <button onclick="clearStoreProdCfg()"
-                  style="background:#e0e0e0;color:#555;padding:8px 16px;font-size:13px;border-radius:6px;border:none;cursor:pointer;font-family:inherit">全商品に戻す</button>
-                <span id="store-prod-cfg-msg" style="font-size:12px;color:#22703d;align-self:center;min-height:18px"></span>
-              </div>
-            </div>
-          </div>
-        </div>
-
         <!-- 商品設定 -->
-        <div>
+        <div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid #e0ede5">
           <div class="settings-accordion-hdr" onclick="toggleProdSettings()">
             <span>商品設定</span>
             <span id="prod-settings-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
@@ -3717,6 +3688,35 @@ function renderSettings() {
                 </tr></thead>
                 <tbody id="prod-tbl-body">${buildProdRows()}</tbody>
               </table>
+            </div>
+          </div>
+        </div>
+
+        <!-- 店舗別取扱商品設定 -->
+        <div>
+          <div class="settings-accordion-hdr" onclick="toggleStoreProdSettings()">
+            <span>店舗別取扱商品設定</span>
+            <span id="store-prod-settings-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
+          </div>
+          <div id="store-prod-settings-body" style="display:none">
+            <div class="settings-accordion-body">
+              <div style="font-size:12px;color:#888;margin-bottom:10px">店舗ごとに取り扱う商品を選択してください。未設定の場合は全商品が表示されます。</div>
+              <div class="store-prod-cfg-wrap">
+                <input id="store-prod-cfg-search" type="text" placeholder="店舗名で検索..." oninput="filterStoreProdCfgSelect()"
+                  style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:100%;margin-bottom:6px;box-sizing:border-box">
+                <select id="store-prod-cfg-sel" class="store-prod-cfg-store-sel"
+                  onchange="renderStoreProdCfg()">
+                  ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}
+                </select>
+              </div>
+              <div id="store-prod-cfg-body" style="margin-top:12px"></div>
+              <div style="margin-top:10px;display:flex;gap:8px">
+                <button onclick="saveStoreProdCfg()"
+                  style="background:#22703d;color:white;padding:8px 20px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">保存</button>
+                <button onclick="clearStoreProdCfg()"
+                  style="background:#e0e0e0;color:#555;padding:8px 16px;font-size:13px;border-radius:6px;border:none;cursor:pointer;font-family:inherit">全商品に戻す</button>
+                <span id="store-prod-cfg-msg" style="font-size:12px;color:#22703d;align-self:center;min-height:18px"></span>
+              </div>
             </div>
           </div>
         </div>
