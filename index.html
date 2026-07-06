@@ -1120,10 +1120,12 @@ function saveAllChecksheetItems() {
   localStorage.setItem(ALL_CHECKSHEET_ITEMS_KEY, json);
   _gasSaveSetting('all_checksheet_items', json);
 }
+// s_toiletpaper はデイリーカウント（商品連動）に移設済みのため、以前に同期済みの端末に残っていても復活させない
+const LEGACY_CHECKSHEET_ITEM_IDS = new Set(['s_toiletpaper']);
 function loadChecksheetItemSettings() {
   const saved = localStorage.getItem(ALL_CHECKSHEET_ITEMS_KEY);
   if (!saved) return;
-  const savedList = JSON.parse(saved);
+  const savedList = JSON.parse(saved).filter(it => !LEGACY_CHECKSHEET_ITEM_IDS.has(it.id));
   const savedIds = new Set(savedList.map(it => it.id));
   const defaults = JSON.parse(JSON.stringify(CHECKSHEET_ITEMS));
   CHECKSHEET_ITEMS.length = 0;
