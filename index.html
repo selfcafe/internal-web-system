@@ -3629,159 +3629,181 @@ function renderSettings() {
       </div>
     </div>
 
-    <!-- 店舗別商品設定 -->
+    <!-- 商品・棚卸設定（グループ） -->
     <div class="settings-card">
-      <div class="settings-accordion-hdr" onclick="toggleStoreProdSettings()">
-        <span>店舗別取扱商品設定</span>
-        <span id="store-prod-settings-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
+      <div class="settings-accordion-hdr" onclick="toggleProductGroup()">
+        <span>商品・棚卸</span>
+        <span id="product-group-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
       </div>
-      <div id="store-prod-settings-body" style="display:none">
-        <div class="settings-accordion-body">
-          <div style="font-size:12px;color:#888;margin-bottom:10px">店舗ごとに取り扱う商品を選択してください。未設定の場合は全商品が表示されます。</div>
-          <div class="store-prod-cfg-wrap">
-            <input id="store-prod-cfg-search" type="text" placeholder="店舗名で検索..." oninput="filterStoreProdCfgSelect()"
-              style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:100%;margin-bottom:6px;box-sizing:border-box">
-            <select id="store-prod-cfg-sel" class="store-prod-cfg-store-sel"
-              onchange="renderStoreProdCfg()">
-              ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}
-            </select>
+      <div id="product-group-body" style="display:none;margin-top:10px">
+
+        <!-- 店舗別取扱商品設定 -->
+        <div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid #e0ede5">
+          <div class="settings-accordion-hdr" onclick="toggleStoreProdSettings()">
+            <span>店舗別取扱商品設定</span>
+            <span id="store-prod-settings-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
           </div>
-          <div id="store-prod-cfg-body" style="margin-top:12px"></div>
-          <div style="margin-top:10px;display:flex;gap:8px">
-            <button onclick="saveStoreProdCfg()"
-              style="background:#22703d;color:white;padding:8px 20px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">保存</button>
-            <button onclick="clearStoreProdCfg()"
-              style="background:#e0e0e0;color:#555;padding:8px 16px;font-size:13px;border-radius:6px;border:none;cursor:pointer;font-family:inherit">全商品に戻す</button>
-            <span id="store-prod-cfg-msg" style="font-size:12px;color:#22703d;align-self:center;min-height:18px"></span>
+          <div id="store-prod-settings-body" style="display:none">
+            <div class="settings-accordion-body">
+              <div style="font-size:12px;color:#888;margin-bottom:10px">店舗ごとに取り扱う商品を選択してください。未設定の場合は全商品が表示されます。</div>
+              <div class="store-prod-cfg-wrap">
+                <input id="store-prod-cfg-search" type="text" placeholder="店舗名で検索..." oninput="filterStoreProdCfgSelect()"
+                  style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:100%;margin-bottom:6px;box-sizing:border-box">
+                <select id="store-prod-cfg-sel" class="store-prod-cfg-store-sel"
+                  onchange="renderStoreProdCfg()">
+                  ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}
+                </select>
+              </div>
+              <div id="store-prod-cfg-body" style="margin-top:12px"></div>
+              <div style="margin-top:10px;display:flex;gap:8px">
+                <button onclick="saveStoreProdCfg()"
+                  style="background:#22703d;color:white;padding:8px 20px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">保存</button>
+                <button onclick="clearStoreProdCfg()"
+                  style="background:#e0e0e0;color:#555;padding:8px 16px;font-size:13px;border-radius:6px;border:none;cursor:pointer;font-family:inherit">全商品に戻す</button>
+                <span id="store-prod-cfg-msg" style="font-size:12px;color:#22703d;align-self:center;min-height:18px"></span>
+              </div>
+            </div>
           </div>
         </div>
+
+        <!-- 商品設定 -->
+        <div>
+          <div class="settings-accordion-hdr" onclick="toggleProdSettings()">
+            <span>商品設定</span>
+            <span id="prod-settings-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
+          </div>
+          <div id="prod-settings-body" style="display:none">
+            <div class="settings-accordion-body">
+              <!-- 仕入先カテゴリ管理 -->
+              <div style="background:#fffef0;border-radius:8px;padding:12px 14px;margin-bottom:14px">
+                <div style="font-weight:600;font-size:12px;color:#888;margin-bottom:10px">仕入先カテゴリ管理</div>
+                <div id="vendor-rows">${buildVendorRows()}</div>
+                <div style="display:flex;gap:6px;align-items:center;margin-top:8px">
+                  <input id="new-vendor-name" placeholder="新しいカテゴリ名"
+                    style="border:1px solid #ddd;border-radius:6px;padding:6px 10px;font-size:13px;font-family:inherit;flex:1">
+                  <button onclick="addVendor()"
+                    style="background:#22703d;color:white;padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap">追加</button>
+                </div>
+                <div id="vendor-msg" style="font-size:12px;margin-top:6px;min-height:18px;color:#22703d"></div>
+              </div>
+              <!-- 商品追加フォーム -->
+              <div style="background:#fffef0;border-radius:8px;padding:12px 14px;margin-bottom:14px">
+                <div style="font-weight:600;font-size:12px;color:#888;margin-bottom:8px">商品を追加</div>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+                  <input id="new-prod-name" placeholder="商品名（必須）"
+                    style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;flex:1;min-width:120px">
+                  <select id="new-prod-vendor"
+                    style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit">
+                    ${buildVendorSelect()}
+                  </select>
+                  <input id="new-prod-unit" placeholder="単位"
+                    style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:70px">
+                  <input id="new-prod-case" placeholder="ケース単位"
+                    style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:130px">
+                  <button onclick="addCustomProduct()"
+                    style="background:#22703d;color:white;padding:8px 16px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap">追加</button>
+                </div>
+                <div id="prod-add-msg" style="font-size:12px;margin-top:6px;min-height:18px"></div>
+              </div>
+              <!-- 商品一覧 -->
+              <table class="settings-tbl">
+                <thead><tr>
+                  <th style="width:44px"></th>
+                  <th>商品名</th><th style="width:90px">単位</th>
+                  <th style="width:110px">単価（円）</th><th>ケース/入り数</th>
+                  <th style="width:52px"></th>
+                </tr></thead>
+                <tbody id="prod-tbl-body">${buildProdRows()}</tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
       </div>
     </div>
 
-    <!-- チェック項目設定（マスタ：追加・編集・削除） -->
+    <!-- チェックシート設定（グループ） -->
     <div class="settings-card">
-      <div class="settings-accordion-hdr" onclick="toggleChecksheetItemSettings()">
-        <span>チェック項目設定</span>
-        <span id="cs-item-settings-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
+      <div class="settings-accordion-hdr" onclick="toggleChecksheetGroup()">
+        <span>チェックシート</span>
+        <span id="checksheet-group-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
       </div>
-      <div id="cs-item-settings-body" style="display:none">
-        <div class="settings-accordion-body">
-          <div style="font-size:12px;color:#888;margin-bottom:10px">
-            「デイリーカウント」（数量）に表示される商品は「店舗別取扱商品設定」と連動しているため、ここでは編集できません。ここで追加・編集できるのは「清掃・点検」の項目です。
-          </div>
-          <!-- 項目追加フォーム -->
-          <div style="background:#fffef0;border-radius:8px;padding:12px 14px;margin-bottom:14px">
-            <div style="font-weight:600;font-size:12px;color:#888;margin-bottom:8px">チェック項目を追加</div>
-            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
-              <input id="new-cs-item-name" placeholder="項目名（必須）"
-                style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;flex:1;min-width:140px">
-              <select id="new-cs-item-category"
-                style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit">
-                ${CHECKSHEET_CATEGORIES.map(c => `<option value="${esc(c.key)}">${esc(c.label)}</option>`).join('')}
-              </select>
-              <select id="new-cs-item-type"
-                style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit">
-                <option value="check">チェック</option>
-                <option value="qty">数量</option>
-              </select>
-              <button onclick="addCustomChecksheetItem()"
-                style="background:#22703d;color:white;padding:8px 16px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap">追加</button>
-            </div>
-            <div id="cs-item-add-msg" style="font-size:12px;margin-top:6px;min-height:18px"></div>
-          </div>
-          <!-- 項目一覧 -->
-          <table class="settings-tbl">
-            <thead><tr>
-              <th>項目名</th><th style="width:120px">カテゴリ</th><th style="width:100px">種別</th><th style="width:52px"></th>
-            </tr></thead>
-            <tbody id="cs-item-tbl-body">${buildChecksheetItemRows()}</tbody>
-          </table>
-        </div>
-      </div>
-    </div>
+      <div id="checksheet-group-body" style="display:none;margin-top:10px">
 
-    <!-- 店舗別チェックシート項目設定 -->
-    <div class="settings-card">
-      <div class="settings-accordion-hdr" onclick="toggleChecksheetSettings()">
-        <span>店舗別チェックシート項目設定</span>
-        <span id="checksheet-settings-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
-      </div>
-      <div id="checksheet-settings-body" style="display:none">
-        <div class="settings-accordion-body">
-          <div style="font-size:12px;color:#888;margin-bottom:10px">
-            店舗ごとに実施するチェックシートの清掃・メンテナンス項目を選択してください。未設定の場合は全項目が表示されます。<br>
-            商品の補充数量列は「店舗別取扱商品設定」の内容がそのまま使われます（ここでの設定は不要です）。
+        <!-- チェック項目設定（マスタ：追加・編集・削除） -->
+        <div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid #e0ede5">
+          <div class="settings-accordion-hdr" onclick="toggleChecksheetItemSettings()">
+            <span>チェック項目設定</span>
+            <span id="cs-item-settings-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
           </div>
-          <div class="store-prod-cfg-wrap">
-            <input id="checksheet-cfg-search" type="text" placeholder="店舗名で検索..." oninput="filterChecksheetCfgSelect()"
-              style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:100%;margin-bottom:6px;box-sizing:border-box">
-            <select id="checksheet-cfg-sel" class="store-prod-cfg-store-sel"
-              onchange="renderChecksheetCfg()">
-              ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}
-            </select>
-          </div>
-          <div id="checksheet-cfg-body" style="margin-top:12px"></div>
-          <div style="margin-top:10px;display:flex;gap:8px">
-            <button onclick="saveChecksheetCfg()"
-              style="background:#22703d;color:white;padding:8px 20px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">保存</button>
-            <button onclick="clearChecksheetCfg()"
-              style="background:#e0e0e0;color:#555;padding:8px 16px;font-size:13px;border-radius:6px;border:none;cursor:pointer;font-family:inherit">全項目に戻す</button>
-            <span id="checksheet-cfg-msg" style="font-size:12px;color:#22703d;align-self:center;min-height:18px"></span>
+          <div id="cs-item-settings-body" style="display:none">
+            <div class="settings-accordion-body">
+              <div style="font-size:12px;color:#888;margin-bottom:10px">
+                「デイリーカウント」（数量）に表示される商品は「店舗別取扱商品設定」と連動しているため、ここでは編集できません。ここで追加・編集できるのは「清掃・点検」の項目です。
+              </div>
+              <!-- 項目追加フォーム -->
+              <div style="background:#fffef0;border-radius:8px;padding:12px 14px;margin-bottom:14px">
+                <div style="font-weight:600;font-size:12px;color:#888;margin-bottom:8px">チェック項目を追加</div>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+                  <input id="new-cs-item-name" placeholder="項目名（必須）"
+                    style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;flex:1;min-width:140px">
+                  <select id="new-cs-item-category"
+                    style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit">
+                    ${CHECKSHEET_CATEGORIES.map(c => `<option value="${esc(c.key)}">${esc(c.label)}</option>`).join('')}
+                  </select>
+                  <select id="new-cs-item-type"
+                    style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit">
+                    <option value="check">チェック</option>
+                    <option value="qty">数量</option>
+                  </select>
+                  <button onclick="addCustomChecksheetItem()"
+                    style="background:#22703d;color:white;padding:8px 16px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap">追加</button>
+                </div>
+                <div id="cs-item-add-msg" style="font-size:12px;margin-top:6px;min-height:18px"></div>
+              </div>
+              <!-- 項目一覧 -->
+              <table class="settings-tbl">
+                <thead><tr>
+                  <th>項目名</th><th style="width:120px">カテゴリ</th><th style="width:100px">種別</th><th style="width:52px"></th>
+                </tr></thead>
+                <tbody id="cs-item-tbl-body">${buildChecksheetItemRows()}</tbody>
+              </table>
+            </div>
           </div>
         </div>
-      </div>
-    </div>
 
-    <!-- 商品設定（アコーディオン） -->
-    <div class="settings-card">
-      <div class="settings-accordion-hdr" onclick="toggleProdSettings()">
-        <span>商品設定</span>
-        <span id="prod-settings-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
-      </div>
-      <div id="prod-settings-body" style="display:none">
-        <div class="settings-accordion-body">
-          <!-- 仕入先カテゴリ管理 -->
-          <div style="background:#fffef0;border-radius:8px;padding:12px 14px;margin-bottom:14px">
-            <div style="font-weight:600;font-size:12px;color:#888;margin-bottom:10px">仕入先カテゴリ管理</div>
-            <div id="vendor-rows">${buildVendorRows()}</div>
-            <div style="display:flex;gap:6px;align-items:center;margin-top:8px">
-              <input id="new-vendor-name" placeholder="新しいカテゴリ名"
-                style="border:1px solid #ddd;border-radius:6px;padding:6px 10px;font-size:13px;font-family:inherit;flex:1">
-              <button onclick="addVendor()"
-                style="background:#22703d;color:white;padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap">追加</button>
-            </div>
-            <div id="vendor-msg" style="font-size:12px;margin-top:6px;min-height:18px;color:#22703d"></div>
+        <!-- 店舗別チェックシート項目設定 -->
+        <div>
+          <div class="settings-accordion-hdr" onclick="toggleChecksheetSettings()">
+            <span>店舗別チェックシート項目設定</span>
+            <span id="checksheet-settings-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
           </div>
-          <!-- 商品追加フォーム -->
-          <div style="background:#fffef0;border-radius:8px;padding:12px 14px;margin-bottom:14px">
-            <div style="font-weight:600;font-size:12px;color:#888;margin-bottom:8px">商品を追加</div>
-            <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
-              <input id="new-prod-name" placeholder="商品名（必須）"
-                style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;flex:1;min-width:120px">
-              <select id="new-prod-vendor"
-                style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit">
-                ${buildVendorSelect()}
-              </select>
-              <input id="new-prod-unit" placeholder="単位"
-                style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:70px">
-              <input id="new-prod-case" placeholder="ケース単位"
-                style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:130px">
-              <button onclick="addCustomProduct()"
-                style="background:#22703d;color:white;padding:8px 16px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap">追加</button>
+          <div id="checksheet-settings-body" style="display:none">
+            <div class="settings-accordion-body">
+              <div style="font-size:12px;color:#888;margin-bottom:10px">
+                店舗ごとに実施するチェックシートの清掃・メンテナンス項目を選択してください。未設定の場合は全項目が表示されます。<br>
+                商品の補充数量列は「店舗別取扱商品設定」の内容がそのまま使われます（ここでの設定は不要です）。
+              </div>
+              <div class="store-prod-cfg-wrap">
+                <input id="checksheet-cfg-search" type="text" placeholder="店舗名で検索..." oninput="filterChecksheetCfgSelect()"
+                  style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:100%;margin-bottom:6px;box-sizing:border-box">
+                <select id="checksheet-cfg-sel" class="store-prod-cfg-store-sel"
+                  onchange="renderChecksheetCfg()">
+                  ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}
+                </select>
+              </div>
+              <div id="checksheet-cfg-body" style="margin-top:12px"></div>
+              <div style="margin-top:10px;display:flex;gap:8px">
+                <button onclick="saveChecksheetCfg()"
+                  style="background:#22703d;color:white;padding:8px 20px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">保存</button>
+                <button onclick="clearChecksheetCfg()"
+                  style="background:#e0e0e0;color:#555;padding:8px 16px;font-size:13px;border-radius:6px;border:none;cursor:pointer;font-family:inherit">全項目に戻す</button>
+                <span id="checksheet-cfg-msg" style="font-size:12px;color:#22703d;align-self:center;min-height:18px"></span>
+              </div>
             </div>
-            <div id="prod-add-msg" style="font-size:12px;margin-top:6px;min-height:18px"></div>
           </div>
-          <!-- 商品一覧 -->
-          <table class="settings-tbl">
-            <thead><tr>
-              <th style="width:44px"></th>
-              <th>商品名</th><th style="width:90px">単位</th>
-              <th style="width:110px">単価（円）</th><th>ケース/入り数</th>
-              <th style="width:52px"></th>
-            </tr></thead>
-            <tbody id="prod-tbl-body">${buildProdRows()}</tbody>
-          </table>
         </div>
+
       </div>
     </div>
 
@@ -3839,6 +3861,14 @@ function toggleProdSettings() {
   const open  = body.style.display === 'none';
   body.style.display  = open ? 'block' : 'none';
   arrow.textContent   = open ? '▼ 閉じる' : '▶ タップして開く';
+}
+
+function toggleProductGroup() {
+  const body  = document.getElementById('product-group-body');
+  const arrow = document.getElementById('product-group-arrow');
+  const open  = body.style.display === 'none';
+  body.style.display = open ? 'block' : 'none';
+  arrow.textContent  = open ? '▼ 閉じる' : '▶ タップして開く';
 }
 
 function toggleStoreProdSettings() {
@@ -3955,6 +3985,14 @@ function toggleChecksheetSettings() {
   body.style.display = open ? 'block' : 'none';
   arrow.textContent  = open ? '▼ 閉じる' : '▶ タップして開く';
   if (open) renderChecksheetCfg();
+}
+
+function toggleChecksheetGroup() {
+  const body  = document.getElementById('checksheet-group-body');
+  const arrow = document.getElementById('checksheet-group-arrow');
+  const open  = body.style.display === 'none';
+  body.style.display = open ? 'block' : 'none';
+  arrow.textContent  = open ? '▼ 閉じる' : '▶ タップして開く';
 }
 
 function toggleChecksheetItemSettings() {
