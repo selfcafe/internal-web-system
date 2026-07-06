@@ -1377,6 +1377,12 @@ function renderChecksheetTodayForm(wrap, subgroups) {
     ${body}`;
 }
 
+// 履歴表の見出しだけで使う短縮・改行表示（商品自体のlabelは変更しない）
+const CHECKSHEET_HEADER_OVERRIDES = {
+  'ロースト': 'コーヒー豆<br>ロースト',
+  '9オンス カップ蓋（12オンスもOK）GLDH09BD': '9オンス カップ蓋<br>（12オンスもOK）<br>GLDH09BD',
+};
+
 // 履歴は確認用のみ（編集不可）。数値・チェックとも読み取り専用のテキスト/記号表示にする
 function renderChecksheetHistoryTable(wrap, subgroups, period) {
   const days = checksheetPeriodDays(period);
@@ -1387,9 +1393,11 @@ function renderChecksheetHistoryTable(wrap, subgroups, period) {
   const subHeaderCells = subgroups.map(sg =>
     `<th colspan="${sg.cols.length}" style="padding:5px 4px;font-size:10px;font-weight:700;color:white;background:#1a5730;border-left:2px solid white;white-space:normal;word-break:break-word;line-height:1.15">${esc(sg.label)}</th>`
   ).join('');
-  const nameHeaderCells = allCols.map(col =>
-    `<th style="padding:5px 3px;font-size:10px;font-weight:600;white-space:normal;word-break:break-word;line-height:1.15;width:42px;background:#22703d;color:white;border-left:1px solid rgba(255,255,255,.25)">${esc(col.name)}</th>`
-  ).join('');
+  const nameHeaderCells = allCols.map(col => {
+    const prodName = col.id.startsWith('prod:') ? col.id.slice(5) : null;
+    const html = (prodName && CHECKSHEET_HEADER_OVERRIDES[prodName]) || esc(col.name);
+    return `<th style="padding:5px 3px;font-size:10px;font-weight:600;white-space:normal;word-break:break-word;line-height:1.15;width:42px;background:#22703d;color:white;border-left:1px solid rgba(255,255,255,.25)">${html}</th>`;
+  }).join('');
 
   const bodyRows = days.map(d => {
     const dKey = dateKeyStr(d);
