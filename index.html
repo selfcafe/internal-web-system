@@ -393,12 +393,11 @@
     </div>
   </div>
 
-  <!-- チェックシートタブ（準備中） -->
+  <!-- チェックシートタブ -->
   <div id="partner-tab-checklist" class="partner-tab-content">
-    <div class="partner-coming-soon">
-      <div class="soon-icon"></div>
-      <div class="soon-label">チェックシート</div>
-      <div style="font-size:13px;margin-top:6px;color:#bbb">準備中です</div>
+    <div style="max-width:1100px">
+      <div style="font-weight:700;font-size:15px;color:#22703d;margin-bottom:12px">チェックシート</div>
+      <div id="checksheet-table-wrap"></div>
     </div>
   </div>
 
@@ -615,6 +614,7 @@ async function syncAllStoreDataToGas() {
     _gasSaveSetting('store_product_cfg',localStorage.getItem(STORE_PRODUCTS_KEY) || '{}'),
     _gasSaveSetting('all_products',     localStorage.getItem(ALL_PRODUCTS_KEY)   || '[]'),
     _gasSaveSetting('vendor_config',    localStorage.getItem(VENDOR_CONFIG_KEY)  || '[]'),
+    _gasSaveSetting('store_checksheet_cfg', localStorage.getItem(STORE_CHECKSHEET_KEY) || '{}'),
   ]);
   if (msg) {
     msg.style.color = results.every(Boolean) ? '#22703d' : '#ef4444';
@@ -649,6 +649,7 @@ async function initGas() {
       if (r.key === 'store_product_cfg') localStorage.setItem(STORE_PRODUCTS_KEY,  clean(r.value));
       if (r.key === 'all_products')      localStorage.setItem(ALL_PRODUCTS_KEY,    clean(r.value));
       if (r.key === 'vendor_config')     localStorage.setItem(VENDOR_CONFIG_KEY,   clean(r.value));
+      if (r.key === 'store_checksheet_cfg') localStorage.setItem(STORE_CHECKSHEET_KEY, clean(r.value));
     });
     if (gasKeys.has('all_products') || gasKeys.has('vendor_config')) {
       loadVendorConfig();
@@ -660,6 +661,7 @@ async function initGas() {
     if (!gasKeys.has('store_product_cfg') && localStorage.getItem(STORE_PRODUCTS_KEY))  _syncStoreProductCfg();
     if (!gasKeys.has('all_products')      && localStorage.getItem(ALL_PRODUCTS_KEY))    _gasSaveSetting('all_products',  localStorage.getItem(ALL_PRODUCTS_KEY));
     if (!gasKeys.has('vendor_config')     && localStorage.getItem(VENDOR_CONFIG_KEY))   _gasSaveSetting('vendor_config', localStorage.getItem(VENDOR_CONFIG_KEY));
+    if (!gasKeys.has('store_checksheet_cfg') && localStorage.getItem(STORE_CHECKSHEET_KEY)) _syncStoreChecksheetCfg();
     loadCustomStores();
     loadDeletedStores();
     // パスワード一覧が開いている場合は再描画
@@ -1033,6 +1035,201 @@ function renderInventory() {
   </div>`;
 }
 
+/* ===== チェックシート ===== */
+// 商品の補充数量は「店舗別取扱商品設定」の商品一覧（棚卸表と同じ、消耗品カテゴリ・「その他」商品名を除く）から自動生成する。
+// ここに持つのは商品ではない清掃・メンテナンス系タスクのみ。
+const CHECKSHEET_ITEMS = [
+  // 100RS清掃（チェック）
+  { id:'c_millock',    category:'100rs_clean', type:'check', name:'ミルロック対策' },
+  { id:'c_nozzle1',    category:'100rs_clean', type:'check', name:'撹拌ノズル清掃' },
+  { id:'c_nozzle2',    category:'100rs_clean', type:'check', name:'コーヒー側小ノズル清掃' },
+  { id:'c_cuptray',    category:'100rs_clean', type:'check', name:'カップ受け清掃' },
+  { id:'c_waste',      category:'100rs_clean', type:'check', name:'廃液捨て' },
+  { id:'c_grounds',    category:'100rs_clean', type:'check', name:'カス捨て' },
+  { id:'c_doorwipe',   category:'100rs_clean', type:'check', name:'取り出し口扉拭き' },
+  { id:'c_lidcheck',   category:'100rs_clean', type:'check', name:'蓋、扉はＯＫ？' },
+  { id:'c_lightcheck', category:'100rs_clean', type:'check', name:'販売中点灯確認' },
+  // 清掃（店舗）
+  { id:'a_water_server', category:'cleaning', type:'check', name:'水　ウォーターサーバー' },
+  { id:'s_alcohol',      category:'cleaning', type:'check', name:'除菌アルコールスプレー補充' },
+  { id:'s_counter',      category:'cleaning', type:'check', name:'サーバーカウンター' },
+  { id:'s_table',        category:'cleaning', type:'check', name:'テーブル' },
+  { id:'s_vacuum',       category:'cleaning', type:'check', name:'掃除機、掃き掃除' },
+  { id:'s_toiletpaper',  category:'cleaning', type:'check', name:'トイレットペーパー補充' },
+  { id:'s_trashcheck',   category:'cleaning', type:'check', name:'ゴミ箱確認・回収' },
+  { id:'s_trashbag',     category:'cleaning', type:'qty',   name:'ゴミ出し（可燃・不燃・資源／45L袋 目安月40個）' },
+  { id:'s_styrofoam',    category:'cleaning', type:'check', name:'発泡スチロールなど その他ゴミ' },
+];
+const CHECKSHEET_CATEGORIES = [
+  { key:'100rs_clean', label:'100RS清掃' },
+  { key:'cleaning',    label:'清掃' },
+];
+
+const STORE_CHECKSHEET_KEY = 'store_checksheet_cfg';
+function getStoreChecksheetConfig(storeId) {
+  const cfg = JSON.parse(localStorage.getItem(STORE_CHECKSHEET_KEY) || '{}');
+  return cfg[storeId] || null;
+}
+function setStoreChecksheetConfig(storeId, itemIds) {
+  const cfg = JSON.parse(localStorage.getItem(STORE_CHECKSHEET_KEY) || '{}');
+  cfg[storeId] = itemIds;
+  localStorage.setItem(STORE_CHECKSHEET_KEY, JSON.stringify(cfg));
+  _syncStoreChecksheetCfg();
+}
+function _syncStoreChecksheetCfg() {
+  _gasSaveSetting('store_checksheet_cfg', localStorage.getItem(STORE_CHECKSHEET_KEY) || '{}');
+}
+function getAvailableChecksheetItems(storeId) {
+  const cfg = getStoreChecksheetConfig(storeId);
+  return cfg ? CHECKSHEET_ITEMS.filter(it => cfg.includes(it.id)) : CHECKSHEET_ITEMS;
+}
+
+// 5日締め：月初1〜5日の入力は前月分として扱う（棚卸と同じ締めサイクル）
+function getChecksheetPeriod(baseDate) {
+  const d = baseDate || new Date();
+  const y = d.getFullYear();
+  let m = d.getMonth(); // 0-indexed
+  if (d.getDate() <= 5) { m -= 1; }
+  const start = new Date(y, m, 6);
+  const end   = new Date(y, m + 1, 5);
+  const label = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}`;
+  return { label, start, end };
+}
+function checksheetPeriodDays(period) {
+  const days = [];
+  const cur = new Date(period.start);
+  while (cur <= period.end) { days.push(new Date(cur)); cur.setDate(cur.getDate() + 1); }
+  return days;
+}
+const CHECKSHEET_WEEKDAY_JA = ['日','月','火','水','木','金','土'];
+const dateKeyStr = d => d.toLocaleDateString('sv');
+function fmtChecksheetDay(d) { return `${d.getMonth() + 1}/${d.getDate()}(${CHECKSHEET_WEEKDAY_JA[d.getDay()]})`; }
+
+const CHECKSHEET_DATA_KEY = 'checksheet_data';
+function getChecksheetData(storeId, periodLabel) {
+  const all = JSON.parse(localStorage.getItem(CHECKSHEET_DATA_KEY) || '{}');
+  return (all[storeId] && all[storeId][periodLabel]) || {};
+}
+function setChecksheetField(storeId, periodLabel, dayKey, itemKey, value) {
+  const all = JSON.parse(localStorage.getItem(CHECKSHEET_DATA_KEY) || '{}');
+  if (!all[storeId]) all[storeId] = {};
+  if (!all[storeId][periodLabel]) all[storeId][periodLabel] = {};
+  if (!all[storeId][periodLabel][dayKey]) all[storeId][periodLabel][dayKey] = {};
+  all[storeId][periodLabel][dayKey][itemKey] = value;
+  localStorage.setItem(CHECKSHEET_DATA_KEY, JSON.stringify(all));
+}
+function updateChecksheetField(dayKey, itemKey, rawValue, type) {
+  const period = getChecksheetPeriod();
+  const value = type === 'check' ? !!rawValue : (rawValue === '' ? '' : Number(rawValue));
+  setChecksheetField(storeTab, period.label, dayKey, itemKey, value);
+  updateChecksheetTotals();
+}
+
+// 補充数量列：棚卸表と同じ商品リスト（消耗品カテゴリ・「その他」商品名を除く、店舗別取扱商品設定に連動）をベンダー別に並べる
+// ただし販売品は「水」以外、東海エリア限定お菓子は全て、デイリーカウント対象外
+function _checksheetProductColumns() {
+  const VENDOR_LABELS = Object.fromEntries(VENDOR_CONFIG.map(v => [v.key, v.label]));
+  const products = _inventoryProductList().filter(p =>
+    p.vendor !== 'tokai_snack' && !(p.vendor === 'sales' && p.name !== '水')
+  );
+  return VENDOR_CONFIG.map(v => ({
+    key: 'vendor:' + v.key,
+    label: VENDOR_LABELS[v.key] || v.key,
+    cols: products.filter(p => p.vendor === v.key).map(p => ({ id:'prod:' + p.name, type:'qty', name:p.label || p.name })),
+  })).filter(g => g.cols.length);
+}
+function _checksheetColumns(storeId) {
+  const items = getAvailableChecksheetItems(storeId);
+  const taskGroups = CHECKSHEET_CATEGORIES.map(c => ({
+    key: c.key, label: c.label,
+    cols: items.filter(it => it.category === c.key).map(it => ({ id:it.id, type:it.type, name:it.name })),
+  })).filter(c => c.cols.length);
+  return [..._checksheetProductColumns(), ...taskGroups];
+}
+
+function renderChecksheet() {
+  const wrap = document.getElementById('checksheet-table-wrap');
+  if (!wrap) return;
+  const period = getChecksheetPeriod();
+  const days = checksheetPeriodDays(period);
+  const todayKey = today();
+  const cats = _checksheetColumns(storeTab);
+
+  if (!cats.length) {
+    wrap.innerHTML = '<div style="color:#aaa;padding:20px">チェック項目が設定されていません</div>';
+    return;
+  }
+  const data = getChecksheetData(storeTab, period.label);
+  const allCols = cats.flatMap(c => c.cols);
+  const inputStyle = 'padding:4px 6px;border:1px solid #d1d5db;border-radius:4px;font-size:13px;background:white;width:60px;text-align:right';
+
+  const catHeaderCells = cats.map(c =>
+    `<th colspan="${c.cols.length}" style="padding:6px 8px;font-size:11px;font-weight:700;color:white;background:#1a5730;border-left:2px solid white;white-space:nowrap">${esc(c.label)}</th>`
+  ).join('');
+  const nameHeaderCells = allCols.map(col =>
+    `<th style="padding:6px 6px;font-size:11px;font-weight:600;white-space:nowrap;background:#22703d;color:white;border-left:1px solid rgba(255,255,255,.25)">${esc(col.name)}</th>`
+  ).join('');
+
+  const bodyRows = days.map(d => {
+    const dKey = dateKeyStr(d);
+    const isToday = dKey === todayKey;
+    const dayData = data[dKey] || {};
+    const cells = allCols.map(col => {
+      const v = dayData[col.id];
+      if (col.type === 'check') {
+        return `<td style="padding:4px 6px;text-align:center">
+          <input type="checkbox" ${v ? 'checked' : ''} style="width:17px;height:17px;accent-color:#22703d"
+            onchange="updateChecksheetField('${dKey}','${col.id}',this.checked,'check')">
+        </td>`;
+      }
+      return `<td style="padding:4px 6px;text-align:center">
+        <input type="number" min="0" step="1" value="${v == null ? '' : esc(v)}" placeholder="0"
+          style="${inputStyle}" onchange="updateChecksheetField('${dKey}','${col.id}',this.value,'qty')">
+      </td>`;
+    }).join('');
+    return `<tr style="border-bottom:1px solid #f0f0f0;${isToday ? 'background:#fff7cc' : ''}">
+      <td style="padding:8px 10px;font-size:12px;white-space:nowrap;font-weight:${isToday ? 700 : 400}">
+        ${fmtChecksheetDay(d)}${isToday ? ' <span style="background:#f59e0b;color:white;font-size:10px;padding:1px 6px;border-radius:10px;margin-left:4px">本日</span>' : ''}
+      </td>
+      ${cells}
+    </tr>`;
+  }).join('');
+
+  wrap.innerHTML = `<div style="overflow-x:auto">
+    <div style="font-size:12px;color:#888;margin-bottom:8px">対象期間：${esc(period.label)}分（${fmtChecksheetDay(period.start)}〜${fmtChecksheetDay(period.end)}）</div>
+    <table id="checksheet-table" style="border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);min-width:600px">
+      <thead>
+        <tr style="background:#1a5730"><th style="padding:6px 8px;background:#1a5730"></th>${catHeaderCells}</tr>
+        <tr><th style="padding:6px 8px;font-size:11px;background:#22703d;color:white;white-space:nowrap">日付</th>${nameHeaderCells}</tr>
+      </thead>
+      <tbody>${bodyRows}</tbody>
+      <tfoot><tr style="background:#f0f7e8;border-top:2px solid #aabf28">
+        <td style="padding:6px 10px;font-size:12px;font-weight:700;color:#22703d">合計</td>
+        ${allCols.map(col => `<td class="checksheet-total-cell" data-item="${esc(col.id)}" data-type="${col.type}" style="padding:6px;text-align:center;font-weight:700;color:#22703d"></td>`).join('')}
+      </tr></tfoot>
+    </table>
+  </div>`;
+  updateChecksheetTotals();
+}
+
+function updateChecksheetTotals() {
+  const table = document.getElementById('checksheet-table');
+  if (!table) return;
+  const period = getChecksheetPeriod();
+  const days = checksheetPeriodDays(period);
+  const data = getChecksheetData(storeTab, period.label);
+  table.querySelectorAll('.checksheet-total-cell').forEach(td => {
+    const itemId = td.dataset.item;
+    if (td.dataset.type !== 'qty') { td.textContent = '―'; td.style.color = '#ccc'; return; }
+    let sum = 0;
+    days.forEach(d => {
+      const v = (data[dateKeyStr(d)] || {})[itemId];
+      if (typeof v === 'number') sum += v;
+    });
+    td.textContent = sum;
+  });
+}
+
 /* ===== パートナーポータル タブ切り替え ===== */
 let partnerTabCurrent = 'order';
 async function switchPartnerTab(tab) {
@@ -1050,6 +1247,9 @@ async function switchPartnerTab(tab) {
   }
   if (tab === 'inventory') {
     renderInventory();
+  }
+  if (tab === 'checklist') {
+    renderChecksheet();
   }
 }
 
@@ -3255,6 +3455,38 @@ function renderSettings() {
       </div>
     </div>
 
+    <!-- 店舗別チェックシート項目設定 -->
+    <div class="settings-card">
+      <div class="settings-accordion-hdr" onclick="toggleChecksheetSettings()">
+        <span>店舗別チェックシート項目設定</span>
+        <span id="checksheet-settings-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
+      </div>
+      <div id="checksheet-settings-body" style="display:none">
+        <div class="settings-accordion-body">
+          <div style="font-size:12px;color:#888;margin-bottom:10px">
+            店舗ごとに実施するチェックシートの清掃・メンテナンス項目を選択してください。未設定の場合は全項目が表示されます。<br>
+            商品の補充数量列は「店舗別取扱商品設定」の内容がそのまま使われます（ここでの設定は不要です）。
+          </div>
+          <div class="store-prod-cfg-wrap">
+            <input id="checksheet-cfg-search" type="text" placeholder="店舗名で検索..." oninput="filterChecksheetCfgSelect()"
+              style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:100%;margin-bottom:6px;box-sizing:border-box">
+            <select id="checksheet-cfg-sel" class="store-prod-cfg-store-sel"
+              onchange="renderChecksheetCfg()">
+              ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}
+            </select>
+          </div>
+          <div id="checksheet-cfg-body" style="margin-top:12px"></div>
+          <div style="margin-top:10px;display:flex;gap:8px">
+            <button onclick="saveChecksheetCfg()"
+              style="background:#22703d;color:white;padding:8px 20px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">保存</button>
+            <button onclick="clearChecksheetCfg()"
+              style="background:#e0e0e0;color:#555;padding:8px 16px;font-size:13px;border-radius:6px;border:none;cursor:pointer;font-family:inherit">全項目に戻す</button>
+            <span id="checksheet-cfg-msg" style="font-size:12px;color:#22703d;align-self:center;min-height:18px"></span>
+          </div>
+        </div>
+      </div>
+    </div>
+
     <!-- 商品設定（アコーディオン） -->
     <div class="settings-card">
       <div class="settings-accordion-hdr" onclick="toggleProdSettings()">
@@ -3468,6 +3700,109 @@ function clearStoreProdCfg() {
   setStoreProductConfig(sid, null);
   renderStoreProdCfg();
   if (msg) { msg.textContent = '✓ 全商品表示に戻しました'; setTimeout(() => { if(msg) msg.textContent=''; }, 2500); }
+}
+
+/* ===== 店舗別チェックシート項目設定（管理画面） ===== */
+function toggleChecksheetSettings() {
+  const body  = document.getElementById('checksheet-settings-body');
+  const arrow = document.getElementById('checksheet-settings-arrow');
+  const open  = body.style.display === 'none';
+  body.style.display = open ? 'block' : 'none';
+  arrow.textContent  = open ? '▼ 閉じる' : '▶ タップして開く';
+  if (open) renderChecksheetCfg();
+}
+
+function filterChecksheetCfgSelect() {
+  const q = (document.getElementById('checksheet-cfg-search')?.value || '').trim().toLowerCase();
+  const sel = document.getElementById('checksheet-cfg-sel');
+  if (!sel) return;
+  const prevValue = sel.value;
+  sel.innerHTML = Object.entries(STORES)
+    .filter(([sid, sname]) => !q || sname.toLowerCase().includes(q) || sid.toLowerCase().includes(q))
+    .map(([sid, sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`)
+    .join('');
+  if ([...sel.options].some(o => o.value === prevValue)) sel.value = prevValue;
+  renderChecksheetCfg();
+}
+
+function renderChecksheetCfg() {
+  const sel = document.getElementById('checksheet-cfg-sel');
+  const container = document.getElementById('checksheet-cfg-body');
+  if (!sel || !container) return;
+  if (!sel.options.length) { container.innerHTML = '<div style="font-size:12px;color:#888">該当する店舗がありません</div>'; return; }
+  const sid = sel.value;
+  const cfg = getStoreChecksheetConfig(sid);
+  const selected = cfg ? new Set(cfg) : null;
+
+  const byCategory = {};
+  CHECKSHEET_ITEMS.forEach(it => { (byCategory[it.category] ||= []).push(it); });
+
+  container.innerHTML = `<div class="store-prod-cfg-list">` +
+    CHECKSHEET_CATEGORIES.map(c => {
+      const items = byCategory[c.key] || [];
+      if (!items.length) return '';
+      return `<div class="store-prod-vendor-hdr" style="display:flex;align-items:center;justify-content:space-between">
+          <span>${esc(c.label)}</span>
+          <label style="font-weight:normal;font-size:11px;display:flex;align-items:center;gap:4px;cursor:pointer;margin-left:8px">
+            <input type="checkbox" data-cat-all="${esc(c.key)}" onchange="toggleChecksheetCatAll('${esc(c.key)}',this.checked)" style="width:13px;height:13px;accent-color:#22703d;flex-shrink:0">全選択
+          </label>
+        </div>
+        <div class="store-prod-vendor-grid">` +
+        items.map(it => {
+          const checked = selected === null || selected.has(it.id) ? 'checked' : '';
+          const typeLabel = it.type === 'qty' ? '数量' : 'チェック';
+          return `<label><input type="checkbox" value="${esc(it.id)}" data-cat="${esc(c.key)}" onchange="updateChecksheetCatAllCheck('${esc(c.key)}')" ${checked}>${esc(it.name)}<span style="color:#aaa;font-size:11px;margin-left:2px">（${typeLabel}）</span></label>`;
+        }).join('') +
+        `</div>`;
+    }).join('') +
+    `</div>`;
+
+  CHECKSHEET_CATEGORIES.forEach(c => {
+    const allBox = container.querySelector(`input[data-cat-all="${c.key}"]`);
+    if (!allBox) return;
+    const boxes = [...container.querySelectorAll(`input[data-cat="${c.key}"]`)];
+    const n = boxes.filter(el => el.checked).length;
+    if (n === boxes.length)    { allBox.checked = true;  allBox.indeterminate = false; }
+    else if (n === 0)          { allBox.checked = false; allBox.indeterminate = false; }
+    else                       { allBox.checked = false; allBox.indeterminate = true;  }
+  });
+}
+
+function toggleChecksheetCatAll(ckey, checked) {
+  document.querySelectorAll(`#checksheet-cfg-body input[data-cat="${ckey}"]`)
+    .forEach(el => el.checked = checked);
+}
+
+function updateChecksheetCatAllCheck(ckey) {
+  const container = document.getElementById('checksheet-cfg-body');
+  const allBox = container?.querySelector(`input[data-cat-all="${ckey}"]`);
+  if (!allBox) return;
+  const boxes = [...container.querySelectorAll(`input[data-cat="${ckey}"]`)];
+  const n = boxes.filter(el => el.checked).length;
+  if (n === boxes.length)    { allBox.checked = true;  allBox.indeterminate = false; }
+  else if (n === 0)          { allBox.checked = false; allBox.indeterminate = false; }
+  else                       { allBox.checked = false; allBox.indeterminate = true;  }
+}
+
+function saveChecksheetCfg() {
+  const sel = document.getElementById('checksheet-cfg-sel');
+  const container = document.getElementById('checksheet-cfg-body');
+  const msg = document.getElementById('checksheet-cfg-msg');
+  if (!sel || !container) return;
+  const sid = sel.value;
+  const checked = [...container.querySelectorAll('input[type=checkbox]:checked')].map(el => el.value);
+  setStoreChecksheetConfig(sid, checked);
+  if (msg) { msg.textContent = '✓ 保存しました'; setTimeout(() => { if(msg) msg.textContent=''; }, 2500); }
+}
+
+function clearChecksheetCfg() {
+  const sel = document.getElementById('checksheet-cfg-sel');
+  const msg = document.getElementById('checksheet-cfg-msg');
+  if (!sel) return;
+  const sid = sel.value;
+  setStoreChecksheetConfig(sid, null);
+  renderChecksheetCfg();
+  if (msg) { msg.textContent = '✓ 全項目表示に戻しました'; setTimeout(() => { if(msg) msg.textContent=''; }, 2500); }
 }
 
 function toggleStorePwSettings() {
