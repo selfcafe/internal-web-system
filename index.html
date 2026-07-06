@@ -304,6 +304,14 @@
     .checksheet-today-row input[type="number"] { width:70px; text-align:right; padding:6px 8px; border:1px solid #d1d5db; border-radius:4px; font-size:14px; }
     .checksheet-today-row input[type="checkbox"] { width:22px; height:22px; accent-color:#22703d; flex-shrink:0; }
 
+    /* チェックシート 当月履歴：俯瞰性重視で行高を最小化（グローバルなinput最小高さ・モバイルの16px強制を上書き） */
+    #checksheet-table th, #checksheet-table td { padding:1px 3px !important; line-height:1.1; }
+    #checksheet-table input[type="number"] {
+      min-height:0 !important; height:20px !important; width:32px !important;
+      padding:0 2px !important; font-size:11px !important; border-radius:3px; text-align:right;
+    }
+    #checksheet-table input[type="checkbox"] { width:14px !important; height:14px !important; margin:0; }
+
     /* 店舗別商品設定 */
     .store-prod-cfg-wrap { display:flex; gap:10px; flex-wrap:wrap; align-items:flex-start; }
     .store-prod-cfg-store-sel { min-width:180px; border:1px solid #ddd; border-radius:6px; padding:7px 10px; font-size:13px; font-family:inherit; }
