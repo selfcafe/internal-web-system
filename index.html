@@ -1126,6 +1126,12 @@ function getChecksheetPeriod(baseDate) {
   const label = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}`;
   return { label, start, end };
 }
+// 前月分の締め日は翌月5日：当月1〜5日はまだ前月分の入力期間として扱う（履歴表示のデフォルト月に反映）
+function getChecksheetDefaultPeriod() {
+  const d = new Date();
+  if (d.getDate() <= 5) return getChecksheetPeriod(new Date(d.getFullYear(), d.getMonth() - 1, 1));
+  return getChecksheetPeriod(d);
+}
 function checksheetPeriodDays(period) {
   const days = [];
   const cur = new Date(period.start);
@@ -1150,7 +1156,9 @@ function setChecksheetField(storeId, periodLabel, dayKey, itemKey, value) {
   localStorage.setItem(CHECKSHEET_DATA_KEY, JSON.stringify(all));
 }
 function updateChecksheetField(dayKey, itemKey, rawValue, type) {
-  const period = getChecksheetPeriod();
+  // dayKeyの属する暦月を使う（当月1〜5日に前月分の履歴を編集するケースがあるため、常に「今日」の期間とは限らない）
+  const [y, m, d] = dayKey.split('-').map(Number);
+  const period = getChecksheetPeriod(new Date(y, m - 1, d));
   const value = type === 'check' ? !!rawValue : (rawValue === '' ? '' : Number(rawValue));
   setChecksheetField(storeTab, period.label, dayKey, itemKey, value);
   updateChecksheetTotals();
@@ -1239,7 +1247,7 @@ function renderChecksheetTodayForm(wrap, subgroups) {
 }
 
 function renderChecksheetHistoryTable(wrap, subgroups) {
-  const period = getChecksheetPeriod();
+  const period = getChecksheetDefaultPeriod();
   const days = checksheetPeriodDays(period);
   const todayKey = today();
   const data = getChecksheetData(storeTab, period.label);
@@ -1298,7 +1306,7 @@ function renderChecksheetHistoryTable(wrap, subgroups) {
 function updateChecksheetTotals() {
   const table = document.getElementById('checksheet-table');
   if (!table) return;
-  const period = getChecksheetPeriod();
+  const period = getChecksheetDefaultPeriod();
   const days = checksheetPeriodDays(period);
   const data = getChecksheetData(storeTab, period.label);
   table.querySelectorAll('.checksheet-total-cell').forEach(td => {
