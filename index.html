@@ -1116,14 +1116,13 @@ function getAvailableChecksheetItems(storeId) {
   return cfg ? CHECKSHEET_ITEMS.filter(it => cfg.includes(it.id)) : CHECKSHEET_ITEMS;
 }
 
-// 5日締め：月初1〜5日の入力は前月分として扱う（棚卸と同じ締めサイクル）
+// 暦月（1日〜月末）で1期間とする
 function getChecksheetPeriod(baseDate) {
   const d = baseDate || new Date();
   const y = d.getFullYear();
-  let m = d.getMonth(); // 0-indexed
-  if (d.getDate() <= 5) { m -= 1; }
-  const start = new Date(y, m, 6);
-  const end   = new Date(y, m + 1, 5);
+  const m = d.getMonth(); // 0-indexed
+  const start = new Date(y, m, 1);
+  const end   = new Date(y, m + 1, 0);
   const label = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}`;
   return { label, start, end };
 }
