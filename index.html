@@ -275,6 +275,14 @@
       .settings-tbl tr:not(.settings-vendor-hdr) td:nth-child(6) { grid-area:del; align-self:start; }
       .settings-tbl td[data-label]::before { content:attr(data-label); display:block; font-size:10px; color:#888; font-weight:600; margin-bottom:2px; }
       .settings-tbl tr:not(.settings-vendor-hdr) input { width:100% !important; box-sizing:border-box; max-width:none !important; }
+      /* チェック項目設定テーブル：ドラッグハンドルが無い4列構成なので独自グリッドを使う */
+      #cs-item-tbl-body tr[data-csid] {
+        grid-template-columns:1fr; grid-template-areas:"nm" "ct" "ty" "dl";
+      }
+      #cs-item-tbl-body tr[data-csid] td:nth-child(1) { grid-area:nm; }
+      #cs-item-tbl-body tr[data-csid] td:nth-child(2) { grid-area:ct; }
+      #cs-item-tbl-body tr[data-csid] td:nth-child(3) { grid-area:ty; }
+      #cs-item-tbl-body tr[data-csid] td:nth-child(4) { grid-area:dl; align-self:start; }
     }
 
     /* パートナーポータル タブ */
