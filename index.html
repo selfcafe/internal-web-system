@@ -1305,14 +1305,21 @@ function _checksheetColumnGroups(storeId) {
 // デイリーカウント／清掃・点検の切替、当日入力／当月履歴／先月履歴の切替
 let checksheetActiveCategory = 'daily_count';
 let checksheetActiveView = 'today'; // 'today' | 'history'（当月/締め猶予中は前月） | 'last_month'（常に実際の前月）
+let checksheetPrevView = 'today'; // 先月の履歴を開く直前のビュー（もう一度押したときに戻す用）
 function switchChecksheetCategory(cat) { checksheetActiveCategory = cat; renderChecksheet(); }
 // 1つのボタンで当日入力⇔当月履歴をトグル。ボタンには「次に切り替わる先」の名前を表示する
 function toggleChecksheetView() {
   checksheetActiveView = checksheetActiveView === 'today' ? 'history' : 'today';
   renderChecksheet();
 }
+// もう一度押すと解除され、先月の履歴を開く直前のビューに戻る
 function showChecksheetLastMonth() {
-  checksheetActiveView = 'last_month';
+  if (checksheetActiveView === 'last_month') {
+    checksheetActiveView = checksheetPrevView;
+  } else {
+    checksheetPrevView = checksheetActiveView;
+    checksheetActiveView = 'last_month';
+  }
   renderChecksheet();
 }
 
