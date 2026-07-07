@@ -974,13 +974,40 @@ function countNewGroups(sid) {
   return new Set(rows.map(r => r.groupId || r.id)).size;
 }
 
-// 依頼済み履歴の中に「否認されたのに、まだ依頼取り下げしていない」ものがあれば
-// パートナー自身が対応すべき通知として上部の発注タブに「NEW」を出す
+// 依頼済み履歴のうち「否認されたのに未対応」または「前回確認時から発注日／納品予定日が
+// 追加・変更された」ものがあれば、パートナーが見るべき通知として上部の発注タブに「NEW」を出す。
+// 否認は取り下げるまで持続するデータ上のフラグをそのまま使うが、発注日／納品予定日の変化は
+// 元データに「見た/見ていない」の概念が無いため、最後に履歴を開いた時点のスナップショットを
+// localStorageに保存して比較する（markOrderHistorySeenで更新）。
+const SEEN_ORDER_STATUS_KEY = 'seen_order_status';
 function updatePartnerOrderBadge() {
   const badge = document.getElementById('ptab-order-badge');
   if (!badge) return;
-  const needsAttention = storeRows.some(r => r.locked && r.isNew && r.denied);
+  const seenAll = JSON.parse(localStorage.getItem(SEEN_ORDER_STATUS_KEY) || '{}');
+  const seen = seenAll[storeTab] || {};
+  const groups = buildStoreGroups(storeRows).filter(g => g[0].locked);
+  const needsAttention = groups.some(g => {
+    const r = g[0];
+    if (r.denied) return true;
+    const gid = r.groupId || r.id;
+    const s = seen[gid];
+    if (!s) return !!(r.orderDate || r.deliveryDate);
+    return (r.orderDate || '') !== (s.orderDate || '') || (r.deliveryDate || '') !== (s.deliveryDate || '');
+  });
   badge.style.display = needsAttention ? '' : 'none';
+}
+// 依頼済み履歴を開いた時点の発注日／納品予定日を「確認済み」として記録する
+function markOrderHistorySeen() {
+  const seenAll = JSON.parse(localStorage.getItem(SEEN_ORDER_STATUS_KEY) || '{}');
+  const seen = {};
+  buildStoreGroups(storeRows).filter(g => g[0].locked).forEach(g => {
+    const r = g[0];
+    const gid = r.groupId || r.id;
+    seen[gid] = { orderDate: r.orderDate || '', deliveryDate: r.deliveryDate || '' };
+  });
+  seenAll[storeTab] = seen;
+  localStorage.setItem(SEEN_ORDER_STATUS_KEY, JSON.stringify(seenAll));
+  updatePartnerOrderBadge();
 }
 
 function updateBadges() {
@@ -2420,7 +2447,7 @@ function toggleOrderHistory() {
     btn.textContent = _historyOpen ? '依頼済み履歴 ' : '発注依頼 ';
     if (badge) btn.appendChild(badge);
   }
-  if (_historyOpen) renderOrderHistory();
+  if (_historyOpen) { renderOrderHistory(); markOrderHistorySeen(); }
 }
 
 function renderOrderHistory() {
