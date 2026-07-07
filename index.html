@@ -182,12 +182,7 @@
     .page-info { font-size:13px; color:#666; padding:0 4px; }
 
     /* サイトログイン画面 */
-    .site-lock {
-      position:fixed; inset:0; background-color:#edecd8;
-      background-image: url('herringbone-tile.png');
-      background-size: 240px 240px;
-      z-index:2000; display:flex; align-items:center; justify-content:center;
-    }
+    .site-lock { position:fixed; inset:0; background-color:#edecd8; background-image:repeating-linear-gradient(45deg,rgba(255,255,255,.18) 0px,rgba(255,255,255,.18) 1px,transparent 1px,transparent 6px),repeating-linear-gradient(-45deg,rgba(200,195,160,.12) 0px,rgba(200,195,160,.12) 1px,transparent 1px,transparent 6px); z-index:2000; display:flex; align-items:center; justify-content:center; }
     .site-lock.hidden { display:none; }
     .site-lock-box { background:rgba(255,255,255,.92); border-radius:20px; padding:40px 36px; width:min(380px,90vw); text-align:center; box-shadow:0 8px 32px rgba(34,112,61,.12); border:1px solid #d8d6be; }
     .site-lock-logo { display:block; width:76px; height:76px; margin:0 auto 14px; border-radius:50%; box-shadow:0 4px 14px rgba(34,112,61,.25); }
