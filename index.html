@@ -1390,13 +1390,17 @@ function renderChecksheetHistoryTable(wrap, subgroups, period) {
   const data = getChecksheetData(storeTab, period.label);
   const allCols = subgroups.flatMap(sg => sg.cols);
 
+  const subgroupStartIds = new Set(subgroups.map(sg => sg.cols[0]?.id).filter(Boolean));
+  const colBorder = col => subgroupStartIds.has(col.id) ? 'border-left:2px solid #b9c9a8' : 'border-left:1px solid #ececec';
+  const headerColBorder = col => subgroupStartIds.has(col.id) ? 'border-left:2px solid white' : 'border-left:1px solid rgba(255,255,255,.25)';
+
   const subHeaderCells = subgroups.map(sg =>
     `<th colspan="${sg.cols.length}" style="padding:5px 4px;font-size:10px;font-weight:700;color:white;background:#1a5730;border-left:2px solid white;white-space:normal;word-break:break-word;line-height:1.15">${esc(sg.label)}</th>`
   ).join('');
   const nameHeaderCells = allCols.map(col => {
     const prodName = col.id.startsWith('prod:') ? col.id.slice(5) : null;
     const html = (prodName && CHECKSHEET_HEADER_OVERRIDES[prodName]) || esc(col.name);
-    return `<th style="padding:6px 3px;font-size:11px;font-weight:600;writing-mode:vertical-rl;text-orientation:mixed;white-space:nowrap;line-height:1.4;width:22px;background:#22703d;color:white;border-left:1px solid rgba(255,255,255,.25)">${html}</th>`;
+    return `<th style="padding:6px 3px;font-size:11px;font-weight:600;writing-mode:vertical-rl;text-orientation:mixed;white-space:nowrap;line-height:1.4;width:22px;background:#22703d;color:white;${headerColBorder(col)}">${html}</th>`;
   }).join('');
 
   const bodyRows = days.map(d => {
@@ -1407,9 +1411,9 @@ function renderChecksheetHistoryTable(wrap, subgroups, period) {
       const v = dayData[col.id];
       if (col.type === 'check') {
         const mark = v ? '<span style="color:#22703d;font-weight:700">✓</span>' : '<span style="color:#ddd">－</span>';
-        return `<td style="padding:2px 4px;text-align:center;font-size:12px">${mark}</td>`;
+        return `<td style="padding:2px 4px;text-align:center;font-size:12px;${colBorder(col)}">${mark}</td>`;
       }
-      return `<td style="padding:2px 4px;text-align:center;font-size:12px;color:${v == null || v === '' ? '#ddd' : '#333'}">${v == null || v === '' ? '－' : esc(v)}</td>`;
+      return `<td style="padding:2px 4px;text-align:center;font-size:12px;${colBorder(col)}color:${v == null || v === '' ? '#ddd' : '#333'}">${v == null || v === '' ? '－' : esc(v)}</td>`;
     }).join('');
     const dateBg = isToday ? '#fff7cc' : 'white';
     return `<tr style="border-bottom:1px solid #f0f0f0;${isToday ? 'background:#fff7cc' : ''}">
@@ -1430,7 +1434,7 @@ function renderChecksheetHistoryTable(wrap, subgroups, period) {
       <tbody>${bodyRows}</tbody>
       <tfoot><tr style="background:#f0f7e8;border-top:2px solid #aabf28">
         <td style="padding:4px 8px;font-size:12px;font-weight:700;color:#22703d;position:sticky;left:0;z-index:1;background:#f0f7e8;box-shadow:1px 0 3px rgba(0,0,0,.08)">合計</td>
-        ${allCols.map(col => `<td class="checksheet-total-cell" data-item="${esc(col.id)}" data-type="${col.type}" style="padding:4px;text-align:center;font-weight:700;color:#22703d"></td>`).join('')}
+        ${allCols.map(col => `<td class="checksheet-total-cell" data-item="${esc(col.id)}" data-type="${col.type}" style="padding:4px;text-align:center;font-weight:700;color:#22703d;${colBorder(col)}"></td>`).join('')}
       </tr></tfoot>
     </table>
   </div>`;
