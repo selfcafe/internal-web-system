@@ -186,8 +186,11 @@
     .site-lock.hidden { display:none; }
     .site-lock-box { background:rgba(255,255,255,.92); border-radius:20px; padding:40px 36px; width:min(380px,90vw); text-align:center; box-shadow:0 8px 32px rgba(34,112,61,.12); border:1px solid #d8d6be; }
     .site-lock-logo { display:block; width:140px; height:140px; margin:0 auto 20px; border-radius:50%; box-shadow:0 6px 20px rgba(34,112,61,.3); }
-    .portal-logo { height:26px; display:block; flex-shrink:0; }
+    .portal-logo { height:26px; display:block; flex-shrink:0; order:1; }
     .portal-title-row { display:flex; align-items:center; gap:8px; }
+    .portal-hdr-row { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; }
+    .portal-hdr-row h1 { order:2; }
+    .portal-logout-btn { order:3; margin-left:auto; }
     .site-lock-box h2 { font-size:20px; color:#22703d; margin-bottom:6px; font-weight:700; }
     .site-lock-box p  { font-size:13px; color:#888; margin-bottom:20px; }
     .site-lock-box .pin-input { font-size:16px; letter-spacing:2px; }
@@ -233,6 +236,8 @@
       .page { padding:10px; }
       .page-header h1 { font-size:30px; }
       .portal-title-row { flex-direction:column; align-items:flex-start; gap:2px; }
+      .portal-hdr-row .portal-logout-btn { order:2; margin-left:auto; }
+      .portal-hdr-row h1 { order:3; flex-basis:100%; }
       .link-btn { padding:8px 12px; font-size:13px; }
       table.card-mode { display:block; box-shadow:none; background:transparent; border-radius:0; }
       table.card-mode thead { display:none; }
@@ -380,12 +385,10 @@
 <!-- 店舗ページ -->
 <div id="page-store" class="page">
   <div class="page-header" style="flex-direction:column;align-items:stretch;gap:4px">
-    <div style="display:flex;justify-content:space-between;align-items:center">
-      <div class="portal-title-row">
-        <img src="logo-horizontal.png" class="portal-logo" alt="セルフカフェ">
-        <h1>パートナーポータル</h1>
-      </div>
-      <button onclick="siteLogout()" style="background:#6b7280;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">ログアウト</button>
+    <div class="portal-hdr-row">
+      <img src="logo-horizontal.png" class="portal-logo" alt="セルフカフェ">
+      <h1>パートナーポータル</h1>
+      <button onclick="siteLogout()" class="portal-logout-btn" style="background:#6b7280;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">ログアウト</button>
     </div>
     <span id="active-store-label" style="font-size:20px;font-weight:700;color:#22703d"></span>
   </div>
