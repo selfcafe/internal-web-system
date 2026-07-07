@@ -287,9 +287,10 @@
 
     /* パートナーポータル タブ */
     .partner-tab-bar { display:flex; gap:4px; margin-bottom:16px; background:#f0f7e8; border-radius:10px; padding:6px; }
-    .partner-tab { flex:1; padding:10px 6px; background:transparent; color:#555; font-size:13px; font-weight:600; border-radius:8px; cursor:pointer; font-family:inherit; transition:background .2s,color .2s; border:none; text-align:center; }
+    .partner-tab { position:relative; flex:1; padding:10px 6px; background:transparent; color:#555; font-size:13px; font-weight:600; border-radius:8px; cursor:pointer; font-family:inherit; transition:background .2s,color .2s; border:none; text-align:center; }
     .partner-tab:hover { background:rgba(34,112,61,.12); color:#22703d; }
     .partner-tab.active { background:#22703d; color:white; }
+    .ptab-badge { position:absolute; top:-6px; right:2px; background:#ef4444; color:white; font-size:9px; font-weight:700; padding:1px 5px; border-radius:8px; line-height:1.4; letter-spacing:.02em; }
     .partner-tab-content { display:none; }
     .partner-tab-content.active { display:block; }
     .partner-coming-soon { padding:60px 20px; text-align:center; color:#aaa; }
@@ -386,7 +387,7 @@
 
   <!-- パートナー機能タブ -->
   <div class="partner-tab-bar">
-    <button class="partner-tab active" id="ptab-order"     onclick="switchPartnerTab('order')">発注</button>
+    <button class="partner-tab active" id="ptab-order"     onclick="switchPartnerTab('order')">発注<span id="ptab-order-badge" class="ptab-badge" style="display:none">NEW</span></button>
     <button class="partner-tab"        id="ptab-lost"      onclick="switchPartnerTab('lost')">忘れ物</button>
     <button class="partner-tab"        id="ptab-inventory" onclick="switchPartnerTab('inventory')">棚卸表</button>
     <button class="partner-tab"        id="ptab-checklist" onclick="switchPartnerTab('checklist')">チェック<br class="sp-only">シート</button>
@@ -971,6 +972,15 @@ function displayCell(value) {
 function countNewGroups(sid) {
   const rows = loadA(sid).filter(r => r.locked && r.isNew && !r.denied);
   return new Set(rows.map(r => r.groupId || r.id)).size;
+}
+
+// 依頼済み履歴の中に「否認されたのに、まだ依頼取り下げしていない」ものがあれば
+// パートナー自身が対応すべき通知として上部の発注タブに「NEW」を出す
+function updatePartnerOrderBadge() {
+  const badge = document.getElementById('ptab-order-badge');
+  if (!badge) return;
+  const needsAttention = storeRows.some(r => r.locked && r.isNew && r.denied);
+  badge.style.display = needsAttention ? '' : 'none';
 }
 
 function updateBadges() {
@@ -2386,6 +2396,7 @@ function renderStore() {
   document.getElementById('store-summary').innerHTML = `【${STORES[storeTab]}】未依頼 ${groups.length} グループ`;
   tbody.querySelectorAll('textarea').forEach(autoGrow);
   updateBadges();
+  updatePartnerOrderBadge();
   if (_historyOpen) renderOrderHistory();
 }
 
