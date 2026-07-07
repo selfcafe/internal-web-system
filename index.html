@@ -318,8 +318,10 @@
     .checksheet-today-row .qty-btn { width:36px; height:36px; font-size:18px; }
     .checksheet-today-row .qty-wrap input[type=number] { width:56px; font-size:16px; }
 
-    /* チェックシート 当月/先月履歴：確認用（編集不可）、俯瞰性重視で行高を最小化 */
+    /* チェックシート 当月/先月履歴：確認用（編集不可）、俯瞰性重視で行高を最小化（データ行のみ） */
     #checksheet-table th, #checksheet-table td { padding:1px 3px !important; line-height:1.1; }
+    /* 見出し行（カテゴリ名・項目名）は詰まって見えないよう、上のpaddingを別途確保 */
+    #checksheet-table thead th { padding:6px 4px !important; }
 
     /* 店舗別商品設定 */
     .store-prod-cfg-wrap { display:flex; gap:10px; flex-wrap:wrap; align-items:flex-start; }
@@ -1374,8 +1376,13 @@ function renderChecksheetTodayForm(wrap, subgroups) {
 // 履歴表の見出しだけで使う短縮・改行表示（商品自体のlabelは変更しない）
 const CHECKSHEET_HEADER_OVERRIDES = {
   'ロースト': 'コーヒー豆<br>ロースト',
-  '9オンス カップ蓋（12オンスもOK）GLDH09BD': '9オンス カップ蓋<br>（12オンスもOK）<br>GLDH09BD',
 };
+// 長い商品名は（）の前後で自動的に改行し、縦一列が極端に長くなるのを防ぐ
+function autoBreakChecksheetHeader(name) {
+  const html = esc(name);
+  if (name.length <= 12) return html;
+  return html.replace(/(?!^)[（(]/g, '<br>$&').replace(/[）)](?!$)/g, '$&<br>');
+}
 
 // 履歴は確認用のみ（編集不可）。数値・チェックとも読み取り専用のテキスト/記号表示にする
 function renderChecksheetHistoryTable(wrap, subgroups, period) {
@@ -1393,8 +1400,8 @@ function renderChecksheetHistoryTable(wrap, subgroups, period) {
   ).join('');
   const nameHeaderCells = allCols.map(col => {
     const prodName = col.id.startsWith('prod:') ? col.id.slice(5) : null;
-    const html = (prodName && CHECKSHEET_HEADER_OVERRIDES[prodName]) || esc(col.name);
-    return `<th style="padding:6px 3px;font-size:11px;font-weight:600;writing-mode:vertical-rl;text-orientation:upright;white-space:nowrap;line-height:1.4;width:22px;background:#22703d;color:white;${headerColBorder(col)}">${html}</th>`;
+    const html = (prodName && CHECKSHEET_HEADER_OVERRIDES[prodName]) || autoBreakChecksheetHeader(col.name);
+    return `<th style="padding:6px 3px;font-size:11px;font-weight:600;writing-mode:vertical-rl;text-orientation:upright;text-combine-upright:digits 2;white-space:nowrap;line-height:1.4;width:22px;background:#22703d;color:white;${headerColBorder(col)}">${html}</th>`;
   }).join('');
 
   const bodyRows = days.map(d => {
