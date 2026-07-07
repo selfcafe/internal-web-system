@@ -185,7 +185,8 @@
     .site-lock { position:fixed; inset:0; background-color:#edecd8; background-image:repeating-linear-gradient(45deg,rgba(255,255,255,.18) 0px,rgba(255,255,255,.18) 1px,transparent 1px,transparent 6px),repeating-linear-gradient(-45deg,rgba(200,195,160,.12) 0px,rgba(200,195,160,.12) 1px,transparent 1px,transparent 6px); z-index:2000; display:flex; align-items:center; justify-content:center; }
     .site-lock.hidden { display:none; }
     .site-lock-box { background:rgba(255,255,255,.92); border-radius:20px; padding:40px 36px; width:min(380px,90vw); text-align:center; box-shadow:0 8px 32px rgba(34,112,61,.12); border:1px solid #d8d6be; }
-    .site-lock-logo { font-size:48px; margin-bottom:12px; }
+    .site-lock-logo { display:block; width:76px; height:76px; margin:0 auto 14px; border-radius:50%; box-shadow:0 4px 14px rgba(34,112,61,.25); }
+    .portal-logo { height:32px; display:block; flex-shrink:0; }
     .site-lock-box h2 { font-size:20px; color:#22703d; margin-bottom:6px; font-weight:700; }
     .site-lock-box p  { font-size:13px; color:#888; margin-bottom:20px; }
     .site-lock-box .pin-input { font-size:16px; letter-spacing:2px; }
@@ -346,6 +347,7 @@
 <!-- サイトログイン画面 -->
 <div class="site-lock" id="site-lock">
   <div class="site-lock-box">
+    <img src="logo-round.png" class="site-lock-logo" alt="セルフカフェ">
     <h2>セルフカフェ社内ポータル</h2>
     <p>パスワードを入力してください</p>
     <div id="site-sync-warning" style="display:none;background:#fef2f2;border:1px solid #fca5a5;color:#b91c1c;font-size:12.5px;border-radius:8px;padding:10px 12px;margin-bottom:12px;text-align:left;line-height:1.5"></div>
@@ -377,7 +379,10 @@
 <div id="page-store" class="page">
   <div class="page-header" style="flex-direction:column;align-items:stretch;gap:4px">
     <div style="display:flex;justify-content:space-between;align-items:center">
-      <h1>パートナーポータル</h1>
+      <div style="display:flex;align-items:center;gap:8px">
+        <img src="logo-horizontal.png" class="portal-logo" alt="セルフカフェ">
+        <h1>パートナーポータル</h1>
+      </div>
       <button onclick="siteLogout()" style="background:#6b7280;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">ログアウト</button>
     </div>
     <span id="active-store-label" style="font-size:20px;font-weight:700;color:#22703d"></span>
@@ -504,6 +509,7 @@
 <div id="page-admin" class="page">
   <div class="page-header">
     <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;flex-wrap:wrap">
+      <img src="logo-horizontal.png" class="portal-logo" alt="セルフカフェ">
       <h1>管理者ポータル</h1>
       <div class="admin-menu-wrap">
         <button class="admin-menu-btn" onclick="toggleAdminMenu()" title="メニュー">☰<span class="menu-label">メニュー</span></button>
