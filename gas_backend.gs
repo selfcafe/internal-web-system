@@ -5,9 +5,10 @@
 const SHEET_ID        = '';  // GoogleスプレッドシートのID
 const IMAGE_FOLDER_ID = '1adg7TQIYXSkWIo19ohVo93raDY2HsTW_';  // 画像保存用DriveフォルダのID
 
-const SHEET_ORDERS   = 'orders';
-const SHEET_SETTINGS = 'app_settings';
-const SHEET_LOST     = 'lost_items';
+const SHEET_ORDERS     = 'orders';
+const SHEET_SETTINGS   = 'app_settings';
+const SHEET_LOST       = 'lost_items';
+const SHEET_CHECKSHEET = 'checksheet_data';
 
 const ORDER_COLS = [
   'id','store_id','group_id','product','label','qty','unit',
@@ -15,6 +16,9 @@ const ORDER_COLS = [
   'delivery_date','created_at','denied','image_url'
 ];
 const LOST_COLS = ['id','store_id','found_date','note','image_url','added_at'];
+// 店舗×年月で1行、その月の日別データはJSON文字列として1セルに保存する
+// （日ごと・項目ごとに行を分けると増え続けて管理しづらいため、月単位でまとめる）
+const CHECKSHEET_COLS = ['store_id','period_label','data','updated_at'];
 
 // エリア別店舗ID
 const AREA_STORES = {
@@ -31,9 +35,10 @@ function doGet(e) {
   try {
     const a = e.parameter.action;
     let result;
-    if      (a === 'getOrders')    result = getOrders();
-    else if (a === 'getSettings')  result = getSettings();
-    else if (a === 'getLostItems') result = getLostItems(e.parameter.month, e.parameter.storeId);
+    if      (a === 'getOrders')         result = getOrders();
+    else if (a === 'getSettings')       result = getSettings();
+    else if (a === 'getLostItems')      result = getLostItems(e.parameter.month, e.parameter.storeId);
+    else if (a === 'getChecksheetData') result = getChecksheetData(e.parameter.storeId);
     else result = { error: 'Unknown action: ' + a };
     return json(result);
   } catch(err) {
@@ -47,11 +52,12 @@ function doPost(e) {
   try {
     const b = JSON.parse(e.postData.contents);
     let result;
-    if      (b.action === 'saveOrders')     result = saveOrders(b.storeId, b.rows);
-    else if (b.action === 'saveSetting')    result = saveSetting(b.key, b.value);
-    else if (b.action === 'saveLostItem')   result = saveLostItem(b.item, b.imageBase64, b.imageMime);
-    else if (b.action === 'deleteLostItem') result = deleteLostItem(b.id, b.imageUrl);
-    else if (b.action === 'saveOrderImage') result = saveOrderImage(b.imageBase64, b.imageMime, b.filename);
+    if      (b.action === 'saveOrders')         result = saveOrders(b.storeId, b.rows);
+    else if (b.action === 'saveSetting')        result = saveSetting(b.key, b.value);
+    else if (b.action === 'saveLostItem')       result = saveLostItem(b.item, b.imageBase64, b.imageMime);
+    else if (b.action === 'deleteLostItem')     result = deleteLostItem(b.id, b.imageUrl);
+    else if (b.action === 'saveOrderImage')     result = saveOrderImage(b.imageBase64, b.imageMime, b.filename);
+    else if (b.action === 'saveChecksheetData') result = saveChecksheetData(b.storeId, b.periodLabel, b.data);
     else result = { error: 'Unknown action: ' + b.action };
     return json(result);
   } catch(err) {
@@ -260,6 +266,41 @@ function deleteLostItem(id, imageUrl) {
       if (m) DriveApp.getFileById(m[1]).setTrashed(true);
     } catch(e) {}
   }
+  return { ok: true };
+}
+
+// ----------------------------------------------------------------
+// checksheet_data（チェックシートの日別入力）
+// ----------------------------------------------------------------
+
+function getChecksheetData(storeId) {
+  let rows = sheetRows(getSheet(SHEET_CHECKSHEET), CHECKSHEET_COLS);
+  if (storeId) rows = rows.filter(r => String(r.store_id) === String(storeId));
+  return rows.map(r => ({
+    store_id: r.store_id,
+    period_label: r.period_label,
+    data: r.data ? JSON.parse(r.data) : {},
+  }));
+}
+
+function saveChecksheetData(storeId, periodLabel, data) {
+  const sheet = getSheet(SHEET_CHECKSHEET);
+  ensureHeaders(sheet, CHECKSHEET_COLS);
+  const json = JSON.stringify(data || {});
+  const now  = new Date().toISOString();
+  if (sheet.getLastRow() > 1) {
+    const values = sheet.getDataRange().getValues();
+    const sidIdx = values[0].indexOf('store_id'), pidIdx = values[0].indexOf('period_label');
+    const dataIdx = values[0].indexOf('data'), updIdx = values[0].indexOf('updated_at');
+    for (let i = 1; i < values.length; i++) {
+      if (String(values[i][sidIdx]) === String(storeId) && String(values[i][pidIdx]) === String(periodLabel)) {
+        sheet.getRange(i + 1, dataIdx + 1).setValue(json);
+        sheet.getRange(i + 1, updIdx + 1).setValue(now);
+        return { ok: true };
+      }
+    }
+  }
+  sheet.appendRow([storeId, periodLabel, json, now]);
   return { ok: true };
 }
 

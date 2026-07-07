@@ -753,6 +753,21 @@ function _initRealtime() {
   });
 }
 
+// チェックシートは店舗ごとに独立しているため、通知が来た店舗が今見ている店舗の場合のみ再取得・再描画する
+function _initChecksheetRealtime() {
+  let first = true;
+  _fbDb.ref('checksheet_updated').on('value', async (snap) => {
+    if (first) { first = false; return; }
+    const val = snap.val();
+    if (val && typeof val === 'object' && val.by === _CLIENT_ID) return;
+    if (!val || !val.storeId) return;
+    try {
+      await loadChecksheetDataFromDb(val.storeId);
+      if (val.storeId === storeTab && partnerTabCurrent === 'checklist') renderChecksheet();
+    } catch(e) { console.error('checksheet realtime reload error:', e); }
+  });
+}
+
 
 const PRODUCTS = [
   /* ── アペックス 100RS ── */
@@ -1252,12 +1267,40 @@ function setChecksheetField(storeId, periodLabel, dayKey, itemKey, value) {
   all[storeId][periodLabel][dayKey][itemKey] = value;
   localStorage.setItem(CHECKSHEET_DATA_KEY, JSON.stringify(all));
 }
+// 店舗×年月ごとに直列化してGASへ保存し、Firebaseで他端末に即時通知する
+// （発注データの同期と同じパターン。自分自身の保存通知で自分を再取得しないよう_CLIENT_IDで除外する）
+const _checksheetSyncChain = {};
+function _syncChecksheetToDb(storeId, periodLabel) {
+  const key = storeId + '|' + periodLabel;
+  const prev = _checksheetSyncChain[key] || Promise.resolve();
+  const run = prev.catch(() => {}).then(async () => {
+    try {
+      const data = getChecksheetData(storeId, periodLabel);
+      await gasPost('saveChecksheetData', { storeId, periodLabel, data });
+      _fbDb.ref('checksheet_updated').set({ ts: Date.now(), by: _CLIENT_ID, storeId, periodLabel });
+    } catch(e) { console.error('checksheet sync error:', e); }
+  });
+  _checksheetSyncChain[key] = run;
+  return run;
+}
+// GASに保存済みのチェックシートデータを取得し、ローカルキャッシュへ反映する
+async function loadChecksheetDataFromDb(storeId) {
+  try {
+    const rows = await gasGet('getChecksheetData', { storeId });
+    if (!Array.isArray(rows) || !rows.length) return;
+    const all = JSON.parse(localStorage.getItem(CHECKSHEET_DATA_KEY) || '{}');
+    if (!all[storeId]) all[storeId] = {};
+    rows.forEach(r => { all[storeId][r.period_label] = r.data || {}; });
+    localStorage.setItem(CHECKSHEET_DATA_KEY, JSON.stringify(all));
+  } catch(e) { console.error('getChecksheetData error:', e); }
+}
 function updateChecksheetField(dayKey, itemKey, rawValue, type) {
   // dayKeyの属する暦月を使う（当月1〜5日に前月分の履歴を編集するケースがあるため、常に「今日」の期間とは限らない）
   const [y, m, d] = dayKey.split('-').map(Number);
   const period = getChecksheetPeriod(new Date(y, m - 1, d));
   const value = type === 'check' ? !!rawValue : (rawValue === '' ? '' : Number(rawValue));
   setChecksheetField(storeTab, period.label, dayKey, itemKey, value);
+  _syncChecksheetToDb(storeTab, period.label);
   updateChecksheetTotals();
 }
 // タップで数量をカウント（直接入力も併用可）
@@ -1478,6 +1521,8 @@ async function switchPartnerTab(tab) {
     renderInventory();
   }
   if (tab === 'checklist') {
+    renderChecksheet();
+    await loadChecksheetDataFromDb(storeTab);
     renderChecksheet();
   }
 }
@@ -4259,6 +4304,7 @@ if (!(sessionStorage.getItem('admin_authed') === '1' || isSiteAuthed())) {
     }
   }
   _initRealtime();
+  _initChecksheetRealtime();
   if (isAuthed()) {
     showPage('admin');
   } else if (isSiteAuthed()) {
