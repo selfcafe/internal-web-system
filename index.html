@@ -2283,7 +2283,8 @@ function renderStore() {
   const groups      = allGroups.filter(g => !g[0].locked);
 
   const badge = document.getElementById('history-badge');
-  if (badge) { badge.textContent = lockedCount; badge.style.display = lockedCount > 0 ? '' : 'none'; }
+  // 「発注依頼」表示中（履歴を開いていない）はバッジを出さない。開いて「依頼済み履歴」表示になった時だけ件数を出す
+  if (badge) { badge.textContent = lockedCount; badge.style.display = (lockedCount > 0 && _historyOpen) ? '' : 'none'; }
 
   if (!groups.length) {
     tbody.innerHTML = '<tr><td colspan="7" class="empty-msg">未依頼の発注はありません</td></tr>';
@@ -2421,7 +2422,10 @@ function toggleOrderHistory() {
   if (btn) {
     const badge = document.getElementById('history-badge');
     btn.textContent = _historyOpen ? '依頼済み履歴 ' : '発注依頼 ';
-    if (badge) btn.appendChild(badge);
+    if (badge) {
+      btn.appendChild(badge);
+      badge.style.display = (_historyOpen && parseInt(badge.textContent || '0', 10) > 0) ? '' : 'none';
+    }
   }
   if (_historyOpen) renderOrderHistory();
 }
