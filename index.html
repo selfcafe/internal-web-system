@@ -1222,13 +1222,7 @@ function getChecksheetPeriod(baseDate) {
   const label = `${start.getFullYear()}-${String(start.getMonth() + 1).padStart(2, '0')}`;
   return { label, start, end };
 }
-// 前月分の締め日は翌月5日：当月1〜5日はまだ前月分の入力期間として扱う（履歴表示のデフォルト月に反映）
-function getChecksheetDefaultPeriod() {
-  const d = new Date();
-  if (d.getDate() <= 5) return getChecksheetPeriod(new Date(d.getFullYear(), d.getMonth() - 1, 1));
-  return getChecksheetPeriod(d);
-}
-// 実際の今日から見た「先月」（締め日の猶予とは独立に常時参照できる）
+// 実際の今日から見た「先月」（「先月の履歴」ボタン用）
 function getChecksheetLastMonthPeriod() {
   const d = new Date();
   return getChecksheetPeriod(new Date(d.getFullYear(), d.getMonth() - 1, 1));
@@ -1307,7 +1301,7 @@ function _checksheetColumnGroups(storeId) {
 
 // デイリーカウント／清掃・点検の切替、当日入力／当月履歴／先月履歴の切替
 let checksheetActiveCategory = 'daily_count';
-let checksheetActiveView = 'today'; // 'today' | 'history'（当月/締め猶予中は前月） | 'last_month'（常に実際の前月）
+let checksheetActiveView = 'today'; // 'today' | 'history'（常に実際の当月） | 'last_month'（常に実際の前月）
 let checksheetPrevView = 'today'; // 先月の履歴を開く直前のビュー（もう一度押したときに戻す用）
 function switchChecksheetCategory(cat) { checksheetActiveCategory = cat; renderChecksheet(); }
 // 1つのボタンで当日入力⇔当月履歴をトグル。ボタンには「次に切り替わる先」の名前を表示する
@@ -1345,7 +1339,7 @@ function renderChecksheet() {
   if (checksheetActiveView === 'today') {
     renderChecksheetTodayForm(wrap, group.subgroups);
   } else {
-    const period = checksheetActiveView === 'last_month' ? getChecksheetLastMonthPeriod() : getChecksheetDefaultPeriod();
+    const period = checksheetActiveView === 'last_month' ? getChecksheetLastMonthPeriod() : getChecksheetPeriod();
     renderChecksheetHistoryTable(wrap, group.subgroups, period);
   }
 }
