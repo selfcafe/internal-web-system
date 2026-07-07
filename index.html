@@ -185,18 +185,9 @@
     .site-lock { position:fixed; inset:0; background-color:#edecd8; background-image:repeating-linear-gradient(45deg,rgba(255,255,255,.18) 0px,rgba(255,255,255,.18) 1px,transparent 1px,transparent 6px),repeating-linear-gradient(-45deg,rgba(200,195,160,.12) 0px,rgba(200,195,160,.12) 1px,transparent 1px,transparent 6px); z-index:2000; display:flex; flex-direction:column; align-items:center; justify-content:flex-start; padding-top:10vh; }
     .site-lock.hidden { display:none; }
     .site-lock-box { background:rgba(255,255,255,.92); border-radius:20px; padding:40px 36px; width:min(380px,90vw); text-align:center; box-shadow:0 8px 32px rgba(34,112,61,.12); border:1px solid #d8d6be; }
-    .site-lock-logo-wrap { position:relative; width:140px; margin:0 auto 28px; }
     .site-lock-logo {
-      display:block; width:140px; height:140px; border-radius:50%;
-      box-shadow:0 14px 24px -6px rgba(34,112,61,.4), 0 2px 6px rgba(34,112,61,.2);
-    }
-    .site-lock-logo-reflect {
-      position:absolute; left:0; top:100%; width:140px; height:140px; border-radius:50%;
-      background-image:url('logo-round.png'); background-size:140px 140px;
-      transform:scaleY(-1);
-      -webkit-mask-image:linear-gradient(to bottom, rgba(0,0,0,.3), transparent 20%);
-      mask-image:linear-gradient(to bottom, rgba(0,0,0,.3), transparent 20%);
-      pointer-events:none;
+      display:block; width:140px; height:140px; margin:0 auto 32px; border-radius:50%;
+      box-shadow:0 6px 12px rgba(34,112,61,.35);
     }
     .portal-logo { height:26px; display:block; flex-shrink:0; order:1; }
     .portal-title-row { display:flex; align-items:center; gap:8px; }
@@ -365,10 +356,7 @@
 
 <!-- サイトログイン画面 -->
 <div class="site-lock" id="site-lock">
-  <div class="site-lock-logo-wrap">
-    <img src="logo-round.png" class="site-lock-logo" alt="セルフカフェ">
-    <div class="site-lock-logo-reflect"></div>
-  </div>
+  <img src="logo-round.png" class="site-lock-logo" alt="セルフカフェ">
   <div class="site-lock-box">
     <h2>セルフカフェ社内ポータル</h2>
     <p>パスワードを入力してください</p>
