@@ -662,6 +662,7 @@ async function syncAllStoreDataToGas() {
     _gasSaveSetting('vendor_config',    localStorage.getItem(VENDOR_CONFIG_KEY)  || '[]'),
     _gasSaveSetting('store_checksheet_cfg', localStorage.getItem(STORE_CHECKSHEET_KEY) || '{}'),
     _gasSaveSetting('all_checksheet_items', localStorage.getItem(ALL_CHECKSHEET_ITEMS_KEY) || '[]'),
+    _gasSaveSetting('checksheet_categories', localStorage.getItem(CHECKSHEET_CATEGORIES_KEY) || '[]'),
   ]);
   if (msg) {
     msg.style.color = results.every(Boolean) ? '#22703d' : '#ef4444';
@@ -698,11 +699,13 @@ async function initGas() {
       if (r.key === 'vendor_config')     localStorage.setItem(VENDOR_CONFIG_KEY,   clean(r.value));
       if (r.key === 'store_checksheet_cfg') localStorage.setItem(STORE_CHECKSHEET_KEY, clean(r.value));
       if (r.key === 'all_checksheet_items') localStorage.setItem(ALL_CHECKSHEET_ITEMS_KEY, clean(r.value));
+      if (r.key === 'checksheet_categories') localStorage.setItem(CHECKSHEET_CATEGORIES_KEY, clean(r.value));
     });
     if (gasKeys.has('all_products') || gasKeys.has('vendor_config')) {
       loadVendorConfig();
       loadProductSettings();
     }
+    if (gasKeys.has('checksheet_categories')) loadChecksheetCategories();
     if (gasKeys.has('all_checksheet_items')) loadChecksheetItemSettings();
     if (!gasKeys.has('store_passwords')   && localStorage.getItem(STORE_PW_KEY))        _syncStorePw();
     if (!gasKeys.has('custom_stores')     && localStorage.getItem(CUSTOM_STORES_KEY))   _syncCustomStores();
@@ -712,6 +715,7 @@ async function initGas() {
     if (!gasKeys.has('vendor_config')     && localStorage.getItem(VENDOR_CONFIG_KEY))   _gasSaveSetting('vendor_config', localStorage.getItem(VENDOR_CONFIG_KEY));
     if (!gasKeys.has('store_checksheet_cfg') && localStorage.getItem(STORE_CHECKSHEET_KEY)) _syncStoreChecksheetCfg();
     if (!gasKeys.has('all_checksheet_items') && localStorage.getItem(ALL_CHECKSHEET_ITEMS_KEY)) _gasSaveSetting('all_checksheet_items', localStorage.getItem(ALL_CHECKSHEET_ITEMS_KEY));
+    if (!gasKeys.has('checksheet_categories') && localStorage.getItem(CHECKSHEET_CATEGORIES_KEY)) _gasSaveSetting('checksheet_categories', localStorage.getItem(CHECKSHEET_CATEGORIES_KEY));
     loadCustomStores();
     loadDeletedStores();
     // パスワード一覧が開いている場合は再描画
@@ -1125,10 +1129,27 @@ const CHECKSHEET_ITEMS = [
   { id:'s_trashbag',     category:'cleaning', type:'qty',   name:'ゴミ出し（可燃・不燃・資源／45L袋 目安月40個）' },
   { id:'s_styrofoam',    category:'cleaning', type:'check', name:'発泡スチロールなど その他ゴミ' },
 ];
-const CHECKSHEET_CATEGORIES = [
+const DEFAULT_CHECKSHEET_CATEGORIES = [
   { key:'100rs_clean', label:'100RS清掃' },
   { key:'cleaning',    label:'清掃' },
 ];
+let CHECKSHEET_CATEGORIES = [...DEFAULT_CHECKSHEET_CATEGORIES];
+const CHECKSHEET_CATEGORIES_KEY = 'checksheet_categories';
+function saveChecksheetCategories() {
+  const json = JSON.stringify(CHECKSHEET_CATEGORIES);
+  localStorage.setItem(CHECKSHEET_CATEGORIES_KEY, json);
+  _gasSaveSetting('checksheet_categories', json);
+}
+function loadChecksheetCategories() {
+  const saved = localStorage.getItem(CHECKSHEET_CATEGORIES_KEY);
+  if (saved) {
+    const savedList = JSON.parse(saved);
+    const savedKeys = new Set(savedList.map(c => c.key));
+    CHECKSHEET_CATEGORIES.length = 0;
+    savedList.forEach(c => CHECKSHEET_CATEGORIES.push(c));
+    DEFAULT_CHECKSHEET_CATEGORIES.forEach(c => { if (!savedKeys.has(c.key)) CHECKSHEET_CATEGORIES.push(c); });
+  }
+}
 
 // チェック項目マスタ（清掃・点検のみ。デイリーカウントの商品は店舗別取扱商品設定と連動するためここでは編集しない）
 const ALL_CHECKSHEET_ITEMS_KEY = 'all_checksheet_items';
@@ -1208,6 +1229,61 @@ function buildChecksheetItemRows() {
     </tr>`).join('');
     return hdr + rows;
   }).join('');
+}
+
+/* ===== チェック項目カテゴリ管理 ===== */
+function buildChecksheetCategoryRows() {
+  return CHECKSHEET_CATEGORIES.map((c, i) => `
+    <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+      <input id="csCatName-${i}" value="${esc(c.label)}"
+        style="border:1px solid #ddd;border-radius:6px;padding:6px 10px;font-size:13px;font-family:inherit;flex:1">
+      <button onclick="renameChecksheetCategory(${i})"
+        style="background:#22703d;color:white;padding:6px 12px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap">保存</button>
+      <button onclick="deleteChecksheetCategory('${esc(c.key)}')"
+        style="background:#e0e0e0;color:#555;padding:6px 10px;font-size:12px;border-radius:6px;border:none;cursor:pointer;font-family:inherit">削除</button>
+    </div>`).join('');
+}
+function refreshChecksheetCategoryRows() {
+  const el = document.getElementById('cs-category-rows');
+  if (el) el.innerHTML = buildChecksheetCategoryRows();
+  const sel = document.getElementById('new-cs-item-category');
+  if (sel) sel.innerHTML = CHECKSHEET_CATEGORIES.map(c => `<option value="${esc(c.key)}">${esc(c.label)}</option>`).join('');
+  const tbody = document.getElementById('cs-item-tbl-body');
+  if (tbody) tbody.innerHTML = buildChecksheetItemRows();
+}
+function renameChecksheetCategory(idx) {
+  const inp = document.getElementById('csCatName-' + idx);
+  if (!inp) return;
+  const newLabel = inp.value.trim();
+  if (!newLabel) return;
+  CHECKSHEET_CATEGORIES[idx].label = newLabel;
+  saveChecksheetCategories();
+  refreshChecksheetCategoryRows();
+  const msg = document.getElementById('cs-category-msg');
+  if (msg) { msg.textContent = '保存しました'; setTimeout(() => { if (msg) msg.textContent = ''; }, 2000); }
+}
+function addChecksheetCategory() {
+  const inp = document.getElementById('new-cs-category-name');
+  const msg = document.getElementById('cs-category-msg');
+  if (!inp) return;
+  const label = inp.value.trim();
+  if (!label) { if (msg) msg.textContent = 'カテゴリ名を入力してください'; return; }
+  const key = 'cc' + Date.now().toString(36);
+  CHECKSHEET_CATEGORIES.push({ key, label });
+  saveChecksheetCategories();
+  inp.value = '';
+  refreshChecksheetCategoryRows();
+  if (msg) { msg.textContent = '追加しました'; setTimeout(() => { if (msg) msg.textContent = ''; }, 2000); }
+}
+function deleteChecksheetCategory(key) {
+  const msg = document.getElementById('cs-category-msg');
+  if (CHECKSHEET_ITEMS.some(it => it.category === key)) { if (msg) msg.textContent = 'このカテゴリに項目があるため削除できません'; return; }
+  if (CHECKSHEET_CATEGORIES.length <= 1) { if (msg) msg.textContent = '最後の1件は削除できません'; return; }
+  if (!confirm('このカテゴリを削除しますか？')) return;
+  const idx = CHECKSHEET_CATEGORIES.findIndex(c => c.key === key);
+  if (idx >= 0) CHECKSHEET_CATEGORIES.splice(idx, 1);
+  saveChecksheetCategories();
+  refreshChecksheetCategoryRows();
 }
 
 const STORE_CHECKSHEET_KEY = 'store_checksheet_cfg';
@@ -3812,6 +3888,18 @@ function renderSettings() {
             <div class="settings-accordion-body">
               <div style="font-size:12px;color:#888;margin-bottom:10px">
                 「デイリーカウント」（数量）に表示される商品は「店舗別取扱商品設定」と連動しているため、ここでは編集できません。ここで追加・編集できるのは「清掃・点検」の項目です。
+              </div>
+              <!-- チェック項目カテゴリ管理 -->
+              <div style="background:#fffef0;border-radius:8px;padding:12px 14px;margin-bottom:14px">
+                <div style="font-weight:600;font-size:12px;color:#888;margin-bottom:10px">チェック項目カテゴリ管理</div>
+                <div id="cs-category-rows">${buildChecksheetCategoryRows()}</div>
+                <div style="display:flex;gap:6px;align-items:center;margin-top:8px">
+                  <input id="new-cs-category-name" placeholder="新しいカテゴリ名"
+                    style="border:1px solid #ddd;border-radius:6px;padding:6px 10px;font-size:13px;font-family:inherit;flex:1">
+                  <button onclick="addChecksheetCategory()"
+                    style="background:#22703d;color:white;padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap">追加</button>
+                </div>
+                <div id="cs-category-msg" style="font-size:12px;margin-top:6px;min-height:18px;color:#22703d"></div>
               </div>
               <!-- 項目追加フォーム -->
               <div style="background:#fffef0;border-radius:8px;padding:12px 14px;margin-bottom:14px">
