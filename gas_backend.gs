@@ -316,6 +316,39 @@ function saveChecksheetData(storeId, periodLabel, data) {
   return { ok: true };
 }
 
+// 修正前のperiod_label自動変換バグにより、同じ店舗×年月の行が複数重複してしまったものを
+// 統合するための一度限りのメンテナンス関数。Web公開はしておらず、Apps Scriptエディタから
+// 直接（関数を選んでRunボタンで）実行する想定。updated_atが最新の行だけを残し、他は削除する。
+function compactChecksheetData() {
+  const sheet = getSheet(SHEET_CHECKSHEET);
+  if (sheet.getLastRow() <= 1) return;
+  const values = sheet.getDataRange().getValues();
+  const sidIdx = values[0].indexOf('store_id'), pidIdx = values[0].indexOf('period_label');
+  const updIdx = values[0].indexOf('updated_at');
+  const keep = {}; // key -> { rowIndex, updatedAt }
+  const toDelete = [];
+  for (let i = 1; i < values.length; i++) {
+    const key = String(values[i][sidIdx]) + '|' + _monthLabelStr(values[i][pidIdx]);
+    const raw = values[i][updIdx];
+    const updatedAt = raw instanceof Date ? raw.getTime() : (Date.parse(raw) || 0);
+    if (!keep[key] || updatedAt >= keep[key].updatedAt) {
+      if (keep[key]) toDelete.push(keep[key].rowIndex);
+      keep[key] = { rowIndex: i + 1, updatedAt };
+    } else {
+      toDelete.push(i + 1);
+    }
+  }
+  toDelete.sort((a, b) => b - a).forEach(r => sheet.deleteRow(r));
+  // 残った行のperiod_labelも、念のためプレーンテキストへ固定し直す
+  const pidCol = pidIdx + 1;
+  Object.values(keep).forEach(({ rowIndex }) => {
+    const cell = sheet.getRange(rowIndex, pidCol);
+    const clean = _monthLabelStr(cell.getValue());
+    cell.setNumberFormat('@').setValue(clean);
+  });
+  Logger.log('重複削除: %s行削除、%s件のユニークな店舗×年月が残りました', toDelete.length, Object.keys(keep).length);
+}
+
 // ----------------------------------------------------------------
 // 発注画像
 // ----------------------------------------------------------------
