@@ -1396,7 +1396,7 @@ function renderChecksheetHistoryTable(wrap, subgroups, period) {
   const nameHeaderCells = allCols.map(col => {
     const prodName = col.id.startsWith('prod:') ? col.id.slice(5) : null;
     const html = (prodName && CHECKSHEET_HEADER_OVERRIDES[prodName]) || esc(col.name);
-    return `<th style="padding:5px 3px;font-size:10px;font-weight:600;white-space:normal;word-break:break-word;line-height:1.15;width:42px;background:#22703d;color:white;border-left:1px solid rgba(255,255,255,.25)">${html}</th>`;
+    return `<th style="padding:6px 3px;font-size:11px;font-weight:600;writing-mode:vertical-rl;text-orientation:mixed;white-space:nowrap;line-height:1.4;width:22px;background:#22703d;color:white;border-left:1px solid rgba(255,255,255,.25)">${html}</th>`;
   }).join('');
 
   const bodyRows = days.map(d => {
