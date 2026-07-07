@@ -278,9 +278,18 @@ function getChecksheetData(storeId) {
   if (storeId) rows = rows.filter(r => String(r.store_id) === String(storeId));
   return rows.map(r => ({
     store_id: r.store_id,
-    period_label: r.period_label,
+    period_label: _monthLabelStr(r.period_label),
     data: r.data ? JSON.parse(r.data) : {},
   }));
+}
+
+// "2026-07"のような年月文字列を書き込むと、Sheetsが日付型セルへ自動変換し、
+// 読み出し時にUTC変換で日付がずれる（_dateStrと同じ問題）。period_label用に同様の変換を行う。
+function _monthLabelStr(v) {
+  if (v instanceof Date) {
+    return Utilities.formatDate(v, _sheetTz(), 'yyyy-MM');
+  }
+  return v || null;
 }
 
 function saveChecksheetData(storeId, periodLabel, data) {
@@ -293,13 +302,16 @@ function saveChecksheetData(storeId, periodLabel, data) {
     const sidIdx = values[0].indexOf('store_id'), pidIdx = values[0].indexOf('period_label');
     const dataIdx = values[0].indexOf('data'), updIdx = values[0].indexOf('updated_at');
     for (let i = 1; i < values.length; i++) {
-      if (String(values[i][sidIdx]) === String(storeId) && String(values[i][pidIdx]) === String(periodLabel)) {
+      if (String(values[i][sidIdx]) === String(storeId) && _monthLabelStr(values[i][pidIdx]) === String(periodLabel)) {
         sheet.getRange(i + 1, dataIdx + 1).setValue(json);
         sheet.getRange(i + 1, updIdx + 1).setValue(now);
         return { ok: true };
       }
     }
   }
+  // period_labelが"YYYY-MM"のまま日付型に自動変換されないよう、書き込み前にプレーンテキスト形式へ固定する
+  const startRow = sheet.getLastRow() + 1;
+  sheet.getRange(startRow, CHECKSHEET_COLS.indexOf('period_label') + 1).setNumberFormat('@');
   sheet.appendRow([storeId, periodLabel, json, now]);
   return { ok: true };
 }
