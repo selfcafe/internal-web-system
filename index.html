@@ -71,7 +71,6 @@
 
     .toolbar { display:flex; gap:10px; margin-bottom:14px; align-items:center; }
     button { border:none; border-radius:6px; cursor:pointer; font-family:inherit; }
-    .btn-add       { background:#22703d; color:white; padding:10px 20px; font-size:15px; font-weight:600; }
     .btn-done      { background:#22703d; color:white; padding:8px 12px; font-size:13px; font-weight:700; }
     .btn-del       { background:#ef4444; color:white; padding:8px 12px; font-size:13px; }
     .btn-confirm   { background:#ffe44c; color:#22703d; padding:7px 11px; font-size:12px; font-weight:700; }
@@ -414,8 +413,7 @@
   <div id="partner-tab-order" class="partner-tab-content active">
     <div id="order-new-msg" style="display:none;font-size:13px;font-weight:700;color:#dc2626;background:#fee2e2;border:1px solid #fca5a5;border-radius:8px;padding:8px 12px;margin-bottom:10px">依頼済み履歴に新着があります</div>
     <div class="toolbar">
-      <button class="btn-add" onclick="addRow()">＋ 発注依頼を追加</button>
-      <button class="btn-history" id="btn-history" onclick="toggleOrderHistory()">発注依頼 <span class="history-badge" id="history-badge" style="display:none"></span></button>
+      <button class="btn-history" id="btn-history" onclick="toggleOrderHistory()">依頼済み履歴 <span class="history-badge" id="history-badge" style="display:none"></span></button>
     </div>
     <div class="note-box">
       【アペックス依頼時】<br>
@@ -2311,8 +2309,7 @@ function renderStore() {
   const groups      = allGroups.filter(g => !g[0].locked);
 
   const badge = document.getElementById('history-badge');
-  // 「発注依頼」表示中（履歴を開いていない）はバッジを出さない。開いて「依頼済み履歴」表示になった時だけ件数を出す
-  if (badge) { badge.textContent = lockedCount; badge.style.display = (lockedCount > 0 && _historyOpen) ? '' : 'none'; }
+  if (badge) { badge.textContent = lockedCount; badge.style.display = lockedCount > 0 ? '' : 'none'; }
 
   if (!groups.length) {
     tbody.innerHTML = '<tr><td colspan="7" class="empty-msg">未依頼の発注はありません</td></tr>';
@@ -2447,14 +2444,6 @@ function toggleOrderHistory() {
   mainWrap.style.display  = _historyOpen ? 'none' : '';
   panel.style.display     = _historyOpen ? '' : 'none';
   btn?.classList.toggle('active', _historyOpen);
-  if (btn) {
-    const badge = document.getElementById('history-badge');
-    btn.textContent = _historyOpen ? '依頼済み履歴 ' : '発注依頼 ';
-    if (badge) {
-      btn.appendChild(badge);
-      badge.style.display = (_historyOpen && parseInt(badge.textContent || '0', 10) > 0) ? '' : 'none';
-    }
-  }
   if (_historyOpen) renderOrderHistory();
 }
 
@@ -2500,7 +2489,7 @@ function renderOrderHistory() {
           ${!hasOrderDate ? 'disabled title="発注日が記載されてから押せます" style="opacity:0.4;cursor:not-allowed"' : ''}>納品済み</button>`;
     } else {
       statusHtml = `<span class="locked-status" style="color:#d97706">⌛ 確認中</span>${photoHtml}`;
-      actionBtn  = `<button class="btn-cancel-lock" onclick="unlockGroup('${gid}')">取り消す</button>`;
+      actionBtn  = `<button class="btn-cancel-lock" onclick="unlockGroup('${gid}')">取り下げ</button>`;
     }
     const doneBtn = actionBtn;
 
@@ -2585,18 +2574,6 @@ function unlockGroup(groupId) {
   renderStore();
 }
 
-/* 新規グループ（発注依頼）を追加 */
-function addRow() {
-  if (_historyOpen) toggleOrderHistory();
-  try {
-    storeRows.push(newRow());
-    saveA(storeTab, storeRows);
-    renderStore();
-  } catch(e) {
-    console.error('addRow error:', e);
-    alert('エラーが発生しました: ' + e.message);
-  }
-}
 function delRow(id) { storeRows = storeRows.filter(r=>r.id!==id); saveA(storeTab, storeRows); renderStore(); }
 
 function updStore(id, field, value) {
