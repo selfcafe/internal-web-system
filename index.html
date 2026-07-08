@@ -1377,24 +1377,23 @@ function renderInventoryInputScreen(wrap, allProducts, period, periodData) {
 
 function renderInventoryConfirmScreen(wrap, allProducts, period, periodData) {
   const VENDOR_LABELS = Object.fromEntries(VENDOR_CONFIG.map(v => [v.key, v.label]));
-  const COLS = ['コード','商品名','期首在庫','期末在庫','消費量','デイリーカウント'];
+  const COLS = ['商品名','期首在庫','期末在庫','消費量','デイリーカウント'];
 
   const mismatches = [];
   const bodyRows = VENDOR_CONFIG.map(v => {
     const items = allProducts.filter(p => p.vendor === v.key);
     if (!items.length) return '';
-    const hdr = `<tr><td colspan="6" style="padding:5px 8px;font-size:11px;font-weight:700;color:#22703d;background:#edf2d4;border-top:2px solid #aabf28">${esc(VENDOR_LABELS[v.key] || v.key)}</td></tr>`;
+    const hdr = `<tr><td colspan="5" style="padding:5px 8px;font-size:11px;font-weight:700;color:#22703d;background:#edf2d4;border-top:2px solid #aabf28">${esc(VENDOR_LABELS[v.key] || v.key)}</td></tr>`;
     const rows = items.map(p => {
       const { openStock, endStock, consumption, tracked, dailyCount, mismatch } = computeInventoryConfirmInfo(p, period, periodData);
       if (mismatch) mismatches.push({ name: p.label || p.name, consumption, dailyCount });
       const rowBg = mismatch ? '#fffaf9' : '#fff';
       return `<tr style="border-bottom:1px solid #f0f0f0${mismatch ? ';background:#fffaf9' : ''}">
-        <td class="inv-sticky-code" data-label="${COLS[0]}" style="padding:5px 6px;font-size:11px;color:#888;white-space:nowrap;width:90px;position:sticky;left:0;z-index:1;background:${rowBg};border-right:1px solid #e5e7eb">${esc(p.code||'')}</td>
-        <td class="inv-sticky-name" data-label="${COLS[1]}" style="padding:5px 6px;font-size:12px;position:sticky;left:90px;z-index:1;background:${rowBg};border-right:1px solid #e5e7eb">${esc(p.label)}${mismatch ? ' <span style="color:#ef4444;font-size:11px">⚠</span>' : ''}</td>
-        <td data-label="${COLS[2]}" style="padding:5px 6px;text-align:right;color:#8a8f7e;white-space:nowrap;font-size:11.5px">${openStock === '' ? '―' : esc(openStock)}</td>
-        <td data-label="${COLS[3]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px">${endStock === '' ? '―' : esc(endStock)}</td>
-        <td data-label="${COLS[4]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px;${mismatch?'color:#b91c1c;font-weight:700;background:#fef2f2':'background:#f6f7f1'}">${consumption === '' ? '―' : esc(consumption)}</td>
-        <td data-label="${COLS[5]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px;${mismatch?'color:#b91c1c;font-weight:700;background:#fef2f2':'background:#f6f7f1'}" title="チェックシートの補充数量の月間合計（閲覧のみ）">
+        <td data-label="${COLS[0]}" style="padding:5px 6px;font-size:12px;position:sticky;left:0;z-index:1;background:${rowBg};border-right:1px solid #e5e7eb">${esc(p.label)}${mismatch ? ' <span style="color:#ef4444;font-size:11px">⚠</span>' : ''}</td>
+        <td data-label="${COLS[1]}" style="padding:5px 6px;text-align:right;color:#8a8f7e;white-space:nowrap;font-size:11.5px">${openStock === '' ? '―' : esc(openStock)}</td>
+        <td data-label="${COLS[2]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px">${endStock === '' ? '―' : esc(endStock)}</td>
+        <td data-label="${COLS[3]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px;${mismatch?'color:#b91c1c;font-weight:700;background:#fef2f2':'background:#f6f7f1'}">${consumption === '' ? '―' : esc(consumption)}</td>
+        <td data-label="${COLS[4]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px;${mismatch?'color:#b91c1c;font-weight:700;background:#fef2f2':'background:#f6f7f1'}" title="チェックシートの補充数量の月間合計（閲覧のみ）">
           ${!tracked ? '<span style="color:#bbb;font-size:11px">対象外</span>' : (dailyCount === '' ? '―' : esc(dailyCount))}
         </td>
       </tr>`;
@@ -1425,12 +1424,11 @@ function renderInventoryConfirmScreen(wrap, allProducts, period, periodData) {
     <div style="overflow-x:auto">
       <table id="inventory-table" style="width:100%;border-collapse:separate;border-spacing:0;background:white;border-radius:8px;overflow:visible;box-shadow:0 1px 4px rgba(0,0,0,.08)">
         <thead><tr style="background:#22703d;color:white">
-          <th class="inv-sticky-code" style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap;width:90px;position:sticky;left:0;z-index:2;background:#22703d;border-right:1px solid #1a5c30">${COLS[0]}</th>
-          <th class="inv-sticky-name" style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap;position:sticky;left:90px;z-index:2;background:#22703d;border-right:1px solid #1a5c30">${COLS[1]}</th>
-          <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap" title="先月末の期末在庫">${COLS[2]}</th>
+          <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap;position:sticky;left:0;z-index:2;background:#22703d;border-right:1px solid #1a5c30">${COLS[0]}</th>
+          <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap" title="先月末の期末在庫">${COLS[1]}</th>
+          <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap">${COLS[2]}</th>
           <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap">${COLS[3]}</th>
-          <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap">${COLS[4]}</th>
-          <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap" title="チェックシートの補充数量の月間合計（閲覧のみ）">${COLS[5]}</th>
+          <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap" title="チェックシートの補充数量の月間合計（閲覧のみ）">${COLS[4]}</th>
         </tr></thead>
         <tbody>${bodyRows}</tbody>
       </table>
