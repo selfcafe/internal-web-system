@@ -413,7 +413,8 @@
   <div id="partner-tab-order" class="partner-tab-content active">
     <div id="order-new-msg" style="display:none;font-size:13px;font-weight:700;color:#dc2626;background:#fee2e2;border:1px solid #fca5a5;border-radius:8px;padding:8px 12px;margin-bottom:10px">依頼済み履歴に新着があります</div>
     <div class="toolbar">
-      <button class="btn-history" id="btn-history" onclick="toggleOrderHistory()">依頼済み履歴 <span class="history-badge" id="history-badge" style="display:none"></span></button>
+      <button class="btn-history active" id="ptab-order-request" onclick="switchOrderSubTab('request')">発注依頼</button>
+      <button class="btn-history" id="ptab-order-history" onclick="switchOrderSubTab('history')">依頼済み履歴 <span class="history-badge" id="history-badge" style="display:none"></span></button>
     </div>
     <div class="note-box">
       【アペックス依頼時】<br>
@@ -2435,15 +2436,17 @@ function autoGrow(el) {
 }
 
 let _historyOpen = false;
-function toggleOrderHistory() {
-  _historyOpen = !_historyOpen;
-  const panel     = document.getElementById('order-history-panel');
-  const mainWrap  = document.getElementById('store-table-wrap');
-  const btn       = document.getElementById('btn-history');
+function switchOrderSubTab(view) {
+  _historyOpen = (view === 'history');
+  const panel    = document.getElementById('order-history-panel');
+  const mainWrap = document.getElementById('store-table-wrap');
+  const reqBtn   = document.getElementById('ptab-order-request');
+  const histBtn  = document.getElementById('ptab-order-history');
   if (!panel || !mainWrap) return;
-  mainWrap.style.display  = _historyOpen ? 'none' : '';
-  panel.style.display     = _historyOpen ? '' : 'none';
-  btn?.classList.toggle('active', _historyOpen);
+  mainWrap.style.display = _historyOpen ? 'none' : '';
+  panel.style.display    = _historyOpen ? '' : 'none';
+  reqBtn?.classList.toggle('active', !_historyOpen);
+  histBtn?.classList.toggle('active', _historyOpen);
   if (_historyOpen) renderOrderHistory();
 }
 
