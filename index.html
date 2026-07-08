@@ -1139,6 +1139,7 @@ function needsExpiryTracking(p) {
   if (p.vendor === 'other') return false;
   if (p.name.includes('カップ')) return false;
   if (p.name === 'ペーパーフィルター') return false;
+  if (p.name === '水') return false;
   return true;
 }
 
