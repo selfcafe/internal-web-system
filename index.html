@@ -192,7 +192,7 @@
     }
     .portal-logo { height:26px; display:block; flex-shrink:0; }
     .portal-title-row { display:flex; align-items:center; gap:8px; }
-    .portal-hdr-row { display:flex; flex-wrap:wrap; align-items:center; gap:8px 12px; }
+    .portal-hdr-row { display:flex; flex-wrap:wrap; align-items:flex-start; gap:8px 12px; }
     .portal-hdr-row .portal-logo { order:1; }
     .portal-title-store-row { display:flex; align-items:baseline; flex-wrap:wrap; gap:4px 12px; }
     .site-lock-box h2 { font-size:20px; color:#22703d; margin-bottom:6px; font-weight:700; }
@@ -523,12 +523,14 @@
 
 <!-- 管理者ポータル -->
 <div id="page-admin" class="page">
-  <div class="page-header">
-    <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:0;flex-wrap:wrap">
-      <div class="portal-title-row">
-        <img src="logo-horizontal.png" class="portal-logo" alt="セルフカフェ">
-        <h1>管理者ポータル</h1>
-      </div>
+  <div class="page-header" style="align-items:flex-start">
+    <img src="logo-horizontal.png" class="portal-logo" alt="セルフカフェ">
+    <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;margin-left:auto">
+      <button onclick="adminLogout()" style="background:#6b7280;color:white;padding:9px 14px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">ログアウト</button>
+      <button onclick="showInvoicePlaceholder()" style="background:#8a8f7e;color:white;padding:9px 14px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">請求一覧</button>
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;flex-basis:100%">
+      <h1>管理者ポータル</h1>
       <div class="admin-menu-wrap">
         <button class="admin-menu-btn" onclick="toggleAdminMenu()" title="メニュー">☰<span class="menu-label">メニュー</span></button>
         <div class="admin-menu-dd" id="admin-menu-dd">
@@ -544,10 +546,6 @@
         </div>
       </div>
       <button class="admin-settings-btn" id="admin-settings-btn" onclick="menuSelect('view','settings')" title="設定"><span class="menu-label">設定</span></button>
-    </div>
-    <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end">
-      <button onclick="adminLogout()" style="background:#6b7280;color:white;padding:9px 14px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">ログアウト</button>
-      <button onclick="showInvoicePlaceholder()" style="background:#8a8f7e;color:white;padding:9px 14px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">請求一覧</button>
     </div>
   </div>
 
