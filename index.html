@@ -313,9 +313,10 @@
 
     /* チェックシート サブタブ */
     .checksheet-subtab-bar, .checksheet-view-bar { display:flex; gap:4px; margin-bottom:10px; background:#f0f7e8; border-radius:8px; padding:4px; }
-    .checksheet-subtab { flex:1; padding:7px 6px; background:transparent; color:#555; font-size:12px; font-weight:600; border-radius:6px; cursor:pointer; font-family:inherit; transition:background .2s,color .2s; border:3px solid #ef4444; text-align:center; }
-    .checksheet-subtab:hover { background:rgba(34,112,61,.12); color:#22703d; }
-    .checksheet-subtab.active { background:#22703d; color:white; border-color:#ef4444; }
+    .checksheet-subtab-bar { background:#fde8ea; }
+    .checksheet-subtab { flex:1; padding:7px 6px; background:transparent; color:#b91c1c; font-size:12px; font-weight:600; border-radius:6px; cursor:pointer; font-family:inherit; transition:background .2s,color .2s; border:3px solid #ef4444; text-align:center; }
+    .checksheet-subtab:hover { background:rgba(239,68,68,.15); color:#991b1b; }
+    .checksheet-subtab.active { background:#ef4444; color:white; border-color:#ef4444; }
     .checksheet-view-bar { background:#fffef0; }
     .checksheet-view-btn { flex:1; padding:8px 6px; background:#c98a1a; color:white; font-size:12px; font-weight:600; border-radius:6px; cursor:pointer; font-family:inherit; border:none; text-align:center; }
     .checksheet-view-btn:hover { background:#b07816; }
@@ -411,6 +412,7 @@
 
   <!-- 発注タブ -->
   <div id="partner-tab-order" class="partner-tab-content active">
+    <div id="order-new-msg" style="display:none;font-size:13px;font-weight:700;color:#dc2626;background:#fee2e2;border:1px solid #fca5a5;border-radius:8px;padding:8px 12px;margin-bottom:10px">依頼済み履歴に新着があります</div>
     <div class="toolbar">
       <button class="btn-add" onclick="addRow()">＋ 発注依頼を追加</button>
       <button class="btn-history" id="btn-history" onclick="toggleOrderHistory()">発注依頼 <span class="history-badge" id="history-badge" style="display:none"></span></button>
@@ -774,6 +776,11 @@ function _initRealtime() {
       if (document.getElementById('page-admin')?.classList.contains('active')) {
         renderAdmin();
         updateBadges();
+      } else if (document.getElementById('page-store')?.classList.contains('active') && storeTab) {
+        // パートナー画面を開いたままにしている間に管理者側が承認/否認/日程変更しても
+        // storeRowsが再読込されず「NEW」バッジが更新されないままだったため、ここでも同期する
+        storeRows = loadA(storeTab);
+        renderStore();
       }
     } catch(e) { console.error('realtime reload error:', e); }
   });
@@ -1003,6 +1010,8 @@ function updatePartnerOrderBadge() {
   const groups = buildStoreGroups(storeRows).filter(g => g[0].locked);
   const needsAttention = groups.some(g => g[0].denied || !g[0].isNew);
   badge.style.display = needsAttention ? '' : 'none';
+  const msg = document.getElementById('order-new-msg');
+  if (msg) msg.style.display = needsAttention ? '' : 'none';
 }
 
 function updateBadges() {
