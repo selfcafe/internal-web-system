@@ -1133,6 +1133,15 @@ function isDailyCountTracked(p) {
   return false;
 }
 
+// 消費期限の管理が不要な商品（その他ベンダーの商品、カップ・カップ蓋類、ペーパーフィルターは
+// 賞味期限の概念がないため、棚卸表の消費期限①〜③の入力欄自体を出さない）
+function needsExpiryTracking(p) {
+  if (p.vendor === 'other') return false;
+  if (p.name.includes('カップ')) return false;
+  if (p.name === 'ペーパーフィルター') return false;
+  return true;
+}
+
 // 店舗×年月ごとの棚卸入力（期末在庫・消費期限ごとの個数・棚卸備考・最終送信日時）。
 // デイリーカウントはチェックシートの「補充」列の月間合計から自動算出する値のため、
 // ここでは保持しない（棚卸表では閲覧のみで編集不可。Phase 3の連携を先取りして実装）
@@ -1290,11 +1299,25 @@ function renderInventoryInputScreen(wrap, allProducts, period, periodData) {
       const expQty = periodData.expQty[p.name] || {};
       const caseLabel = p.caseUnit || '―';
       const endStockRaw = periodData.endStock[p.name];
-      const { d, expFlags, isExpired, nearFlags, isNearing } = computeInventoryExpiryInfo(p, data);
+      const trackExpiry = needsExpiryTracking(p);
+      const { d, expFlags, isExpired, nearFlags, isNearing } = trackExpiry
+        ? computeInventoryExpiryInfo(p, data)
+        : { d: {}, expFlags: {}, isExpired: false, nearFlags: {}, isNearing: false };
       if (isExpired) expiredProducts.push(p.label || p.name);
       if (isNearing) nearingProducts.push(p.label || p.name);
       const fieldStyle = f => expFlags[f] ? INV_ERR_STYLE : (nearFlags[f] ? INV_NEAR_STYLE : INV_INPUT_STYLE);
       const rowBg = isExpired ? '#fffaf9' : '#fff';
+      const expCell = (slot, colLabel) => trackExpiry
+        ? `<td data-label="${colLabel}" style="padding:5px 6px">
+          <div style="display:flex;gap:4px;align-items:center">
+          <input type="date" value="${esc(d[slot]||'')}" style="${fieldStyle(slot)};flex:1;min-width:0"
+            onchange="updateInventoryField(${i},'${slot}',this.value)">
+          <input type="number" min="0" step="1" placeholder="個数" value="${esc(expQty[slot==='exp1'?'qty1':slot==='exp2'?'qty2':'qty3']||'')}"
+            style="width:48px;flex:none;padding:2px 4px;border:1px solid #d1d5db;border-radius:4px;font-size:11px;text-align:right"
+            onchange="updateInventoryExpQty('${esc(p.name)}','${slot==='exp1'?'qty1':slot==='exp2'?'qty2':'qty3'}',this.value)">
+          </div>
+        </td>`
+        : `<td data-label="${colLabel}" style="padding:5px 6px;text-align:center;color:#bbb;font-size:11px">対象外</td>`;
       return `<tr style="border-bottom:1px solid #f0f0f0${isExpired ? ';background:#fffaf9' : ''}">
         <td data-label="${COLS[0]}" style="padding:5px 6px;font-size:12px;position:sticky;left:0;z-index:1;background:${rowBg};border-right:1px solid #e5e7eb">${esc(p.label)}${isExpired ? ' <span style="color:#ef4444;font-size:11px" title="消費期限切れの商品があります">⏰期限切れ</span>' : (isNearing ? ' <span style="color:#b45309;font-size:11px" title="消費期限が近付いています">⚠まもなく期限</span>' : '')}</td>
         <td data-label="${COLS[1]}" style="padding:5px 6px;font-size:11px;color:#666;white-space:nowrap">${esc(caseLabel)}</td>
@@ -1304,33 +1327,9 @@ function renderInventoryInputScreen(wrap, allProducts, period, periodData) {
             onchange="updateInventoryPeriodField('endStock','${esc(p.name)}',this.value)"
             title="消費期限①〜③に個数を入力すると自動で合計を反映します。直接入力もできます">
         </td>
-        <td data-label="${COLS[3]}" style="padding:5px 6px">
-          <div style="display:flex;gap:4px;align-items:center">
-          <input type="date" value="${esc(d.exp1||'')}" style="${fieldStyle('exp1')};flex:1;min-width:0"
-            onchange="updateInventoryField(${i},'exp1',this.value)">
-          <input type="number" min="0" step="1" placeholder="個数" value="${esc(expQty.qty1||'')}"
-            style="width:48px;flex:none;padding:2px 4px;border:1px solid #d1d5db;border-radius:4px;font-size:11px;text-align:right"
-            onchange="updateInventoryExpQty('${esc(p.name)}','qty1',this.value)">
-          </div>
-        </td>
-        <td data-label="${COLS[4]}" style="padding:5px 6px">
-          <div style="display:flex;gap:4px;align-items:center">
-          <input type="date" value="${esc(d.exp2||'')}" style="${fieldStyle('exp2')};flex:1;min-width:0"
-            onchange="updateInventoryField(${i},'exp2',this.value)">
-          <input type="number" min="0" step="1" placeholder="個数" value="${esc(expQty.qty2||'')}"
-            style="width:48px;flex:none;padding:2px 4px;border:1px solid #d1d5db;border-radius:4px;font-size:11px;text-align:right"
-            onchange="updateInventoryExpQty('${esc(p.name)}','qty2',this.value)">
-          </div>
-        </td>
-        <td data-label="${COLS[5]}" style="padding:5px 6px">
-          <div style="display:flex;gap:4px;align-items:center">
-          <input type="date" value="${esc(d.exp3||'')}" style="${fieldStyle('exp3')};flex:1;min-width:0"
-            onchange="updateInventoryField(${i},'exp3',this.value)">
-          <input type="number" min="0" step="1" placeholder="個数" value="${esc(expQty.qty3||'')}"
-            style="width:48px;flex:none;padding:2px 4px;border:1px solid #d1d5db;border-radius:4px;font-size:11px;text-align:right"
-            onchange="updateInventoryExpQty('${esc(p.name)}','qty3',this.value)">
-          </div>
-        </td>
+        ${expCell('exp1', COLS[3])}
+        ${expCell('exp2', COLS[4])}
+        ${expCell('exp3', COLS[5])}
       </tr>`;
     }).join('');
     return hdr + rows;
