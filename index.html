@@ -253,6 +253,8 @@
       table.card-mode tr.group-sep { display:block; height:12px; background:transparent; padding:0; box-shadow:none; border:none; }
       table.card-mode td { display:block; padding:5px 0; border:none; font-size:14px; }
       table.card-mode td::before { content:attr(data-label); display:block; font-size:11px; color:#888; font-weight:600; letter-spacing:.4px; margin-bottom:3px; }
+      /* 棚卸表はPC幅で右寄せ・中央寄せのセルが多く、カード表示ではラベルごと寄ってしまうため左寄せに戻す */
+      #inventory-table.card-mode td { text-align:left !important; }
       table.card-mode td.c-action { display:flex; gap:8px; margin-top:8px; padding-top:10px; border-top:1px solid #ddd !important; text-align:left; }
       table.card-mode td.c-action::before { display:none; }
       .btn-done, .btn-del, .btn-withdraw { flex:1; padding:10px 8px; font-size:14px; width:100%; }
@@ -1097,8 +1099,13 @@ function getInventoryPeriod(baseDate) {
   const d = baseDate || new Date();
   const shifted = d.getDate() <= 5 ? new Date(d.getFullYear(), d.getMonth() - 1, 1) : new Date(d.getFullYear(), d.getMonth(), 1);
   const label = `${shifted.getFullYear()}-${String(shifted.getMonth() + 1).padStart(2, '0')}`;
-  const deadline = new Date(shifted.getFullYear(), shifted.getMonth() + 2, 5);
-  return { label, year: shifted.getFullYear(), month: shifted.getMonth() + 1, deadlineLabel: `${deadline.getMonth() + 1}/${deadline.getDate()}` };
+  const monthEnd = new Date(shifted.getFullYear(), shifted.getMonth() + 1, 0);
+  const deadline = new Date(shifted.getFullYear(), shifted.getMonth() + 1, 5);
+  return {
+    label, year: shifted.getFullYear(), month: shifted.getMonth() + 1,
+    startLabel: `${monthEnd.getMonth() + 1}/${monthEnd.getDate()}`,
+    deadlineLabel: `${deadline.getMonth() + 1}/${deadline.getDate()}`,
+  };
 }
 function _prevPeriodLabel(label) {
   const [y, m] = label.split('-').map(Number);
@@ -1115,12 +1122,14 @@ function isDailyCountTracked(p) {
   return false;
 }
 
-// 店舗×年月ごとの棚卸入力（期末在庫・デイリーカウント・棚卸備考・最終送信日時）
+// 店舗×年月ごとの棚卸入力（期末在庫・棚卸備考・最終送信日時）。
+// デイリーカウントはチェックシートの「補充」列の月間合計から自動算出する値のため、
+// ここでは保持しない（棚卸表では閲覧のみで編集不可。Phase 3の連携を先取りして実装）
 const INVENTORY_PERIOD_KEY = 'inventory_period_data';
 function getInventoryPeriodData(storeId, periodLabel) {
   const all = JSON.parse(localStorage.getItem(INVENTORY_PERIOD_KEY) || '{}');
   const rec = (all[storeId] && all[storeId][periodLabel]) || {};
-  return { endStock: rec.endStock || {}, dailyCount: rec.dailyCount || {}, remarks: rec.remarks || '', lastSentAt: rec.lastSentAt || null };
+  return { endStock: rec.endStock || {}, remarks: rec.remarks || '', lastSentAt: rec.lastSentAt || null };
 }
 function setInventoryPeriodData(storeId, periodLabel, rec) {
   const all = JSON.parse(localStorage.getItem(INVENTORY_PERIOD_KEY) || '{}');
@@ -1135,6 +1144,19 @@ function updateInventoryPeriodField(section, name, value) {
   else rec[section][name] = value;
   setInventoryPeriodData(storeTab, period.label, rec);
   renderInventory();
+}
+
+// デイリーカウント＝チェックシートの「補充」列（'prod:'+商品名）のその月の日別入力の合計。
+// 棚卸表側では編集させず、常にチェックシートの値をそのまま表示する
+function getInventoryDailyCount(storeId, periodLabel, productName) {
+  const data = getChecksheetData(storeId, periodLabel);
+  const itemId = 'prod:' + productName;
+  let sum = 0, has = false;
+  Object.values(data).forEach(dayData => {
+    const v = dayData[itemId];
+    if (typeof v === 'number') { sum += v; has = true; }
+  });
+  return has ? sum : '';
 }
 
 // 期首在庫＝前月分としてスプレッドシートへ送信済みの期末在庫。サーバー履歴を
@@ -1164,6 +1186,7 @@ function getInventoryOpeningStock(storeId, periodLabel, productName) {
 function renderInventory() {
   const wrap = document.getElementById('inventory-table-wrap');
   if (!wrap) return;
+  const isMobile = window.innerWidth < 640;
   const productOrder = new Map(PRODUCTS.map((p, i) => [p.name, i]));
   const consumablesKey = VENDOR_CONFIG.find(v => v.label === '消耗品')?.key;
   const allProducts = getAvailableProducts(storeTab)
@@ -1176,16 +1199,19 @@ function renderInventory() {
   const data = getInventoryData(storeTab);
   const period = getInventoryPeriod();
   const periodData = getInventoryPeriodData(storeTab, period.label);
-  const inputStyle = 'padding:4px 6px;border:1px solid #d1d5db;border-radius:4px;font-size:13px;background:white';
-  const errStyle   = 'padding:4px 6px;border:1px solid #ef4444;border-radius:4px;font-size:13px;background:#fef2f2;color:#b91c1c;font-weight:700';
+  // PC幅でも改行なし・横スクロールなしで収まるよう、パディング/フォント/入力幅を最小限に詰める
+  const inputStyle = 'padding:3px 4px;border:1px solid #d1d5db;border-radius:4px;font-size:11.5px;background:white';
+  const errStyle   = 'padding:3px 4px;border:1px solid #ef4444;border-radius:4px;font-size:11.5px;background:#fef2f2;color:#b91c1c;font-weight:700';
   const VENDOR_LABELS = Object.fromEntries(VENDOR_CONFIG.map(v => [v.key, v.label]));
+
+  const COLS = ['コード','商品名','ケース/入り数','期首在庫','期末在庫','消費量','デイリーカウント','消費期限①','消費期限②','消費期限③'];
 
   const mismatches = [];
   let globalIdx = 0;
   const bodyRows = VENDOR_CONFIG.map(v => {
     const items = allProducts.filter(p => p.vendor === v.key);
     if (!items.length) return '';
-    const hdr = `<tr><td colspan="10" style="padding:6px 10px;font-size:11px;font-weight:700;color:#22703d;background:#edf2d4;border-top:2px solid #aabf28">${esc(VENDOR_LABELS[v.key] || v.key)}</td></tr>`;
+    const hdr = `<tr><td colspan="10" style="padding:5px 8px;font-size:11px;font-weight:700;color:#22703d;background:#edf2d4;border-top:2px solid #aabf28">${esc(VENDOR_LABELS[v.key] || v.key)}</td></tr>`;
     const rows = items.map(p => {
       const i = globalIdx++;
       const d = data[p.name] || {};
@@ -1196,38 +1222,33 @@ function renderInventory() {
       const endStock = (endStockRaw === undefined || endStockRaw === '') ? '' : Number(endStockRaw);
       const consumption = (openStock !== '' && endStock !== '') ? (openStock - endStock) : '';
       const tracked = isDailyCountTracked(p);
-      const dcRaw = periodData.dailyCount[p.name];
-      const dailyCount = (dcRaw === undefined || dcRaw === '') ? '' : Number(dcRaw);
+      const dailyCount = tracked ? getInventoryDailyCount(storeTab, period.label, p.name) : '';
       const mismatch = tracked && consumption !== '' && dailyCount !== '' && consumption !== dailyCount;
       if (mismatch) mismatches.push({ name: p.label || p.name, consumption, dailyCount });
       return `<tr style="border-bottom:1px solid #f0f0f0${mismatch ? ';background:#fffaf9' : ''}">
-        <td style="padding:8px 10px;font-size:12px;color:#888;white-space:nowrap">${esc(p.code||'')}</td>
-        <td style="padding:8px 10px;font-size:13px">${esc(p.label)}${mismatch ? ' <span style="color:#ef4444;font-size:11px">⚠</span>' : ''}</td>
-        <td style="padding:8px 10px;font-size:12px;color:#666;white-space:nowrap">${esc(caseLabel)}</td>
-        <td style="padding:6px 8px;text-align:right;color:#8a8f7e;white-space:nowrap">${openStock === '' ? '―' : esc(openStock)}</td>
-        <td style="padding:6px 8px;text-align:center">
+        <td data-label="${COLS[0]}" style="padding:5px 6px;font-size:11px;color:#888;white-space:nowrap">${esc(p.code||'')}</td>
+        <td data-label="${COLS[1]}" style="padding:5px 6px;font-size:12px">${esc(p.label)}${mismatch ? ' <span style="color:#ef4444;font-size:11px">⚠</span>' : ''}</td>
+        <td data-label="${COLS[2]}" style="padding:5px 6px;font-size:11px;color:#666;white-space:nowrap">${esc(caseLabel)}</td>
+        <td data-label="${COLS[3]}" style="padding:5px 6px;text-align:right;color:#8a8f7e;white-space:nowrap;font-size:11.5px">${openStock === '' ? '―' : esc(openStock)}</td>
+        <td data-label="${COLS[4]}" style="padding:5px 6px;text-align:center">
           <input type="number" min="0" step="1" value="${esc(endStockRaw||'')}" placeholder="0"
-            style="${(mismatch?errStyle:inputStyle)};width:70px;text-align:right"
+            style="${(mismatch?errStyle:inputStyle)};width:52px;text-align:right"
             onchange="updateInventoryPeriodField('endStock','${esc(p.name)}',this.value)">
         </td>
-        <td style="padding:6px 8px;text-align:right;white-space:nowrap;${mismatch?'color:#b91c1c;font-weight:700;background:#fef2f2':'background:#f6f7f1'}">${consumption === '' ? '―' : esc(consumption)}</td>
-        <td style="padding:6px 8px;text-align:center">
-          ${tracked
-            ? `<input type="number" min="0" step="1" value="${esc(dcRaw||'')}" placeholder="0"
-                style="${(mismatch?errStyle:inputStyle)};width:70px;text-align:right"
-                onchange="updateInventoryPeriodField('dailyCount','${esc(p.name)}',this.value)">`
-            : '<span style="color:#bbb;font-size:12px">対象外</span>'}
+        <td data-label="${COLS[5]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px;${mismatch?'color:#b91c1c;font-weight:700;background:#fef2f2':'background:#f6f7f1'}">${consumption === '' ? '―' : esc(consumption)}</td>
+        <td data-label="${COLS[6]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px;${mismatch?'color:#b91c1c;font-weight:700;background:#fef2f2':'background:#f6f7f1'}" title="チェックシートの補充数量の月間合計（閲覧のみ）">
+          ${!tracked ? '<span style="color:#bbb;font-size:11px">対象外</span>' : (dailyCount === '' ? '―' : esc(dailyCount))}
         </td>
-        <td style="padding:6px 8px">
-          <input type="date" value="${esc(d.exp1||'')}" style="${inputStyle}"
+        <td data-label="${COLS[7]}" style="padding:5px 6px">
+          <input type="date" value="${esc(d.exp1||'')}" style="${inputStyle};width:100%"
             onchange="updateInventoryField(${i},'exp1',this.value)">
         </td>
-        <td style="padding:6px 8px">
-          <input type="date" value="${esc(d.exp2||'')}" style="${inputStyle}"
+        <td data-label="${COLS[8]}" style="padding:5px 6px">
+          <input type="date" value="${esc(d.exp2||'')}" style="${inputStyle};width:100%"
             onchange="updateInventoryField(${i},'exp2',this.value)">
         </td>
-        <td style="padding:6px 8px">
-          <input type="date" value="${esc(d.exp3||'')}" style="${inputStyle}"
+        <td data-label="${COLS[9]}" style="padding:5px 6px">
+          <input type="date" value="${esc(d.exp3||'')}" style="${inputStyle};width:100%"
             onchange="updateInventoryField(${i},'exp3',this.value)">
         </td>
       </tr>`;
@@ -1251,25 +1272,25 @@ function renderInventory() {
 
   wrap.innerHTML = `
     <div style="font-size:12px;color:#6b7263;background:#f1f3ea;border-radius:6px;padding:6px 10px;margin-bottom:10px;display:inline-block">
-      🗓 締め日ルール：当月6日〜翌月5日の入力はすべて<b>当月分</b>として扱われます（例：7/1〜7/5の入力も6月分）
+      🗓 締め日ルール：原則<b>当月末から翌月5日まで</b>に棚卸作業を行ってください。（例：7/1〜7/5の入力も6月分）
     </div>
     <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:10px;flex-wrap:wrap;gap:6px">
       <b style="font-size:15px">${esc(STORES[storeTab]||'')}</b>
-      <span style="font-size:12px;color:#6b7263">${period.year}年${period.month}月分（入力受付: 〜${esc(period.deadlineLabel)}）</span>
+      <span style="font-size:12px;color:#6b7263">${period.year}年${period.month}月分（入力受付: ${esc(period.startLabel)}〜${esc(period.deadlineLabel)}）</span>
     </div>
     <div style="overflow-x:auto">
-      <table style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+      <table id="inventory-table" style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
         <thead><tr style="background:#22703d;color:white">
-          <th style="padding:9px 12px;font-size:13px;text-align:left;white-space:nowrap">コード</th>
-          <th style="padding:9px 12px;font-size:13px;text-align:left;white-space:nowrap">商品名</th>
-          <th style="padding:9px 12px;font-size:13px;text-align:left;white-space:nowrap">ケース/入り数</th>
-          <th style="padding:9px 12px;font-size:13px;text-align:right;white-space:nowrap">期首在庫<br><span style="font-weight:400;opacity:.8">(先月末)</span></th>
-          <th style="padding:9px 12px;font-size:13px;text-align:center;white-space:nowrap">期末在庫<br><span style="font-weight:400;opacity:.8">(当月・入力)</span></th>
-          <th style="padding:9px 12px;font-size:13px;text-align:right;white-space:nowrap">消費量</th>
-          <th style="padding:9px 12px;font-size:13px;text-align:center;white-space:nowrap">デイリー<br>カウント</th>
-          <th style="padding:9px 12px;font-size:13px;text-align:left;white-space:nowrap">消費期限①</th>
-          <th style="padding:9px 12px;font-size:13px;text-align:left;white-space:nowrap">消費期限②</th>
-          <th style="padding:9px 12px;font-size:13px;text-align:left;white-space:nowrap">消費期限③</th>
+          <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap">${COLS[0]}</th>
+          <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap">${COLS[1]}</th>
+          <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap">${COLS[2]}</th>
+          <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap" title="先月末の期末在庫">${COLS[3]}</th>
+          <th style="padding:5px 6px;font-size:11px;text-align:center;white-space:nowrap" title="当月分・入力してください">${COLS[4]}</th>
+          <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap">${COLS[5]}</th>
+          <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap" title="チェックシートの補充数量の月間合計（閲覧のみ）">${COLS[6]}</th>
+          <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap">${COLS[7]}</th>
+          <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap">${COLS[8]}</th>
+          <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap">${COLS[9]}</th>
         </tr></thead>
         <tbody>${bodyRows}</tbody>
       </table>
@@ -1289,6 +1310,8 @@ function renderInventory() {
     </div>
     <div id="inventory-toast" style="display:none;margin-top:10px;background:#eef6ee;border:1px solid #bfe0c4;color:#1a5c30;border-radius:8px;padding:9px 12px;font-size:12px"></div>
   `;
+  const table = document.getElementById('inventory-table');
+  if (table) isMobile ? table.classList.add('card-mode') : table.classList.remove('card-mode');
 }
 
 async function submitInventory() {
@@ -1303,8 +1326,7 @@ async function submitInventory() {
     const endStock = (endStockRaw === undefined || endStockRaw === '') ? '' : Number(endStockRaw);
     const consumption = (openStock !== '' && endStock !== '') ? (openStock - endStock) : '';
     const tracked = isDailyCountTracked(p);
-    const dcRaw = periodData.dailyCount[p.name];
-    const dailyCount = (dcRaw === undefined || dcRaw === '') ? '' : Number(dcRaw);
+    const dailyCount = tracked ? getInventoryDailyCount(storeTab, period.label, p.name) : '';
     const mismatch = tracked && consumption !== '' && dailyCount !== '' && consumption !== dailyCount;
     if (mismatch) mismatches.push(p.label || p.name);
     const price = Number(p.price) || 0;
@@ -1828,6 +1850,9 @@ async function switchPartnerTab(tab) {
   if (tab === 'inventory') {
     renderInventory();
     loadInventoryOpeningStock(storeTab, getInventoryPeriod().label);
+    // デイリーカウントはチェックシートの補充数量から算出するため、最新のチェックシートデータも取得する
+    await loadChecksheetDataFromDb(storeTab);
+    renderInventory();
   }
   if (tab === 'checklist') {
     renderChecksheet();
@@ -2672,54 +2697,84 @@ function renderOrderHistory() {
       ? `<img src="${esc(gPhoto)}" style="height:36px;border-radius:5px;cursor:pointer;border:1px solid #e5e7eb;margin-left:6px;vertical-align:middle" onclick="showLostImage(this.src)" title="写真を拡大">`
       : '';
 
-    let statusHtml, actionBtn;
     const isOrdered = !group[0].isNew;
+
+    // 発注済みの依頼で、商品によって納品予定日が異なる（未記入を含む）場合は、
+    // 納品予定日ごとに別々の「納品済み」ボタンを設置し、届いた分から個別に納品済みにできるようにする。
+    // 全商品が同じ納品予定日（未記入含む）ならこれまで通りグループ全体で1つのボタンにする。
+    let actionGroups;
     if (isDenied) {
-      statusHtml = `<span style="font-weight:700;color:#dc2626;font-size:13px">✕ 否認されました。備考を確認してください。</span>${photoHtml}`;
-      actionBtn  = `<button class="btn-withdraw" onclick="withdrawDenied('${gid}')">依頼取り下げ</button>`;
-    } else if (isOrdered) {
-      statusHtml = `<span class="locked-status">✓ 依頼済み</span>${photoHtml}`;
-      actionBtn  = `<button class="btn-done" onclick="markGroupDelivered('${esc(gid)}')"
-          ${!hasOrderDate ? 'disabled title="発注日が記載されてから押せます" style="opacity:0.4;cursor:not-allowed"' : ''}>納品済み</button>`;
+      actionGroups = [{
+        rows: group,
+        statusHtml: `<span style="font-weight:700;color:#dc2626;font-size:13px">✕ 否認されました。備考を確認してください。</span>${photoHtml}`,
+        actionBtn: `<button class="btn-withdraw" onclick="withdrawDenied('${gid}')">依頼取り下げ</button>`,
+      }];
+    } else if (!isOrdered) {
+      actionGroups = [{
+        rows: group,
+        statusHtml: `<span class="locked-status" style="color:#d97706">⌛ 確認中</span>${photoHtml}`,
+        actionBtn: `<button class="btn-cancel-lock" onclick="unlockGroup('${gid}')">取り下げ</button>`,
+      }];
     } else {
-      statusHtml = `<span class="locked-status" style="color:#d97706">⌛ 確認中</span>${photoHtml}`;
-      actionBtn  = `<button class="btn-cancel-lock" onclick="unlockGroup('${gid}')">取り下げ</button>`;
-    }
-    const doneBtn = actionBtn;
-
-    group.forEach((row, i) => {
-      const tr = document.createElement('tr');
-      tr.classList.add('locked-row');
-      if (i === 0) tr.classList.add('group-first');
-
-      const pLabel = prodByName(row.product)?.label || row.product || '';
-      const showReq = (i === 0) || isMobile;
-      const rowspanAttr = (!isMobile && i === 0) ? ` rowspan="${N}"` : '';
-      const reqCell = showReq
-        ? `<td class="c-req" data-label="依頼日"${rowspanAttr} style="vertical-align:middle;font-size:13px;font-weight:600;text-align:center">${esc(row.requestDate)}</td>`
-        : '';
-
-      // c-action: 最初の行のみ（rowspan=N）にステータス＋納品済みを横並びで表示
-      let actionCell = '';
-      if (i === 0) {
-        const actionRowspan = !isMobile ? ` rowspan="${N}"` : '';
-        actionCell = `<td class="c-action"${actionRowspan} style="vertical-align:middle">
-          <div class="action-wrap">
-            <div>${statusHtml}</div>
-            ${doneBtn}
-          </div>
-        </td>`;
+      const deliveryKeys = [...new Set(group.map(r => r.deliveryDate || ''))];
+      if (deliveryKeys.length <= 1) {
+        actionGroups = [{
+          rows: group,
+          statusHtml: `<span class="locked-status">✓ 依頼済み</span>${photoHtml}`,
+          actionBtn: `<button class="btn-done" onclick="markGroupDelivered('${esc(gid)}')"
+              ${!hasOrderDate ? 'disabled title="発注日が記載されてから押せます" style="opacity:0.4;cursor:not-allowed"' : ''}>納品済み</button>`,
+        }];
+      } else {
+        actionGroups = deliveryKeys.map((dKey, di) => {
+          const subRows = group.filter(r => (r.deliveryDate || '') === dKey);
+          const subHasOrderDate = subRows.some(r => r.orderDate);
+          return {
+            rows: subRows,
+            statusHtml: `<span class="locked-status">✓ 依頼済み</span>${di === 0 ? photoHtml : ''}`,
+            actionBtn: `<button class="btn-done" onclick="markGroupDeliveredByDate('${esc(gid)}','${esc(dKey)}')"
+                ${!subHasOrderDate ? 'disabled title="発注日が記載されてから押せます" style="opacity:0.4;cursor:not-allowed"' : ''}>納品済み</button>`,
+          };
+        });
       }
+    }
 
-      tr.innerHTML = `
-        ${reqCell}
-        <td class="c-order" data-label="発注日">${displayCell(row.orderDate)}</td>
-        <td class="c-delivery" data-label="納品予定日">${displayCell(row.deliveryDate)}</td>
-        <td class="c-product" data-label="商品名" style="font-size:13px">${pLabel ? esc(pLabel) : '<span style="color:#bbb">未選択</span>'}</td>
-        <td class="c-qty" data-label="数量"><span style="font-size:13px">${esc(row.qty)||'—'}</span> <span class="unit-label">${esc(unitLabelText(row.product))}</span></td>
-        <td class="c-note" data-label="備考" style="font-size:13px;color:#555;white-space:pre-wrap">${esc(row.note)}</td>
-        ${actionCell}`;
-      tbody.appendChild(tr);
+    let rowIdxInGroup = 0;
+    actionGroups.forEach(ag => {
+      ag.rows.forEach((row, iInSub) => {
+        const globalI = rowIdxInGroup++;
+        const tr = document.createElement('tr');
+        tr.classList.add('locked-row');
+        if (globalI === 0) tr.classList.add('group-first');
+
+        const pLabel = prodByName(row.product)?.label || row.product || '';
+        const showReq = (globalI === 0) || isMobile;
+        const rowspanAttr = (!isMobile && globalI === 0) ? ` rowspan="${N}"` : '';
+        const reqCell = showReq
+          ? `<td class="c-req" data-label="依頼日"${rowspanAttr} style="vertical-align:middle;font-size:13px;font-weight:600;text-align:center">${esc(row.requestDate)}</td>`
+          : '';
+
+        // c-action: 各アクショングループの最初の行にのみ（rowspan=そのグループの件数）ステータス＋納品済みを表示
+        let actionCell = '';
+        if (iInSub === 0) {
+          const actionRowspan = !isMobile ? ` rowspan="${ag.rows.length}"` : '';
+          actionCell = `<td class="c-action"${actionRowspan} style="vertical-align:middle">
+            <div class="action-wrap">
+              <div>${ag.statusHtml}</div>
+              ${ag.actionBtn}
+            </div>
+          </td>`;
+        }
+
+        tr.innerHTML = `
+          ${reqCell}
+          <td class="c-order" data-label="発注日">${displayCell(row.orderDate)}</td>
+          <td class="c-delivery" data-label="納品予定日">${displayCell(row.deliveryDate)}</td>
+          <td class="c-product" data-label="商品名" style="font-size:13px">${pLabel ? esc(pLabel) : '<span style="color:#bbb">未選択</span>'}</td>
+          <td class="c-qty" data-label="数量"><span style="font-size:13px">${esc(row.qty)||'—'}</span> <span class="unit-label">${esc(unitLabelText(row.product))}</span></td>
+          <td class="c-note" data-label="備考" style="font-size:13px;color:#555;white-space:pre-wrap">${esc(row.note)}</td>
+          ${actionCell}`;
+        tbody.appendChild(tr);
+      });
     });
 
     if (gi < groups.length - 1) {
@@ -2800,6 +2855,23 @@ function markGroupDelivered(gid) {
   group.forEach(r => hist.push({...r, deliveredAt: now}));
   saveH(storeTab, hist);
   storeRows = storeRows.filter(r => (r.groupId||r.id) !== gid);
+  saveA(storeTab, storeRows);
+  renderStore();
+}
+
+/* 商品によって納品予定日が異なるグループで、指定した納品予定日（未記入は''）の商品分だけを
+   納品済みにする。他の納品予定日の商品はそのまま依頼済み履歴に残る */
+function markGroupDeliveredByDate(gid, deliveryDate) {
+  const group = storeRows.filter(r => (r.groupId||r.id) === gid && (r.deliveryDate||'') === deliveryDate);
+  if (!group.length) return;
+  if (!group.some(r => r.orderDate)) { alert('発注日が記載されてから納品済みにできます。'); return; }
+  if (!confirm('この納品予定日の商品を納品済みにして履歴へ移動しますか？')) return;
+  const hist = loadH(storeTab);
+  const now = Date.now();
+  group.forEach(r => hist.push({...r, deliveredAt: now}));
+  saveH(storeTab, hist);
+  const ids = new Set(group.map(r => r.id));
+  storeRows = storeRows.filter(r => !ids.has(r.id));
   saveA(storeTab, storeRows);
   renderStore();
 }
@@ -4556,7 +4628,7 @@ window.addEventListener('resize', () => {
   const w = window.innerWidth;
   if (w === _lastInnerWidth) return; // 高さのみの変化（スマホキーボード）は無視
   _lastInnerWidth = w;
-  if (location.hash !== '#admin') renderStore();
+  if (location.hash !== '#admin') { renderStore(); renderInventory(); }
 });
 
 /* ホーム画面PWAでスワイプ「戻る」→アプリごと終了してホーム画面に落ちるのを防ぐ */
