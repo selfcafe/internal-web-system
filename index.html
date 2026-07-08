@@ -1259,8 +1259,8 @@ function renderInventory() {
       const fieldStyle = f => expFlags[f] ? errStyle : (nearFlags[f] ? nearStyle : inputStyle);
       const rowBg = (mismatch || isExpired) ? '#fffaf9' : '#fff';
       return `<tr style="border-bottom:1px solid #f0f0f0${(mismatch||isExpired) ? ';background:#fffaf9' : ''}">
-        <td data-label="${COLS[0]}" style="padding:5px 6px;font-size:11px;color:#888;white-space:nowrap;width:90px;position:sticky;left:0;z-index:1;background:${rowBg};border-right:1px solid #e5e7eb">${esc(p.code||'')}</td>
-        <td data-label="${COLS[1]}" style="padding:5px 6px;font-size:12px;position:sticky;left:90px;z-index:1;background:${rowBg};border-right:1px solid #e5e7eb">${esc(p.label)}${mismatch ? ' <span style="color:#ef4444;font-size:11px">⚠</span>' : ''}${isExpired ? ' <span style="color:#ef4444;font-size:11px" title="消費期限切れの商品があります">⏰期限切れ</span>' : (isNearing ? ' <span style="color:#b45309;font-size:11px" title="消費期限が近付いています">⚠まもなく期限</span>' : '')}</td>
+        <td class="inv-sticky-code" data-label="${COLS[0]}" style="padding:5px 6px;font-size:11px;color:#888;white-space:nowrap;width:90px;position:sticky;left:0;z-index:1;background:${rowBg};border-right:1px solid #e5e7eb">${esc(p.code||'')}</td>
+        <td class="inv-sticky-name" data-label="${COLS[1]}" style="padding:5px 6px;font-size:12px;position:sticky;left:90px;z-index:1;background:${rowBg};border-right:1px solid #e5e7eb">${esc(p.label)}${mismatch ? ' <span style="color:#ef4444;font-size:11px">⚠</span>' : ''}${isExpired ? ' <span style="color:#ef4444;font-size:11px" title="消費期限切れの商品があります">⏰期限切れ</span>' : (isNearing ? ' <span style="color:#b45309;font-size:11px" title="消費期限が近付いています">⚠まもなく期限</span>' : '')}</td>
         <td data-label="${COLS[2]}" style="padding:5px 6px;font-size:11px;color:#666;white-space:nowrap">${esc(caseLabel)}</td>
         <td data-label="${COLS[3]}" style="padding:5px 6px;text-align:right;color:#8a8f7e;white-space:nowrap;font-size:11.5px">${openStock === '' ? '―' : esc(openStock)}</td>
         <td data-label="${COLS[4]}" style="padding:5px 6px;text-align:center">
@@ -1346,8 +1346,8 @@ function renderInventory() {
     <div style="overflow-x:auto">
       <table id="inventory-table" style="width:100%;border-collapse:separate;border-spacing:0;background:white;border-radius:8px;overflow:visible;box-shadow:0 1px 4px rgba(0,0,0,.08)">
         <thead><tr style="background:#22703d;color:white">
-          <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap;width:90px;position:sticky;left:0;z-index:2;background:#22703d;border-right:1px solid #1a5c30">${COLS[0]}</th>
-          <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap;position:sticky;left:90px;z-index:2;background:#22703d;border-right:1px solid #1a5c30">${COLS[1]}</th>
+          <th class="inv-sticky-code" style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap;width:90px;position:sticky;left:0;z-index:2;background:#22703d;border-right:1px solid #1a5c30">${COLS[0]}</th>
+          <th class="inv-sticky-name" style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap;position:sticky;left:90px;z-index:2;background:#22703d;border-right:1px solid #1a5c30">${COLS[1]}</th>
           <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap">${COLS[2]}</th>
           <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap" title="先月末の期末在庫">${COLS[3]}</th>
           <th style="padding:5px 6px;font-size:11px;text-align:center;white-space:nowrap" title="当月分・入力してください。消費期限①〜③に個数を入力すると自動で合計を反映します">${COLS[4]}</th>
@@ -1375,6 +1375,14 @@ function renderInventory() {
     </div>
     <div id="inventory-toast" style="display:none;margin-top:10px;background:#eef6ee;border:1px solid #bfe0c4;color:#1a5c30;border-radius:8px;padding:9px 12px;font-size:12px"></div>
   `;
+  // コード列はtable-layout:autoのため指定したwidth通りに描画されるとは限らず、
+  // 商品名列のleft固定値とズレると隙間から横スクロール中の内容が透けて見えてしまう。
+  // 実際に描画された幅を測って商品名列のleftへ反映し、隙間が出ないようにする
+  const codeCell = document.querySelector('#inventory-table tbody td.inv-sticky-code');
+  if (codeCell) {
+    const w = codeCell.getBoundingClientRect().width;
+    document.querySelectorAll('#inventory-table .inv-sticky-name').forEach(el => { el.style.left = w + 'px'; });
+  }
 }
 
 async function submitInventory() {
@@ -1870,7 +1878,7 @@ function renderChecksheetHistoryTable(wrap, subgroups, period) {
 
   wrap.innerHTML = `<div style="overflow-x:auto">
     <div style="font-size:12px;color:#888;margin-bottom:8px">対象期間：${esc(period.label)}分（${fmtChecksheetDay(period.start)}〜${fmtChecksheetDay(period.end)}）</div>
-    <table id="checksheet-table" style="border-collapse:separate;border-spacing:0;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+    <table id="checksheet-table" style="border-collapse:separate;border-spacing:0;background:white;border-radius:8px;overflow:visible;box-shadow:0 1px 4px rgba(0,0,0,.08)">
       <thead>
         <tr style="background:#1a5730"><th style="padding:5px 6px;width:60px;max-width:60px;background:#1a5730;position:sticky;left:0;z-index:3"></th>${subHeaderCells}</tr>
         <tr><th style="padding:5px 6px;font-size:11px;width:60px;max-width:60px;background:#22703d;color:white;white-space:nowrap;position:sticky;left:0;z-index:3">日付</th>${nameHeaderCells}</tr>
