@@ -275,7 +275,8 @@
         grid-template-areas:
           "dh nm del"
           "dh ut pr"
-          "dh cs cs";
+          "dh cs cs"
+          "dh cd cd";
         column-gap:8px; row-gap:6px;
         padding:10px 8px; border-bottom:1px solid #e5e7eb !important;
       }
@@ -285,7 +286,8 @@
       .settings-tbl tr:not(.settings-vendor-hdr) td:nth-child(3) { grid-area:ut; }
       .settings-tbl tr:not(.settings-vendor-hdr) td:nth-child(4) { grid-area:pr; }
       .settings-tbl tr:not(.settings-vendor-hdr) td:nth-child(5) { grid-area:cs; }
-      .settings-tbl tr:not(.settings-vendor-hdr) td:nth-child(6) { grid-area:del; align-self:start; }
+      .settings-tbl tr:not(.settings-vendor-hdr) td:nth-child(6) { grid-area:cd; }
+      .settings-tbl tr:not(.settings-vendor-hdr) td:nth-child(7) { grid-area:del; align-self:start; }
       .settings-tbl td[data-label]::before { content:attr(data-label); display:block; font-size:10px; color:#888; font-weight:600; margin-bottom:2px; }
       .settings-tbl tr:not(.settings-vendor-hdr) input { width:100% !important; box-sizing:border-box; max-width:none !important; }
       /* チェック項目設定テーブル：ドラッグハンドルが無い4列構成なので独自グリッドを使う */
@@ -1268,7 +1270,7 @@ function renderInventory() {
 function renderInventoryInputScreen(wrap, allProducts, period, periodData) {
   const data = getInventoryData(storeTab);
   const VENDOR_LABELS = Object.fromEntries(VENDOR_CONFIG.map(v => [v.key, v.label]));
-  const COLS = ['コード','商品名','ケース/入り数','期末在庫','消費期限①','消費期限②','消費期限③'];
+  const COLS = ['商品名','ケース/入り数','期末在庫','消費期限①','消費期限②','消費期限③'];
 
   const expiredProducts = [];
   const nearingProducts = [];
@@ -1276,7 +1278,7 @@ function renderInventoryInputScreen(wrap, allProducts, period, periodData) {
   const bodyRows = VENDOR_CONFIG.map(v => {
     const items = allProducts.filter(p => p.vendor === v.key);
     if (!items.length) return '';
-    const hdr = `<tr><td colspan="7" style="padding:5px 8px;font-size:11px;font-weight:700;color:#22703d;background:#edf2d4;border-top:2px solid #aabf28">${esc(VENDOR_LABELS[v.key] || v.key)}</td></tr>`;
+    const hdr = `<tr><td colspan="6" style="padding:5px 8px;font-size:11px;font-weight:700;color:#22703d;background:#edf2d4;border-top:2px solid #aabf28">${esc(VENDOR_LABELS[v.key] || v.key)}</td></tr>`;
     const rows = items.map(p => {
       const i = globalIdx++;
       const expQty = periodData.expQty[p.name] || {};
@@ -1288,16 +1290,15 @@ function renderInventoryInputScreen(wrap, allProducts, period, periodData) {
       const fieldStyle = f => expFlags[f] ? INV_ERR_STYLE : (nearFlags[f] ? INV_NEAR_STYLE : INV_INPUT_STYLE);
       const rowBg = isExpired ? '#fffaf9' : '#fff';
       return `<tr style="border-bottom:1px solid #f0f0f0${isExpired ? ';background:#fffaf9' : ''}">
-        <td class="inv-sticky-code" data-label="${COLS[0]}" style="padding:5px 6px;font-size:11px;color:#888;white-space:nowrap;width:90px;position:sticky;left:0;z-index:1;background:${rowBg};border-right:1px solid #e5e7eb">${esc(p.code||'')}</td>
-        <td class="inv-sticky-name" data-label="${COLS[1]}" style="padding:5px 6px;font-size:12px;position:sticky;left:90px;z-index:1;background:${rowBg};border-right:1px solid #e5e7eb">${esc(p.label)}${isExpired ? ' <span style="color:#ef4444;font-size:11px" title="消費期限切れの商品があります">⏰期限切れ</span>' : (isNearing ? ' <span style="color:#b45309;font-size:11px" title="消費期限が近付いています">⚠まもなく期限</span>' : '')}</td>
-        <td data-label="${COLS[2]}" style="padding:5px 6px;font-size:11px;color:#666;white-space:nowrap">${esc(caseLabel)}</td>
-        <td data-label="${COLS[3]}" style="padding:5px 6px;text-align:center">
+        <td data-label="${COLS[0]}" style="padding:5px 6px;font-size:12px;position:sticky;left:0;z-index:1;background:${rowBg};border-right:1px solid #e5e7eb">${esc(p.label)}${isExpired ? ' <span style="color:#ef4444;font-size:11px" title="消費期限切れの商品があります">⏰期限切れ</span>' : (isNearing ? ' <span style="color:#b45309;font-size:11px" title="消費期限が近付いています">⚠まもなく期限</span>' : '')}</td>
+        <td data-label="${COLS[1]}" style="padding:5px 6px;font-size:11px;color:#666;white-space:nowrap">${esc(caseLabel)}</td>
+        <td data-label="${COLS[2]}" style="padding:5px 6px;text-align:center">
           <input type="number" min="0" step="1" value="${esc(endStockRaw||'')}" placeholder="0"
             style="${INV_INPUT_STYLE};width:52px;text-align:right"
             onchange="updateInventoryPeriodField('endStock','${esc(p.name)}',this.value)"
             title="消費期限①〜③に個数を入力すると自動で合計を反映します。直接入力もできます">
         </td>
-        <td data-label="${COLS[4]}" style="padding:5px 6px">
+        <td data-label="${COLS[3]}" style="padding:5px 6px">
           <div style="display:flex;gap:4px;align-items:center">
           <input type="date" value="${esc(d.exp1||'')}" style="${fieldStyle('exp1')};flex:1;min-width:0"
             onchange="updateInventoryField(${i},'exp1',this.value)">
@@ -1306,7 +1307,7 @@ function renderInventoryInputScreen(wrap, allProducts, period, periodData) {
             onchange="updateInventoryExpQty('${esc(p.name)}','qty1',this.value)">
           </div>
         </td>
-        <td data-label="${COLS[5]}" style="padding:5px 6px">
+        <td data-label="${COLS[4]}" style="padding:5px 6px">
           <div style="display:flex;gap:4px;align-items:center">
           <input type="date" value="${esc(d.exp2||'')}" style="${fieldStyle('exp2')};flex:1;min-width:0"
             onchange="updateInventoryField(${i},'exp2',this.value)">
@@ -1315,7 +1316,7 @@ function renderInventoryInputScreen(wrap, allProducts, period, periodData) {
             onchange="updateInventoryExpQty('${esc(p.name)}','qty2',this.value)">
           </div>
         </td>
-        <td data-label="${COLS[6]}" style="padding:5px 6px">
+        <td data-label="${COLS[5]}" style="padding:5px 6px">
           <div style="display:flex;gap:4px;align-items:center">
           <input type="date" value="${esc(d.exp3||'')}" style="${fieldStyle('exp3')};flex:1;min-width:0"
             onchange="updateInventoryField(${i},'exp3',this.value)">
@@ -1356,13 +1357,12 @@ function renderInventoryInputScreen(wrap, allProducts, period, periodData) {
     <div style="overflow-x:auto">
       <table id="inventory-table" style="width:100%;border-collapse:separate;border-spacing:0;background:white;border-radius:8px;overflow:visible;box-shadow:0 1px 4px rgba(0,0,0,.08)">
         <thead><tr style="background:#22703d;color:white">
-          <th class="inv-sticky-code" style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap;width:90px;position:sticky;left:0;z-index:2;background:#22703d;border-right:1px solid #1a5c30">${COLS[0]}</th>
-          <th class="inv-sticky-name" style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap;position:sticky;left:90px;z-index:2;background:#22703d;border-right:1px solid #1a5c30">${COLS[1]}</th>
-          <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap">${COLS[2]}</th>
-          <th style="padding:5px 6px;font-size:11px;text-align:center;white-space:nowrap" title="当月分・入力してください。消費期限①〜③に個数を入力すると自動で合計を反映します">${COLS[3]}</th>
+          <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap;position:sticky;left:0;z-index:2;background:#22703d;border-right:1px solid #1a5c30">${COLS[0]}</th>
+          <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap">${COLS[1]}</th>
+          <th style="padding:5px 6px;font-size:11px;text-align:center;white-space:nowrap" title="当月分・入力してください。消費期限①〜③に個数を入力すると自動で合計を反映します">${COLS[2]}</th>
+          <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap">${COLS[3]}</th>
           <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap">${COLS[4]}</th>
           <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap">${COLS[5]}</th>
-          <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap">${COLS[6]}</th>
         </tr></thead>
         <tbody>${bodyRows}</tbody>
       </table>
@@ -3821,7 +3821,9 @@ function loadProductSettings() {
     PRODUCTS.length = 0;
     savedList.forEach(p => {
       const def = defaultsByName[p.name];
-      PRODUCTS.push(def ? { ...p, vendor: def.vendor, code: def.code ?? p.code ?? '' } : p);
+      // コードは管理者ポータルの商品設定画面から編集できるため、保存済みの値があればそちらを優先し、
+      // 未設定の商品にだけコード内のデフォルト値（実JANコード等）を使う
+      PRODUCTS.push(def ? { ...p, vendor: def.vendor, code: (p.code !== undefined && p.code !== '') ? p.code : (def.code ?? '') } : p);
     });
     defaults.forEach(p => { if (!savedNames.has(p.name)) PRODUCTS.push(p); });
   }
@@ -4116,7 +4118,7 @@ function buildProdRows() {
     const items  = PRODUCTS.filter(p => p.vendor === vendor);
     const isOpen = _openVendors.has(vendor);
     const hdr = `<tr class="settings-vendor-hdr" onclick="toggleVendorSection('${vendor}')" style="cursor:pointer">
-      <td colspan="6"><div style="display:flex;justify-content:space-between;align-items:center">
+      <td colspan="7"><div style="display:flex;justify-content:space-between;align-items:center">
         <span>${VENDOR_LABELS[vendor]}</span>
         <span id="vendor-arrow-${vendor}" style="font-size:11px;color:#22703d">${isOpen ? '▼' : '▶'}</span>
       </div></td></tr>`;
@@ -4141,6 +4143,9 @@ function buildProdRows() {
         <td data-label="ケース/入り数"><input type="text" value="${esc(p.caseUnit)}" placeholder="なし"
           style="width:100%;max-width:260px;border:1px solid #ddd;border-radius:5px;padding:5px 7px;font-size:13px;font-family:inherit"
           onchange="saveProductSetting('${esc(p.name)}','caseUnit',this.value)"></td>
+        <td data-label="コード"><input type="text" value="${esc(p.code||'')}" placeholder="未設定"
+          style="width:100%;max-width:130px;border:1px solid #ddd;border-radius:5px;padding:5px 7px;font-size:13px;font-family:inherit"
+          onchange="saveProductSetting('${esc(p.name)}','code',this.value)"></td>
         <td style="text-align:center;white-space:nowrap">
           <button onclick="deleteProduct('${esc(p.name)}')"
             style="background:#ef4444;color:white;border:none;border-radius:5px;padding:4px 10px;font-size:12px;cursor:pointer;font-family:inherit">削除</button>
@@ -4259,6 +4264,7 @@ function renderSettings() {
                   <th style="width:44px"></th>
                   <th>商品名</th><th style="width:90px">単位</th>
                   <th style="width:110px">単価（円）</th><th>ケース/入り数</th>
+                  <th style="width:130px">コード</th>
                   <th style="width:52px"></th>
                 </tr></thead>
                 <tbody id="prod-tbl-body">${buildProdRows()}</tbody>
