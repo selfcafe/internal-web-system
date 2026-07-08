@@ -1114,10 +1114,9 @@ function _prevPeriodLabel(label) {
 }
 
 // デイリーカウント対象商品かどうか（チェックシートの補充対象と同じ基準を再利用。
-// 東海スナック等デイリーカウント対象外の商品は、消費量との不一致チェックからも除外する）
+// 東海スナック・その他ベンダー等デイリーカウント対象外の商品は、消費量との不一致チェックからも除外する）
 function isDailyCountTracked(p) {
   if (CHECKSHEET_QTY_VENDOR_ALL.includes(p.vendor)) return true;
-  if (p.vendor === 'other') return CHECKSHEET_QTY_OTHER_ALLOW.has(p.name);
   if (p.vendor === 'sales') return p.name === '水';
   return false;
 }
@@ -1644,14 +1643,12 @@ function stepChecksheetQty(dayKey, itemId, delta) {
 }
 
 // デイリーカウント（補充数量）列：棚卸表と同じ商品リストのうち、アペックス100RS／トーヨーベンディング／55D CS3の全商品と、
-// その他のストロー・ペーパータオル・トイレットペーパー、販売品の水のみを対象にする（店舗別取扱商品設定に連動）
+// 販売品の水のみを対象にする（店舗別取扱商品設定に連動）。「その他」ベンダーの商品は全て対象外
 const CHECKSHEET_QTY_VENDOR_ALL = ['apex', 'toyo', 'cs3'];
-const CHECKSHEET_QTY_OTHER_ALLOW = new Set(['ストロー', 'ペーパータオル', 'トイレットペーパー']);
 function _checksheetProductColumns() {
   const VENDOR_LABELS = Object.fromEntries(VENDOR_CONFIG.map(v => [v.key, v.label]));
   const products = _inventoryProductList().filter(p => {
     if (CHECKSHEET_QTY_VENDOR_ALL.includes(p.vendor)) return true;
-    if (p.vendor === 'other') return CHECKSHEET_QTY_OTHER_ALLOW.has(p.name);
     if (p.vendor === 'sales') return p.name === '水';
     return false;
   });
