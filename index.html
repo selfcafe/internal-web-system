@@ -1152,8 +1152,8 @@ function updateInventoryPeriodField(section, name, value) {
   renderInventory();
 }
 
-// 期末在庫は消費期限①②③ごとに入力した個数の合計として自動算出する（直接入力はさせない）。
-// 消費期限を持たない商品は、消費期限①の個数欄だけに日付を空欄のまま数量を入れればよい
+// 消費期限①②③ごとの個数を入力すると、その合計を期末在庫欄へ自動反映する（便利機能）。
+// 消費期限を必ずしも入力するとは限らないため、期末在庫欄自体は直接入力も引き続き可能にする
 function computeEndStockFromExpQty(q) {
   q = q || {};
   const vals = ['qty1', 'qty2', 'qty3'].map(k => (q[k] !== undefined && q[k] !== '') ? Number(q[k]) : null);
@@ -1246,7 +1246,8 @@ function renderInventory() {
       const caseLabel = p.caseUnit || '―';
       const openStockRaw = getInventoryOpeningStock(storeTab, period.label, p.name);
       const openStock = (openStockRaw === '' || openStockRaw === null || openStockRaw === undefined) ? '' : Number(openStockRaw);
-      const endStock = computeEndStockFromExpQty(expQty);
+      const endStockRaw = periodData.endStock[p.name];
+      const endStock = (endStockRaw === undefined || endStockRaw === '') ? '' : Number(endStockRaw);
       const consumption = (openStock !== '' && endStock !== '') ? (openStock - endStock) : '';
       const tracked = isDailyCountTracked(p);
       const dailyCount = tracked ? getInventoryDailyCount(storeTab, period.label, p.name) : '';
@@ -1264,8 +1265,11 @@ function renderInventory() {
         <td data-label="${COLS[1]}" style="padding:5px 6px;font-size:12px">${esc(p.label)}${mismatch ? ' <span style="color:#ef4444;font-size:11px">⚠</span>' : ''}${isExpired ? ' <span style="color:#ef4444;font-size:11px" title="消費期限切れの商品があります">⏰期限切れ</span>' : (isNearing ? ' <span style="color:#b45309;font-size:11px" title="消費期限が近付いています">⚠まもなく期限</span>' : '')}</td>
         <td data-label="${COLS[2]}" style="padding:5px 6px;font-size:11px;color:#666;white-space:nowrap">${esc(caseLabel)}</td>
         <td data-label="${COLS[3]}" style="padding:5px 6px;text-align:right;color:#8a8f7e;white-space:nowrap;font-size:11.5px">${openStock === '' ? '―' : esc(openStock)}</td>
-        <td data-label="${COLS[4]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px;${mismatch?'color:#b91c1c;font-weight:700;background:#fef2f2':'background:#f6f7f1'}" title="消費期限①〜③の個数の合計（閲覧のみ）">
-          ${endStock === '' ? '―' : esc(endStock)}
+        <td data-label="${COLS[4]}" style="padding:5px 6px;text-align:center">
+          <input type="number" min="0" step="1" value="${esc(endStockRaw||'')}" placeholder="0"
+            style="${(mismatch?errStyle:inputStyle)};width:52px;text-align:right"
+            onchange="updateInventoryPeriodField('endStock','${esc(p.name)}',this.value)"
+            title="消費期限①〜③に個数を入力すると自動で合計を反映します。直接入力もできます">
         </td>
         <td data-label="${COLS[5]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px;${mismatch?'color:#b91c1c;font-weight:700;background:#fef2f2':'background:#f6f7f1'}">${consumption === '' ? '―' : esc(consumption)}</td>
         <td data-label="${COLS[6]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px;${mismatch?'color:#b91c1c;font-weight:700;background:#fef2f2':'background:#f6f7f1'}" title="チェックシートの補充数量の月間合計（閲覧のみ）">
@@ -1342,7 +1346,7 @@ function renderInventory() {
           <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap">${COLS[1]}</th>
           <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap">${COLS[2]}</th>
           <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap" title="先月末の期末在庫">${COLS[3]}</th>
-          <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap" title="消費期限①〜③に入力した個数の合計（自動計算・閲覧のみ）">${COLS[4]}</th>
+          <th style="padding:5px 6px;font-size:11px;text-align:center;white-space:nowrap" title="当月分・入力してください。消費期限①〜③に個数を入力すると自動で合計を反映します">${COLS[4]}</th>
           <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap">${COLS[5]}</th>
           <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap" title="チェックシートの補充数量の月間合計（閲覧のみ）">${COLS[6]}</th>
           <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap">${COLS[7]}</th>
@@ -1387,7 +1391,8 @@ async function submitInventory() {
   const rows = allProducts.map(p => {
     const openStockRaw = getInventoryOpeningStock(storeTab, period.label, p.name);
     const openStock = (openStockRaw === '' || openStockRaw === null || openStockRaw === undefined) ? '' : Number(openStockRaw);
-    const endStock = computeEndStockFromExpQty(periodData.expQty[p.name]);
+    const endStockRaw = periodData.endStock[p.name];
+    const endStock = (endStockRaw === undefined || endStockRaw === '') ? '' : Number(endStockRaw);
     const consumption = (openStock !== '' && endStock !== '') ? (openStock - endStock) : '';
     const tracked = isDailyCountTracked(p);
     const dailyCount = tracked ? getInventoryDailyCount(storeTab, period.label, p.name) : '';
