@@ -4,11 +4,14 @@
 // 【設定】デプロイ前に以下2行を入力してください
 const SHEET_ID        = '';  // GoogleスプレッドシートのID
 const IMAGE_FOLDER_ID = '1adg7TQIYXSkWIo19ohVo93raDY2HsTW_';  // 画像保存用DriveフォルダのID
+// 棚卸完了の送信先（別Driveの「棚卸集計」スプレッドシート、この実行アカウントに編集権限で共有しておくこと）
+const INVENTORY_SHEET_ID = '';  // 棚卸集計スプレッドシートのID
 
 const SHEET_ORDERS     = 'orders';
 const SHEET_SETTINGS   = 'app_settings';
 const SHEET_LOST       = 'lost_items';
 const SHEET_CHECKSHEET = 'checksheet_data';
+const SHEET_INVENTORY  = 'inventory_log';
 
 const ORDER_COLS = [
   'id','store_id','group_id','product','label','qty','unit',
@@ -19,6 +22,8 @@ const LOST_COLS = ['id','store_id','found_date','note','image_url','added_at'];
 // 店舗×年月で1行、その月の日別データはJSON文字列として1セルに保存する
 // （日ごと・項目ごとに行を分けると増え続けて管理しづらいため、月単位でまとめる）
 const CHECKSHEET_COLS = ['store_id','period_label','data','updated_at'];
+// 店舗×年月×商品で1行。同じ店舗×年月で再送信した場合はその行を上書きする
+const INVENTORY_COLS = ['period_label','store_id','code','product','label','open_stock','end_stock','consumption','daily_count','matched','price','amount','remarks','updated_at'];
 
 // エリア別店舗ID
 const AREA_STORES = {
@@ -39,6 +44,7 @@ function doGet(e) {
     else if (a === 'getSettings')       result = getSettings();
     else if (a === 'getLostItems')      result = getLostItems(e.parameter.month, e.parameter.storeId);
     else if (a === 'getChecksheetData') result = getChecksheetData(e.parameter.storeId);
+    else if (a === 'getInventoryHistory') result = getInventoryHistory(e.parameter.storeId, e.parameter.periodLabel);
     else result = { error: 'Unknown action: ' + a };
     return json(result);
   } catch(err) {
@@ -58,6 +64,7 @@ function doPost(e) {
     else if (b.action === 'deleteLostItem')     result = deleteLostItem(b.id, b.imageUrl);
     else if (b.action === 'saveOrderImage')     result = saveOrderImage(b.imageBase64, b.imageMime, b.filename);
     else if (b.action === 'saveChecksheetData') result = saveChecksheetData(b.storeId, b.periodLabel, b.data);
+    else if (b.action === 'saveInventorySnapshot') result = saveInventorySnapshot(b.storeId, b.periodLabel, b.rows, b.remarks);
     else result = { error: 'Unknown action: ' + b.action };
     return json(result);
   } catch(err) {
@@ -347,6 +354,81 @@ function compactChecksheetData() {
     cell.setNumberFormat('@').setValue(clean);
   });
   Logger.log('重複削除: %s行削除、%s件のユニークな店舗×年月が残りました', toDelete.length, Object.keys(keep).length);
+}
+
+// ----------------------------------------------------------------
+// inventory_log（棚卸完了：期首/期末/消費量/デイリーカウントの月次送信）
+// ----------------------------------------------------------------
+// 棚卸集計は別スプレッドシート（別Driveの場合あり）のため、SHEET_IDとは別に開く。
+// あらかじめこの実行アカウントに編集権限で共有しておくこと。
+function getInventorySheet() {
+  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  return ss.getSheetByName(SHEET_INVENTORY) || ss.insertSheet(SHEET_INVENTORY);
+}
+// タイムゾーンはSHEET_ID側と共有せず、棚卸集計スプレッドシート自体のものを使う
+// （_sheetTzと同じ理由。別Driveのスプレッドシートなのでタイムゾーンが異なる可能性がある）
+let _cachedInvTz = null;
+function _invSheetTz() {
+  if (!_cachedInvTz) _cachedInvTz = SpreadsheetApp.openById(INVENTORY_SHEET_ID).getSpreadsheetTimeZone();
+  return _cachedInvTz;
+}
+// "2026-06"のような年月文字列がSheetsに日付型セルへ自動変換されるのを防ぐ
+// （_monthLabelStrと同じ問題。棚卸集計側のタイムゾーンを使う点だけが異なる）
+function _invMonthLabelStr(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, _invSheetTz(), 'yyyy-MM');
+  return v || null;
+}
+
+function getInventoryHistory(storeId, periodLabel) {
+  const sheet = getInventorySheet();
+  if (sheet.getLastRow() <= 1) return [];
+  const data = sheet.getDataRange().getValues();
+  const hdrs = data[0].map(String);
+  const rows = data.slice(1).map(row => {
+    const obj = {};
+    INVENTORY_COLS.forEach(c => { const i = hdrs.indexOf(c); obj[c] = i >= 0 ? row[i] : null; });
+    obj.period_label = _invMonthLabelStr(obj.period_label);
+    return obj;
+  });
+  return rows.filter(r =>
+    (!storeId || String(r.store_id) === String(storeId)) &&
+    (!periodLabel || r.period_label === String(periodLabel))
+  );
+}
+
+// 同じ店舗×年月の既存行を全て削除してから送信内容を書き直す（当月分は何度でも上書き修正できる）
+function saveInventorySnapshot(storeId, periodLabel, rows, remarks) {
+  const sheet = getInventorySheet();
+  ensureHeaders(sheet, INVENTORY_COLS);
+  const now = new Date().toISOString();
+
+  if (sheet.getLastRow() > 1) {
+    const values = sheet.getDataRange().getValues();
+    const sidIdx = values[0].indexOf('store_id'), pidIdx = values[0].indexOf('period_label');
+    const toDel = [];
+    for (let i = 1; i < values.length; i++) {
+      if (String(values[i][sidIdx]) === String(storeId) && _invMonthLabelStr(values[i][pidIdx]) === String(periodLabel)) {
+        toDel.push(i + 1);
+      }
+    }
+    for (let i = toDel.length - 1; i >= 0; i--) sheet.deleteRow(toDel[i]);
+  }
+
+  if (rows && rows.length) {
+    const newRows = rows.map(r => INVENTORY_COLS.map(c => {
+      if (c === 'period_label') return periodLabel;
+      if (c === 'store_id')     return storeId;
+      if (c === 'remarks')      return remarks || '';
+      if (c === 'updated_at')   return now;
+      const v = r[c];
+      return (v === undefined || v === null) ? '' : v;
+    }));
+    const startRow = sheet.getLastRow() + 1;
+    // period_labelが"YYYY-MM"のまま日付型に自動変換されないよう、書き込み前にプレーンテキスト形式へ固定する
+    sheet.getRange(startRow, INVENTORY_COLS.indexOf('period_label') + 1, newRows.length, 1).setNumberFormat('@');
+    sheet.getRange(startRow, 1, newRows.length, INVENTORY_COLS.length).setValues(newRows);
+  }
+  return { ok: true };
 }
 
 // ----------------------------------------------------------------
