@@ -3010,7 +3010,7 @@ function buildStoreOrderDetail(sid, groups) {
       } else {
         rows += `<tr class="${cls}">
           <td style="padding:6px 8px"><input type="date" value="${esc(row.deliveryDate)}" style="font-size:13px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-family:inherit" onchange="adminUpd('${sid}','${row.id}','deliveryDate',this.value)"></td>
-          <td style="padding:8px 10px;padding-left:18px;border-left:3px solid #b8d8c5">${esc(pLabel)}</td>
+          <td style="padding:8px 10px">${esc(pLabel)}</td>
           <td style="padding:8px 10px;white-space:nowrap">${esc(row.qty)||'—'} <span style="font-size:11px;color:#888">${esc(unitTxt)}</span></td>
           <td style="padding:6px 8px"><textarea style="width:100%;min-width:100px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-size:12px;font-family:inherit;resize:vertical" placeholder="備考" onchange="adminUpd('${sid}','${row.id}','note',this.value)">${esc(row.note)}</textarea></td>
         </tr>`;
