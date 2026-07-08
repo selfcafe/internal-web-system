@@ -238,8 +238,10 @@
     #admin-time-msg-bar { display:none; background:linear-gradient(135deg,#fffde0 0%,#f0f7e8 100%); border-radius:14px; padding:14px 24px; text-align:center; font-size:15px; color:#333; font-weight:500; box-shadow:0 3px 12px rgba(0,0,0,.09); letter-spacing:.3px; margin-bottom:12px; border:1.5px solid #e8e4c0; }
 
     .sp-only { display:none; }
+    .pc-only { display:inline; }
     @media (max-width:639px) {
       .sp-only { display:inline; }
+      .pc-only { display:none; }
       .page { padding:10px; }
       .page-header h1 { font-size:24px; }
       .portal-title-row { flex-direction:column; align-items:flex-start; gap:2px; }
@@ -398,11 +400,12 @@
     <img src="logo-horizontal.png" class="portal-logo" alt="セルフカフェ">
     <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;position:absolute;top:0;right:0">
       <button onclick="siteLogout()" class="portal-logout-btn" style="background:#6b7280;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">ログアウト</button>
-      <button onclick="showInvoicePlaceholder()" style="background:#8a8f7e;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">請求書</button>
+      <button onclick="showInvoicePlaceholder()" class="pc-only" style="background:#8a8f7e;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">請求書</button>
     </div>
     <div class="portal-title-store-row">
       <h1>パートナーポータル</h1>
       <span id="active-store-label" style="font-size:20px;font-weight:700;color:#22703d"></span>
+      <button onclick="showInvoicePlaceholder()" class="sp-only" style="background:#8a8f7e;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;margin-left:auto">請求書</button>
     </div>
   </div>
 
@@ -529,7 +532,7 @@
     <img src="logo-horizontal.png" class="portal-logo" alt="セルフカフェ">
     <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;position:absolute;top:0;right:0">
       <button onclick="adminLogout()" style="background:#6b7280;color:white;padding:9px 14px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">ログアウト</button>
-      <button onclick="showInvoicePlaceholder()" style="background:#8a8f7e;color:white;padding:9px 14px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">請求一覧</button>
+      <button onclick="showInvoicePlaceholder()" class="pc-only" style="background:#8a8f7e;color:white;padding:9px 14px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">請求一覧</button>
     </div>
     <div class="admin-title-row" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <h1>管理者ポータル</h1>
@@ -548,6 +551,7 @@
         </div>
       </div>
       <button class="admin-settings-btn" id="admin-settings-btn" onclick="menuSelect('view','settings')" title="設定"><span class="menu-label">設定</span></button>
+      <button onclick="showInvoicePlaceholder()" class="sp-only" style="background:#8a8f7e;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;margin-left:auto">請求一覧</button>
     </div>
   </div>
 
