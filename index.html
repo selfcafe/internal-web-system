@@ -777,8 +777,20 @@ function _initRealtime() {
         updateBadges();
       } else if (document.getElementById('page-store')?.classList.contains('active') && storeTab) {
         // パートナー画面を開いたままにしている間に管理者側が承認/否認/日程変更しても
-        // storeRowsが再読込されず「NEW」バッジが更新されないままだったため、ここでも同期する
-        storeRows = loadA(storeTab);
+        // 「NEW」バッジが更新されない問題への対応。ただしstoreRowsを丸ごと
+        // サーバー取得値で置き換えると、パートナー自身の直前の保存がまだ
+        // サーバーへ反映しきっていないタイミングで別端末発の通知を受けた場合に
+        // 未反映の古い状態で上書きしてしまい、直前の依頼が画面から消える事故になる。
+        // そのため行の追加・削除はせず、既にlocked済みの行のステータス項目だけを
+        // サーバー側の最新値でマージする。
+        const fresh = ORDERS_CACHE[storeTab] || [];
+        const freshById = new Map(fresh.map(r => [r.id, r]));
+        storeRows.forEach(r => {
+          if (!r.locked) return;
+          const f = freshById.get(r.id);
+          if (!f) return;
+          r.isNew = f.isNew; r.denied = f.denied; r.orderDate = f.orderDate; r.deliveryDate = f.deliveryDate;
+        });
         renderStore();
       }
     } catch(e) { console.error('realtime reload error:', e); }
