@@ -999,6 +999,9 @@ const uid     = () => Date.now().toString(36) + Math.random().toString(36).slice
 const today   = () => new Date().toLocaleDateString('sv');
 const fmtDate = ts => ts ? new Date(ts).toLocaleDateString('ja-JP') : '';
 const overdue = d  => !!d && d < today();
+// 消費期限が今日から1ヶ月以内（今日を含む、まだ切れてはいない）
+const oneMonthFromToday = () => { const d = new Date(); d.setMonth(d.getMonth() + 1); return d.toLocaleDateString('sv'); };
+const nearingExpiry = d => !!d && !overdue(d) && d <= oneMonthFromToday();
 const esc     = s  => (s == null ? '' : String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
 const prodByName    = n => PRODUCTS.find(p => p.name===n) || null;
@@ -1094,6 +1097,9 @@ function updateInventoryField(idx, field, value) {
   setInventoryData(storeTab, data);
 }
 
+const INVENTORY_EXPIRED_NOTICE = '期限切れの商品があります。確認してください。処分の際は処分後の数字を入力し、何をいくつ処分したのか備考欄に記載してください';
+const INVENTORY_NEARING_NOTICE = '消費期限が近付いています。期限までに消費しきれない場合はスタッフに連絡してください。';
+
 // 締め日ルール：当月6日〜翌月5日の入力はすべて当月分として扱う
 function getInventoryPeriod(baseDate) {
   const d = baseDate || new Date();
@@ -1122,14 +1128,14 @@ function isDailyCountTracked(p) {
   return false;
 }
 
-// 店舗×年月ごとの棚卸入力（期末在庫・棚卸備考・最終送信日時）。
+// 店舗×年月ごとの棚卸入力（期末在庫・消費期限ごとの個数・棚卸備考・最終送信日時）。
 // デイリーカウントはチェックシートの「補充」列の月間合計から自動算出する値のため、
 // ここでは保持しない（棚卸表では閲覧のみで編集不可。Phase 3の連携を先取りして実装）
 const INVENTORY_PERIOD_KEY = 'inventory_period_data';
 function getInventoryPeriodData(storeId, periodLabel) {
   const all = JSON.parse(localStorage.getItem(INVENTORY_PERIOD_KEY) || '{}');
   const rec = (all[storeId] && all[storeId][periodLabel]) || {};
-  return { endStock: rec.endStock || {}, remarks: rec.remarks || '', lastSentAt: rec.lastSentAt || null };
+  return { endStock: rec.endStock || {}, expQty: rec.expQty || {}, remarks: rec.remarks || '', lastSentAt: rec.lastSentAt || null };
 }
 function setInventoryPeriodData(storeId, periodLabel, rec) {
   const all = JSON.parse(localStorage.getItem(INVENTORY_PERIOD_KEY) || '{}');
@@ -1142,6 +1148,24 @@ function updateInventoryPeriodField(section, name, value) {
   const rec = getInventoryPeriodData(storeTab, period.label);
   if (section === 'remarks') rec.remarks = value;
   else rec[section][name] = value;
+  setInventoryPeriodData(storeTab, period.label, rec);
+  renderInventory();
+}
+
+// 期末在庫は消費期限①②③ごとに入力した個数の合計として自動算出する（直接入力はさせない）。
+// 消費期限を持たない商品は、消費期限①の個数欄だけに日付を空欄のまま数量を入れればよい
+function computeEndStockFromExpQty(q) {
+  q = q || {};
+  const vals = ['qty1', 'qty2', 'qty3'].map(k => (q[k] !== undefined && q[k] !== '') ? Number(q[k]) : null);
+  if (!vals.some(v => v !== null)) return '';
+  return vals.reduce((sum, v) => sum + (v || 0), 0);
+}
+function updateInventoryExpQty(productName, slot, value) {
+  const period = getInventoryPeriod();
+  const rec = getInventoryPeriodData(storeTab, period.label);
+  if (!rec.expQty[productName]) rec.expQty[productName] = {};
+  rec.expQty[productName][slot] = value;
+  rec.endStock[productName] = computeEndStockFromExpQty(rec.expQty[productName]);
   setInventoryPeriodData(storeTab, period.label, rec);
   renderInventory();
 }
@@ -1202,11 +1226,14 @@ function renderInventory() {
   // PC幅でも改行なし・横スクロールなしで収まるよう、パディング/フォント/入力幅を最小限に詰める
   const inputStyle = 'padding:3px 4px;border:1px solid #d1d5db;border-radius:4px;font-size:11.5px;background:white';
   const errStyle   = 'padding:3px 4px;border:1px solid #ef4444;border-radius:4px;font-size:11.5px;background:#fef2f2;color:#b91c1c;font-weight:700';
+  const nearStyle  = 'padding:3px 4px;border:1px solid #f59e0b;border-radius:4px;font-size:11.5px;background:#fffbeb;color:#92400e;font-weight:700';
   const VENDOR_LABELS = Object.fromEntries(VENDOR_CONFIG.map(v => [v.key, v.label]));
 
   const COLS = ['コード','商品名','ケース/入り数','期首在庫','期末在庫','消費量','デイリーカウント','消費期限①','消費期限②','消費期限③'];
 
   const mismatches = [];
+  const expiredProducts = [];
+  const nearingProducts = [];
   let globalIdx = 0;
   const bodyRows = VENDOR_CONFIG.map(v => {
     const items = allProducts.filter(p => p.vendor === v.key);
@@ -1215,41 +1242,55 @@ function renderInventory() {
     const rows = items.map(p => {
       const i = globalIdx++;
       const d = data[p.name] || {};
+      const expQty = periodData.expQty[p.name] || {};
       const caseLabel = p.caseUnit || '―';
       const openStockRaw = getInventoryOpeningStock(storeTab, period.label, p.name);
       const openStock = (openStockRaw === '' || openStockRaw === null || openStockRaw === undefined) ? '' : Number(openStockRaw);
-      const endStockRaw = periodData.endStock[p.name];
-      const endStock = (endStockRaw === undefined || endStockRaw === '') ? '' : Number(endStockRaw);
+      const endStock = computeEndStockFromExpQty(expQty);
       const consumption = (openStock !== '' && endStock !== '') ? (openStock - endStock) : '';
       const tracked = isDailyCountTracked(p);
       const dailyCount = tracked ? getInventoryDailyCount(storeTab, period.label, p.name) : '';
       const mismatch = tracked && consumption !== '' && dailyCount !== '' && consumption !== dailyCount;
       if (mismatch) mismatches.push({ name: p.label || p.name, consumption, dailyCount });
-      return `<tr style="border-bottom:1px solid #f0f0f0${mismatch ? ';background:#fffaf9' : ''}">
+      const expFlags = { exp1: overdue(d.exp1), exp2: overdue(d.exp2), exp3: overdue(d.exp3) };
+      const isExpired = expFlags.exp1 || expFlags.exp2 || expFlags.exp3;
+      if (isExpired) expiredProducts.push(p.label || p.name);
+      const nearFlags = { exp1: nearingExpiry(d.exp1), exp2: nearingExpiry(d.exp2), exp3: nearingExpiry(d.exp3) };
+      const isNearing = nearFlags.exp1 || nearFlags.exp2 || nearFlags.exp3;
+      if (isNearing) nearingProducts.push(p.label || p.name);
+      const fieldStyle = f => expFlags[f] ? errStyle : (nearFlags[f] ? nearStyle : inputStyle);
+      return `<tr style="border-bottom:1px solid #f0f0f0${(mismatch||isExpired) ? ';background:#fffaf9' : ''}">
         <td data-label="${COLS[0]}" style="padding:5px 6px;font-size:11px;color:#888;white-space:nowrap">${esc(p.code||'')}</td>
-        <td data-label="${COLS[1]}" style="padding:5px 6px;font-size:12px">${esc(p.label)}${mismatch ? ' <span style="color:#ef4444;font-size:11px">⚠</span>' : ''}</td>
+        <td data-label="${COLS[1]}" style="padding:5px 6px;font-size:12px">${esc(p.label)}${mismatch ? ' <span style="color:#ef4444;font-size:11px">⚠</span>' : ''}${isExpired ? ' <span style="color:#ef4444;font-size:11px" title="消費期限切れの商品があります">⏰期限切れ</span>' : (isNearing ? ' <span style="color:#b45309;font-size:11px" title="消費期限が近付いています">⚠まもなく期限</span>' : '')}</td>
         <td data-label="${COLS[2]}" style="padding:5px 6px;font-size:11px;color:#666;white-space:nowrap">${esc(caseLabel)}</td>
         <td data-label="${COLS[3]}" style="padding:5px 6px;text-align:right;color:#8a8f7e;white-space:nowrap;font-size:11.5px">${openStock === '' ? '―' : esc(openStock)}</td>
-        <td data-label="${COLS[4]}" style="padding:5px 6px;text-align:center">
-          <input type="number" min="0" step="1" value="${esc(endStockRaw||'')}" placeholder="0"
-            style="${(mismatch?errStyle:inputStyle)};width:52px;text-align:right"
-            onchange="updateInventoryPeriodField('endStock','${esc(p.name)}',this.value)">
+        <td data-label="${COLS[4]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px;${mismatch?'color:#b91c1c;font-weight:700;background:#fef2f2':'background:#f6f7f1'}" title="消費期限①〜③の個数の合計（閲覧のみ）">
+          ${endStock === '' ? '―' : esc(endStock)}
         </td>
         <td data-label="${COLS[5]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px;${mismatch?'color:#b91c1c;font-weight:700;background:#fef2f2':'background:#f6f7f1'}">${consumption === '' ? '―' : esc(consumption)}</td>
         <td data-label="${COLS[6]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px;${mismatch?'color:#b91c1c;font-weight:700;background:#fef2f2':'background:#f6f7f1'}" title="チェックシートの補充数量の月間合計（閲覧のみ）">
           ${!tracked ? '<span style="color:#bbb;font-size:11px">対象外</span>' : (dailyCount === '' ? '―' : esc(dailyCount))}
         </td>
         <td data-label="${COLS[7]}" style="padding:5px 6px">
-          <input type="date" value="${esc(d.exp1||'')}" style="${inputStyle};width:100%"
+          <input type="date" value="${esc(d.exp1||'')}" style="${fieldStyle('exp1')};width:100%;margin-bottom:2px"
             onchange="updateInventoryField(${i},'exp1',this.value)">
+          <input type="number" min="0" step="1" placeholder="個数" value="${esc(expQty.qty1||'')}"
+            style="width:56px;padding:2px 4px;border:1px solid #d1d5db;border-radius:4px;font-size:11px;text-align:right"
+            onchange="updateInventoryExpQty('${esc(p.name)}','qty1',this.value)">
         </td>
         <td data-label="${COLS[8]}" style="padding:5px 6px">
-          <input type="date" value="${esc(d.exp2||'')}" style="${inputStyle};width:100%"
+          <input type="date" value="${esc(d.exp2||'')}" style="${fieldStyle('exp2')};width:100%;margin-bottom:2px"
             onchange="updateInventoryField(${i},'exp2',this.value)">
+          <input type="number" min="0" step="1" placeholder="個数" value="${esc(expQty.qty2||'')}"
+            style="width:56px;padding:2px 4px;border:1px solid #d1d5db;border-radius:4px;font-size:11px;text-align:right"
+            onchange="updateInventoryExpQty('${esc(p.name)}','qty2',this.value)">
         </td>
         <td data-label="${COLS[9]}" style="padding:5px 6px">
-          <input type="date" value="${esc(d.exp3||'')}" style="${inputStyle};width:100%"
+          <input type="date" value="${esc(d.exp3||'')}" style="${fieldStyle('exp3')};width:100%;margin-bottom:2px"
             onchange="updateInventoryField(${i},'exp3',this.value)">
+          <input type="number" min="0" step="1" placeholder="個数" value="${esc(expQty.qty3||'')}"
+            style="width:56px;padding:2px 4px;border:1px solid #d1d5db;border-radius:4px;font-size:11px;text-align:right"
+            onchange="updateInventoryExpQty('${esc(p.name)}','qty3',this.value)">
         </td>
       </tr>`;
     }).join('');
@@ -1266,6 +1307,20 @@ function renderInventory() {
       </div>`
     : '';
 
+  const hasExpired = expiredProducts.length > 0;
+  const expiredBanner = hasExpired
+    ? `<div style="font-size:12px;color:#b91c1c;background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:10px 12px;margin-bottom:10px;line-height:1.6">
+        ⏰ <b>${expiredProducts.map(esc).join('／')}</b> の消費期限が切れています。${INVENTORY_EXPIRED_NOTICE}
+      </div>`
+    : '';
+
+  const hasNearing = nearingProducts.length > 0;
+  const nearingBanner = hasNearing
+    ? `<div style="font-size:12px;color:#92400e;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:10px 12px;margin-bottom:10px;line-height:1.6">
+        ⚠ <b>${nearingProducts.map(esc).join('／')}</b> の消費期限が近付いています。${INVENTORY_NEARING_NOTICE}
+      </div>`
+    : '';
+
   const lastSent = periodData.lastSentAt
     ? `<span style="font-size:11.5px;color:#6b7263">最終送信: <b>${esc(new Date(periodData.lastSentAt).toLocaleString('ja-JP'))}</b>（当月分・再送信で上書き）</span>`
     : '<span style="font-size:11.5px;color:#6b7263">まだ送信していません</span>';
@@ -1278,6 +1333,8 @@ function renderInventory() {
       <b style="font-size:15px">${esc(STORES[storeTab]||'')}</b>
       <span style="font-size:12px;color:#6b7263">${period.year}年${period.month}月分（入力受付: ${esc(period.startLabel)}〜${esc(period.deadlineLabel)}）</span>
     </div>
+    ${expiredBanner}
+    ${nearingBanner}
     <div style="overflow-x:auto">
       <table id="inventory-table" style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
         <thead><tr style="background:#22703d;color:white">
@@ -1285,7 +1342,7 @@ function renderInventory() {
           <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap">${COLS[1]}</th>
           <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap">${COLS[2]}</th>
           <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap" title="先月末の期末在庫">${COLS[3]}</th>
-          <th style="padding:5px 6px;font-size:11px;text-align:center;white-space:nowrap" title="当月分・入力してください">${COLS[4]}</th>
+          <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap" title="消費期限①〜③に入力した個数の合計（自動計算・閲覧のみ）">${COLS[4]}</th>
           <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap">${COLS[5]}</th>
           <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap" title="チェックシートの補充数量の月間合計（閲覧のみ）">${COLS[6]}</th>
           <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap">${COLS[7]}</th>
@@ -1317,13 +1374,20 @@ function renderInventory() {
 async function submitInventory() {
   const period = getInventoryPeriod();
   const periodData = getInventoryPeriodData(storeTab, period.label);
+  const data = getInventoryData(storeTab);
   const allProducts = _inventoryProductList();
+  const expiredProducts = allProducts
+    .filter(p => { const d = data[p.name] || {}; return overdue(d.exp1) || overdue(d.exp2) || overdue(d.exp3); })
+    .map(p => p.label || p.name);
+  if (expiredProducts.length) {
+    const ok = confirm(`${expiredProducts.join('／')} の消費期限が切れています。${INVENTORY_EXPIRED_NOTICE}\n\nこのまま送信しますか？`);
+    if (!ok) return;
+  }
   const mismatches = [];
   const rows = allProducts.map(p => {
     const openStockRaw = getInventoryOpeningStock(storeTab, period.label, p.name);
     const openStock = (openStockRaw === '' || openStockRaw === null || openStockRaw === undefined) ? '' : Number(openStockRaw);
-    const endStockRaw = periodData.endStock[p.name];
-    const endStock = (endStockRaw === undefined || endStockRaw === '') ? '' : Number(endStockRaw);
+    const endStock = computeEndStockFromExpQty(periodData.expQty[p.name]);
     const consumption = (openStock !== '' && endStock !== '') ? (openStock - endStock) : '';
     const tracked = isDailyCountTracked(p);
     const dailyCount = tracked ? getInventoryDailyCount(storeTab, period.label, p.name) : '';
