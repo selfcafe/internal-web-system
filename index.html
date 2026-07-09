@@ -2633,7 +2633,7 @@ async function showPage(p) {
     if (authedStore && STORES[authedStore]) {
       storeTab = authedStore;
       storeRows = loadA(authedStore);
-      if (!storeRows.length) { storeRows.push(newRow(null, null)); saveA(authedStore, storeRows); }
+      if (!storeRows.length || storeRows.every(r => r.locked)) { storeRows.push(newRow(null, null)); saveA(authedStore, storeRows); }
       const lbl = document.getElementById('active-store-label');
       if (lbl) lbl.textContent = STORES[authedStore] + '店';
     }
@@ -2804,7 +2804,7 @@ function switchStore(id) {
   const lbl = document.getElementById('active-store-label');
   if (lbl) lbl.textContent = STORES[id] || id;
   storeRows = loadA(id);
-  if (!storeRows.length) { storeRows.push(newRow(null, null)); saveA(id, storeRows); }
+  if (!storeRows.length || storeRows.every(r => r.locked)) { storeRows.push(newRow(null, null)); saveA(id, storeRows); }
   renderStore();
 }
 
