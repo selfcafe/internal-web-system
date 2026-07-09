@@ -1152,7 +1152,7 @@ function updateInventoryField(idx, field, value) {
   setInventoryData(storeTab, data);
 }
 
-const INVENTORY_EXPIRED_NOTICE = '期限切れの商品があります。確認してください。処分の際は処分後の数字を入力し、何をいくつ処分したのか備考欄に記載してください';
+const INVENTORY_EXPIRED_NOTICE = '期限切れの商品があります。確認してください。処分の際は期末在庫を処分後の数字に修正し、処分数量欄に処分した個数を入力してください';
 const INVENTORY_NEARING_NOTICE = '消費期限が近付いています。期限までに消費しきれない場合はスタッフに連絡してください。';
 
 // 締め日ルール：当月6日〜翌月5日の入力はすべて当月分として扱う
@@ -1174,15 +1174,6 @@ function _prevPeriodLabel(label) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
-// デイリーカウント対象商品かどうか（チェックシートの補充対象と同じ基準を再利用。
-// 東海スナック等デイリーカウント対象外の商品は、消費量との不一致チェックからも除外する）
-function isDailyCountTracked(p) {
-  if (CHECKSHEET_QTY_VENDOR_ALL.includes(p.vendor)) return true;
-  if (p.vendor === 'other') return p.name === 'ペーパータオル';
-  if (p.vendor === 'sales') return p.name === '水';
-  return false;
-}
-
 // 消費期限の管理が不要な商品（その他ベンダーの商品、カップ・カップ蓋類、ペーパーフィルターは
 // 賞味期限の概念がないため、棚卸表の消費期限①〜③の入力欄自体を出さない）
 function needsExpiryTracking(p) {
@@ -1193,14 +1184,12 @@ function needsExpiryTracking(p) {
   return true;
 }
 
-// 店舗×年月ごとの棚卸入力（期末在庫・消費期限ごとの個数・棚卸備考・最終送信日時）。
-// デイリーカウントはチェックシートの「補充」列の月間合計から自動算出する値のため、
-// ここでは保持しない（棚卸表では閲覧のみで編集不可。Phase 3の連携を先取りして実装）
+// 店舗×年月ごとの棚卸入力（期末在庫・消費期限ごとの個数・処分数量・棚卸備考・最終送信日時）。
 const INVENTORY_PERIOD_KEY = 'inventory_period_data';
 function getInventoryPeriodData(storeId, periodLabel) {
   const all = JSON.parse(localStorage.getItem(INVENTORY_PERIOD_KEY) || '{}');
   const rec = (all[storeId] && all[storeId][periodLabel]) || {};
-  return { endStock: rec.endStock || {}, expQty: rec.expQty || {}, remarks: rec.remarks || '', lastSentAt: rec.lastSentAt || null };
+  return { endStock: rec.endStock || {}, expQty: rec.expQty || {}, disposedQty: rec.disposedQty || {}, remarks: rec.remarks || '', lastSentAt: rec.lastSentAt || null };
 }
 // 発注タブで「納品済み」にした分の当月納品（自動）。店舗×期間×商品名で個数を積算。
 // GAS側はappend-onlyのログシートに記録し、読み出し時に合計する（saveOrders等の
@@ -1246,19 +1235,6 @@ function updateInventoryExpQty(productName, slot, value) {
   rec.endStock[productName] = computeEndStockFromExpQty(rec.expQty[productName]);
   setInventoryPeriodData(storeTab, period.label, rec);
   renderInventory();
-}
-
-// デイリーカウント＝チェックシートの「補充」列（'prod:'+商品名）のその月の日別入力の合計。
-// 棚卸表側では編集させず、常にチェックシートの値をそのまま表示する
-function getInventoryDailyCount(storeId, periodLabel, productName) {
-  const data = getChecksheetData(storeId, periodLabel);
-  const itemId = 'prod:' + productName;
-  let sum = 0, has = false;
-  Object.values(data).forEach(dayData => {
-    const v = dayData[itemId];
-    if (typeof v === 'number') { sum += v; has = true; }
-  });
-  return has ? sum : '';
 }
 
 // 期首在庫＝前月分としてスプレッドシートへ送信済みの期末在庫。サーバー履歴を
@@ -1327,7 +1303,7 @@ function computeInventoryExpiryInfo(p, data) {
   const isNearing = nearFlags.exp1 || nearFlags.exp2 || nearFlags.exp3;
   return { d, expFlags, isExpired, nearFlags, isNearing };
 }
-// 期首在庫／期末在庫／消費量／デイリーカウントと不一致判定を算出する（確認画面・送信処理で共通利用）
+// 期首在庫／当月納品／期末在庫／消費量／処分数量を算出する（確認画面・送信処理で共通利用）
 function computeInventoryConfirmInfo(p, period, periodData) {
   const openStockRaw = getInventoryOpeningStock(storeTab, period.label, p.name);
   const openStock = (openStockRaw === '' || openStockRaw === null || openStockRaw === undefined) ? '' : Number(openStockRaw);
@@ -1335,10 +1311,9 @@ function computeInventoryConfirmInfo(p, period, periodData) {
   const endStock = (endStockRaw === undefined || endStockRaw === '') ? '' : Number(endStockRaw);
   const delivery = getInventoryDelivery(storeTab, period.label, p.name);
   const consumption = (openStock !== '' && endStock !== '') ? (openStock + delivery - endStock) : '';
-  const tracked = isDailyCountTracked(p);
-  const dailyCount = tracked ? getInventoryDailyCount(storeTab, period.label, p.name) : '';
-  const mismatch = tracked && consumption !== '' && dailyCount !== '' && consumption !== dailyCount;
-  return { openStock, endStockRaw, endStock, delivery, consumption, tracked, dailyCount, mismatch };
+  const disposedRaw = periodData.disposedQty[p.name];
+  const disposedQty = (disposedRaw === undefined || disposedRaw === '') ? '' : Number(disposedRaw);
+  return { openStock, endStockRaw, endStock, delivery, consumption, disposedQty };
 }
 
 let inventoryStep = 'input'; // 'input'（数字入力） | 'confirm'（確認・棚卸完了）
@@ -1375,7 +1350,7 @@ function renderInventory() {
 function renderInventoryInputScreen(wrap, allProducts, period, periodData) {
   const data = getInventoryData(storeTab);
   const VENDOR_LABELS = Object.fromEntries(VENDOR_CONFIG.map(v => [v.key, v.label]));
-  const COLS = ['商品名','ケース/入り数','期末在庫','消費期限①','消費期限②','消費期限③'];
+  const COLS = ['商品名','ケース/入り数','期末在庫','処分数量','消費期限①','消費期限②','消費期限③'];
 
   const expiredProducts = [];
   const nearingProducts = [];
@@ -1385,13 +1360,14 @@ function renderInventoryInputScreen(wrap, allProducts, period, periodData) {
     if (!items.length) return '';
     // colspanセルにposition:stickyを指定すると横スクロール中に固定されない環境があったため、
     // データ行と同じく個別セル(1列目のみ固定)で構成する
-    const vendorFillerCells = '<td style="background:#edf2d4;border-top:2px solid #aabf28"></td>'.repeat(5);
+    const vendorFillerCells = '<td style="background:#edf2d4;border-top:2px solid #aabf28"></td>'.repeat(6);
     const hdr = `<tr><td style="padding:5px 8px;font-size:11px;font-weight:700;color:#22703d;background:#edf2d4;border-top:2px solid #aabf28;position:sticky;left:0;z-index:1">${esc(VENDOR_LABELS[v.key] || v.key)}</td>${vendorFillerCells}</tr>`;
     const rows = items.map(p => {
       const i = globalIdx++;
       const expQty = periodData.expQty[p.name] || {};
       const caseLabel = p.caseUnit || '―';
       const endStockRaw = periodData.endStock[p.name];
+      const disposedQtyRaw = periodData.disposedQty[p.name];
       const trackExpiry = needsExpiryTracking(p);
       const { d, expFlags, isExpired, nearFlags, isNearing } = trackExpiry
         ? computeInventoryExpiryInfo(p, data)
@@ -1420,9 +1396,15 @@ function renderInventoryInputScreen(wrap, allProducts, period, periodData) {
             onchange="updateInventoryPeriodField('endStock','${esc(p.name)}',this.value)"
             title="消費期限①〜③に個数を入力すると自動で合計を反映します。直接入力もできます">
         </td>
-        ${expCell('exp1', COLS[3])}
-        ${expCell('exp2', COLS[4])}
-        ${expCell('exp3', COLS[5])}
+        <td data-label="${COLS[3]}" style="padding:5px 6px;text-align:center">
+          <input type="number" min="0" step="1" value="${esc(disposedQtyRaw||'')}" placeholder="0"
+            style="${INV_INPUT_STYLE};width:52px;text-align:right"
+            onchange="updateInventoryPeriodField('disposedQty','${esc(p.name)}',this.value)"
+            title="消費期限切れ等で処分した数量（任意）">
+        </td>
+        ${expCell('exp1', COLS[4])}
+        ${expCell('exp2', COLS[5])}
+        ${expCell('exp3', COLS[6])}
       </tr>`;
     }).join('');
     return hdr + rows;
@@ -1457,9 +1439,10 @@ function renderInventoryInputScreen(wrap, allProducts, period, periodData) {
           <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap;position:sticky;left:0;z-index:2;background:#22703d;border-right:1px solid #1a5c30">${COLS[0]}</th>
           <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap">${COLS[1]}</th>
           <th style="padding:5px 6px;font-size:11px;text-align:center;white-space:nowrap" title="当月分・入力してください。消費期限①〜③に個数を入力すると自動で合計を反映します">${COLS[2]}</th>
-          <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap">${COLS[3]}</th>
+          <th style="padding:5px 6px;font-size:11px;text-align:center;white-space:nowrap" title="消費期限切れ等で処分した数量（任意）">${COLS[3]}</th>
           <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap">${COLS[4]}</th>
           <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap">${COLS[5]}</th>
+          <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap">${COLS[6]}</th>
         </tr></thead>
         <tbody>${bodyRows}</tbody>
       </table>
@@ -1474,9 +1457,8 @@ function renderInventoryInputScreen(wrap, allProducts, period, periodData) {
 
 function renderInventoryConfirmScreen(wrap, allProducts, period, periodData) {
   const VENDOR_LABELS = Object.fromEntries(VENDOR_CONFIG.map(v => [v.key, v.label]));
-  const COLS = ['商品名','期首在庫','当月納品','期末在庫','消費量','デイリーカウント'];
+  const COLS = ['商品名','期首在庫','当月納品','期末在庫','消費量','処分数量'];
 
-  const mismatches = [];
   const bodyRows = VENDOR_CONFIG.map(v => {
     const items = allProducts.filter(p => p.vendor === v.key);
     if (!items.length) return '';
@@ -1485,32 +1467,18 @@ function renderInventoryConfirmScreen(wrap, allProducts, period, periodData) {
     const vendorFillerCells = '<td style="background:#edf2d4;border-top:2px solid #aabf28"></td>'.repeat(5);
     const hdr = `<tr><td style="padding:5px 8px;font-size:11px;font-weight:700;color:#22703d;background:#edf2d4;border-top:2px solid #aabf28;position:sticky;left:0;z-index:1">${esc(VENDOR_LABELS[v.key] || v.key)}</td>${vendorFillerCells}</tr>`;
     const rows = items.map(p => {
-      const { openStock, delivery, endStock, consumption, tracked, dailyCount, mismatch } = computeInventoryConfirmInfo(p, period, periodData);
-      if (mismatch) mismatches.push({ name: p.label || p.name, consumption, dailyCount });
-      const rowBg = mismatch ? '#fffaf9' : '#fff';
-      return `<tr style="border-bottom:1px solid #f0f0f0${mismatch ? ';background:#fffaf9' : ''}">
-        <td data-label="${COLS[0]}" style="padding:5px 6px;font-size:12px;position:sticky;left:0;z-index:1;background:${rowBg};border-right:1px solid #e5e7eb">${esc(p.label)}${mismatch ? ' <span style="color:#ef4444;font-size:11px">⚠</span>' : ''}</td>
+      const { openStock, delivery, endStock, consumption, disposedQty } = computeInventoryConfirmInfo(p, period, periodData);
+      return `<tr style="border-bottom:1px solid #f0f0f0">
+        <td data-label="${COLS[0]}" style="padding:5px 6px;font-size:12px;position:sticky;left:0;z-index:1;background:#fff;border-right:1px solid #e5e7eb">${esc(p.label)}</td>
         <td data-label="${COLS[1]}" style="padding:5px 6px;text-align:right;color:#8a8f7e;white-space:nowrap;font-size:11.5px">${openStock === '' ? '―' : esc(openStock)}</td>
         <td data-label="${COLS[2]}" style="padding:5px 6px;text-align:right;color:#8a8f7e;white-space:nowrap;font-size:11.5px" title="発注タブの納品済み分（自動）＋本部手入力分（月初納品分など）の合計・閲覧のみ">${delivery ? esc(delivery) : '―'}</td>
         <td data-label="${COLS[3]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px">${endStock === '' ? '―' : esc(endStock)}</td>
-        <td data-label="${COLS[4]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px;${mismatch?'color:#b91c1c;font-weight:700;background:#fef2f2':'background:#f6f7f1'}">${consumption === '' ? '―' : esc(consumption)}</td>
-        <td data-label="${COLS[5]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px;${mismatch?'color:#b91c1c;font-weight:700;background:#fef2f2':'background:#f6f7f1'}" title="チェックシートの補充数量の月間合計（閲覧のみ）">
-          ${!tracked ? '<span style="color:#bbb;font-size:11px">対象外</span>' : (dailyCount === '' ? '―' : esc(dailyCount))}
-        </td>
+        <td data-label="${COLS[4]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px;background:#f6f7f1">${consumption === '' ? '―' : esc(consumption)}</td>
+        <td data-label="${COLS[5]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px;background:#f6f7f1" title="消費期限切れ等で処分した数量">${disposedQty === '' ? '―' : esc(disposedQty)}</td>
       </tr>`;
     }).join('');
     return hdr + rows;
   }).join('');
-
-  const hasMismatch = mismatches.length > 0;
-  const remarksEmpty = !periodData.remarks.trim();
-  const blocked = hasMismatch && remarksEmpty;
-
-  const errBanner = hasMismatch
-    ? `<div style="font-size:12px;color:#b91c1c;background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:10px 12px;margin-bottom:10px;line-height:1.6">
-        ⚠ ${mismatches.map(m => `<b>${esc(m.name)}</b>：消費量(${esc(m.consumption)})とデイリーカウント(${esc(m.dailyCount)})が一致しません`).join('／')}。期末在庫またはデイリーカウントの入力を確認してください。数字に誤りがなければ、下の備考に理由を記入すれば送信できます。
-      </div>`
-    : '';
 
   const skippedDelivery = getInventoryDeliverySkipped(storeTab, period.label);
   const skippedBanner = skippedDelivery.length
@@ -1527,7 +1495,6 @@ function renderInventoryConfirmScreen(wrap, allProducts, period, periodData) {
     <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
       <span style="font-size:12px;color:#6b7263">${period.year}年${period.month}月分の確認</span>
     </div>
-    ${errBanner}
     ${skippedBanner}
     <div style="overflow-x:auto">
       <table id="inventory-table" style="width:100%;border-collapse:separate;border-spacing:0;background:white;border-radius:8px;overflow:visible;box-shadow:0 1px 4px rgba(0,0,0,.08)">
@@ -1537,24 +1504,23 @@ function renderInventoryConfirmScreen(wrap, allProducts, period, periodData) {
           <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap" title="発注タブの納品済み分（自動）＋本部手入力分（月初納品分など）の合計・閲覧のみ">${COLS[2]}</th>
           <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap">${COLS[3]}</th>
           <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap">${COLS[4]}</th>
-          <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap" title="チェックシートの補充数量の月間合計（閲覧のみ）">${COLS[5]}</th>
+          <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap" title="消費期限切れ等で処分した数量">${COLS[5]}</th>
         </tr></thead>
         <tbody>${bodyRows}</tbody>
       </table>
     </div>
     <div style="margin-top:14px">
-      <div style="font-size:12px;font-weight:700;color:#2b2f27;margin-bottom:6px">棚卸備考${hasMismatch ? ' <span style="color:#ef4444;font-size:11px">※ 不一致がある場合は記入必須</span>' : ''}</div>
-      <textarea id="inventory-remarks" style="width:100%;min-height:54px;border:1px solid ${blocked?'#ef4444':'#d6d9cb'};border-radius:8px;padding:8px 10px;font-size:12.5px;font-family:inherit;resize:vertical;background:${blocked?'#fef2f2':'white'}"
-        placeholder="不一致がある場合は理由を記入してください"
+      <div style="font-size:12px;font-weight:700;color:#2b2f27;margin-bottom:6px">棚卸備考</div>
+      <textarea id="inventory-remarks" style="width:100%;min-height:54px;border:1px solid #d6d9cb;border-radius:8px;padding:8px 10px;font-size:12.5px;font-family:inherit;resize:vertical;background:white"
+        placeholder="特記事項があれば記入してください"
         onchange="updateInventoryPeriodField('remarks',null,this.value)">${esc(periodData.remarks)}</textarea>
-      ${blocked ? '<div style="font-size:11px;color:#b91c1c;margin-top:6px;text-align:right">※ 不一致があるのに備考が空欄の場合、「棚卸完了」は押せません</div>' : ''}
     </div>
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-top:14px;padding-top:14px;border-top:1px dashed #e3e6da;flex-wrap:wrap">
       <button type="button" onclick="goToInventoryInput()"
         style="background:#f3f4f6;color:#374151;border:1.5px solid #d1d5db;border-radius:9px;padding:11px 20px;font-size:13.5px;font-weight:700;font-family:inherit;cursor:pointer">← 戻る</button>
       ${lastSent}
-      <button type="button" onclick="submitInventory()" ${blocked?'disabled':''}
-        style="background:${blocked?'#c8cbbd':'#22703d'};color:white;border:none;border-radius:9px;padding:11px 20px;font-size:13.5px;font-weight:700;font-family:inherit;cursor:${blocked?'not-allowed':'pointer'}">棚卸完了</button>
+      <button type="button" onclick="submitInventory()"
+        style="background:#22703d;color:white;border:none;border-radius:9px;padding:11px 20px;font-size:13.5px;font-weight:700;font-family:inherit;cursor:pointer">棚卸完了</button>
     </div>
     <div id="inventory-toast" style="display:none;margin-top:10px;background:#eef6ee;border:1px solid #bfe0c4;color:#1a5c30;border-radius:8px;padding:9px 12px;font-size:12px"></div>
   `;
@@ -1573,10 +1539,8 @@ async function submitInventory() {
     const ok = confirm(`${expiredProducts.join('／')} の消費期限が切れています。${INVENTORY_EXPIRED_NOTICE}\n\nこのまま送信しますか？`);
     if (!ok) return;
   }
-  const mismatches = [];
   const rows = allProducts.map(p => {
-    const { openStock, delivery, endStock, consumption, tracked, dailyCount, mismatch } = computeInventoryConfirmInfo(p, period, periodData);
-    if (mismatch) mismatches.push(p.label || p.name);
+    const { openStock, delivery, endStock, consumption, disposedQty } = computeInventoryConfirmInfo(p, period, periodData);
     const price = Number(p.price) || 0;
     return {
       code: p.code || '', product: p.name, label: p.label || p.name,
@@ -1584,23 +1548,17 @@ async function submitInventory() {
       delivery: delivery || null,
       end_stock: endStock === '' ? null : endStock,
       consumption: consumption === '' ? null : consumption,
-      daily_count: dailyCount === '' ? null : dailyCount,
-      matched: !mismatch,
+      disposed_qty: disposedQty === '' ? null : disposedQty,
       price, amount: endStock === '' ? null : price * endStock,
     };
   });
-  if (mismatches.length && !periodData.remarks.trim()) {
-    alert('消費量とデイリーカウントが一致しない商品があります。棚卸備考に理由を記入してから送信してください。');
-    renderInventory();
-    return;
-  }
   try {
     await gasPost('saveInventorySnapshot', { storeId: storeTab, periodLabel: period.label, rows, remarks: periodData.remarks });
     periodData.lastSentAt = Date.now();
     setInventoryPeriodData(storeTab, period.label, periodData);
     renderInventory();
     const toast = document.getElementById('inventory-toast');
-    if (toast) { toast.style.display=''; toast.textContent = `✓ ${period.month}月分の棚卸を${mismatches.length?'備考つきで':''}スプレッドシートに送信しました`; }
+    if (toast) { toast.style.display=''; toast.textContent = `✓ ${period.month}月分の棚卸をスプレッドシートに送信しました`; }
   } catch(e) {
     console.error('saveInventorySnapshot error:', e);
     alert('送信に失敗しました。通信環境をご確認のうえ、もう一度お試しください。');

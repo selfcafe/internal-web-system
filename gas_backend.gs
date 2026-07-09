@@ -26,7 +26,7 @@ const LOST_COLS = ['id','store_id','found_date','note','image_url','added_at'];
 // （日ごと・項目ごとに行を分けると増え続けて管理しづらいため、月単位でまとめる）
 const CHECKSHEET_COLS = ['store_id','period_label','data','updated_at'];
 // 店舗×年月×商品で1行。同じ店舗×年月で再送信した場合はその行を上書きする
-const INVENTORY_COLS = ['period_label','store_id','code','product','label','open_stock','delivery','end_stock','consumption','daily_count','matched','price','amount','remarks','updated_at'];
+const INVENTORY_COLS = ['period_label','store_id','code','product','label','open_stock','delivery','end_stock','consumption','disposed_qty','price','amount','remarks','updated_at'];
 
 // エリア別店舗ID
 const AREA_STORES = {
