@@ -220,6 +220,8 @@
     tr.dragging { opacity:0.4; }
     .vrow.drag-over { border-top:2px solid #22703d; }
     .vrow.dragging { opacity:0.4; }
+    .cscat-row.drag-over { border-top:2px solid #22703d; }
+    .cscat-row.dragging { opacity:0.4; }
 
     /* ロック画面 */
     .lock-overlay { display:none; position:fixed; inset:0; background:rgba(15,23,42,.7); z-index:1000; align-items:center; justify-content:center; }
@@ -294,14 +296,14 @@
       .settings-tbl tr:not(.settings-vendor-hdr) td:nth-child(7) { grid-area:del; align-self:start; }
       .settings-tbl td[data-label]::before { content:attr(data-label); display:block; font-size:10px; color:#888; font-weight:600; margin-bottom:2px; }
       .settings-tbl tr:not(.settings-vendor-hdr) input { width:100% !important; box-sizing:border-box; max-width:none !important; }
-      /* チェック項目設定テーブル：ドラッグハンドルが無い4列構成なので独自グリッドを使う */
+      /* チェック項目設定テーブル：ドラッグハンドル＋5列構成なので独自グリッドを使う */
       #cs-item-tbl-body tr[data-csid] {
-        grid-template-columns:1fr; grid-template-areas:"nm" "ct" "ty" "dl";
+        grid-template-columns:28px 1fr; grid-template-areas:"dh nm" "dh ct" "dh ty" "dh dl";
       }
-      #cs-item-tbl-body tr[data-csid] td:nth-child(1) { grid-area:nm; }
-      #cs-item-tbl-body tr[data-csid] td:nth-child(2) { grid-area:ct; }
-      #cs-item-tbl-body tr[data-csid] td:nth-child(3) { grid-area:ty; }
-      #cs-item-tbl-body tr[data-csid] td:nth-child(4) { grid-area:dl; align-self:start; }
+      #cs-item-tbl-body tr[data-csid] td:nth-child(2) { grid-area:nm; }
+      #cs-item-tbl-body tr[data-csid] td:nth-child(3) { grid-area:ct; }
+      #cs-item-tbl-body tr[data-csid] td:nth-child(4) { grid-area:ty; }
+      #cs-item-tbl-body tr[data-csid] td:nth-child(5) { grid-area:dl; align-self:start; }
     }
 
     /* パートナーポータル タブ */
@@ -1608,12 +1610,40 @@ function deleteChecksheetItem(id) {
   const tbody = document.getElementById('cs-item-tbl-body');
   if (tbody) tbody.innerHTML = buildChecksheetItemRows();
 }
+/* ===== チェック項目カテゴリの開閉（商品設定の仕入先カテゴリ開閉と同じ挙動） ===== */
+const _openChecksheetCats = new Set();
+function toggleChecksheetCatSection(catKey) {
+  if (_openChecksheetCats.has(catKey)) {
+    _openChecksheetCats.delete(catKey);
+  } else {
+    _openChecksheetCats.add(catKey);
+  }
+  const isOpen = _openChecksheetCats.has(catKey);
+  const arrow = document.getElementById('cs-cat-arrow-' + catKey);
+  if (arrow) arrow.textContent = isOpen ? '▼' : '▶';
+  document.querySelectorAll('tr[data-cscat="' + catKey + '"]').forEach(tr => {
+    tr.style.display = isOpen ? '' : 'none';
+  });
+}
+
 function buildChecksheetItemRows() {
   return CHECKSHEET_CATEGORIES.map(c => {
     const items = CHECKSHEET_ITEMS.filter(it => it.category === c.key);
     if (!items.length) return '';
-    const hdr = `<tr class="settings-vendor-hdr"><td colspan="4">${esc(c.label)}</td></tr>`;
-    const rows = items.map(it => `<tr data-csid="${esc(it.id)}">
+    const isOpen = _openChecksheetCats.has(c.key);
+    const hdr = `<tr class="settings-vendor-hdr" onclick="toggleChecksheetCatSection('${esc(c.key)}')" style="cursor:pointer">
+      <td colspan="5"><div style="display:flex;justify-content:space-between;align-items:center">
+        <span>${esc(c.label)}</span>
+        <span id="cs-cat-arrow-${esc(c.key)}" style="font-size:11px;color:#22703d">${isOpen ? '▼' : '▶'}</span>
+      </div></td></tr>`;
+    const rows = items.map(it => `<tr data-csid="${esc(it.id)}" data-cscat="${esc(c.key)}" style="${isOpen ? '' : 'display:none'}"
+      ondragover="csItemDragOver(event)" ondrop="csItemDrop(event,'${esc(it.id)}')">
+      <td class="drag-handle" draggable="true"
+        ondragstart="csItemDragStart(event,'${esc(it.id)}')"
+        ondragend="csItemDragEnd(event)"
+        ontouchstart="csItemTouchStart(event,'${esc(it.id)}')"
+        ontouchmove="csItemTouchMove(event)"
+        ontouchend="csItemTouchEnd(event)">⠿</td>
       <td data-label="項目名"><input type="text" value="${esc(it.name)}"
         style="width:100%;border:1px solid #ddd;border-radius:5px;padding:5px 7px;font-size:13px;font-family:inherit"
         onchange="saveChecksheetItemSetting('${esc(it.id)}','name',this.value)"></td>
@@ -1637,10 +1667,90 @@ function buildChecksheetItemRows() {
   }).join('');
 }
 
+/* ===== チェック項目 ドラッグ並び替え（商品設定の商品ドラッグ並び替えと同じ挙動、カテゴリ内のみ） ===== */
+let _csItemDragId = null;
+let _csItemTouchId = null, _csItemTouchEl = null, _csItemTouchClone = null, _csItemTouchStartY = 0;
+
+function csItemDragStart(e, id) {
+  _csItemDragId = id;
+  e.dataTransfer.effectAllowed = 'move';
+  setTimeout(() => e.currentTarget.closest('tr')?.classList.add('dragging'), 0);
+}
+function csItemDragEnd(e) {
+  e.currentTarget.closest('tr')?.classList.remove('dragging');
+  document.querySelectorAll('tr.drag-over').forEach(el => el.classList.remove('drag-over'));
+}
+function csItemDragOver(e) {
+  e.preventDefault();
+  document.querySelectorAll('tr.drag-over').forEach(el => el.classList.remove('drag-over'));
+  e.currentTarget.closest('tr')?.classList.add('drag-over');
+}
+function csItemDrop(e, id) {
+  e.preventDefault();
+  document.querySelectorAll('tr.drag-over').forEach(el => el.classList.remove('drag-over'));
+  applyChecksheetItemReorder(_csItemDragId, id);
+  _csItemDragId = null;
+}
+
+function csItemTouchStart(e, id) {
+  _csItemTouchId    = id;
+  _csItemTouchEl    = e.currentTarget.closest('tr');
+  _csItemTouchStartY = e.touches[0].clientY;
+  const rect        = _csItemTouchEl.getBoundingClientRect();
+  _csItemTouchClone = _csItemTouchEl.cloneNode(true);
+  Object.assign(_csItemTouchClone.style, {
+    position:'fixed', top:rect.top+'px', left:rect.left+'px', width:rect.width+'px',
+    opacity:'0.85', zIndex:'9999', pointerEvents:'none',
+    background:'white', boxShadow:'0 6px 20px rgba(0,0,0,.25)', borderRadius:'6px'
+  });
+  document.body.appendChild(_csItemTouchClone);
+  _csItemTouchEl.style.opacity = '0.3';
+}
+function csItemTouchMove(e) {
+  if (!_csItemTouchClone) return;
+  e.preventDefault();
+  const dy = e.touches[0].clientY - _csItemTouchStartY;
+  const rect = _csItemTouchEl.getBoundingClientRect();
+  _csItemTouchClone.style.top = (rect.top + dy) + 'px';
+}
+function csItemTouchEnd(e) {
+  if (!_csItemTouchClone) return;
+  const finalY = e.changedTouches[0].clientY;
+  document.body.removeChild(_csItemTouchClone); _csItemTouchClone = null;
+  _csItemTouchEl.style.opacity = '';
+  let targetId = null;
+  document.querySelectorAll('tr[data-csid]').forEach(row => {
+    const r = row.getBoundingClientRect();
+    if (finalY >= r.top && finalY <= r.bottom) targetId = row.dataset.csid;
+  });
+  applyChecksheetItemReorder(_csItemTouchId, targetId);
+  _csItemTouchId = _csItemTouchEl = null;
+}
+
+function applyChecksheetItemReorder(srcId, dstId) {
+  if (!srcId || !dstId || srcId === dstId) return;
+  const srcIt = CHECKSHEET_ITEMS.find(it => it.id === srcId);
+  const dstIt = CHECKSHEET_ITEMS.find(it => it.id === dstId);
+  if (!srcIt || !dstIt || srcIt.category !== dstIt.category) return;
+  const ai = CHECKSHEET_ITEMS.indexOf(srcIt);
+  CHECKSHEET_ITEMS.splice(ai, 1);
+  CHECKSHEET_ITEMS.splice(CHECKSHEET_ITEMS.indexOf(dstIt), 0, srcIt);
+  saveAllChecksheetItems();
+  const tbody = document.getElementById('cs-item-tbl-body');
+  if (tbody) tbody.innerHTML = buildChecksheetItemRows();
+}
+
 /* ===== チェック項目カテゴリ管理 ===== */
 function buildChecksheetCategoryRows() {
   return CHECKSHEET_CATEGORIES.map((c, i) => `
-    <div style="display:flex;gap:6px;align-items:center;margin-bottom:6px">
+    <div class="cscat-row" data-cckey="${esc(c.key)}" style="display:flex;gap:6px;align-items:center;margin-bottom:6px"
+      ondragover="csCatDragOver(event)" ondrop="csCatDrop(event,'${esc(c.key)}')">
+      <span class="drag-handle" draggable="true"
+        ondragstart="csCatDragStart(event,'${esc(c.key)}')"
+        ondragend="csCatDragEnd(event)"
+        ontouchstart="csCatTouchStart(event,'${esc(c.key)}')"
+        ontouchmove="csCatTouchMove(event)"
+        ontouchend="csCatTouchEnd(event)">⠿</span>
       <input id="csCatName-${i}" value="${esc(c.label)}"
         style="border:1px solid #ddd;border-radius:6px;padding:6px 10px;font-size:13px;font-family:inherit;flex:1">
       <button onclick="renameChecksheetCategory(${i})"
@@ -1656,6 +1766,77 @@ function refreshChecksheetCategoryRows() {
   if (sel) sel.innerHTML = CHECKSHEET_CATEGORIES.map(c => `<option value="${esc(c.key)}">${esc(c.label)}</option>`).join('');
   const tbody = document.getElementById('cs-item-tbl-body');
   if (tbody) tbody.innerHTML = buildChecksheetItemRows();
+}
+
+/* ===== チェック項目カテゴリ ドラッグ並び替え ===== */
+let _csCatDragKey = null;
+let _csCatTouchKey = null, _csCatTouchEl = null, _csCatTouchClone = null, _csCatTouchStartY = 0;
+
+function csCatDragStart(e, key) {
+  _csCatDragKey = key;
+  e.dataTransfer.effectAllowed = 'move';
+  setTimeout(() => e.currentTarget.closest('.cscat-row')?.classList.add('dragging'), 0);
+}
+function csCatDragEnd(e) {
+  e.currentTarget.closest('.cscat-row')?.classList.remove('dragging');
+  document.querySelectorAll('.cscat-row.drag-over').forEach(el => el.classList.remove('drag-over'));
+}
+function csCatDragOver(e) {
+  e.preventDefault();
+  document.querySelectorAll('.cscat-row.drag-over').forEach(el => el.classList.remove('drag-over'));
+  e.currentTarget.closest('.cscat-row')?.classList.add('drag-over');
+}
+function csCatDrop(e, key) {
+  e.preventDefault();
+  document.querySelectorAll('.cscat-row.drag-over').forEach(el => el.classList.remove('drag-over'));
+  applyChecksheetCategoryReorder(_csCatDragKey, key);
+  _csCatDragKey = null;
+}
+
+function csCatTouchStart(e, key) {
+  _csCatTouchKey    = key;
+  _csCatTouchEl     = e.currentTarget.closest('.cscat-row');
+  _csCatTouchStartY = e.touches[0].clientY;
+  const rect        = _csCatTouchEl.getBoundingClientRect();
+  _csCatTouchClone  = _csCatTouchEl.cloneNode(true);
+  Object.assign(_csCatTouchClone.style, {
+    position:'fixed', top:rect.top+'px', left:rect.left+'px', width:rect.width+'px',
+    opacity:'0.85', zIndex:'9999', pointerEvents:'none',
+    background:'white', boxShadow:'0 6px 20px rgba(0,0,0,.25)', borderRadius:'6px'
+  });
+  document.body.appendChild(_csCatTouchClone);
+  _csCatTouchEl.style.opacity = '0.3';
+}
+function csCatTouchMove(e) {
+  if (!_csCatTouchClone) return;
+  e.preventDefault();
+  const dy = e.touches[0].clientY - _csCatTouchStartY;
+  const rect = _csCatTouchEl.getBoundingClientRect();
+  _csCatTouchClone.style.top = (rect.top + dy) + 'px';
+}
+function csCatTouchEnd(e) {
+  if (!_csCatTouchClone) return;
+  const finalY = e.changedTouches[0].clientY;
+  document.body.removeChild(_csCatTouchClone); _csCatTouchClone = null;
+  _csCatTouchEl.style.opacity = '';
+  let targetKey = null;
+  document.querySelectorAll('.cscat-row[data-cckey]').forEach(row => {
+    const r = row.getBoundingClientRect();
+    if (finalY >= r.top && finalY <= r.bottom) targetKey = row.dataset.cckey;
+  });
+  applyChecksheetCategoryReorder(_csCatTouchKey, targetKey);
+  _csCatTouchKey = _csCatTouchEl = null;
+}
+
+function applyChecksheetCategoryReorder(srcKey, dstKey) {
+  if (!srcKey || !dstKey || srcKey === dstKey) return;
+  const srcIdx = CHECKSHEET_CATEGORIES.findIndex(c => c.key === srcKey);
+  const dstIdx = CHECKSHEET_CATEGORIES.findIndex(c => c.key === dstKey);
+  if (srcIdx < 0 || dstIdx < 0) return;
+  const [moved] = CHECKSHEET_CATEGORIES.splice(srcIdx, 1);
+  CHECKSHEET_CATEGORIES.splice(CHECKSHEET_CATEGORIES.indexOf(CHECKSHEET_CATEGORIES.find(c => c.key === dstKey)), 0, moved);
+  saveChecksheetCategories();
+  refreshChecksheetCategoryRows();
 }
 function renameChecksheetCategory(idx) {
   const inp = document.getElementById('csCatName-' + idx);
@@ -4377,6 +4558,7 @@ function renderSettings() {
               <!-- 項目一覧 -->
               <table class="settings-tbl">
                 <thead><tr>
+                  <th style="width:44px"></th>
                   <th>項目名</th><th style="width:120px">カテゴリ</th><th style="width:100px">種別</th><th style="width:52px"></th>
                 </tr></thead>
                 <tbody id="cs-item-tbl-body">${buildChecksheetItemRows()}</tbody>
