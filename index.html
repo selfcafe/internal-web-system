@@ -617,6 +617,7 @@ function _rowToDb(row, storeId) {
     product: row.product || null,
     label: row.label || null,
     qty: (row.qty !== '' && row.qty != null) ? row.qty : null,
+    actual_qty: (row.actualQty !== '' && row.actualQty != null) ? row.actualQty : null,
     unit: row.unit || null,
     case_unit: row.caseUnit || null,
     note: row.note || null,
@@ -638,6 +639,7 @@ function _dbToRow(r) {
     product: r.product,
     label: r.label,
     qty: r.qty != null ? String(r.qty) : '',
+    actualQty: r.actual_qty != null ? String(r.actual_qty) : '',
     unit: r.unit,
     caseUnit: r.case_unit,
     note: r.note,
@@ -1020,6 +1022,46 @@ const esc     = s  => (s == null ? '' : String(s)).replace(/&/g,'&amp;').replace
 const prodByName    = n => PRODUCTS.find(p => p.name===n) || null;
 const unitLabelText = n => { const p = prodByName(n); if (!p) return ''; if (p.caseOnly) return `ケース（${p.caseUnit}）`; return p.caseUnit ? `${p.unit}（${p.caseUnit}）` : p.unit; };
 
+// caseUnit（例："1ケース/20本"）は表示用の自由文字列なので、書式を決め打ちでパースせず
+// 含まれる数字を1つだけ抜き出す。数字が0個または2個以上ある場合はnullを返し、
+// 呼び出し側で「変換できません」の警告を出す（誤った数量でサイレントに計算しない）
+function casePiecesFromUnit(caseUnitStr) {
+  const nums = String(caseUnitStr || '').match(/\d+/g);
+  if (!nums || nums.length !== 1) return null;
+  return Number(nums[0]);
+}
+// 依頼数量(qty)を実際の個数（本/袋/箱/個）に変換。caseOnly商品はcaseUnitから
+// 1ケースあたりの個数を求めて掛け算、それ以外はqtyがそのまま個数単位
+function qtyToPieces(product, qty) {
+  const n = Number(qty);
+  if (!product || qty === '' || qty == null || Number.isNaN(n)) return null;
+  if (!product.caseOnly) return n;
+  const pieces = casePiecesFromUnit(product.caseUnit);
+  return pieces == null ? null : n * pieces;
+}
+
+// 発注タブ（管理者）用：本部が実際数量（個数単位）を編集できる欄。
+// 未編集ならqtyToPiecesのフォールバック値をプレースホルダー表示するだけで、
+// row.actualQty自体は空のまま（フォールバックは集計側で判定する）
+function actualQtyCell(sid, row) {
+  const product = prodByName(row.product);
+  const fallback = qtyToPieces(product, row.qty);
+  const caseAmbiguous = !!(product && product.caseOnly && casePiecesFromUnit(product.caseUnit) == null && row.qty !== '' && row.qty != null);
+  const warn = caseAmbiguous ? `<span title="1ケースあたりの個数を自動判定できません。実際数量を直接入力してください" style="color:#dc2626;font-size:11px;cursor:help">⚠変換不可</span>` : '';
+  return `<div style="display:flex;flex-direction:column;gap:2px;min-width:110px">
+    <div style="font-size:11px;color:#888">依頼：${esc(row.qty)||'—'} ${esc(unitLabelText(row.product))}</div>
+    <div style="display:flex;align-items:center;gap:4px">
+      <span style="font-size:10px;color:#888;white-space:nowrap">実際数量</span>
+      <input type="number" min="0" value="${row.actualQty !== '' && row.actualQty != null ? esc(row.actualQty) : ''}"
+        placeholder="${fallback != null ? esc(fallback) : ''}"
+        style="width:60px;font-size:12px;border:1px solid #ddd;border-radius:5px;padding:3px 4px;font-family:inherit"
+        onchange="adminUpd('${sid}','${row.id}','actualQty',this.value)">
+      <span style="font-size:11px;color:#888">${esc(product ? product.unit : '')}</span>
+    </div>
+    ${warn}
+  </div>`;
+}
+
 function displayCell(value) {
   return value ? `<div class="display-cell">${esc(value)}</div>` : `<div class="display-cell empty">入力不要</div>`;
 }
@@ -1160,6 +1202,19 @@ function getInventoryPeriodData(storeId, periodLabel) {
   const rec = (all[storeId] && all[storeId][periodLabel]) || {};
   return { endStock: rec.endStock || {}, expQty: rec.expQty || {}, remarks: rec.remarks || '', lastSentAt: rec.lastSentAt || null };
 }
+// 発注タブで「納品済み」にした分の当月納品（自動）。店舗×期間×商品名で個数を積算。
+// GAS側はappend-onlyのログシートに記録し、読み出し時に合計する（saveOrders等の
+// 全件削除→再送信と違い、既存行を書き換えないので同時実行でも壊れない）
+const INVENTORY_DELIVERY_KEY = 'inventory_delivery_auto_data';
+function addInventoryDeliveryAuto(storeId, periodLabel, productName, pieces) {
+  const all = JSON.parse(localStorage.getItem(INVENTORY_DELIVERY_KEY) || '{}');
+  if (!all[storeId]) all[storeId] = {};
+  if (!all[storeId][periodLabel]) all[storeId][periodLabel] = {};
+  all[storeId][periodLabel][productName] = (all[storeId][periodLabel][productName] || 0) + pieces;
+  localStorage.setItem(INVENTORY_DELIVERY_KEY, JSON.stringify(all));
+  gasPost('recordInventoryDelivery', { storeId, periodLabel, product: productName, qty: pieces })
+    .catch(e => console.error('納品自動集計の送信エラー:', e));
+}
 function setInventoryPeriodData(storeId, periodLabel, rec) {
   const all = JSON.parse(localStorage.getItem(INVENTORY_PERIOD_KEY) || '{}');
   if (!all[storeId]) all[storeId] = {};
@@ -1230,6 +1285,34 @@ function getInventoryOpeningStock(storeId, periodLabel, productName) {
   return local[productName] !== undefined ? local[productName] : '';
 }
 
+// 当月納品＝発注タブの「納品済み」から自動集計した分（getInventoryDeliveryAuto）＋
+// 本部が外部スプレッドシートに手入力した分（getInventoryDeliveryManual、月初納品分など）の合計。
+// 両方サーバー側の値のみを見る（ローカルの自動集計はGAS送信前の一時値でしかないため、
+// 表示用の合計は必ずサーバーの値で揃える）
+const _inventoryDeliveryCache = {}; // storeId -> { periodLabel: { totals:{productName:qty}, skipped:[...] } }
+async function loadInventoryDelivery(storeId, periodLabel) {
+  try {
+    const [autoTotals, manualRes] = await Promise.all([
+      gasGet('getInventoryDeliveryAuto', { storeId, periodLabel }),
+      gasGet('getInventoryDeliveryManual', { storeId, periodLabel }),
+    ]);
+    const totals = {};
+    Object.entries(autoTotals || {}).forEach(([name, qty]) => { totals[name] = (totals[name] || 0) + Number(qty || 0); });
+    Object.entries((manualRes && manualRes.totals) || {}).forEach(([name, qty]) => { totals[name] = (totals[name] || 0) + Number(qty || 0); });
+    if (!_inventoryDeliveryCache[storeId]) _inventoryDeliveryCache[storeId] = {};
+    _inventoryDeliveryCache[storeId][periodLabel] = { totals, skipped: (manualRes && manualRes.skipped) || [] };
+    renderInventory();
+  } catch (e) { console.error('getInventoryDelivery error:', e); }
+}
+function getInventoryDelivery(storeId, periodLabel, productName) {
+  const rec = _inventoryDeliveryCache[storeId] && _inventoryDeliveryCache[storeId][periodLabel];
+  return (rec && rec.totals[productName]) || 0;
+}
+function getInventoryDeliverySkipped(storeId, periodLabel) {
+  const rec = _inventoryDeliveryCache[storeId] && _inventoryDeliveryCache[storeId][periodLabel];
+  return (rec && rec.skipped) || [];
+}
+
 // PC幅でも改行なし・横スクロールなしで収まるよう、パディング/フォント/入力幅を最小限に詰める
 const INV_INPUT_STYLE = 'padding:3px 4px;border:1px solid #d1d5db;border-radius:4px;font-size:11.5px;background:white';
 const INV_ERR_STYLE   = 'padding:3px 4px;border:1px solid #ef4444;border-radius:4px;font-size:11.5px;background:#fef2f2;color:#b91c1c;font-weight:700';
@@ -1250,11 +1333,12 @@ function computeInventoryConfirmInfo(p, period, periodData) {
   const openStock = (openStockRaw === '' || openStockRaw === null || openStockRaw === undefined) ? '' : Number(openStockRaw);
   const endStockRaw = periodData.endStock[p.name];
   const endStock = (endStockRaw === undefined || endStockRaw === '') ? '' : Number(endStockRaw);
-  const consumption = (openStock !== '' && endStock !== '') ? (openStock - endStock) : '';
+  const delivery = getInventoryDelivery(storeTab, period.label, p.name);
+  const consumption = (openStock !== '' && endStock !== '') ? (openStock + delivery - endStock) : '';
   const tracked = isDailyCountTracked(p);
   const dailyCount = tracked ? getInventoryDailyCount(storeTab, period.label, p.name) : '';
   const mismatch = tracked && consumption !== '' && dailyCount !== '' && consumption !== dailyCount;
-  return { openStock, endStockRaw, endStock, consumption, tracked, dailyCount, mismatch };
+  return { openStock, endStockRaw, endStock, delivery, consumption, tracked, dailyCount, mismatch };
 }
 
 let inventoryStep = 'input'; // 'input'（数字入力） | 'confirm'（確認・棚卸完了）
@@ -1390,7 +1474,7 @@ function renderInventoryInputScreen(wrap, allProducts, period, periodData) {
 
 function renderInventoryConfirmScreen(wrap, allProducts, period, periodData) {
   const VENDOR_LABELS = Object.fromEntries(VENDOR_CONFIG.map(v => [v.key, v.label]));
-  const COLS = ['商品名','期首在庫','期末在庫','消費量','デイリーカウント'];
+  const COLS = ['商品名','期首在庫','当月納品','期末在庫','消費量','デイリーカウント'];
 
   const mismatches = [];
   const bodyRows = VENDOR_CONFIG.map(v => {
@@ -1398,18 +1482,19 @@ function renderInventoryConfirmScreen(wrap, allProducts, period, periodData) {
     if (!items.length) return '';
     // colspanセルにposition:stickyを指定すると横スクロール中に固定されない環境があったため、
     // データ行と同じく個別セル(1列目のみ固定)で構成する
-    const vendorFillerCells = '<td style="background:#edf2d4;border-top:2px solid #aabf28"></td>'.repeat(4);
+    const vendorFillerCells = '<td style="background:#edf2d4;border-top:2px solid #aabf28"></td>'.repeat(5);
     const hdr = `<tr><td style="padding:5px 8px;font-size:11px;font-weight:700;color:#22703d;background:#edf2d4;border-top:2px solid #aabf28;position:sticky;left:0;z-index:1">${esc(VENDOR_LABELS[v.key] || v.key)}</td>${vendorFillerCells}</tr>`;
     const rows = items.map(p => {
-      const { openStock, endStock, consumption, tracked, dailyCount, mismatch } = computeInventoryConfirmInfo(p, period, periodData);
+      const { openStock, delivery, endStock, consumption, tracked, dailyCount, mismatch } = computeInventoryConfirmInfo(p, period, periodData);
       if (mismatch) mismatches.push({ name: p.label || p.name, consumption, dailyCount });
       const rowBg = mismatch ? '#fffaf9' : '#fff';
       return `<tr style="border-bottom:1px solid #f0f0f0${mismatch ? ';background:#fffaf9' : ''}">
         <td data-label="${COLS[0]}" style="padding:5px 6px;font-size:12px;position:sticky;left:0;z-index:1;background:${rowBg};border-right:1px solid #e5e7eb">${esc(p.label)}${mismatch ? ' <span style="color:#ef4444;font-size:11px">⚠</span>' : ''}</td>
         <td data-label="${COLS[1]}" style="padding:5px 6px;text-align:right;color:#8a8f7e;white-space:nowrap;font-size:11.5px">${openStock === '' ? '―' : esc(openStock)}</td>
-        <td data-label="${COLS[2]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px">${endStock === '' ? '―' : esc(endStock)}</td>
-        <td data-label="${COLS[3]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px;${mismatch?'color:#b91c1c;font-weight:700;background:#fef2f2':'background:#f6f7f1'}">${consumption === '' ? '―' : esc(consumption)}</td>
-        <td data-label="${COLS[4]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px;${mismatch?'color:#b91c1c;font-weight:700;background:#fef2f2':'background:#f6f7f1'}" title="チェックシートの補充数量の月間合計（閲覧のみ）">
+        <td data-label="${COLS[2]}" style="padding:5px 6px;text-align:right;color:#8a8f7e;white-space:nowrap;font-size:11.5px" title="発注タブの納品済み分（自動）＋本部手入力分（月初納品分など）の合計・閲覧のみ">${delivery ? esc(delivery) : '―'}</td>
+        <td data-label="${COLS[3]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px">${endStock === '' ? '―' : esc(endStock)}</td>
+        <td data-label="${COLS[4]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px;${mismatch?'color:#b91c1c;font-weight:700;background:#fef2f2':'background:#f6f7f1'}">${consumption === '' ? '―' : esc(consumption)}</td>
+        <td data-label="${COLS[5]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px;${mismatch?'color:#b91c1c;font-weight:700;background:#fef2f2':'background:#f6f7f1'}" title="チェックシートの補充数量の月間合計（閲覧のみ）">
           ${!tracked ? '<span style="color:#bbb;font-size:11px">対象外</span>' : (dailyCount === '' ? '―' : esc(dailyCount))}
         </td>
       </tr>`;
@@ -1427,6 +1512,13 @@ function renderInventoryConfirmScreen(wrap, allProducts, period, periodData) {
       </div>`
     : '';
 
+  const skippedDelivery = getInventoryDeliverySkipped(storeTab, period.label);
+  const skippedBanner = skippedDelivery.length
+    ? `<div style="font-size:12px;color:#92400e;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:10px 12px;margin-bottom:10px;line-height:1.6">
+        ⚠ 当月納品（手入力分）に商品コードが一致しない行が${skippedDelivery.length}件あります。当月納品の数字に反映されていない可能性があるので、本部にスプレッドシートの内容を確認してください。
+      </div>`
+    : '';
+
   const lastSent = periodData.lastSentAt
     ? `<span style="font-size:11.5px;color:#6b7263">最終送信: <b>${esc(new Date(periodData.lastSentAt).toLocaleString('ja-JP'))}</b>（当月分・再送信で上書き）</span>`
     : '<span style="font-size:11.5px;color:#6b7263">まだ送信していません</span>';
@@ -1436,14 +1528,16 @@ function renderInventoryConfirmScreen(wrap, allProducts, period, periodData) {
       <span style="font-size:12px;color:#6b7263">${period.year}年${period.month}月分の確認</span>
     </div>
     ${errBanner}
+    ${skippedBanner}
     <div style="overflow-x:auto">
       <table id="inventory-table" style="width:100%;border-collapse:separate;border-spacing:0;background:white;border-radius:8px;overflow:visible;box-shadow:0 1px 4px rgba(0,0,0,.08)">
         <thead><tr style="background:#22703d;color:white">
           <th style="padding:5px 6px;font-size:11px;text-align:left;white-space:nowrap;position:sticky;left:0;z-index:2;background:#22703d;border-right:1px solid #1a5c30">${COLS[0]}</th>
           <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap" title="先月末の期末在庫">${COLS[1]}</th>
-          <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap">${COLS[2]}</th>
+          <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap" title="発注タブの納品済み分（自動）＋本部手入力分（月初納品分など）の合計・閲覧のみ">${COLS[2]}</th>
           <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap">${COLS[3]}</th>
-          <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap" title="チェックシートの補充数量の月間合計（閲覧のみ）">${COLS[4]}</th>
+          <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap">${COLS[4]}</th>
+          <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap" title="チェックシートの補充数量の月間合計（閲覧のみ）">${COLS[5]}</th>
         </tr></thead>
         <tbody>${bodyRows}</tbody>
       </table>
@@ -1481,12 +1575,13 @@ async function submitInventory() {
   }
   const mismatches = [];
   const rows = allProducts.map(p => {
-    const { openStock, endStock, consumption, tracked, dailyCount, mismatch } = computeInventoryConfirmInfo(p, period, periodData);
+    const { openStock, delivery, endStock, consumption, tracked, dailyCount, mismatch } = computeInventoryConfirmInfo(p, period, periodData);
     if (mismatch) mismatches.push(p.label || p.name);
     const price = Number(p.price) || 0;
     return {
       code: p.code || '', product: p.name, label: p.label || p.name,
       open_stock: openStock === '' ? null : openStock,
+      delivery: delivery || null,
       end_stock: endStock === '' ? null : endStock,
       consumption: consumption === '' ? null : consumption,
       daily_count: dailyCount === '' ? null : dailyCount,
@@ -2182,6 +2277,7 @@ async function switchPartnerTab(tab) {
   if (tab === 'inventory') {
     renderInventory();
     loadInventoryOpeningStock(storeTab, getInventoryPeriod().label);
+    loadInventoryDelivery(storeTab, getInventoryPeriod().label);
     // デイリーカウントはチェックシートの補充数量から算出するため、最新のチェックシートデータも取得する
     await loadChecksheetDataFromDb(storeTab);
     renderInventory();
@@ -2826,7 +2922,7 @@ function selectStoreFromDD(id) {
 
 function newRow(groupId, requestDate) {
   const gid = groupId || uid();
-  return { id:uid(), groupId:gid, requestDate:requestDate||today(), orderDate:'', deliveryDate:'', product:'', qty:'', note:'', isNew:false, denied:false, imageUrl:null };
+  return { id:uid(), groupId:gid, requestDate:requestDate||today(), orderDate:'', deliveryDate:'', product:'', qty:'', actualQty:'', note:'', isNew:false, denied:false, imageUrl:null };
 }
 
 function buildStoreGroups(rows) {
@@ -3172,11 +3268,28 @@ function updStore(id, field, value) {
   saveA(storeTab, storeRows);
 }
 
+// 「納品済み」で確定した個数を棚卸の当月納品（自動）へ加算する。実際数量が
+// 本部により編集済みならそれを、無ければ依頼数量をピース単位に変換した値を使う
+function deliveredPiecesForRow(row) {
+  if (row.actualQty !== '' && row.actualQty != null) return Number(row.actualQty);
+  return qtyToPieces(prodByName(row.product), row.qty);
+}
+function recordDeliveredRows(storeId, rows) {
+  const period = getInventoryPeriod(new Date());
+  rows.forEach(row => {
+    if (!row.product) return;
+    const pieces = deliveredPiecesForRow(row);
+    if (pieces == null || !pieces) return;
+    addInventoryDeliveryAuto(storeId, period.label, row.product, pieces);
+  });
+}
+
 function markDelivered(id) {
   const row = storeRows.find(r=>r.id===id); if (!row) return;
   if (!row.orderDate) { alert('発注日が記載されてから納品済みにできます。'); return; }
   if (!confirm('この依頼を納品済みにして履歴へ移動しますか？')) return;
   saveH(storeTab, [...loadH(storeTab), {...row, deliveredAt:Date.now()}]);
+  recordDeliveredRows(storeTab, [row]);
   storeRows = storeRows.filter(r=>r.id!==id);
   saveA(storeTab, storeRows);
   renderStore();
@@ -3191,6 +3304,7 @@ function markGroupDelivered(gid) {
   const now = Date.now();
   group.forEach(r => hist.push({...r, deliveredAt: now}));
   saveH(storeTab, hist);
+  recordDeliveredRows(storeTab, group);
   storeRows = storeRows.filter(r => (r.groupId||r.id) !== gid);
   saveA(storeTab, storeRows);
   renderStore();
@@ -3207,6 +3321,7 @@ function markGroupDeliveredByDate(gid, deliveryDate) {
   const now = Date.now();
   group.forEach(r => hist.push({...r, deliveredAt: now}));
   saveH(storeTab, hist);
+  recordDeliveredRows(storeTab, group);
   const ids = new Set(group.map(r => r.id));
   storeRows = storeRows.filter(r => !ids.has(r.id));
   saveA(storeTab, storeRows);
@@ -3593,7 +3708,6 @@ function buildStoreOrderDetail(sid, groups) {
 
     group.forEach((row, i) => {
       const pLabel  = prodByName(row.product)?.label || row.product || '—';
-      const unitTxt = unitLabelText(row.product);
       const cls     = groupIsNew ? 'new-req' : '';
       const topBorder = gi > 0 && i === 0 ? 'border-top:2px solid #d1d5db;' : '';
       const groupPhoto = first.imageUrl;
@@ -3606,7 +3720,7 @@ function buildStoreOrderDetail(sid, groups) {
           <td rowspan="${N}" style="vertical-align:middle;padding:8px 10px;${topBorder}"><input type="date" value="${esc(first.orderDate)}" style="font-size:13px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-family:inherit" onchange="adminUpdGroup('${sid}','${esc(reqDate)}','orderDate',this.value)"></td>
           <td style="padding:6px 8px;${topBorder}"><input type="date" value="${esc(row.deliveryDate)}" style="font-size:13px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-family:inherit" onchange="adminUpd('${sid}','${row.id}','deliveryDate',this.value)"></td>
           <td style="padding:8px 10px;${topBorder}">${esc(pLabel)}</td>
-          <td style="padding:8px 10px;white-space:nowrap;${topBorder}">${esc(row.qty)||'—'} <span style="font-size:11px;color:#888">${esc(unitTxt)}</span></td>
+          <td style="padding:8px 10px;white-space:nowrap;${topBorder}">${actualQtyCell(sid, row)}</td>
           <td style="padding:6px 8px;${topBorder}"><textarea style="width:100%;min-width:100px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-size:12px;font-family:inherit;resize:vertical" placeholder="備考" onchange="adminUpd('${sid}','${row.id}','note',this.value)">${esc(row.note)}</textarea></td>
           <td rowspan="${N}" style="vertical-align:middle;padding:8px 10px;white-space:nowrap;${topBorder}">${btn}</td>
         </tr>`;
@@ -3614,7 +3728,7 @@ function buildStoreOrderDetail(sid, groups) {
         rows += `<tr class="${cls}">
           <td style="padding:6px 8px"><input type="date" value="${esc(row.deliveryDate)}" style="font-size:13px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-family:inherit" onchange="adminUpd('${sid}','${row.id}','deliveryDate',this.value)"></td>
           <td style="padding:8px 10px">${esc(pLabel)}</td>
-          <td style="padding:8px 10px;white-space:nowrap">${esc(row.qty)||'—'} <span style="font-size:11px;color:#888">${esc(unitTxt)}</span></td>
+          <td style="padding:8px 10px;white-space:nowrap">${actualQtyCell(sid, row)}</td>
           <td style="padding:6px 8px"><textarea style="width:100%;min-width:100px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-size:12px;font-family:inherit;resize:vertical" placeholder="備考" onchange="adminUpd('${sid}','${row.id}','note',this.value)">${esc(row.note)}</textarea></td>
         </tr>`;
       }
@@ -3676,14 +3790,14 @@ function buildHistTable(sid) {
           <td rowspan="${N}" style="padding:8px 10px;vertical-align:middle">${esc(first.orderDate)||'—'}</td>
           <td rowspan="${N}" style="padding:8px 10px;vertical-align:middle">${esc(first.deliveryDate)||'—'}</td>
           <td style="padding:8px 10px">${esc(pLabel)}</td>
-          <td style="padding:8px 10px;white-space:nowrap">${esc(row.qty)||'—'} <span style="font-size:11px;color:#aaa">${esc(unitTxt)}</span></td>
+          <td style="padding:8px 10px;white-space:nowrap">${esc(row.qty)||'—'} <span style="font-size:11px;color:#aaa">${esc(unitTxt)}</span>${row.actualQty !== '' && row.actualQty != null ? `<div style="font-size:11px;color:#888">実際：${esc(row.actualQty)}${esc(prodByName(row.product)?.unit||'')}</div>` : ''}</td>
           <td rowspan="${N}" style="padding:8px 10px;white-space:pre-wrap;font-size:12px;vertical-align:middle;min-width:200px">${esc(first.note)}</td>
           <td rowspan="${N}" style="padding:8px 10px;vertical-align:middle">${fmtDate(first.deliveredAt)}</td>
         </tr>`;
       } else {
         html += `<tr>
           <td style="padding:6px 10px 6px 22px;border-left:3px solid #b8d8c5">${esc(pLabel)}</td>
-          <td style="padding:6px 10px;white-space:nowrap">${esc(row.qty)||'—'} <span style="font-size:11px;color:#aaa">${esc(unitTxt)}</span></td>
+          <td style="padding:6px 10px;white-space:nowrap">${esc(row.qty)||'—'} <span style="font-size:11px;color:#aaa">${esc(unitTxt)}</span>${row.actualQty !== '' && row.actualQty != null ? `<div style="font-size:11px;color:#888">実際：${esc(row.actualQty)}${esc(prodByName(row.product)?.unit||'')}</div>` : ''}</td>
         </tr>`;
       }
     });

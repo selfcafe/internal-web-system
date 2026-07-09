@@ -6,6 +6,9 @@ const SHEET_ID        = '';  // GoogleスプレッドシートのID
 const IMAGE_FOLDER_ID = '1adg7TQIYXSkWIo19ohVo93raDY2HsTW_';  // 画像保存用DriveフォルダのID
 // 棚卸完了の送信先（別Driveの「棚卸集計」スプレッドシート、この実行アカウントに編集権限で共有しておくこと）
 const INVENTORY_SHEET_ID = '';  // 棚卸集計スプレッドシートのID
+// 月初納品分など、アプリを通さず本部が直接手配・受領した納品を本部が手入力するスプレッドシート
+// （棚卸集計とは別。この実行アカウントに編集権限で共有しておくこと。列は「期間ラベル/店舗ID/商品コード/数量」）
+const MANUAL_DELIVERY_SHEET_ID = '';  // 手動納品入力スプレッドシートのID
 
 const SHEET_ORDERS     = 'orders';
 const SHEET_SETTINGS   = 'app_settings';
@@ -14,7 +17,7 @@ const SHEET_CHECKSHEET = 'checksheet_data';
 const SHEET_INVENTORY  = 'inventory_log';
 
 const ORDER_COLS = [
-  'id','store_id','group_id','product','label','qty','unit',
+  'id','store_id','group_id','product','label','qty','actual_qty','unit',
   'case_unit','note','locked','is_new','request_date','order_date',
   'delivery_date','created_at','denied','image_url'
 ];
@@ -23,7 +26,7 @@ const LOST_COLS = ['id','store_id','found_date','note','image_url','added_at'];
 // （日ごと・項目ごとに行を分けると増え続けて管理しづらいため、月単位でまとめる）
 const CHECKSHEET_COLS = ['store_id','period_label','data','updated_at'];
 // 店舗×年月×商品で1行。同じ店舗×年月で再送信した場合はその行を上書きする
-const INVENTORY_COLS = ['period_label','store_id','code','product','label','open_stock','end_stock','consumption','daily_count','matched','price','amount','remarks','updated_at'];
+const INVENTORY_COLS = ['period_label','store_id','code','product','label','open_stock','delivery','end_stock','consumption','daily_count','matched','price','amount','remarks','updated_at'];
 
 // エリア別店舗ID
 const AREA_STORES = {
@@ -45,6 +48,8 @@ function doGet(e) {
     else if (a === 'getLostItems')      result = getLostItems(e.parameter.month, e.parameter.storeId);
     else if (a === 'getChecksheetData') result = getChecksheetData(e.parameter.storeId);
     else if (a === 'getInventoryHistory') result = getInventoryHistory(e.parameter.storeId, e.parameter.periodLabel);
+    else if (a === 'getInventoryDeliveryAuto') result = getInventoryDeliveryAuto(e.parameter.storeId, e.parameter.periodLabel);
+    else if (a === 'getInventoryDeliveryManual') result = getInventoryDeliveryManual(e.parameter.storeId, e.parameter.periodLabel);
     else result = { error: 'Unknown action: ' + a };
     return json(result);
   } catch(err) {
@@ -65,6 +70,7 @@ function doPost(e) {
     else if (b.action === 'saveOrderImage')     result = saveOrderImage(b.imageBase64, b.imageMime, b.filename);
     else if (b.action === 'saveChecksheetData') result = saveChecksheetData(b.storeId, b.periodLabel, b.data);
     else if (b.action === 'saveInventorySnapshot') result = saveInventorySnapshot(b.storeId, b.periodLabel, b.rows, b.remarks);
+    else if (b.action === 'recordInventoryDelivery') result = recordInventoryDelivery(b.storeId, b.periodLabel, b.product, b.qty);
     else result = { error: 'Unknown action: ' + b.action };
     return json(result);
   } catch(err) {
@@ -137,6 +143,7 @@ function getOrders() {
     product:       r.product       || null,
     label:         r.label         || null,
     qty:           (r.qty !== '' && r.qty !== null) ? Number(r.qty) : null,
+    actual_qty:    (r.actual_qty !== '' && r.actual_qty !== null) ? Number(r.actual_qty) : null,
     unit:          r.unit          || null,
     case_unit:     r.case_unit     || null,
     note:          r.note          || null,
@@ -429,6 +436,118 @@ function saveInventorySnapshot(storeId, periodLabel, rows, remarks) {
     sheet.getRange(startRow, 1, newRows.length, INVENTORY_COLS.length).setValues(newRows);
   }
   return { ok: true };
+}
+
+// ----------------------------------------------------------------
+// inventory_delivery_auto（発注タブの「納品済み」から自動集計する当月納品）
+// ----------------------------------------------------------------
+// saveInventorySnapshotのような全件削除→再送信ではなく、追記のみのログにする。
+// 複数店舗・端末から同時に「納品済み」が押されても、他の記録を消してしまう事故が起きない。
+// 同じ棚卸集計スプレッドシート（INVENTORY_SHEET_ID）内に新規シートとして持つ
+const SHEET_DELIVERY_AUTO  = 'inventory_delivery_auto';
+const DELIVERY_AUTO_COLS   = ['period_label', 'store_id', 'product', 'qty', 'recorded_at'];
+
+function getDeliveryAutoSheet() {
+  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  return ss.getSheetByName(SHEET_DELIVERY_AUTO) || ss.insertSheet(SHEET_DELIVERY_AUTO);
+}
+
+function recordInventoryDelivery(storeId, periodLabel, product, qty) {
+  const sheet = getDeliveryAutoSheet();
+  ensureHeaders(sheet, DELIVERY_AUTO_COLS);
+  const row = DELIVERY_AUTO_COLS.map(c => {
+    if (c === 'period_label') return periodLabel;
+    if (c === 'store_id')     return storeId;
+    if (c === 'product')      return product;
+    if (c === 'qty')          return qty;
+    if (c === 'recorded_at')  return new Date().toISOString();
+    return '';
+  });
+  const startRow = sheet.getLastRow() + 1;
+  // period_labelが"YYYY-MM"のまま日付型に自動変換されないよう固定
+  sheet.getRange(startRow, DELIVERY_AUTO_COLS.indexOf('period_label') + 1, 1, 1).setNumberFormat('@');
+  sheet.getRange(startRow, 1, 1, DELIVERY_AUTO_COLS.length).setValues([row]);
+  return { ok: true };
+}
+
+// 店舗×期間の当月納品（自動）を商品名ごとに合計して返す
+function getInventoryDeliveryAuto(storeId, periodLabel) {
+  const sheet = getDeliveryAutoSheet();
+  if (sheet.getLastRow() <= 1) return {};
+  const data = sheet.getDataRange().getValues();
+  const hdrs = data[0].map(String);
+  const pIdx = hdrs.indexOf('period_label'), sIdx = hdrs.indexOf('store_id'),
+        prIdx = hdrs.indexOf('product'), qIdx = hdrs.indexOf('qty');
+  const totals = {};
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (String(row[sIdx]) !== String(storeId)) continue;
+    if (_invMonthLabelStr(row[pIdx]) !== String(periodLabel)) continue;
+    const product = row[prIdx];
+    totals[product] = (totals[product] || 0) + Number(row[qIdx] || 0);
+  }
+  return totals;
+}
+
+// ----------------------------------------------------------------
+// inventory_delivery_manual（月初納品分など、アプリを通さない納品を本部が手入力）
+// ----------------------------------------------------------------
+// 本部が直接編集する外部スプレッドシート。読み取りのみ（appは書き込まない）。
+// 商品は「商品コード」列で持つ（商品名は表記ゆれの元になるため使わない）。
+// 商品コード→商品名の変換は、商品設定画面で保存されている値（app_settingsシートの
+// all_productsキー、JSON文字列）を正とする。ハードコードされたPRODUCTS配列は
+// クライアント側にしかないため、GAS側では必ずこちらを見る
+const SHEET_DELIVERY_MANUAL = '手動納品';
+const DELIVERY_MANUAL_COLS  = ['期間ラベル', '店舗ID', '商品コード', '数量'];
+
+function getDeliveryManualSheet() {
+  const ss = SpreadsheetApp.openById(MANUAL_DELIVERY_SHEET_ID);
+  return ss.getSheetByName(SHEET_DELIVERY_MANUAL) || ss.insertSheet(SHEET_DELIVERY_MANUAL);
+}
+
+let _cachedManualDeliveryTz = null;
+function _manualDeliverySheetTz() {
+  if (!_cachedManualDeliveryTz) _cachedManualDeliveryTz = SpreadsheetApp.openById(MANUAL_DELIVERY_SHEET_ID).getSpreadsheetTimeZone();
+  return _cachedManualDeliveryTz;
+}
+function _manualDeliveryMonthLabelStr(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, _manualDeliverySheetTz(), 'yyyy-MM');
+  return v || null;
+}
+
+function getProductCodeMap() {
+  const entry = getSettings().find(s => s.key === 'all_products');
+  if (!entry || !entry.value) return {};
+  let products;
+  try { products = JSON.parse(entry.value); } catch (e) { return {}; }
+  const map = {};
+  products.forEach(p => { if (p.code) map[String(p.code)] = p.name; });
+  return map;
+}
+
+// 店舗×期間の当月納品（手動）を商品名ごとに合計して返す。商品コードが商品設定の
+// どれとも一致しない行はskippedへ積んで返す（サイレントに数量を捨てない）
+function getInventoryDeliveryManual(storeId, periodLabel) {
+  if (!MANUAL_DELIVERY_SHEET_ID) return { totals: {}, skipped: [] };
+  const sheet = getDeliveryManualSheet();
+  if (sheet.getLastRow() <= 1) return { totals: {}, skipped: [] };
+  const data = sheet.getDataRange().getValues();
+  const hdrs = data[0].map(String);
+  const pIdx = hdrs.indexOf('期間ラベル'), sIdx = hdrs.indexOf('店舗ID'),
+        cIdx = hdrs.indexOf('商品コード'), qIdx = hdrs.indexOf('数量');
+  const codeToName = getProductCodeMap();
+  const totals = {};
+  const skipped = [];
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (String(row[sIdx]) !== String(storeId)) continue;
+    if (_manualDeliveryMonthLabelStr(row[pIdx]) !== String(periodLabel)) continue;
+    const code = String(row[cIdx]);
+    const name = codeToName[code];
+    if (!name) { skipped.push({ sheetRow: i + 1, code: code, qty: row[qIdx] }); continue; }
+    totals[name] = (totals[name] || 0) + Number(row[qIdx] || 0);
+  }
+  return { totals, skipped };
 }
 
 // ----------------------------------------------------------------
