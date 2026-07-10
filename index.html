@@ -282,6 +282,7 @@
           "dh nm del"
           "dh ut pr"
           "dh cs cs"
+          "dh co co"
           "dh cd cd";
         column-gap:8px; row-gap:6px;
         padding:10px 8px; border-bottom:1px solid #e5e7eb !important;
@@ -292,8 +293,9 @@
       .settings-tbl tr:not(.settings-vendor-hdr) td:nth-child(3) { grid-area:ut; }
       .settings-tbl tr:not(.settings-vendor-hdr) td:nth-child(4) { grid-area:pr; }
       .settings-tbl tr:not(.settings-vendor-hdr) td:nth-child(5) { grid-area:cs; }
-      .settings-tbl tr:not(.settings-vendor-hdr) td:nth-child(6) { grid-area:cd; }
-      .settings-tbl tr:not(.settings-vendor-hdr) td:nth-child(7) { grid-area:del; align-self:start; }
+      .settings-tbl tr:not(.settings-vendor-hdr) td:nth-child(6) { grid-area:co; text-align:left; }
+      .settings-tbl tr:not(.settings-vendor-hdr) td:nth-child(7) { grid-area:cd; }
+      .settings-tbl tr:not(.settings-vendor-hdr) td:nth-child(8) { grid-area:del; align-self:start; }
       .settings-tbl td[data-label]::before { content:attr(data-label); display:block; font-size:10px; color:#888; font-weight:600; margin-bottom:2px; }
       .settings-tbl tr:not(.settings-vendor-hdr) input { width:100% !important; box-sizing:border-box; max-width:none !important; }
       /* チェック項目設定テーブル：ドラッグハンドル＋5列構成なので独自グリッドを使う */
@@ -4413,7 +4415,7 @@ function buildProdRows() {
     const items  = PRODUCTS.filter(p => p.vendor === vendor);
     const isOpen = _openVendors.has(vendor);
     const hdr = `<tr class="settings-vendor-hdr" onclick="toggleVendorSection('${vendor}')" style="cursor:pointer">
-      <td colspan="7"><div style="display:flex;justify-content:space-between;align-items:center">
+      <td colspan="8"><div style="display:flex;justify-content:space-between;align-items:center">
         <span>${VENDOR_LABELS[vendor]}</span>
         <span id="vendor-arrow-${vendor}" style="font-size:11px;color:#22703d">${isOpen ? '▼' : '▶'}</span>
       </div></td></tr>`;
@@ -4438,6 +4440,10 @@ function buildProdRows() {
         <td data-label="ケース/入り数"><input type="text" value="${esc(p.caseUnit)}" placeholder="なし"
           style="width:100%;max-width:260px;border:1px solid #ddd;border-radius:5px;padding:5px 7px;font-size:13px;font-family:inherit"
           onchange="saveProductSetting('${esc(p.name)}','caseUnit',this.value)"></td>
+        <td data-label="ケース発注のみ" style="text-align:center">
+          <input type="checkbox" ${p.caseOnly ? 'checked' : ''} style="width:16px;height:16px;accent-color:#22703d;cursor:pointer"
+            onchange="saveProductSetting('${esc(p.name)}','caseOnly',this.checked)">
+        </td>
         <td data-label="コード"><input type="text" value="${esc(p.code||'')}" placeholder="未設定"
           style="width:100%;max-width:130px;border:1px solid #ddd;border-radius:5px;padding:5px 7px;font-size:13px;font-family:inherit"
           onchange="saveProductSetting('${esc(p.name)}','code',this.value)"></td>
@@ -4559,6 +4565,7 @@ function renderSettings() {
                   <th style="width:44px"></th>
                   <th>商品名</th><th style="width:90px">単位</th>
                   <th style="width:110px">単価（円）</th><th>ケース/入り数</th>
+                  <th style="width:90px">ケース発注のみ</th>
                   <th style="width:130px">コード</th>
                   <th style="width:52px"></th>
                 </tr></thead>
