@@ -1940,9 +1940,10 @@ function setStoreChecksheetConfig(storeId, itemIds) {
 function _syncStoreChecksheetCfg() {
   _gasSaveSetting('store_checksheet_cfg', localStorage.getItem(STORE_CHECKSHEET_KEY) || '{}');
 }
+// cfgは「除外リスト」（そのIDに一致する項目を非表示にする）。nullなら常に全項目を表示する。
 function getAvailableChecksheetItems(storeId) {
   const cfg = getStoreChecksheetConfig(storeId);
-  return cfg ? CHECKSHEET_ITEMS.filter(it => cfg.includes(it.id)) : CHECKSHEET_ITEMS;
+  return cfg ? CHECKSHEET_ITEMS.filter(it => !cfg.includes(it.id)) : CHECKSHEET_ITEMS;
 }
 
 // 暦月（1日〜月末）で1期間とする
@@ -2464,9 +2465,10 @@ function setStoreProductConfig(storeId, productNames) {
   localStorage.setItem(STORE_PRODUCTS_KEY, JSON.stringify(cfg));
   _syncStoreProductCfg();
 }
+// cfgは「除外リスト」（その商品名に一致するものを非表示にする）。nullなら常に全商品を表示する。
 function getAvailableProducts(storeId) {
   const cfg = getStoreProductConfig(storeId);
-  return cfg ? PRODUCTS.filter(p => cfg.includes(p.name)) : PRODUCTS;
+  return cfg ? PRODUCTS.filter(p => !cfg.includes(p.name)) : PRODUCTS;
 }
 
 const SITE_PW        = 'selfcafe001';
@@ -4767,7 +4769,8 @@ function renderStoreProdCfg() {
   if (!sel.options.length) { container.innerHTML = '<div style="font-size:12px;color:#888">該当する店舗がありません</div>'; return; }
   const sid = sel.value;
   const cfg = getStoreProductConfig(sid);
-  const selected = cfg ? new Set(cfg) : null;
+  // cfgは「除外リスト」。excludedに入っていない（＝cfgがnull、またはその商品名が含まれない）商品はチェック済み＝表示する
+  const excluded = cfg ? new Set(cfg) : null;
 
   const VENDOR_LABELS = Object.fromEntries(VENDOR_CONFIG.map(v => [v.key, v.label]));
   const byVendor = {};
@@ -4788,7 +4791,7 @@ function renderStoreProdCfg() {
         </div>
         <div class="store-prod-vendor-grid">` +
         items.map(p => {
-          const checked = selected === null || selected.has(p.name) ? 'checked' : '';
+          const checked = excluded === null || !excluded.has(p.name) ? 'checked' : '';
           return `<label><input type="checkbox" value="${esc(p.name)}" data-vendor="${esc(v.key)}" onchange="updateVendorAllCheck('${esc(v.key)}')" ${checked}>${esc(p.label||p.name)}</label>`;
         }).join('') +
         `</div>`;
@@ -4829,8 +4832,10 @@ function saveStoreProdCfg() {
   const msg = document.getElementById('store-prod-cfg-msg');
   if (!sel || !container) return;
   const sid = sel.value;
-  const checked = [...container.querySelectorAll('input[type=checkbox]:checked')].map(el => el.value);
-  setStoreProductConfig(sid, checked);
+  // チェックが外れている（＝非表示にしたい）商品だけを除外リストとして保存する。
+  // data-vendorを持つ実商品チェックボックスのみを対象にし、「全選択」トグル（data-vendor-all、value未設定）は含めない
+  const excluded = [...container.querySelectorAll('input[data-vendor]:not(:checked)')].map(el => el.value);
+  setStoreProductConfig(sid, excluded);
   if (msg) { msg.textContent = '✓ 保存しました'; setTimeout(() => { if(msg) msg.textContent=''; }, 2500); }
 }
 
@@ -4890,7 +4895,8 @@ function renderChecksheetCfg() {
   if (!sel.options.length) { container.innerHTML = '<div style="font-size:12px;color:#888">該当する店舗がありません</div>'; return; }
   const sid = sel.value;
   const cfg = getStoreChecksheetConfig(sid);
-  const selected = cfg ? new Set(cfg) : null;
+  // cfgは「除外リスト」。excludedに入っていない（＝cfgがnull、またはそのIDが含まれない）項目はチェック済み＝表示する
+  const excluded = cfg ? new Set(cfg) : null;
 
   const byCategory = {};
   CHECKSHEET_ITEMS.forEach(it => { (byCategory[it.category] ||= []).push(it); });
@@ -4907,7 +4913,7 @@ function renderChecksheetCfg() {
         </div>
         <div class="store-prod-vendor-grid">` +
         items.map(it => {
-          const checked = selected === null || selected.has(it.id) ? 'checked' : '';
+          const checked = excluded === null || !excluded.has(it.id) ? 'checked' : '';
           const typeLabel = it.type === 'qty' ? '数量' : 'チェック';
           return `<label><input type="checkbox" value="${esc(it.id)}" data-cat="${esc(c.key)}" onchange="updateChecksheetCatAllCheck('${esc(c.key)}')" ${checked}>${esc(it.name)}<span style="color:#aaa;font-size:11px;margin-left:2px">（${typeLabel}）</span></label>`;
         }).join('') +
@@ -4948,8 +4954,10 @@ function saveChecksheetCfg() {
   const msg = document.getElementById('checksheet-cfg-msg');
   if (!sel || !container) return;
   const sid = sel.value;
-  const checked = [...container.querySelectorAll('input[type=checkbox]:checked')].map(el => el.value);
-  setStoreChecksheetConfig(sid, checked);
+  // チェックが外れている（＝非表示にしたい）項目だけを除外リストとして保存する。
+  // data-catを持つ実項目チェックボックスのみを対象にし、「全選択」トグル（data-cat-all、value未設定）は含めない
+  const excluded = [...container.querySelectorAll('input[data-cat]:not(:checked)')].map(el => el.value);
+  setStoreChecksheetConfig(sid, excluded);
   if (msg) { msg.textContent = '✓ 保存しました'; setTimeout(() => { if(msg) msg.textContent=''; }, 2500); }
 }
 
