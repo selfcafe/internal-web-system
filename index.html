@@ -687,6 +687,9 @@ function _syncCustomStores() {
 function _syncDeletedStores() {
   _gasSaveSetting('deleted_stores', localStorage.getItem(DELETED_STORES_KEY) || '[]');
 }
+function _syncDeletedProducts() {
+  _gasSaveSetting('deleted_products', localStorage.getItem(DELETED_PRODUCTS_KEY) || '[]');
+}
 function _syncStoreProductCfg() {
   _gasSaveSetting('store_product_cfg', localStorage.getItem(STORE_PRODUCTS_KEY) || '{}');
 }
@@ -736,6 +739,7 @@ async function initGas() {
       if (r.key === 'deleted_stores')    localStorage.setItem(DELETED_STORES_KEY,  clean(r.value));
       if (r.key === 'store_product_cfg') localStorage.setItem(STORE_PRODUCTS_KEY,  clean(r.value));
       if (r.key === 'all_products')      localStorage.setItem(ALL_PRODUCTS_KEY,    clean(r.value));
+      if (r.key === 'deleted_products')  localStorage.setItem(DELETED_PRODUCTS_KEY, clean(r.value));
       if (r.key === 'vendor_config')     localStorage.setItem(VENDOR_CONFIG_KEY,   clean(r.value));
       if (r.key === 'store_checksheet_cfg') localStorage.setItem(STORE_CHECKSHEET_KEY, clean(r.value));
       if (r.key === 'all_checksheet_items') localStorage.setItem(ALL_CHECKSHEET_ITEMS_KEY, clean(r.value));
@@ -752,12 +756,14 @@ async function initGas() {
     if (!gasKeys.has('deleted_stores')    && localStorage.getItem(DELETED_STORES_KEY))  _syncDeletedStores();
     if (!gasKeys.has('store_product_cfg') && localStorage.getItem(STORE_PRODUCTS_KEY))  _syncStoreProductCfg();
     if (!gasKeys.has('all_products')      && localStorage.getItem(ALL_PRODUCTS_KEY))    _gasSaveSetting('all_products',  localStorage.getItem(ALL_PRODUCTS_KEY));
+    if (!gasKeys.has('deleted_products')  && localStorage.getItem(DELETED_PRODUCTS_KEY)) _syncDeletedProducts();
     if (!gasKeys.has('vendor_config')     && localStorage.getItem(VENDOR_CONFIG_KEY))   _gasSaveSetting('vendor_config', localStorage.getItem(VENDOR_CONFIG_KEY));
     if (!gasKeys.has('store_checksheet_cfg') && localStorage.getItem(STORE_CHECKSHEET_KEY)) _syncStoreChecksheetCfg();
     if (!gasKeys.has('all_checksheet_items') && localStorage.getItem(ALL_CHECKSHEET_ITEMS_KEY)) _gasSaveSetting('all_checksheet_items', localStorage.getItem(ALL_CHECKSHEET_ITEMS_KEY));
     if (!gasKeys.has('checksheet_categories') && localStorage.getItem(CHECKSHEET_CATEGORIES_KEY)) _gasSaveSetting('checksheet_categories', localStorage.getItem(CHECKSHEET_CATEGORIES_KEY));
     loadCustomStores();
     loadDeletedStores();
+    loadDeletedProducts();
     // パスワード一覧が開いている場合は再描画
     const pwList = document.getElementById('store-pw-list');
     if (pwList && pwList.innerHTML) pwList.innerHTML = buildStorePwList();
@@ -4053,6 +4059,19 @@ function removeCustomStore(id) {
 
 /* ===== 商品設定 ===== */
 const ALL_PRODUCTS_KEY = 'all_products';
+const DELETED_PRODUCTS_KEY = 'deleted_products';
+
+// コード内のデフォルト商品配列に残ったまま削除された商品が、loadProductSettings()の
+// 「保存済みリストに無い＝新規追加商品」救済ロジックによって復活してしまうのを防ぐ
+// （deleted_storesと同じ、削除済み名前をトゥームストーンとして保持する方式）
+function loadDeletedProducts() {
+  const deleted = JSON.parse(localStorage.getItem(DELETED_PRODUCTS_KEY) || '[]');
+  if (!deleted.length) return;
+  const deletedSet = new Set(deleted);
+  for (let i = PRODUCTS.length - 1; i >= 0; i--) {
+    if (deletedSet.has(PRODUCTS[i].name)) PRODUCTS.splice(i, 1);
+  }
+}
 
 function saveAllProducts() {
   const json = JSON.stringify(PRODUCTS);
@@ -4155,6 +4174,9 @@ function deleteProduct(name) {
   if (!confirm(`「${name}」を削除しますか？`)) return;
   const i = PRODUCTS.findIndex(p => p.name === name);
   if (i >= 0) PRODUCTS.splice(i, 1);
+  const deleted = JSON.parse(localStorage.getItem(DELETED_PRODUCTS_KEY) || '[]');
+  if (!deleted.includes(name)) { deleted.push(name); localStorage.setItem(DELETED_PRODUCTS_KEY, JSON.stringify(deleted)); }
+  _syncDeletedProducts();
   saveAllProducts();
   const tbody = document.getElementById('prod-tbl-body');
   if (tbody) tbody.innerHTML = buildProdRows(); else renderSettings();
@@ -5068,6 +5090,7 @@ loadDeletedStores();
 loadStoreRegions();
 loadVendorConfig();
 loadProductSettings();
+loadDeletedProducts();
 migrateProductRenames();
 purgeHistory();
 applyTimeMsg();
