@@ -18,7 +18,7 @@ const SHEET_INVENTORY  = 'inventory_log';
 
 const ORDER_COLS = [
   'id','store_id','group_id','product','label','qty','actual_qty','unit',
-  'case_unit','note','locked','is_new','request_date','order_date',
+  'case_unit','unit_mode','note','locked','is_new','request_date','order_date',
   'delivery_date','created_at','denied','image_url'
 ];
 const LOST_COLS = ['id','store_id','found_date','note','image_url','added_at'];
@@ -146,6 +146,7 @@ function getOrders() {
     actual_qty:    (r.actual_qty !== '' && r.actual_qty !== null) ? Number(r.actual_qty) : null,
     unit:          r.unit          || null,
     case_unit:     r.case_unit     || null,
+    unit_mode:     r.unit_mode     || null,
     note:          r.note          || null,
     locked:        r.locked === true || r.locked === 'TRUE',
     is_new:        r.is_new  === true || r.is_new  === 'TRUE',

@@ -622,6 +622,7 @@ function _rowToDb(row, storeId) {
     actual_qty: (row.actualQty !== '' && row.actualQty != null) ? row.actualQty : null,
     unit: row.unit || null,
     case_unit: row.caseUnit || null,
+    unit_mode: row.unitMode || null,
     note: row.note || null,
     locked: row.locked || false,
     is_new: row.isNew || false,
@@ -644,6 +645,7 @@ function _dbToRow(r) {
     actualQty: r.actual_qty != null ? String(r.actual_qty) : '',
     unit: r.unit,
     caseUnit: r.case_unit,
+    unitMode: r.unit_mode || 'piece',
     note: r.note,
     locked: r.locked,
     isNew: r.is_new,
@@ -1027,8 +1029,16 @@ const oneMonthFromToday = () => { const d = new Date(); d.setMonth(d.getMonth() 
 const nearingExpiry = d => !!d && !overdue(d) && d <= oneMonthFromToday();
 const esc     = s  => (s == null ? '' : String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
-const prodByName    = n => PRODUCTS.find(p => p.name===n) || null;
-const unitLabelText = n => { const p = prodByName(n); if (!p) return ''; if (p.caseOnly) return `ケース（${p.caseUnit}）`; return p.caseUnit ? `${p.unit}（${p.caseUnit}）` : p.unit; };
+const prodByName = n => PRODUCTS.find(p => p.name===n) || null;
+// caseOnly商品は常に'case'扱い。それ以外でcaseUnitがある商品は行ごとのunitMode
+// （'piece'|'case'、未指定は既定'piece'＝今まで通りの挙動）で表示を切り替える
+function unitLabelText(name, unitMode) {
+  const p = prodByName(name);
+  if (!p) return '';
+  if (p.caseOnly) return `ケース（${p.caseUnit}）`;
+  if (!p.caseUnit) return p.unit;
+  return (unitMode || 'piece') === 'case' ? `ケース（${p.caseUnit}）` : `${p.unit}（${p.caseUnit}）`;
+}
 
 // caseUnit（例："1ケース/20本"）は表示用の自由文字列なので、書式を決め打ちでパースせず
 // 含まれる数字を1つだけ抜き出す。数字が0個または2個以上ある場合はnullを返し、
@@ -1038,12 +1048,13 @@ function casePiecesFromUnit(caseUnitStr) {
   if (!nums || nums.length !== 1) return null;
   return Number(nums[0]);
 }
-// 依頼数量(qty)を実際の個数（本/袋/箱/個）に変換。caseOnly商品はcaseUnitから
-// 1ケースあたりの個数を求めて掛け算、それ以外はqtyがそのまま個数単位
-function qtyToPieces(product, qty) {
+// 依頼数量(qty)を実際の個数（本/袋/箱/個）に変換。caseOnly商品は常にケース換算、
+// それ以外はcaseUnitがあっても行のunitModeが'case'の時だけケース換算する
+function qtyToPieces(product, qty, unitMode) {
   const n = Number(qty);
   if (!product || qty === '' || qty == null || Number.isNaN(n)) return null;
-  if (!product.caseOnly) return n;
+  const mode = product.caseOnly ? 'case' : (unitMode || 'piece');
+  if (mode !== 'case') return n;
   const pieces = casePiecesFromUnit(product.caseUnit);
   return pieces == null ? null : n * pieces;
 }
@@ -1053,11 +1064,12 @@ function qtyToPieces(product, qty) {
 // row.actualQty自体は空のまま（フォールバックは集計側で判定する）
 function actualQtyCell(sid, row) {
   const product = prodByName(row.product);
-  const fallback = qtyToPieces(product, row.qty);
-  const caseAmbiguous = !!(product && product.caseOnly && casePiecesFromUnit(product.caseUnit) == null && row.qty !== '' && row.qty != null);
+  const fallback = qtyToPieces(product, row.qty, row.unitMode);
+  const effectiveMode = product && (product.caseOnly ? 'case' : (row.unitMode || 'piece'));
+  const caseAmbiguous = !!(product && effectiveMode === 'case' && casePiecesFromUnit(product.caseUnit) == null && row.qty !== '' && row.qty != null);
   const warn = caseAmbiguous ? `<span title="1ケースあたりの個数を自動判定できません。実際数量を直接入力してください" style="color:#dc2626;font-size:11px;cursor:help">⚠変換不可</span>` : '';
   return `<div style="display:flex;flex-direction:column;gap:2px;min-width:110px">
-    <div style="font-size:11px;color:#888">依頼：${esc(row.qty)||'—'} ${esc(unitLabelText(row.product))}</div>
+    <div style="font-size:11px;color:#888">依頼：${esc(row.qty)||'—'} ${esc(unitLabelText(row.product, row.unitMode))}</div>
     <div style="display:flex;align-items:center;gap:4px">
       <span style="font-size:10px;color:#888;white-space:nowrap">実際数量</span>
       <input type="number" min="0" value="${row.actualQty !== '' && row.actualQty != null ? esc(row.actualQty) : ''}"
@@ -2789,6 +2801,7 @@ function filterProd(rowId) {
       ${esc(p.label)}
       ${inUse ? '<span style="font-size:10px;background:#94a3b8;color:white;border-radius:3px;padding:1px 5px;margin-left:5px">依頼中</span>' : ''}
       ${!inUse && p.caseOnly ? '<span style="font-size:10px;background:#ef4444;color:white;border-radius:3px;padding:1px 5px;margin-left:5px">ケース注文のみ</span>' : ''}
+      ${!inUse && !p.caseOnly && p.caseUnit ? '<span style="font-size:10px;background:#22703d;color:white;border-radius:3px;padding:1px 5px;margin-left:5px">個数/ケース選択可</span>' : ''}
       <span style="font-size:11px;color:#888;margin-left:6px">${p.caseOnly ? 'ケース（'+esc(p.caseUnit)+')' : (esc(p.unit)+(p.caseUnit?' / '+esc(p.caseUnit):''))}</span>
     </div>`;
   };
@@ -2890,7 +2903,7 @@ function selectStoreFromDD(id) {
 
 function newRow(groupId, requestDate) {
   const gid = groupId || uid();
-  return { id:uid(), groupId:gid, requestDate:requestDate||today(), orderDate:'', deliveryDate:'', product:'', qty:'', actualQty:'', note:'', isNew:false, denied:false, imageUrl:null };
+  return { id:uid(), groupId:gid, requestDate:requestDate||today(), orderDate:'', deliveryDate:'', product:'', qty:'', actualQty:'', unitMode:'piece', note:'', isNew:false, denied:false, imageUrl:null };
 }
 
 function buildStoreGroups(rows) {
@@ -2955,12 +2968,13 @@ function renderStore() {
         : `<td class="c-product" data-label="商品名">${productSearchHTML(row.id, row.product)}</td>`;
 
       const qtyCell = isLocked
-        ? `<td class="c-qty" data-label="数量"><span style="font-size:13px">${esc(row.qty)||'—'}</span> <span class="unit-label">${esc(unitLabelText(row.product))}</span></td>`
+        ? `<td class="c-qty" data-label="数量"><span style="font-size:13px">${esc(row.qty)||'—'}</span> <span class="unit-label">${esc(unitLabelText(row.product, row.unitMode))}</span></td>`
         : `<td class="c-qty" data-label="数量"><div class="qty-wrap">
             <button class="qty-btn" onclick="stepQty('${row.id}',-1)">－</button>
             <input type="number" min="0" id="qty-${row.id}" ${row.qty !== null && row.qty !== '' ? `value="${esc(row.qty)}"` : ''} onchange="updStore('${row.id}','qty',this.value)">
             <button class="qty-btn" onclick="stepQty('${row.id}',1)">＋</button>
-            <span class="unit-label" id="unit-${row.id}">${esc(unitLabelText(row.product))}</span>
+            <span class="unit-label" id="unit-${row.id}">${esc(unitLabelText(row.product, row.unitMode))}</span>
+            ${unitToggleHTML(row)}
           </div></td>`;
 
       const noteCell = isLocked
@@ -3171,7 +3185,7 @@ function renderOrderHistory() {
           <td class="c-order" data-label="発注日">${displayCell(row.orderDate)}</td>
           <td class="c-delivery" data-label="納品予定日">${displayCell(row.deliveryDate)}</td>
           <td class="c-product" data-label="商品名" style="font-size:13px">${pLabel ? esc(pLabel) : '<span style="color:#bbb">未選択</span>'}</td>
-          <td class="c-qty" data-label="数量"><span style="font-size:13px">${esc(row.qty)||'—'}</span> <span class="unit-label">${esc(unitLabelText(row.product))}</span></td>
+          <td class="c-qty" data-label="数量"><span style="font-size:13px">${esc(row.qty)||'—'}</span> <span class="unit-label">${esc(unitLabelText(row.product, row.unitMode))}</span></td>
           <td class="c-note" data-label="備考" style="font-size:13px;color:#555;white-space:pre-wrap">${esc(row.note)}</td>
           ${actionCell}`;
         tbody.appendChild(tr);
@@ -3194,6 +3208,21 @@ function stepQty(id, delta) {
   const newVal = Math.max(0, val + delta);
   inp.value = newVal;
   updStore(id, 'qty', newVal);
+}
+
+// caseUnitはあるがcaseOnlyではない商品だけ、行ごとに個数/ケースを選べるトグルを出す
+// （caseOnly商品は常にケース固定、caseUnitが無い商品は常に個数固定で、トグル自体を出さない）
+function unitToggleHTML(row) {
+  const p = prodByName(row.product);
+  if (!p || p.caseOnly || !p.caseUnit) return '';
+  const mode = row.unitMode || 'piece';
+  const btn = (val, label) => `<span onclick="setRowUnitMode('${row.id}','${val}')"
+    style="padding:3px 8px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;${mode===val ? 'background:#22703d;color:#fff' : 'color:#22703d'}">${esc(label)}</span>`;
+  return `<span style="display:inline-flex;border:1.5px solid #22703d;border-radius:100px;overflow:hidden;margin-left:4px">${btn('piece', p.unit)}${btn('case', 'ケース')}</span>`;
+}
+function setRowUnitMode(id, mode) {
+  updStore(id, 'unitMode', mode);
+  renderStore();
 }
 
 /* 依頼日変更時：同グループ全行の requestDate を更新 */
@@ -3230,8 +3259,12 @@ function updStore(id, field, value) {
   const row = storeRows.find(r=>r.id===id); if (!row) return;
   row[field] = value;
   if (field==='product') {
-    const el = document.getElementById('unit-'+id);
-    if (el) el.textContent = unitLabelText(value);
+    // 商品が変わると個数/ケーストグルの要不要も変わりうる（前の商品の選択を引き継がないようリセット）ため、
+    // ラベルのテキストだけ書き換える軽量パッチではなく再描画する
+    row.unitMode = 'piece';
+    saveA(storeTab, storeRows);
+    renderStore();
+    return;
   }
   saveA(storeTab, storeRows);
 }
@@ -3240,7 +3273,7 @@ function updStore(id, field, value) {
 // 本部により編集済みならそれを、無ければ依頼数量をピース単位に変換した値を使う
 function deliveredPiecesForRow(row) {
   if (row.actualQty !== '' && row.actualQty != null) return Number(row.actualQty);
-  return qtyToPieces(prodByName(row.product), row.qty);
+  return qtyToPieces(prodByName(row.product), row.qty, row.unitMode);
 }
 function recordDeliveredRows(storeId, rows) {
   const period = getInventoryPeriod(new Date());
@@ -3750,7 +3783,7 @@ function buildHistTable(sid) {
     const N = group.length;
     group.forEach((row, i) => {
       const pLabel = prodByName(row.product)?.label || row.product || '—';
-      const unitTxt = unitLabelText(row.product);
+      const unitTxt = unitLabelText(row.product, row.unitMode);
       const sep = gi > 0 && i === 0 ? 'border-top:2px solid #e5e7eb' : '';
       if (i === 0) {
         html += `<tr style="${sep}">
