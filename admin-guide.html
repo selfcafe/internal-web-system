@@ -6,6 +6,7 @@
 <title>管理者ポータル運用ガイド</title>
 <style>
 :root{
+  color-scheme: light;
   --bg:#f5f4f1;
   --surface:#ffffff;
   --ink:#1f2422;
@@ -16,27 +17,7 @@
   --line-strong:#c7c2b8;
   --code-bg:#efe9de;
 }
-@media (prefers-color-scheme: dark){
-  :root{
-    --bg:#15181a;
-    --surface:#1d2124;
-    --ink:#e7e4de;
-    --muted:#9ba39e;
-    --accent:#4fa394;
-    --accent-warm:#d9884f;
-    --line:#2c3134;
-    --line-strong:#3a4044;
-    --code-bg:#262b26;
-  }
-}
-:root[data-theme="dark"]{
-  --bg:#15181a; --surface:#1d2124; --ink:#e7e4de; --muted:#9ba39e;
-  --accent:#4fa394; --accent-warm:#d9884f; --line:#2c3134; --line-strong:#3a4044; --code-bg:#262b26;
-}
-:root[data-theme="light"]{
-  --bg:#f5f4f1; --surface:#ffffff; --ink:#1f2422; --muted:#626b67;
-  --accent:#2f6f62; --accent-warm:#b5541c; --line:#ddd9d2; --line-strong:#c7c2b8; --code-bg:#efe9de;
-}
+/* 常にライトテーマ固定（OS/ブラウザのダークモード設定に関わらず背景を白系で統一） */
 
 *{box-sizing:border-box;}
 html,body{background:var(--bg);color:var(--ink);}
