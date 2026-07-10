@@ -4099,12 +4099,15 @@ const DELETED_PRODUCTS_KEY = 'deleted_products';
 // コード内のデフォルト商品配列に残ったまま削除された商品が、loadProductSettings()の
 // 「保存済みリストに無い＝新規追加商品」救済ロジックによって復活してしまうのを防ぐ
 // （deleted_storesと同じ、削除済み名前をトゥームストーンとして保持する方式）
+// キーは「仕入先|商品名」。商品名だけだと、削除済みの商品と同じ名前を別の仕入先で
+// 新規追加した際に、その新しい商品まで巻き添えで消えてしまう（実際に発生した不具合）
 function loadDeletedProducts() {
   const deleted = JSON.parse(localStorage.getItem(DELETED_PRODUCTS_KEY) || '[]');
   if (!deleted.length) return;
   const deletedSet = new Set(deleted);
   for (let i = PRODUCTS.length - 1; i >= 0; i--) {
-    if (deletedSet.has(PRODUCTS[i].name)) PRODUCTS.splice(i, 1);
+    const p = PRODUCTS[i];
+    if (deletedSet.has(p.vendor + '|' + p.name)) PRODUCTS.splice(i, 1);
   }
 }
 
@@ -4141,18 +4144,22 @@ function loadProductSettings() {
         const newName = PRODUCT_RENAMES[p.name];
         return newName ? { ...p, name: newName, label: newName } : p;
       });
-    const savedNames = new Set(savedList.map(p => p.name));
+    // キーは「仕入先|商品名」。商品名だけだと、別の仕入先にある同名の別商品（例：複数の
+    // 仕入先にそれぞれ存在する「その他」）を誤って同一商品とみなし、vendor/codeを
+    // 意図せず上書きしてしまう（実際に発生した不具合）
+    const keyOf = p => p.vendor + '|' + p.name;
+    const savedKeys = new Set(savedList.map(keyOf));
     // 保存済みリストをベースに、コードに新規追加された商品を末尾に追記
     const defaults = JSON.parse(JSON.stringify(PRODUCTS));
-    const defaultsByName = Object.fromEntries(defaults.map(p => [p.name, p]));
+    const defaultsByKey = Object.fromEntries(defaults.map(p => [keyOf(p), p]));
     PRODUCTS.length = 0;
     savedList.forEach(p => {
-      const def = defaultsByName[p.name];
+      const def = defaultsByKey[keyOf(p)];
       // コードは管理者ポータルの商品設定画面から編集できるため、保存済みの値があればそちらを優先し、
       // 未設定の商品にだけコード内のデフォルト値（実JANコード等）を使う
       PRODUCTS.push(def ? { ...p, vendor: def.vendor, code: (p.code !== undefined && p.code !== '') ? p.code : (def.code ?? '') } : p);
     });
-    defaults.forEach(p => { if (!savedNames.has(p.name)) PRODUCTS.push(p); });
+    defaults.forEach(p => { if (!savedKeys.has(keyOf(p))) PRODUCTS.push(p); });
   }
 }
 
@@ -4208,9 +4215,11 @@ function addCustomProduct() {
 function deleteProduct(name) {
   if (!confirm(`「${name}」を削除しますか？`)) return;
   const i = PRODUCTS.findIndex(p => p.name === name);
-  if (i >= 0) PRODUCTS.splice(i, 1);
+  if (i < 0) return;
+  const key = PRODUCTS[i].vendor + '|' + name;
+  PRODUCTS.splice(i, 1);
   const deleted = JSON.parse(localStorage.getItem(DELETED_PRODUCTS_KEY) || '[]');
-  if (!deleted.includes(name)) { deleted.push(name); localStorage.setItem(DELETED_PRODUCTS_KEY, JSON.stringify(deleted)); }
+  if (!deleted.includes(key)) { deleted.push(key); localStorage.setItem(DELETED_PRODUCTS_KEY, JSON.stringify(deleted)); }
   _syncDeletedProducts();
   saveAllProducts();
   const tbody = document.getElementById('prod-tbl-body');
