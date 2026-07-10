@@ -722,15 +722,20 @@ async function syncAllStoreDataToGas() {
 // 直前（showPage）でだけ完了を待つ（ログインパスワード照合はsettingsのみで
 // 完結するため、注文データの取得完了を待つ理由がない）
 let _ordersReady = Promise.resolve();
+// getOrdersの読み込みに失敗した場合のフラグ。失敗時は「0件だから」と空の下書き行を
+// 自動生成・即保存する処理を止めるために使う（さもないと本物のデータを空行で
+// 上書きしてしまう事故になる。実際に発生した不具合への対応）
+let _ordersLoadFailed = false;
 
 async function initGas() {
   try {
+    _ordersLoadFailed = false;
     _ordersReady = gasGet('getOrders').then(orders => {
       (orders || []).forEach(r => {
         if (!ORDERS_CACHE[r.store_id]) ORDERS_CACHE[r.store_id] = [];
         ORDERS_CACHE[r.store_id].push(_dbToRow(r));
       });
-    }).catch(e => console.error('getOrders error:', e));
+    }).catch(e => { console.error('getOrders error:', e); _ordersLoadFailed = true; });
 
     // ページ最上部で先行発火済みのgetSettingsがあればそれを使う（早く始まっている分だけ速い）
     const settings = await (window.__earlySettings || gasGet('getSettings'));
@@ -2709,7 +2714,7 @@ async function showPage(p) {
     if (authedStore && STORES[authedStore]) {
       storeTab = authedStore;
       storeRows = loadA(authedStore);
-      if (!storeRows.length || storeRows.every(r => r.locked)) { storeRows.push(newRow(null, null)); saveA(authedStore, storeRows); }
+      ensureBlankDraftRow(authedStore);
       const lbl = document.getElementById('active-store-label');
       if (lbl) lbl.textContent = STORES[authedStore] + '店';
     }
@@ -2876,12 +2881,26 @@ document.addEventListener('touchstart', e => {
 document.addEventListener('keydown', touchActivity);
 
 /* ===== 店舗ページ ===== */
+// 注文データの読み込みが失敗している間は「0件だから」と空の下書き行を自動生成・
+// 即保存する処理をスキップする（さもないと、通信不良で本当は行があるのに空扱いされ、
+// その空行の保存で本物のデータが消えてしまう事故になる。実際に発生した不具合への対応）
+function ensureBlankDraftRow(id) {
+  if (_ordersLoadFailed) {
+    alert('発注データの読み込みに失敗している可能性があります。この状態で新規の下書きは作成しません。時間をおいて再読み込みしてから操作してください。');
+    return;
+  }
+  if (!storeRows.length || storeRows.every(r => r.locked)) {
+    storeRows.push(newRow(null, null));
+    saveA(id, storeRows);
+  }
+}
+
 function switchStore(id) {
   storeTab = id;
   const lbl = document.getElementById('active-store-label');
   if (lbl) lbl.textContent = STORES[id] || id;
   storeRows = loadA(id);
-  if (!storeRows.length || storeRows.every(r => r.locked)) { storeRows.push(newRow(null, null)); saveA(id, storeRows); }
+  ensureBlankDraftRow(id);
   renderStore();
 }
 
