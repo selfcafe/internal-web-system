@@ -663,12 +663,17 @@ function _dbToRow(r) {
    店舗ごとに直列化し、実行時点の最新ORDERS_CACHEを送る */
 const _CLIENT_ID = Date.now().toString(36) + Math.random().toString(36).slice(2);
 const _syncChain = {};
-function _syncStoreToDb(storeId, rows) {
+// saveOrders（店舗の行を全削除してから書き込む方式）は、削除と書き込みの間に一瞬
+// 「空」の状態ができ、その隙間に別のリクエスト（getOrders）が割り込むと本物のデータが
+// 消える事故になる（実際に発生）。idが一致する行だけを個別に更新・追加するupsertOrdersと、
+// 明示的に指定したidだけを消すdeleteOrdersに分離し、他の行に一切触れないようにする
+function _syncStoreToDb(storeId, rows, deletedIds) {
   const prev = _syncChain[storeId] || Promise.resolve();
   const run = prev.catch(() => {}).then(async () => {
     try {
       const dbRows = (ORDERS_CACHE[storeId] || rows).map(r => _rowToDb(r, storeId));
-      await gasPost('saveOrders', { storeId, rows: dbRows });
+      if (dbRows.length) await gasPost('upsertOrders', { storeId, rows: dbRows });
+      if (deletedIds && deletedIds.length) await gasPost('deleteOrders', { ids: deletedIds });
       _fbDb.ref('orders_updated').set({ ts: Date.now(), by: _CLIENT_ID });
     } catch(e) { console.error('GAS sync error:', e); }
   });
@@ -1016,7 +1021,16 @@ function migrateRows(rows) {
 }
 
 const loadA = id => migrateRows(ORDERS_CACHE[id] ? [...ORDERS_CACHE[id]] : []);
-const saveA = (id, rows) => { ORDERS_CACHE[id] = rows; _syncStoreToDb(id, rows); };
+// このクライアントが直前に知っていた行のうち、新しい配列に無くなったidだけを
+// 「削除された行」として明示的にサーバーへ伝える（他の、このクライアントが知らない
+// 行を巻き添えにしないため。詳細は_syncStoreToDbのコメント参照）
+const saveA = (id, rows) => {
+  const prevIds = new Set((ORDERS_CACHE[id] || []).map(r => r.id));
+  const newIds = new Set(rows.map(r => r.id));
+  const deletedIds = [...prevIds].filter(pid => !newIds.has(pid));
+  ORDERS_CACHE[id] = rows;
+  _syncStoreToDb(id, rows, deletedIds);
+};
 const loadH = id => migrateRows(JSON.parse(localStorage.getItem(hKey(id)) || '[]'));
 const saveH = (id, r) => localStorage.setItem(hKey(id), JSON.stringify(r));
 

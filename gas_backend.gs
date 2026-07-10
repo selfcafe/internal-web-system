@@ -64,6 +64,8 @@ function doPost(e) {
     const b = JSON.parse(e.postData.contents);
     let result;
     if      (b.action === 'saveOrders')         result = saveOrders(b.storeId, b.rows);
+    else if (b.action === 'upsertOrders')       result = upsertOrderRows(b.storeId, b.rows);
+    else if (b.action === 'deleteOrders')       result = deleteOrderRows(b.ids);
     else if (b.action === 'saveSetting')        result = saveSetting(b.key, b.value);
     else if (b.action === 'saveLostItem')       result = saveLostItem(b.item, b.imageBase64, b.imageMime);
     else if (b.action === 'deleteLostItem')     result = deleteLostItem(b.id, b.imageUrl);
@@ -188,6 +190,65 @@ function saveOrders(storeId, rows) {
     sheet.getRange(startRow, 1, newRows.length, ORDER_COLS.length).setValues(newRows);
   }
 
+  return { ok: true };
+}
+
+// saveOrdersの「その店舗の行を全削除してから書き込む」という2段階方式は、削除と
+// 書き込みの間に一瞬「空」の状態ができてしまい、その瞬間に別のリクエスト（getOrders）が
+// 割り込むと、本当は行があるのに0件に見えてしまう（実際にこの隙間が原因でデータが
+// 消える事故が発生した）。idで一致する行だけを個別に更新・追加し、他の行には一切
+// 触れないため、この種の空白状態が構造的に発生しない。
+function upsertOrderRows(storeId, rows) {
+  const sheet = getSheet(SHEET_ORDERS);
+  ensureHeaders(sheet, ORDER_COLS);
+  if (!rows || !rows.length) return { ok: true };
+
+  const idIdx = ORDER_COLS.indexOf('id');
+  const idToRowNum = {};
+  if (sheet.getLastRow() > 1) {
+    const ids = sheet.getRange(2, idIdx + 1, sheet.getLastRow() - 1, 1).getValues();
+    ids.forEach((r, i) => { if (r[0] !== '') idToRowNum[String(r[0])] = i + 2; });
+  }
+
+  const dateCols = ['request_date', 'order_date', 'delivery_date'];
+  const toAppend = [];
+  rows.forEach(r => {
+    const values = ORDER_COLS.map(c => (r[c] === undefined || r[c] === null) ? '' : r[c]);
+    const rowNum = idToRowNum[String(r.id)];
+    if (rowNum) {
+      sheet.getRange(rowNum, 1, 1, ORDER_COLS.length).setValues([values]);
+      dateCols.forEach(c => sheet.getRange(rowNum, ORDER_COLS.indexOf(c) + 1).setNumberFormat('@'));
+    } else {
+      toAppend.push(values);
+    }
+  });
+
+  if (toAppend.length) {
+    const startRow = sheet.getLastRow() + 1;
+    dateCols.forEach(c => {
+      const colIdx = ORDER_COLS.indexOf(c) + 1;
+      sheet.getRange(startRow, colIdx, toAppend.length, 1).setNumberFormat('@');
+    });
+    sheet.getRange(startRow, 1, toAppend.length, ORDER_COLS.length).setValues(toAppend);
+  }
+
+  return { ok: true };
+}
+
+// 指定したidの行だけを個別に削除する。他の行（他店舗はもちろん、同じ店舗の
+// 他の行も）には一切触れない
+function deleteOrderRows(ids) {
+  if (!ids || !ids.length) return { ok: true };
+  const sheet = getSheet(SHEET_ORDERS);
+  if (sheet.getLastRow() <= 1) return { ok: true };
+  const idSet = new Set(ids.map(String));
+  const data = sheet.getDataRange().getValues();
+  const idIdx = ORDER_COLS.indexOf('id');
+  const toDelete = [];
+  for (let i = 1; i < data.length; i++) {
+    if (idSet.has(String(data[i][idIdx]))) toDelete.push(i + 1);
+  }
+  toDelete.sort((a, b) => b - a).forEach(r => sheet.deleteRow(r));
   return { ok: true };
 }
 
