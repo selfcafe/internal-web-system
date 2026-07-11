@@ -803,6 +803,13 @@ function submitInvoice(p) {
   const sheet = ss.getSheets().find(s => s.getSheetId() === 1628780517) || ss.getSheets()[0];
   const M = INVOICE_CELL_MAP;
   const set = (a1, value) => sheet.getRange(a1).setValue(value);
+  // 枠からはみ出さないよう、文字数に応じてフォントサイズを自動で縮小する（narrow=幅の狭い列は早めに縮小）
+  const setFit = (a1, value, narrow) => {
+    const len = String(value == null ? '' : value).length;
+    const t = narrow ? [10, 7, 5] : [18, 12, 8];
+    const size = len > t[0] ? 6 : len > t[1] ? 7 : len > t[2] ? 8 : 9;
+    sheet.getRange(a1).setValue(value).setFontSize(size);
+  };
 
   // テンプレートに前回の値が残っていることがあるため、未設定でも空文字で必ず上書きする
   set(M.bizCode, p.bizCode || '');
@@ -814,12 +821,12 @@ function submitInvoice(p) {
   if (p.isTaxExempt) {
     set(M.taxExemptCheck, '✓');
   } else if (p.registrationNumber) {
-    set(M.registrationDigits, String(p.registrationNumber).replace(/^T/i, ''));
+    setFit(M.registrationDigits, String(p.registrationNumber).replace(/^T/i, ''), true);
   }
 
-  sheet.getRange(M.partnerName).setValue(p.partnerName || '').setFontSize(9).setWrap(false);
+  setFit(M.partnerName, p.partnerName || '');
   set(M.storeNameCell, 'セルフカフェ　' + (p.storeName || '') + '　店');
-  set(M.address, p.address || '');
+  setFit(M.address, p.address || '');
   set(M.tel, p.tel || '');
 
   set(M.claimTotalIncl, grandTotal);
@@ -832,13 +839,13 @@ function submitInvoice(p) {
   set(M.payTotalExcl, taxExcl);
   set(M.payTax, tax);
 
-  set(M.bankName, p.bankName || '');
+  setFit(M.bankName, p.bankName || '', true);
   set(M.bankCode, p.bankCode || '');
-  set(M.branchName, p.branchName || '');
+  setFit(M.branchName, p.branchName || '', true);
   set(M.branchCode, p.branchCode || '');
   if (p.accountType === '当座') set(M.accountType, '当');
   set(M.accountNumber, p.accountNumber || '');
-  set(M.accountHolderKana, p.accountHolderKana || '');
+  setFit(M.accountHolderKana, p.accountHolderKana || '', true);
 
   // 明細：1行目=日割り計算分、2行目以降=その他（緊急出動・現地購入等、複数行）
   const lines = [{ amount: dayRateAmount, note: p.dayRateNote || '' }].concat(
@@ -850,11 +857,11 @@ function submitInvoice(p) {
   }
   lines.forEach((line, i) => {
     const row = M.itemRowStart + i;
+    setFit(M.itemCols.storeName + row, p.storeName || '');
     sheet.getRange(M.itemCols.storeCode + row).setValue(p.storeCode || p.storeId || '');
-    sheet.getRange(M.itemCols.storeName + row).setValue(p.storeName || '');
-    sheet.getRange(M.itemCols.staff     + row).setValue(p.partnerName || '').setFontSize(8);
+    setFit(M.itemCols.staff + row, p.partnerName || '', true);
     sheet.getRange(M.itemCols.amount    + row).setValue(line.amount).setNumberFormat(INVOICE_YEN_FORMAT);
-    sheet.getRange(M.itemCols.note      + row).setValue(line.note);
+    setFit(M.itemCols.note + row, line.note, true);
     sheet.getRange(M.itemCols.category  + row).setValue('');
   });
   set(M.grandTotal, grandTotal);
