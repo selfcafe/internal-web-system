@@ -755,20 +755,25 @@ function sendDailyOrderNotification() {
 // テンプレートの行・列を作り直した場合はこのマップだけ直せばよい。
 // ※eraYear/eraMonth/eraDay・bankName・branchNameの3項目はテンプレートの構造上の推測を
 //   含むため、実際に生成したPDFを見て位置がずれていないか一度確認すること。
+// 2026-07-11: ユーザーのテンプレート編集で複数セルの結合状態が変化したため、
+// 「座標マップ」を再取得して以下を実測値に合わせて更新（座標マップの取得結果を正とする）。
 const INVOICE_CELL_MAP = {
   bizCode: 'P3',
   // 令和/年/月/日は独立した値セルが無く、ラベルセル自体を「N年」のように書き換える方式
   eraYear: 'Q5', eraMonth: 'S5', eraDay: 'U5',
-  registrationDigits: 'P7', taxExemptCheck: 'Q7',
+  registrationDigits: 'M7', // 旧P7。M7:P7が結合されアンカーがM7になったため変更
+  taxExemptCheck: 'Q7', // ネイティブのチェックボックス（TRUE/FALSE）に変わっている
   partnerName: 'L8',
-  storeNameCell: 'A9', // テンプレート編集時にA9:H9で結合され、アンカーがB9からA9に変わったため修正（2026-07-11）
+  storeNameCell: 'A9', // テンプレート編集時にA9:H9で結合され、アンカーがB9からA9に変わったため修正
   address: 'L9',
   tel: 'L10',
   claimTotalIncl: 'C11', claimTotalExcl: 'B14', claimTax: 'F14',
-  bankName: 'M13', bankCode: 'L14',
-  branchName: 'M15', branchCode: 'L16',
+  bankName: 'O13', // 旧M13。銀行コード欄がL13:N13に拡張され、新たにO13:P14が空欄として確保されたため変更
+  bankCode: 'L14',
+  branchName: 'O15', // 旧M15。支店コード欄と同様の理由でO15:P16に変更
+  branchCode: 'L16',
   accountType: 'L17', accountNumber: 'M17',
-  accountHolderKana: 'K18',
+  accountHolderKana: 'M18', // 旧K18。ラベルがJ18:L18に拡張され、新たにM18:P18が空欄として確保されたため変更
   payTotalIncl: 'C16', payTotalExcl: 'B18', payTax: 'F18',
   itemRowStart: 21, itemRowEnd: 40,
   itemCols: { storeCode: 'A', storeName: 'C', staff: 'H', amount: 'K', note: 'O', category: 'T' },
@@ -827,9 +832,9 @@ function submitInvoice(p) {
   // 明細の備考欄が長文で収まらないため、O・Q列も広げる（P列は既に広げ済み）
   sheet.setColumnWidth(15, 70); // O列
   sheet.setColumnWidth(17, 70); // Q列
-  if (p.isTaxExempt) {
-    set(M.taxExemptCheck, '✓');
-  } else if (p.registrationNumber) {
+  // 課税事業者ではないチェックはテンプレートのネイティブチェックボックス（TRUE/FALSE）なので真偽値を書く
+  set(M.taxExemptCheck, !!p.isTaxExempt);
+  if (!p.isTaxExempt && p.registrationNumber) {
     setFit(M.registrationDigits, String(p.registrationNumber).replace(/^T/i, ''), true);
     sheet.getRange(M.registrationDigits).setHorizontalAlignment('left'); // 列幅拡張で中央寄りになり「T」から離れて見えていたため左寄せに固定
   }
@@ -856,11 +861,8 @@ function submitInvoice(p) {
   if (p.accountType === '当座') set(M.accountType, '当');
   set(M.accountNumber, p.accountNumber || '');
   setFit(M.accountHolderKana, p.accountHolderKana || '', true);
-  // 「口座名義（カナ）」ラベルは元々J18が空のK18へのはみ出し表示で全文を出していたため、
-  // K18に値が入ると自身の列幅までしか表示されず「口座」に切れて見える。フォント縮小だけでは
-  // 収まらなかったため、登録番号(P列)と同じ対処＝列幅を広げる方式に変更
+  // 「口座名義（カナ）」ラベル（J18:L18）の表示を整える
   sheet.getRange('J18').setFontSize(9);
-  sheet.setColumnWidth(10, 110); // J列
 
   // 明細：1行目=日割り計算分、2行目以降=その他（緊急出動・現地購入等、複数行）
   const lines = [{ amount: dayRateAmount, note: p.dayRateNote || '' }].concat(
