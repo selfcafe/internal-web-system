@@ -827,15 +827,13 @@ function submitInvoice(p) {
   set(M.eraYear,  era.year  ? era.year  + '年' : ''); eraFont(M.eraYear);
   set(M.eraMonth, era.month ? era.month + '月' : ''); eraFont(M.eraMonth);
   set(M.eraDay,   era.day   ? era.day   + '日' : ''); eraFont(M.eraDay);
-  // 令和/年/月/日の間（R列・T列）の余白を詰める。P列は登録番号の幅確保のため触らない
+  // 令和/年/月/日の間（P・Q・R・T列）の余白を詰める。Q列は明細の備考欄にも使われるが、
+  // 日付行を優先し、備考の長文対策はフォントサイズの自動縮小側に任せる
+  sheet.setColumnWidth(16, 35); // P列
+  sheet.setColumnWidth(17, 35); // Q列
   sheet.setColumnWidth(18, 35); // R列
   sheet.setColumnWidth(20, 35); // T列
-
-  // 登録番号は列が狭く、長い数字がチェックボックス欄に重なって見えるため列幅を広げる
-  sheet.setColumnWidth(16, 90); // P列
-  // 明細の備考欄が長文で収まらないため、O・Q列も広げる（P列は既に広げ済み）
-  sheet.setColumnWidth(15, 70); // O列
-  sheet.setColumnWidth(17, 70); // Q列
+  sheet.setColumnWidth(15, 70); // O列（明細の備考欄用）
   // 課税事業者ではないチェックは、常に四角い枠が見える文字（☑/☐）で表現する
   // （テンプレート側のそのセルはデータ入力規則＝ネイティブチェックボックスを解除してプレーンな文字セルにしておくこと）
   // 列幅拡張(Q列)で「課税事業者ではない」の文字から離れて見えるため、右寄せにして隙間を詰める
