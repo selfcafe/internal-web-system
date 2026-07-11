@@ -937,9 +937,8 @@ function submitInvoice(p) {
   const pdfBlob = pdfResp.getBlob().setName(fileBaseName + '.pdf');
   const pdfFile = folder.createFile(pdfBlob);
 
-  // 【デバッグのため一時的に無効化】PDF表示崩れの原因をセル自体で確認するため、
-  // 中間生成物のシートコピーを当面は削除せず残す。原因特定後にtrashedへ戻すこと。
-  // copyFile.setTrashed(true);
+  // レイアウト調査用に一時的に残していた中間生成物のシートコピーを削除する（原因特定・解消済みのため復活）
+  copyFile.setTrashed(true);
 
   appendInvoiceLog({
     storeId: p.storeId, storeName: p.storeName, partnerId: p.partnerId || p.storeId,
