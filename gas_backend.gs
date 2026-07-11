@@ -20,6 +20,8 @@ const SHEET_SETTINGS   = 'app_settings';
 const SHEET_LOST       = 'lost_items';
 const SHEET_CHECKSHEET = 'checksheet_data';
 const SHEET_INVENTORY  = 'inventory_log';
+const SHEET_INVOICE_LOG = 'invoice_log';
+const INVOICE_LOG_COLS = ['id', 'store_id', 'store_name', 'partner_id', 'period', 'amount', 'pdf_url', 'submitted_at'];
 
 const ORDER_COLS = [
   'id','store_id','group_id','product','label','qty','actual_qty','unit',
@@ -55,6 +57,7 @@ function doGet(e) {
     else if (a === 'getInventoryHistory') result = getInventoryHistory(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'getInventoryDeliveryAuto') result = getInventoryDeliveryAuto(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'getInventoryDeliveryManual') result = getInventoryDeliveryManual(e.parameter.storeId, e.parameter.periodLabel);
+    else if (a === 'getInvoiceLog')             result = getInvoiceLog();
     else result = { error: 'Unknown action: ' + a };
     return json(result);
   } catch(err) {
@@ -867,7 +870,40 @@ function submitInvoice(p) {
   // 中間生成物のシートコピーは残さず、PDFのみをフォルダに残す
   copyFile.setTrashed(true);
 
+  appendInvoiceLog({
+    storeId: p.storeId, storeName: p.storeName, partnerId: p.partnerId || p.storeId,
+    period: String(p.invoiceDate || '').slice(0, 6),
+    amount: grandTotal, pdfUrl: pdfFile.getUrl(),
+  });
+
   return { ok: true, pdfUrl: pdfFile.getUrl(), grandTotal: grandTotal };
+}
+
+// ----------------------------------------------------------------
+// 請求提出履歴（管理者の「請求一覧」画面用）
+// ----------------------------------------------------------------
+
+function appendInvoiceLog(entry) {
+  const sheet = getSheet(SHEET_INVOICE_LOG);
+  ensureHeaders(sheet, INVOICE_LOG_COLS);
+  // periodは'YYYYMMDD'形式のinvoiceDateから先頭6桁を受け取る想定なので、'YYYY-MM'に整形する
+  const period = /^\d{6}$/.test(entry.period) ? entry.period.slice(0, 4) + '-' + entry.period.slice(4, 6) : entry.period;
+  sheet.appendRow([
+    Utilities.getUuid(), entry.storeId, entry.storeName, entry.partnerId,
+    period, entry.amount, entry.pdfUrl, new Date().toISOString(),
+  ]);
+}
+
+function getInvoiceLog() {
+  const sheet = getSheet(SHEET_INVOICE_LOG);
+  if (sheet.getLastRow() <= 1) return [];
+  const data = sheet.getDataRange().getValues();
+  const headers = data[0];
+  return data.slice(1).map(row => {
+    const o = {};
+    headers.forEach((h, i) => { o[h] = row[i]; });
+    return o;
+  });
 }
 
 function setDailyTrigger() {
