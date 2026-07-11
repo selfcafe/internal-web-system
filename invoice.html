@@ -192,6 +192,14 @@ function saveInvoicePartnerSettings(pid) {
   if (msg) { msg.style.color = '#22703d'; msg.textContent = '✓ 保存しました'; setTimeout(() => { msg.textContent = ''; }, 2000); }
 }
 
+function toggleInvoiceNoInvoice(sid, checked) {
+  const cfg = getInvoiceStoreCfg();
+  cfg[sid] = cfg[sid] || {};
+  cfg[sid].noInvoice = checked;
+  saveInvoiceStoreCfg(cfg);
+  renderInvoiceAdminList();
+}
+
 function renderInvoiceAdminList() {
   seedInvoiceStoreCodesOnce();
   const cfg = getInvoiceStoreCfg();
@@ -199,6 +207,7 @@ function renderInvoiceAdminList() {
   const body = document.getElementById('invoice-admin-body');
   if (!body) return;
   body.innerHTML = Object.entries(STORES).map(([sid, sname]) => {
+    const noInvoice = !!(cfg[sid] && cfg[sid].noInvoice);
     const multi = !!(cfg[sid] && cfg[sid].multiPartner);
     const storePartners = Object.entries(partners).filter(([pid, p]) => p.storeId === sid && pid !== sid);
     return `
@@ -207,12 +216,17 @@ function renderInvoiceAdminList() {
           <span style="width:60px;font-size:12px;color:#888">店舗番号</span>
           <input type="text" value="${esc(getInvoiceStoreCode(sid))}" onchange="saveInvoiceStoreCode('${sid}', this.value.trim())" placeholder="未設定" style="width:60px;border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:13px">
           <span style="flex:1;min-width:100px;font-size:13px;font-weight:600">${esc(sname)}</span>
-          <label style="font-size:12px;display:flex;align-items:center;gap:4px;white-space:nowrap">
-            <input type="checkbox" ${multi ? 'checked' : ''} onchange="toggleInvoiceMultiPartner('${sid}', this.checked)">複数パートナー
+          <label style="font-size:12px;display:flex;align-items:center;gap:4px;white-space:nowrap;color:#ef4444">
+            <input type="checkbox" ${noInvoice ? 'checked' : ''} onchange="toggleInvoiceNoInvoice('${sid}', this.checked)">請求無し
+          </label>
+          <label style="font-size:12px;display:flex;align-items:center;gap:4px;white-space:nowrap${noInvoice ? ';opacity:0.4' : ''}">
+            <input type="checkbox" ${multi ? 'checked' : ''} ${noInvoice ? 'disabled' : ''} onchange="toggleInvoiceMultiPartner('${sid}', this.checked)">複数パートナー
           </label>
         </div>
         <div style="margin-top:8px">
-          ${multi ? buildInvoiceMultiPartnerRows(sid, storePartners) : buildInvoiceSinglePartnerRow(sid)}
+          ${noInvoice
+            ? '<div style="font-size:12px;color:#888;padding:6px 0">この店舗は自社管理のため請求書機能を利用しません（パートナーポータルの請求書ボタンも非表示になります）</div>'
+            : (multi ? buildInvoiceMultiPartnerRows(sid, storePartners) : buildInvoiceSinglePartnerRow(sid))}
         </div>
       </div>`;
   }).join('');
@@ -242,6 +256,7 @@ function _invoicePartnerRowsForList(latestThisPeriod) {
   const cfg = getInvoiceStoreCfg();
   const rows = [];
   Object.entries(STORES).forEach(([sid, sname]) => {
+    if (cfg[sid] && cfg[sid].noInvoice) return;
     const multi = !!(cfg[sid] && cfg[sid].multiPartner);
     const storeCode = getInvoiceStoreCode(sid);
     if (multi) {

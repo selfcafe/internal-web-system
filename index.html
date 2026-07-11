@@ -404,13 +404,13 @@
     <img src="logo-horizontal.png" class="portal-logo" alt="セルフカフェ">
     <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;position:absolute;top:0;right:0">
       <button onclick="siteLogout()" class="portal-logout-btn" style="background:#6b7280;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">ログアウト</button>
-      <button onclick="openInvoicePartnerScreen()" class="pc-only" style="background:#8a8f7e;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">請求書</button>
+      <button id="invoice-btn-pc" onclick="openInvoicePartnerScreen()" class="pc-only" style="background:#8a8f7e;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">請求書</button>
     </div>
     <div class="portal-title-store-row">
       <h1>パートナーポータル</h1>
       <div style="display:flex;align-items:baseline;flex:1;align-self:stretch;width:100%;gap:4px 12px">
         <span id="active-store-label" style="font-size:20px;font-weight:700;color:#22703d"></span>
-        <button onclick="openInvoicePartnerScreen()" class="sp-only" style="background:#8a8f7e;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;margin-left:auto">請求書</button>
+        <button id="invoice-btn-sp" onclick="openInvoicePartnerScreen()" class="sp-only" style="background:#8a8f7e;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;margin-left:auto">請求書</button>
       </div>
     </div>
   </div>
@@ -2952,7 +2952,18 @@ function buildStoreGroups(rows) {
   return [...map.values()].sort((a,b) => (a[0].requestDate||'').localeCompare(b[0].requestDate||''));
 }
 
+// 「請求無し」設定の店舗ではパートナー側の請求書ボタン自体を隠す
+function updateInvoiceButtonVisibility() {
+  const cfg = getInvoiceStoreCfg();
+  const hide = !!(cfg[storeTab] && cfg[storeTab].noInvoice);
+  const pc = document.getElementById('invoice-btn-pc');
+  const sp = document.getElementById('invoice-btn-sp');
+  if (pc) pc.style.display = hide ? 'none' : '';
+  if (sp) sp.style.display = hide ? 'none' : '';
+}
+
 function renderStore() {
+  updateInvoiceButtonVisibility();
   const isMobile = window.innerWidth < 640;
   const table = document.getElementById('store-table');
   isMobile ? table.classList.add('card-mode') : table.classList.remove('card-mode');
