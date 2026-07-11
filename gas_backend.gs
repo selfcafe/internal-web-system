@@ -829,10 +829,10 @@ function submitInvoice(p) {
   set(M.eraDay,   era.day   ? era.day   + '日' : ''); eraFont(M.eraDay);
   // 令和/年/月/日の間（P・Q・R・T列）の余白を詰める。Q列は明細の備考欄にも使われるが、
   // 日付行を優先し、備考の長文対策はフォントサイズの自動縮小側に任せる
-  sheet.setColumnWidth(16, 35); // P列
-  sheet.setColumnWidth(17, 35); // Q列
-  sheet.setColumnWidth(18, 35); // R列
-  sheet.setColumnWidth(20, 35); // T列
+  sheet.setColumnWidth(16, 20); // P列（純粋な余白）
+  sheet.setColumnWidth(17, 35); // Q列（「8年」の表示にも使うため、余白列ほどは狭めない）
+  sheet.setColumnWidth(18, 20); // R列（純粋な余白）
+  sheet.setColumnWidth(20, 20); // T列（純粋な余白）
   sheet.setColumnWidth(21, 55); // U列（「31日」のように2桁+日で元の1文字分の幅では収まらず見切れていたため）
   sheet.setColumnWidth(15, 70); // O列（明細の備考欄用）
   // 課税事業者ではないチェックは、常に四角い枠が見える文字（☑/☐）で表現する
