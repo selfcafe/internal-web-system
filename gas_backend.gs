@@ -842,7 +842,7 @@ function submitInvoice(p) {
   }
 
   setFit(M.partnerName, p.partnerName || '');
-  set(M.storeNameCell, 'セルフカフェ' + (p.storeName || '') + '店');
+  sheet.getRange(M.storeNameCell).setValue('セルフカフェ' + (p.storeName || '') + '店').setHorizontalAlignment('center');
   setFit(M.address, p.address || '');
   set(M.tel, p.tel || '');
 
@@ -857,9 +857,9 @@ function submitInvoice(p) {
   set(M.payTax, tax);
 
   setFit(M.bankName, p.bankName || '', true);
-  set(M.bankCode, p.bankCode || '');
+  sheet.getRange(M.bankCode).setValue(p.bankCode || '').setFontSize(8).setVerticalAlignment('middle');
   setFit(M.branchName, p.branchName || '', true);
-  set(M.branchCode, p.branchCode || '');
+  sheet.getRange(M.branchCode).setValue(p.branchCode || '').setFontSize(8).setVerticalAlignment('middle');
   if (p.accountType === '当座') set(M.accountType, '当');
   set(M.accountNumber, p.accountNumber || '');
   setFit(M.accountHolderKana, p.accountHolderKana || '', true);
