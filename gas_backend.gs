@@ -817,15 +817,15 @@ function submitInvoice(p) {
     set(M.registrationDigits, String(p.registrationNumber).replace(/^T/i, ''));
   }
 
-  set(M.partnerName, p.partnerName || '');
+  sheet.getRange(M.partnerName).setValue(p.partnerName || '').setFontSize(9).setWrap(false);
   set(M.storeNameCell, 'セルフカフェ　' + (p.storeName || '') + '　店');
   set(M.address, p.address || '');
   set(M.tel, p.tel || '');
 
   set(M.claimTotalIncl, grandTotal);
   set(M.payTotalIncl, grandTotal);
-  // 消費税10%を前提に税抜・税額へ逆算（円未満切り捨て）
-  const taxExcl = Math.floor(grandTotal / 1.1);
+  // 消費税10%を前提に税抜・税額へ逆算（円未満切り上げ）
+  const taxExcl = Math.ceil(grandTotal / 1.1);
   const tax = grandTotal - taxExcl;
   set(M.claimTotalExcl, taxExcl);
   set(M.claimTax, tax);
@@ -852,7 +852,7 @@ function submitInvoice(p) {
     const row = M.itemRowStart + i;
     sheet.getRange(M.itemCols.storeCode + row).setValue(p.storeCode || p.storeId || '');
     sheet.getRange(M.itemCols.storeName + row).setValue(p.storeName || '');
-    sheet.getRange(M.itemCols.staff     + row).setValue(p.partnerName || '');
+    sheet.getRange(M.itemCols.staff     + row).setValue(p.partnerName || '').setFontSize(8);
     sheet.getRange(M.itemCols.amount    + row).setValue(line.amount).setNumberFormat(INVOICE_YEN_FORMAT);
     sheet.getRange(M.itemCols.note      + row).setValue(line.note);
     sheet.getRange(M.itemCols.category  + row).setValue('');
@@ -865,11 +865,12 @@ function submitInvoice(p) {
 
   SpreadsheetApp.flush();
 
-  // PDFエクスポート（対象シートのgidを指定）
+  // PDFエクスポート（対象シートのgidを指定。scale=4で縦横とも1ページに収める）
   const token = ScriptApp.getOAuthToken();
   const exportUrl = 'https://docs.google.com/spreadsheets/d/' + ss.getId() + '/export'
     + '?format=pdf&gid=' + sheet.getSheetId()
-    + '&size=A4&portrait=true&fitw=true&gridlines=false&printtitle=false&sheetnames=false';
+    + '&size=A4&portrait=true&scale=4&gridlines=false&printtitle=false&sheetnames=false'
+    + '&top_margin=0.3&bottom_margin=0.3&left_margin=0.3&right_margin=0.3';
   const pdfResp = UrlFetchApp.fetch(exportUrl, { headers: { Authorization: 'Bearer ' + token } });
   const pdfBlob = pdfResp.getBlob().setName(fileBaseName + '.pdf');
   const pdfFile = folder.createFile(pdfBlob);
