@@ -853,8 +853,10 @@ function submitInvoice(p) {
   set(M.accountNumber, p.accountNumber || '');
   setFit(M.accountHolderKana, p.accountHolderKana || '', true);
   // 「口座名義（カナ）」ラベルは元々J18が空のK18へのはみ出し表示で全文を出していたため、
-  // K18に値が入ると自身の列幅までしか表示されず「口座」に切れて見える。ラベル自体を縮小して収める
-  sheet.getRange('J18').setFontSize(7);
+  // K18に値が入ると自身の列幅までしか表示されず「口座」に切れて見える。フォント縮小だけでは
+  // 収まらなかったため、登録番号(P列)と同じ対処＝列幅を広げる方式に変更
+  sheet.getRange('J18').setFontSize(9);
+  sheet.setColumnWidth(10, 110); // J列
 
   // 明細：1行目=日割り計算分、2行目以降=その他（緊急出動・現地購入等、複数行）
   const lines = [{ amount: dayRateAmount, note: p.dayRateNote || '' }].concat(
@@ -891,8 +893,9 @@ function submitInvoice(p) {
   const pdfBlob = pdfResp.getBlob().setName(fileBaseName + '.pdf');
   const pdfFile = folder.createFile(pdfBlob);
 
-  // 中間生成物のシートコピーは残さず、PDFのみをフォルダに残す
-  copyFile.setTrashed(true);
+  // 【デバッグのため一時的に無効化】PDF表示崩れの原因をセル自体で確認するため、
+  // 中間生成物のシートコピーを当面は削除せず残す。原因特定後にtrashedへ戻すこと。
+  // copyFile.setTrashed(true);
 
   appendInvoiceLog({
     storeId: p.storeId, storeName: p.storeName, partnerId: p.partnerId || p.storeId,
