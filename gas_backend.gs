@@ -831,7 +831,7 @@ function submitInvoice(p) {
   }
 
   setFit(M.partnerName, p.partnerName || '');
-  set(M.storeNameCell, 'セルフカフェ　' + (p.storeName || '') + '　店');
+  set(M.storeNameCell, 'セルフカフェ' + (p.storeName || '') + '店');
   setFit(M.address, p.address || '');
   set(M.tel, p.tel || '');
 
