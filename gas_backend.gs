@@ -836,7 +836,8 @@ function submitInvoice(p) {
   sheet.setColumnWidth(15, 70); // O列（明細の備考欄用。他の箇所と共有していない）
   // R・S・T・U列（仕入/外注チェック枠、明細の確認印/科目列、担当者/事務欄で共有）を揃える。
   // 「31日」が見切れないための拡幅もこの中で吸収する
-  [18, 19, 20, 21].forEach(col => sheet.setColumnWidth(col, 26)); // R・S・T・U列
+  [18, 19, 20].forEach(col => sheet.setColumnWidth(col, 26)); // R・S・T列
+  sheet.setColumnWidth(21, 40); // U列だけ「31日」が見切れないよう少し広め（対称性より正確な表示を優先）
   // 課税事業者ではないチェックは、常に四角い枠が見える文字（☑/☐）で表現する
   // （テンプレート側のそのセルはデータ入力規則＝ネイティブチェックボックスを解除してプレーンな文字セルにしておくこと）
   // 列幅拡張(Q列)で「課税事業者ではない」の文字から離れて見えるため、右寄せにして隙間を詰める
@@ -914,11 +915,13 @@ function submitInvoice(p) {
   SpreadsheetApp.flush();
 
   // PDFエクスポート（対象シートのgidを指定。scale=4で縦横とも1ページに収める）
+  // 印刷範囲をA1:U41に明示的に絞り、V列以降の空列が印刷範囲に含まれて右側に余白ができるのを防ぐ
   const token = ScriptApp.getOAuthToken();
   const exportUrl = 'https://docs.google.com/spreadsheets/d/' + ss.getId() + '/export'
     + '?format=pdf&gid=' + sheet.getSheetId()
     + '&size=A4&portrait=true&scale=4&gridlines=false&printtitle=false&sheetnames=false'
-    + '&top_margin=0.3&bottom_margin=0.3&left_margin=0.3&right_margin=0.3';
+    + '&top_margin=0.3&bottom_margin=0.3&left_margin=0.3&right_margin=0.3'
+    + '&r1=0&r2=41&c1=0&c2=21';
   const pdfResp = UrlFetchApp.fetch(exportUrl, { headers: { Authorization: 'Bearer ' + token } });
   const pdfBlob = pdfResp.getBlob().setName(fileBaseName + '.pdf');
   const pdfFile = folder.createFile(pdfBlob);
