@@ -902,7 +902,7 @@ function submitInvoice(p) {
     sheet.getRange(M.itemCols.storeCode + row).setValue(p.storeCode || p.storeId || '').setHorizontalAlignment('center');
     // 担当者欄は幅が狭く、6文字程度でも折り返してしまうため、折り返しを禁止した上で小さめの固定サイズにする
     sheet.getRange(M.itemCols.staff + row).setValue(p.partnerName || '').setFontSize(8).setWrap(false);
-    sheet.getRange(M.itemCols.amount    + row).setValue(line.amount).setNumberFormat(INVOICE_YEN_FORMAT).setHorizontalAlignment('center');
+    sheet.getRange(M.itemCols.amount    + row).setValue(line.amount).setNumberFormat(INVOICE_YEN_FORMAT).setHorizontalAlignment('right');
     setFit(M.itemCols.note + row, line.note, true);
     sheet.getRange(M.itemCols.category  + row).setValue('');
   });
