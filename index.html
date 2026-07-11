@@ -5301,9 +5301,9 @@ function _invoicePartnerRowsForList(period, latestThisPeriod) {
       rows.push({ storeCode, sname, partnerName: (p && p.bank && p.bank.partnerName) || '', submitted: !!entry, amount: entry && entry.amount, pdfUrl: entry && entry.pdf_url });
     }
   });
+  const codeVal = c => (c === '' || c == null || isNaN(Number(c))) ? Infinity : Number(c);
   rows.sort((a, b) => {
-    const an = Number(a.storeCode), bn = Number(b.storeCode);
-    const av = isNaN(an) ? Infinity : an, bv = isNaN(bn) ? Infinity : bn;
+    const av = codeVal(a.storeCode), bv = codeVal(b.storeCode);
     if (av !== bv) return av - bv;
     return String(a.sname).localeCompare(String(b.sname), 'ja');
   });
