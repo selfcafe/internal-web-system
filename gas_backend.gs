@@ -9,6 +9,11 @@ const INVENTORY_SHEET_ID = '';  // 棚卸集計スプレッドシートのID
 // 月初納品分など、アプリを通さず本部が直接手配・受領した納品を本部が手入力するスプレッドシート
 // （棚卸集計とは別。この実行アカウントに編集権限で共有しておくこと。列は「期間ラベル/店舗ID/商品コード/数量」）
 const MANUAL_DELIVERY_SHEET_ID = '';  // 手動納品入力スプレッドシートのID
+// 請求書テンプレート（Googleスプレッドシート版）。このファイルをmakeCopy()で複製し、
+// セルに値を差し込んでからPDFエクスポートする。この実行アカウントに編集権限で共有しておくこと。
+const INVOICE_TEMPLATE_ID = '1nojfTEfzs0-kI6rcIPjcXQ6YIX84DkPgddk-p_35-Ss';
+// 生成した請求書PDFの保存先Driveフォルダ（名称・場所は今後変わる可能性あり。移動した場合はこのIDだけ差し替える）
+const INVOICE_PDF_FOLDER_ID = '1ite8mdJR0HcSqeRdmsMNK1rnD4TydIRf';
 
 const SHEET_ORDERS     = 'orders';
 const SHEET_SETTINGS   = 'app_settings';
@@ -73,6 +78,7 @@ function doPost(e) {
     else if (b.action === 'saveChecksheetData') result = saveChecksheetData(b.storeId, b.periodLabel, b.data);
     else if (b.action === 'saveInventorySnapshot') result = saveInventorySnapshot(b.storeId, b.periodLabel, b.rows, b.remarks);
     else if (b.action === 'recordInventoryDelivery') result = recordInventoryDelivery(b.storeId, b.periodLabel, b.product, b.qty);
+    else if (b.action === 'submitInvoice')       result = submitInvoice(b.payload);
     else result = { error: 'Unknown action: ' + b.action };
     return json(result);
   } catch(err) {
@@ -737,6 +743,131 @@ function sendDailyOrderNotification() {
   if (hasTokai) sendLineWorksNotification('東海エリアにて発注依頼があります。');
   if (hasKansai) sendLineWorksNotification('関西エリアにて発注依頼があります。');
   if (hasKanto) sendLineWorksNotification('関東エリアにて発注依頼があります。');
+}
+
+// ----------------------------------------------------------------
+// 請求書PDF生成（テンプレート複製方式）
+// ----------------------------------------------------------------
+// セル位置は2026-07-11にINVOICE_TEMPLATE_IDのシート(gid=1628780517)を実測して確定。
+// テンプレートの行・列を作り直した場合はこのマップだけ直せばよい。
+// ※eraYear/eraMonth/eraDay・bankName・branchNameの3項目はテンプレートの構造上の推測を
+//   含むため、実際に生成したPDFを見て位置がずれていないか一度確認すること。
+const INVOICE_CELL_MAP = {
+  bizCode: 'P3',
+  eraYear: 'R5', eraMonth: 'T5', eraDay: 'V5',
+  registrationDigits: 'P7', taxExemptCheck: 'Q7',
+  partnerName: 'L8',
+  storeNameCell: 'B9',
+  address: 'L9',
+  tel: 'L10',
+  claimTotalIncl: 'C11', claimTotalExcl: 'B14', claimTax: 'F14',
+  bankName: 'M13', bankCode: 'L14',
+  branchName: 'M15', branchCode: 'L16',
+  accountType: 'L17', accountNumber: 'M17',
+  accountHolderKana: 'K18',
+  payTotalIncl: 'C16', payTotalExcl: 'B18', payTax: 'F18',
+  itemRowStart: 21, itemRowEnd: 40,
+  itemCols: { storeCode: 'A', storeName: 'C', staff: 'H', amount: 'K', note: 'O', category: 'T' },
+  grandTotal: 'K41',
+};
+
+function submitInvoice(p) {
+  if (!p) return { error: 'payloadがありません' };
+  if (!INVOICE_TEMPLATE_ID)  return { error: 'INVOICE_TEMPLATE_IDが設定されていません' };
+  if (!INVOICE_PDF_FOLDER_ID) return { error: 'INVOICE_PDF_FOLDER_IDが設定されていません' };
+
+  // 請求金額は端数切捨てが必須のため、クライアント値を信用せずサーバー側で再計算する
+  const fullAmount = Number(p.fullAmount || 0);
+  const baseDays   = Number(p.baseDays || 0);
+  const actualDays = Number(p.actualDays || 0);
+  const dayRateAmount = baseDays > 0 ? Math.floor(fullAmount / baseDays * actualDays) : 0;
+  const otherItems = (p.otherItems || []).filter(it => it && Number(it.amount) > 0);
+  const otherTotal = otherItems.reduce((s, it) => s + Math.floor(Number(it.amount)), 0);
+  const grandTotal = dayRateAmount + otherTotal;
+
+  const fileBaseName = (p.storeName || p.storeId || 'invoice') + '_' + (p.invoiceDate || Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMM'));
+
+  const folder   = DriveApp.getFolderById(INVOICE_PDF_FOLDER_ID);
+  const copyFile = DriveApp.getFileById(INVOICE_TEMPLATE_ID).makeCopy(fileBaseName + '_作業用', folder);
+  const ss = SpreadsheetApp.openById(copyFile.getId());
+
+  // セル座標確認用に残っている可能性のある「座標マップ」タブは複製から取り除く
+  const leftover = ss.getSheetByName('座標マップ');
+  if (leftover) ss.deleteSheet(leftover);
+
+  const sheet = ss.getSheets().find(s => s.getSheetId() === 1628780517) || ss.getSheets()[0];
+  const M = INVOICE_CELL_MAP;
+  const set = (a1, value) => sheet.getRange(a1).setValue(value);
+
+  if (p.bizCode) set(M.bizCode, p.bizCode);
+  const era = p.era || {};
+  if (era.year)  set(M.eraYear,  era.year);
+  if (era.month) set(M.eraMonth, era.month);
+  if (era.day)   set(M.eraDay,   era.day);
+
+  if (p.isTaxExempt) {
+    set(M.taxExemptCheck, '✓');
+  } else if (p.registrationNumber) {
+    set(M.registrationDigits, String(p.registrationNumber).replace(/^T/i, ''));
+  }
+
+  set(M.partnerName, p.partnerName || '');
+  set(M.storeNameCell, 'セルフカフェ　' + (p.storeName || '') + '　店');
+  set(M.address, p.address || '');
+  set(M.tel, p.tel || '');
+
+  set(M.claimTotalIncl, grandTotal);
+  set(M.payTotalIncl, grandTotal);
+  // 消費税10%を前提に税抜・税額へ逆算（円未満切り捨て）
+  const taxExcl = Math.floor(grandTotal / 1.1);
+  const tax = grandTotal - taxExcl;
+  set(M.claimTotalExcl, taxExcl);
+  set(M.claimTax, tax);
+  set(M.payTotalExcl, taxExcl);
+  set(M.payTax, tax);
+
+  set(M.bankName, p.bankName || '');
+  set(M.bankCode, p.bankCode || '');
+  set(M.branchName, p.branchName || '');
+  set(M.branchCode, p.branchCode || '');
+  if (p.accountType === '当座') set(M.accountType, '当');
+  set(M.accountNumber, p.accountNumber || '');
+  set(M.accountHolderKana, p.accountHolderKana || '');
+
+  // 明細：1行目=日割り計算分、2行目以降=その他（緊急出動・現地購入等、複数行）
+  const lines = [{ amount: dayRateAmount, note: p.dayRateNote || '' }].concat(
+    otherItems.map(it => ({ amount: Math.floor(Number(it.amount)), note: it.note || '' }))
+  );
+  const maxRows = M.itemRowEnd - M.itemRowStart + 1;
+  if (lines.length > maxRows) {
+    return { error: '明細行が' + maxRows + '行を超えています（' + lines.length + '行）。その他の項目数を減らしてください。' };
+  }
+  lines.forEach((line, i) => {
+    const row = M.itemRowStart + i;
+    sheet.getRange(M.itemCols.storeCode + row).setValue(p.storeCode || p.storeId || '');
+    sheet.getRange(M.itemCols.storeName + row).setValue(p.storeName || '');
+    sheet.getRange(M.itemCols.staff     + row).setValue(p.partnerName || '');
+    sheet.getRange(M.itemCols.amount    + row).setValue(line.amount);
+    sheet.getRange(M.itemCols.note      + row).setValue(line.note);
+    sheet.getRange(M.itemCols.category  + row).setValue(p.category || '');
+  });
+  set(M.grandTotal, grandTotal);
+
+  SpreadsheetApp.flush();
+
+  // PDFエクスポート（対象シートのgidを指定）
+  const token = ScriptApp.getOAuthToken();
+  const exportUrl = 'https://docs.google.com/spreadsheets/d/' + ss.getId() + '/export'
+    + '?format=pdf&gid=' + sheet.getSheetId()
+    + '&size=A4&portrait=true&fitw=true&gridlines=false&printtitle=false&sheetnames=false';
+  const pdfResp = UrlFetchApp.fetch(exportUrl, { headers: { Authorization: 'Bearer ' + token } });
+  const pdfBlob = pdfResp.getBlob().setName(fileBaseName + '.pdf');
+  const pdfFile = folder.createFile(pdfBlob);
+
+  // 中間生成物のシートコピーは残さず、PDFのみをフォルダに残す
+  copyFile.setTrashed(true);
+
+  return { ok: true, pdfUrl: pdfFile.getUrl(), grandTotal: grandTotal };
 }
 
 function setDailyTrigger() {
