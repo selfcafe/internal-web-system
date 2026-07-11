@@ -1,0 +1,367 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>請求書管理 - セルフカフェ社内ポータル</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Segoe UI", sans-serif; background: #f7f8f5; margin: 0; color: #333; }
+  .wrap { max-width: 900px; margin: 0 auto; padding: 16px; }
+  .page-header { display: flex; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+  .page-header h1 { font-size: 18px; margin: 0; }
+  .back-link { font-size: 13px; color: #22703d; text-decoration: none; }
+  .settings-card { background: white; border-radius: 12px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  input, select { font-family: inherit; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="page-header">
+    <h1>請求書管理</h1>
+    <a class="back-link" href="index.html">← ポータルに戻る</a>
+  </div>
+  <div id="invoice-page-body"></div>
+</div>
+
+<script>
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbzoqu607sj-rpYulIiDwnuyGSCTzoblzSqaq37cb5k5KiGsK7sisZew9sSRSBoYBSwo_A/exec';
+const esc = s => (s == null ? '' : String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+async function gasGet(action, params) {
+  const q = new URLSearchParams({ action, ...(params||{}) });
+  const res = await fetch(GAS_URL + '?' + q);
+  return res.json();
+}
+async function gasPost(action, body) {
+  const res = await fetch(GAS_URL, {
+    method: 'POST',
+    headers: { 'Content-Type': 'text/plain' },
+    body: JSON.stringify({ action, ...body }),
+  });
+  return res.json();
+}
+async function _gasSaveSetting(key, value) {
+  try {
+    const r = await gasPost('saveSetting', { key, value });
+    return !r.error;
+  } catch(e) { console.error('GAS saveSetting error:', e); return false; }
+}
+
+// index.htmlのSTORES定数と同じもの（ビルド手順が無い静的サイトのため、店舗を追加・削除した際はindex.html側と両方を更新すること）
+const STORES = {
+  sasashima:'ささしまライブ', chikusa:'千種', gokaiso:'御器所', tsuruma:'鶴舞',
+  kamisawa:'神沢', nakamura_nisseki:'中村日赤', midori_kofubutsu:'緑鴻仏目',
+  sakurayama:'桜山', akatsuka:'赤塚', shin_moriyama:'新守山', tokoname:'常滑',
+  hamamatsu:'浜松新橋', sakae:'栄', rokubanchou:'六番町', nonami:'野並',
+  seto_iwayadou:'瀬戸岩屋堂', nagakute:'長久手', meieki_nishi:'名駅西口',
+  nadia_sakae:'ナディアパーク栄', shinmizuhashi:'新瑞橋', eisei:'栄生',
+  hotei:'布袋駅', kamejima:'亀島', nakamura_torii:'中村日赤鳥居通',
+  taikodori:'太閤通駅', kouta:'幸田', hibino:'日比野', hoshigaoka:'星が丘',
+  ikeshita:'池下', toyota:'T-FACE豊田', hara:'原', fujigaoka:'藤が丘',
+  gifu_kitagata:'イオンタウン岐阜北方', narumi:'鳴海山下',
+  tenma:'天満', higashiosaka:'東大阪小若江', aikawa:'相川駅前',
+  minami_morimachi:'南森町', abeno:'あべの南', tanimachi9:'谷町九丁目',
+  moriguchi:'守口駅前', taishibashi:'太子橋', kyobashi_kita:'京橋北',
+  shinsaibashi:'心斎橋東急ビル', kishi:'喜志', umeda:'梅田センタービル',
+  kami_shinjyo:'上新庄', osaka_hirano:'大阪平野西', hikone:'イオンタウン彦根',
+  aeon_higashiosaka:'イオンタウン東大阪', gamo4:'蒲生四丁目',
+  inzai:'印西牧の原', otsuka:'大塚駅南口', sugamo:'巣鴨駅南口',
+  umejima:'梅島（うめじま）', shibuya:'渋谷神南',
+  shinjuku_fc:'FC 新宿西口Shinjuku Future Gallery', kamisato:'カインズ上里本庄',
+};
+// 店舗一覧は本部側で随時追加されるため、custom_stores/deleted_storesも読み込んで反映する
+function applyStoreOverrides(customStores, deletedStores) {
+  Object.entries(customStores || {}).forEach(([id, v]) => { STORES[id] = (v && v.name) || id; });
+  (deletedStores || []).forEach(id => { delete STORES[id]; });
+}
+
+const INVOICE_STORE_CFG_KEY = 'invoice_store_cfg';
+const INVOICE_PARTNERS_KEY  = 'invoice_partners';
+
+function getInvoiceStoreCfg() { return JSON.parse(localStorage.getItem(INVOICE_STORE_CFG_KEY) || '{}'); }
+function getInvoicePartners() { return JSON.parse(localStorage.getItem(INVOICE_PARTNERS_KEY) || '{}'); }
+function saveInvoiceStoreCfg(cfg) { localStorage.setItem(INVOICE_STORE_CFG_KEY, JSON.stringify(cfg)); _gasSaveSetting('invoice_store_cfg', JSON.stringify(cfg)); }
+function saveInvoicePartners(partners) { localStorage.setItem(INVOICE_PARTNERS_KEY, JSON.stringify(partners)); _gasSaveSetting('invoice_partners', JSON.stringify(partners)); }
+
+function genInvoicePassword() {
+  const chars = '0123456789abcdefghijklmnopqrstuvwxyz';
+  let pw = '';
+  for (let i = 0; i < 4; i++) pw += chars[Math.floor(Math.random() * chars.length)];
+  return pw;
+}
+
+// 2026-07-11に「パートナーさん○月分」一覧（既存の運用資料）から抽出した店舗番号の初期値。
+// 店名の表記ゆれ（ヶ/が、省略表記）があるため一部は確度が低い。新規店舗・未掲載店舗は空のまま。
+const INVOICE_STORE_CODE_SEED = {
+  sasashima:31, chikusa:33, gokaiso:34, kamisawa:35, nakamura_nisseki:36, tsuruma:37, sakurayama:38,
+  midori_kofubutsu:39, akatsuka:40, seto_iwayadou:41, shin_moriyama:42, tokoname:43, hamamatsu:44,
+  tenma:45, sakae:46, inzai:47, nonami:48, rokubanchou:49, nagakute:50, meieki_nishi:51, nadia_sakae:52,
+  higashiosaka:53, aikawa:55, eisei:57, shinmizuhashi:58, hotei:59, abeno:60, minami_morimachi:61,
+  tanimachi9:63, kamejima:64, nakamura_torii:65, taikodori:66, moriguchi:67, taishibashi:68,
+  kouta:72, hibino:73, kyobashi_kita:74, hoshigaoka:75, shinsaibashi:76, toyota:77, ikeshita:78,
+  kishi:81, otsuka:82, umeda:83, sugamo:84, umejima:85, kami_shinjyo:86, shibuya:87, osaka_hirano:88,
+  hara:89, hikone:90, gifu_kitagata:91, fujigaoka:93, shinjuku_fc:94,
+};
+
+function getInvoiceStoreCode(sid) {
+  const cfg = getInvoiceStoreCfg();
+  if (cfg[sid] && cfg[sid].storeCode) return cfg[sid].storeCode;
+  return INVOICE_STORE_CODE_SEED[sid] || '';
+}
+function saveInvoiceStoreCode(sid, code) {
+  const cfg = getInvoiceStoreCfg();
+  cfg[sid] = cfg[sid] || {};
+  cfg[sid].storeCode = code;
+  saveInvoiceStoreCfg(cfg);
+}
+function seedInvoiceStoreCodesOnce() {
+  const cfg = getInvoiceStoreCfg();
+  if (cfg.__codesSeeded) return;
+  Object.keys(STORES).forEach(sid => {
+    cfg[sid] = cfg[sid] || {};
+    if (!cfg[sid].storeCode && INVOICE_STORE_CODE_SEED[sid]) cfg[sid].storeCode = INVOICE_STORE_CODE_SEED[sid];
+  });
+  cfg.__codesSeeded = true;
+  saveInvoiceStoreCfg(cfg);
+}
+
+function invoiceCategoryOptions(selected) {
+  return ['仕入', '外注', '業務委託費'].map(c => `<option ${selected === c ? 'selected' : ''}>${c}</option>`).join('');
+}
+
+function buildInvoiceSinglePartnerRow(sid) {
+  const p = getInvoicePartners()[sid] || {};
+  return `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;background:#fffef0;border-radius:8px;padding:10px 12px">
+      <span style="font-size:12px;color:#888">満額</span>
+      <input type="number" id="inv-amt-${esc(sid)}" value="${p.fullAmount || ''}" placeholder="例:15000" style="width:90px;border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:13px">
+      <span style="font-size:12px;color:#888">基準日数</span>
+      <select id="inv-basemode-${esc(sid)}" style="border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:13px">
+        <option value="full" ${p.baseDaysMode === 'full' ? 'selected' : ''}>当月日数</option>
+        <option value="halfRoundUp" ${p.baseDaysMode === 'halfRoundUp' ? 'selected' : ''}>当月日数÷2切り上げ</option>
+      </select>
+      <span style="font-size:12px;color:#888">科目</span>
+      <select id="inv-cat-${esc(sid)}" style="border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:13px">${invoiceCategoryOptions(p.category)}</select>
+      <button onclick="saveInvoicePartnerSettings('${sid}')" style="background:#22703d;color:white;padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer">保存</button>
+      <div id="invoice-admin-msg-${esc(sid)}" style="font-size:12px;width:100%;min-height:16px"></div>
+    </div>`;
+}
+
+function buildInvoiceMultiPartnerRows(sid, storePartners) {
+  const rows = storePartners.map(([pid, p]) => `
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;background:#fffef0;border-radius:8px;padding:10px 12px;margin-bottom:8px">
+      <span style="font-size:11px;color:#888;background:#fef9c3;border-radius:5px;padding:4px 8px;font-family:monospace">${esc(p.password || '')}</span>
+      <span style="font-size:12px;color:#888">満額</span>
+      <input type="number" id="inv-amt-${esc(pid)}" value="${p.fullAmount || ''}" style="width:90px;border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:13px">
+      <span style="font-size:12px;color:#888">基準日数</span>
+      <select id="inv-basemode-${esc(pid)}" style="border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:13px">
+        <option value="full" ${p.baseDaysMode === 'full' ? 'selected' : ''}>当月日数</option>
+        <option value="halfRoundUp" ${p.baseDaysMode === 'halfRoundUp' ? 'selected' : ''}>当月日数÷2切り上げ</option>
+      </select>
+      <span style="font-size:12px;color:#888">科目</span>
+      <select id="inv-cat-${esc(pid)}" style="border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:13px">${invoiceCategoryOptions(p.category)}</select>
+      <button onclick="saveInvoicePartnerSettings('${pid}')" style="background:#22703d;color:white;padding:6px 12px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer">保存</button>
+      <button onclick="resetInvoicePartnerPassword('${sid}','${pid}')" style="background:#8a8f7e;color:white;padding:6px 12px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;white-space:nowrap">パス再発行</button>
+      <button onclick="removeInvoicePartner('${sid}','${pid}')" style="background:#ef4444;color:white;padding:6px 10px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer">削除</button>
+    </div>`).join('');
+  return rows + `<button onclick="addInvoicePartner('${sid}')" style="background:#22703d;color:white;padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer">+ パートナー追加</button>
+    <div id="invoice-admin-msg-${esc(sid)}" style="font-size:12px;margin-top:6px;min-height:16px"></div>`;
+}
+
+function toggleInvoiceMultiPartner(sid, checked) {
+  const cfg = getInvoiceStoreCfg();
+  cfg[sid] = cfg[sid] || {};
+  cfg[sid].multiPartner = checked;
+  saveInvoiceStoreCfg(cfg);
+  renderInvoiceAdminList();
+}
+function addInvoicePartner(sid) {
+  const partners = getInvoicePartners();
+  let pid;
+  do { pid = sid + '_' + Math.random().toString(36).slice(2, 6); } while (partners[pid]);
+  partners[pid] = { storeId: sid, password: genInvoicePassword(), fullAmount: 0, baseDaysMode: 'full', category: '仕入', bank: {} };
+  saveInvoicePartners(partners);
+  renderInvoiceAdminList();
+}
+function removeInvoicePartner(sid, pid) {
+  if (!confirm('このパートナーの設定を削除しますか？(保存済みの口座情報等も消えます)')) return;
+  const partners = getInvoicePartners();
+  delete partners[pid];
+  saveInvoicePartners(partners);
+  renderInvoiceAdminList();
+}
+function resetInvoicePartnerPassword(sid, pid) {
+  if (!confirm('新しいパスワードを発行します（パートナー交代時に使用）。よろしいですか？')) return;
+  const partners = getInvoicePartners();
+  if (!partners[pid]) return;
+  partners[pid].password = genInvoicePassword();
+  saveInvoicePartners(partners);
+  renderInvoiceAdminList();
+}
+function saveInvoicePartnerSettings(pid) {
+  const partners = getInvoicePartners();
+  const p = partners[pid] || { storeId: pid, password: '', bank: {} };
+  p.fullAmount = Number(document.getElementById('inv-amt-' + pid)?.value || 0);
+  p.baseDaysMode = document.getElementById('inv-basemode-' + pid)?.value || 'full';
+  p.category = document.getElementById('inv-cat-' + pid)?.value || '仕入';
+  if (!p.storeId) p.storeId = pid;
+  partners[pid] = p;
+  saveInvoicePartners(partners);
+  const msg = document.getElementById('invoice-admin-msg-' + p.storeId);
+  if (msg) { msg.style.color = '#22703d'; msg.textContent = '✓ 保存しました'; setTimeout(() => { msg.textContent = ''; }, 2000); }
+}
+
+function renderInvoiceAdminList() {
+  seedInvoiceStoreCodesOnce();
+  const cfg = getInvoiceStoreCfg();
+  const partners = getInvoicePartners();
+  const body = document.getElementById('invoice-admin-body');
+  if (!body) return;
+  body.innerHTML = Object.entries(STORES).map(([sid, sname]) => {
+    const multi = !!(cfg[sid] && cfg[sid].multiPartner);
+    const storePartners = Object.entries(partners).filter(([pid, p]) => p.storeId === sid && pid !== sid);
+    return `
+      <div style="border-bottom:1px solid #eee;padding:10px 0">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span style="width:60px;font-size:12px;color:#888">店舗番号</span>
+          <input type="text" value="${esc(getInvoiceStoreCode(sid))}" onchange="saveInvoiceStoreCode('${sid}', this.value.trim())" placeholder="未設定" style="width:60px;border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:13px">
+          <span style="flex:1;min-width:100px;font-size:13px;font-weight:600">${esc(sname)}</span>
+          <label style="font-size:12px;display:flex;align-items:center;gap:4px;white-space:nowrap">
+            <input type="checkbox" ${multi ? 'checked' : ''} onchange="toggleInvoiceMultiPartner('${sid}', this.checked)">複数パートナー
+          </label>
+        </div>
+        <div style="margin-top:8px">
+          ${multi ? buildInvoiceMultiPartnerRows(sid, storePartners) : buildInvoiceSinglePartnerRow(sid)}
+        </div>
+      </div>`;
+  }).join('');
+}
+
+/* ---- 請求一覧／請求設定の画面切り替え ---- */
+
+let invoiceView = 'invoice';
+
+function invoiceSubNavHtml(active) {
+  const tab = (key, label) => `<button onclick="switchInvoiceView('${key}')" style="background:${active === key ? '#22703d' : '#eee'};color:${active === key ? 'white' : '#555'};padding:7px 16px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer">${label}</button>`;
+  return `<div style="display:flex;gap:8px;margin-bottom:16px">${tab('invoice', '請求一覧')}${tab('invoiceSettings', '請求設定')}</div>`;
+}
+
+function switchInvoiceView(v) {
+  invoiceView = v;
+  renderInvoicePage();
+}
+
+function renderInvoicePage() {
+  if (invoiceView === 'invoiceSettings') renderInvoiceSettingsView();
+  else renderInvoiceAdminView();
+}
+
+function _invoicePartnerRowsForList(latestThisPeriod) {
+  const partners = getInvoicePartners();
+  const cfg = getInvoiceStoreCfg();
+  const rows = [];
+  Object.entries(STORES).forEach(([sid, sname]) => {
+    const multi = !!(cfg[sid] && cfg[sid].multiPartner);
+    const storeCode = getInvoiceStoreCode(sid);
+    if (multi) {
+      const storePartners = Object.entries(partners).filter(([pid, p]) => p.storeId === sid && pid !== sid);
+      if (!storePartners.length) {
+        rows.push({ storeCode, sname, partnerName: '', submitted: false });
+      } else {
+        storePartners.forEach(([pid, p]) => {
+          const entry = latestThisPeriod[pid];
+          rows.push({ storeCode, sname, partnerName: (p.bank && p.bank.partnerName) || '', submitted: !!entry, amount: entry && entry.amount, pdfUrl: entry && entry.pdf_url });
+        });
+      }
+    } else {
+      const p = partners[sid];
+      const entry = latestThisPeriod[sid];
+      rows.push({ storeCode, sname, partnerName: (p && p.bank && p.bank.partnerName) || '', submitted: !!entry, amount: entry && entry.amount, pdfUrl: entry && entry.pdf_url });
+    }
+  });
+  const codeVal = c => (c === '' || c == null || isNaN(Number(c))) ? Infinity : Number(c);
+  rows.sort((a, b) => {
+    const av = codeVal(a.storeCode), bv = codeVal(b.storeCode);
+    if (av !== bv) return av - bv;
+    return String(a.sname).localeCompare(String(b.sname), 'ja');
+  });
+  return rows;
+}
+
+async function renderInvoiceAdminView() {
+  const container = document.getElementById('invoice-page-body');
+  container.innerHTML = invoiceSubNavHtml('invoice') + '<div style="color:#aaa;font-size:13px;padding:10px 0">読み込み中…</div>';
+
+  const now = new Date();
+  const period = now.getFullYear() + '-' + String(now.getMonth() + 1).padStart(2, '0');
+  let log = [];
+  try { log = await gasGet('getInvoiceLog') || []; } catch (e) { log = []; }
+  if (log.error) log = [];
+
+  const latestThisPeriod = {};
+  log.forEach(row => {
+    if (String(row.period) !== period) return;
+    const prev = latestThisPeriod[row.partner_id];
+    if (!prev || new Date(row.submitted_at) > new Date(prev.submitted_at)) latestThisPeriod[row.partner_id] = row;
+  });
+
+  const rows = _invoicePartnerRowsForList(latestThisPeriod);
+  const listRows = rows.map(r => `
+    <div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #eee;font-size:13px;flex-wrap:wrap">
+      <span style="width:44px;color:#888">${esc(r.storeCode || '—')}</span>
+      <span style="width:150px">${esc(r.sname)}</span>
+      <span style="flex:1;min-width:100px;color:#555">${esc(r.partnerName || '—')}</span>
+      ${r.submitted
+        ? `<span style="font-size:12px;color:#22703d">○ ${Number(r.amount || 0).toLocaleString()}円</span>${r.pdfUrl ? ` <a href="${esc(r.pdfUrl)}" target="_blank" style="font-size:12px;color:#22703d">PDF</a>` : ''}`
+        : `<span style="font-size:12px;color:#ccc">－</span>`}
+    </div>`).join('');
+
+  const recent = log.slice().sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at)).slice(0, 50);
+  const recentRows = recent.length ? recent.map(row => `
+    <div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #f2f2f2;font-size:12px;flex-wrap:wrap">
+      <span style="width:90px;color:#888">${esc(String(row.submitted_at || '').slice(0, 10))}</span>
+      <span style="min-width:110px">${esc(row.store_name)}</span>
+      <span style="flex:1;text-align:right">${Number(row.amount || 0).toLocaleString()}円</span>
+      <a href="${esc(row.pdf_url)}" target="_blank">PDF</a>
+    </div>`).join('') : '<div style="color:#aaa;font-size:13px">まだ提出はありません</div>';
+
+  container.innerHTML = invoiceSubNavHtml('invoice') + `
+    <div class="settings-card">
+      <div style="font-weight:700;font-size:15px;margin-bottom:10px">請求一覧（${period}）</div>
+      <div style="display:flex;gap:10px;padding:6px 0;border-bottom:2px solid #ddd;font-size:12px;color:#888;font-weight:600">
+        <span style="width:44px">番号</span><span style="width:150px">店舗名</span><span style="flex:1">パートナー</span><span>請求書</span>
+      </div>
+      ${listRows}
+    </div>
+    <div class="settings-card" style="margin-top:16px">
+      <div style="font-weight:700;font-size:15px;margin-bottom:10px">提出履歴（新しい順・直近50件）</div>
+      ${recentRows}
+    </div>`;
+}
+
+function renderInvoiceSettingsView() {
+  const container = document.getElementById('invoice-page-body');
+  container.innerHTML = invoiceSubNavHtml('invoiceSettings') + '<div class="settings-card"><div style="font-weight:700;font-size:15px;margin-bottom:10px">請求設定</div><div id="invoice-admin-body"></div></div>';
+  renderInvoiceAdminList();
+}
+
+async function loadInvoiceSettings() {
+  try {
+    const settings = await gasGet('getSettings');
+    const clean = v => String(v).replace(/[\x00-\x1f]/g, '');
+    let customStores = {}, deletedStores = [];
+    (settings || []).forEach(r => {
+      if (r.key === 'invoice_store_cfg') localStorage.setItem(INVOICE_STORE_CFG_KEY, clean(r.value));
+      if (r.key === 'invoice_partners')  localStorage.setItem(INVOICE_PARTNERS_KEY,  clean(r.value));
+      if (r.key === 'custom_stores')     { try { customStores = JSON.parse(clean(r.value)); } catch(e) {} }
+      if (r.key === 'deleted_stores')    { try { deletedStores = JSON.parse(clean(r.value)); } catch(e) {} }
+    });
+    applyStoreOverrides(customStores, deletedStores);
+  } catch (e) { console.error('invoice settings load error', e); }
+}
+
+loadInvoiceSettings().then(renderInvoicePage);
+</script>
+</body>
+</html>
