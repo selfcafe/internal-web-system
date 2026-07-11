@@ -850,7 +850,9 @@ function submitInvoice(p) {
   sheet.getRange('J8').setFontSize(9);
   sheet.getRange(M.partnerName).setValue(p.partnerName || '').setFontSize(11);
   sheet.getRange(M.storeNameCell).setValue('セルフカフェ' + (p.storeName || '') + '店').setHorizontalAlignment('center');
-  sheet.getRange(M.address).setValue(p.address || '').setFontSize(10);
+  // 住所は右端で見切れやすいため、折り返しを許可する（行の高さがテンプレート側で固定されている
+  // 場合は折り返し後も窮屈に見えることがあるため、必要なら住所欄の行の高さもテンプレート側で広げること）
+  sheet.getRange(M.address).setValue(p.address || '').setFontSize(10).setWrap(true);
   set(M.tel, p.tel || '');
 
   // 金額ボックスは値が右寄り/中央寄りでラベルと離れて見えるため、左寄せにして間を詰める
@@ -872,7 +874,8 @@ function submitInvoice(p) {
   setFit(M.branchName, p.branchName || '', true);
   sheet.getRange(M.branchCode).setNumberFormat('@').setValue(p.branchCode || '')
     .setFontSize(9).setVerticalAlignment('top').setHorizontalAlignment('left');
-  if (p.accountType === '当座') set(M.accountType, '当');
+  // 前回の値が残らないよう、普通/当座どちらでも毎回明示的に上書きする
+  set(M.accountType, p.accountType === '当座' ? '当' : '普');
   sheet.getRange(M.accountNumber).setNumberFormat('@').setValue(p.accountNumber || ''); // 口座番号も同様に先頭0が消えるのを防ぐ
   setFit(M.accountHolderKana, p.accountHolderKana || '', true);
   // 「口座名義（カナ）」ラベル（J18:L18）の表示を整える
