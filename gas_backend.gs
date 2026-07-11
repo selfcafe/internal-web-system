@@ -818,10 +818,11 @@ function submitInvoice(p) {
   };
 
   // テンプレートに前回の値が残っていることがあるため、未設定でも空文字で必ず上書きする
-  set(M.bizCode, p.bizCode || '');
+  sheet.getRange(M.bizCode).setNumberFormat('@').setValue(p.bizCode || ''); // 先頭0付きコードにも対応
   // 令和/年/月/日：ラベルセルを書き換えるため、テンプレートの飾り文字フォントを引き継がず
-  // 標準フォントに揃える（数字が潰れて読み違えられるのを防ぐ）
-  const eraFont = a1 => sheet.getRange(a1).setFontFamily('Arial').setFontSize(11);
+  // 標準フォントに揃える（数字が潰れて読み違えられるのを防ぐ）。列幅拡張などで空白が
+  // 目立つため左寄せにして、直前の文字（令和／年／月）との間隔を詰める
+  const eraFont = a1 => sheet.getRange(a1).setFontFamily('Arial').setFontSize(11).setHorizontalAlignment('left');
   const era = p.era || {};
   set(M.eraYear,  era.year  ? era.year  + '年' : ''); eraFont(M.eraYear);
   set(M.eraMonth, era.month ? era.month + '月' : ''); eraFont(M.eraMonth);
@@ -839,13 +840,16 @@ function submitInvoice(p) {
   // 登録番号は「課税事業者ではない」がチェックされていない場合のみ表示する
   // （両立を防ぐ入力チェックはクライアント側（index.html）で行っている）
   if (!p.isTaxExempt && p.registrationNumber) {
-    setFit(M.registrationDigits, String(p.registrationNumber).replace(/^T/i, ''), true);
-    sheet.getRange(M.registrationDigits).setHorizontalAlignment('left'); // 列幅拡張で中央寄りになり「T」から離れて見えていたため左寄せに固定
+    // 列幅を広げ済みなので縮小せず、固定サイズ(11pt)で見やすく表示する。先頭0落ち防止でテキスト書式にする
+    sheet.getRange(M.registrationDigits).setNumberFormat('@').setValue(String(p.registrationNumber).replace(/^T/i, ''))
+      .setFontSize(11).setHorizontalAlignment('left');
   }
 
-  setFit(M.partnerName, p.partnerName || '');
+  // 「社名（名前）」ラベル（J8）は隣のL8に値が入ると右端の「）」が見切れるため縮小
+  sheet.getRange('J8').setFontSize(9);
+  sheet.getRange(M.partnerName).setValue(p.partnerName || '').setFontSize(11);
   sheet.getRange(M.storeNameCell).setValue('セルフカフェ' + (p.storeName || '') + '店').setHorizontalAlignment('center');
-  setFit(M.address, p.address || '');
+  sheet.getRange(M.address).setValue(p.address || '').setFontSize(10);
   set(M.tel, p.tel || '');
 
   // 金額ボックスは値が右寄り/中央寄りでラベルと離れて見えるため、左寄せにして間を詰める
@@ -860,11 +864,15 @@ function submitInvoice(p) {
   set(M.payTax, tax);
 
   setFit(M.bankName, p.bankName || '', true);
-  sheet.getRange(M.bankCode).setValue(p.bankCode || '').setFontSize(9).setVerticalAlignment('middle').setHorizontalAlignment('left');
+  // setNumberFormat('@')でプレーンテキスト扱いにしてから書き込む。そうしないと「0005」のような
+  // 先頭0付きコードが数値として自動変換され、「5」のように先頭の0が消えて表示されてしまう
+  sheet.getRange(M.bankCode).setNumberFormat('@').setValue(p.bankCode || '')
+    .setFontSize(9).setVerticalAlignment('middle').setHorizontalAlignment('left');
   setFit(M.branchName, p.branchName || '', true);
-  sheet.getRange(M.branchCode).setValue(p.branchCode || '').setFontSize(9).setVerticalAlignment('middle').setHorizontalAlignment('left');
+  sheet.getRange(M.branchCode).setNumberFormat('@').setValue(p.branchCode || '')
+    .setFontSize(9).setVerticalAlignment('middle').setHorizontalAlignment('left');
   if (p.accountType === '当座') set(M.accountType, '当');
-  set(M.accountNumber, p.accountNumber || '');
+  sheet.getRange(M.accountNumber).setNumberFormat('@').setValue(p.accountNumber || ''); // 口座番号も同様に先頭0が消えるのを防ぐ
   setFit(M.accountHolderKana, p.accountHolderKana || '', true);
   // 「口座名義（カナ）」ラベル（J18:L18）の表示を整える
   sheet.getRange('J18').setFontSize(9);
@@ -882,7 +890,8 @@ function submitInvoice(p) {
     setFit(M.itemCols.storeName + row, 'セルフカフェ' + (p.storeName || '') + '店');
     sheet.getRange(M.itemCols.storeName + row).setHorizontalAlignment('center');
     sheet.getRange(M.itemCols.storeCode + row).setValue(p.storeCode || p.storeId || '').setHorizontalAlignment('center');
-    setFit(M.itemCols.staff + row, p.partnerName || '', true);
+    // 担当者欄は幅が狭く、6文字程度でも折り返してしまうため、折り返しを禁止した上で小さめの固定サイズにする
+    sheet.getRange(M.itemCols.staff + row).setValue(p.partnerName || '').setFontSize(8).setWrap(false);
     sheet.getRange(M.itemCols.amount    + row).setValue(line.amount).setNumberFormat(INVOICE_YEN_FORMAT).setHorizontalAlignment('center');
     setFit(M.itemCols.note + row, line.note, true);
     sheet.getRange(M.itemCols.category  + row).setValue('');
