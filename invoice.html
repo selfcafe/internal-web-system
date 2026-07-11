@@ -106,6 +106,34 @@ function seedInvoiceStoreCodesOnce() {
   saveInvoiceStoreCfg(cfg);
 }
 
+// 2026-07-11に実際の請求書PDF一式（複数パートナー分）から抽出した業者コードの初期値。
+// 単独パートナー店舗のみ対応（pid===storeId）。複数店舗を1つの業者コードでまとめて請求していた
+// パートナー（辻上由伯・山川隆一・佐藤裕久・村田和輝）は、対象の各店舗に同じコードを設定している。
+// 空欄・判読不能だった店舗、複数パートナー店舗（幸田=koutaは西村文乃/有澤奈穂の2名）は含めていない。
+const INVOICE_BIZCODE_SEED = {
+  sasashima: '50039600', meieki_nishi: '50039600',
+  hibino: '50065087', gokaiso: '50065087', sakurayama: '50065087', hara: '50065087', tsuruma: '50065087', chikusa: '50065087',
+  kamisawa: '50038400', nakamura_nisseki: '50038500', akatsuka: '50040800', hamamatsu: '50058900', tenma: '50065645',
+  nonami: '50059000', rokubanchou: '50065049', nagakute: '50059200', nadia_sakae: '50065052',
+  aikawa: '50055300', eisei: '50059400', shinmizuhashi: '50065058', hotei: '50059500', abeno: '50065660',
+  minami_morimachi: '50061800', tanimachi9: '50065062', shinsaibashi: '50065062', kamejima: '50065764',
+  taikodori: '50065666', kyobashi_kita: '50065074', kishi: '50065081', osaka_hirano: '50065088',
+  hikone: '50065090', fujigaoka: '50065093',
+};
+
+function seedInvoiceBizCodesOnce() {
+  const partners = getInvoicePartners();
+  if (partners.__bizCodesSeeded) return;
+  Object.entries(INVOICE_BIZCODE_SEED).forEach(([sid, code]) => {
+    const p = partners[sid] || { storeId: sid, password: '', bank: {} };
+    if (!p.bizCode) p.bizCode = code;
+    if (!p.storeId) p.storeId = sid;
+    partners[sid] = p;
+  });
+  partners.__bizCodesSeeded = true;
+  saveInvoicePartners(partners);
+}
+
 function buildInvoiceSinglePartnerRow(sid) {
   const p = getInvoicePartners()[sid] || {};
   return `
@@ -198,6 +226,7 @@ function toggleInvoiceNoInvoice(sid, checked) {
 
 function renderInvoiceAdminList() {
   seedInvoiceStoreCodesOnce();
+  seedInvoiceBizCodesOnce();
   const cfg = getInvoiceStoreCfg();
   const partners = getInvoicePartners();
   const body = document.getElementById('invoice-admin-body');
