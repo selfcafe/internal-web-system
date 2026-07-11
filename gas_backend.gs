@@ -872,7 +872,7 @@ function submitInvoice(p) {
   }
   lines.forEach((line, i) => {
     const row = M.itemRowStart + i;
-    setFit(M.itemCols.storeName + row, p.storeName || '');
+    setFit(M.itemCols.storeName + row, 'セルフカフェ' + (p.storeName || '') + '店');
     sheet.getRange(M.itemCols.storeCode + row).setValue(p.storeCode || p.storeId || '');
     setFit(M.itemCols.staff + row, p.partnerName || '', true);
     sheet.getRange(M.itemCols.amount    + row).setValue(line.amount).setNumberFormat(INVOICE_YEN_FORMAT);
