@@ -832,8 +832,10 @@ function submitInvoice(p) {
   // 明細の備考欄が長文で収まらないため、O・Q列も広げる（P列は既に広げ済み）
   sheet.setColumnWidth(15, 70); // O列
   sheet.setColumnWidth(17, 70); // Q列
-  // 課税事業者ではないチェックはテンプレートのネイティブチェックボックス（TRUE/FALSE）なので真偽値を書く
-  set(M.taxExemptCheck, !!p.isTaxExempt);
+  // 課税事業者ではないチェックは文字（✓）で表現する。テンプレート側のセルがネイティブの
+  // チェックボックス（データ入力規則）のままだと文字が正しく表示されないことがあるため、
+  // その場合はテンプレート側でそのセルのデータ入力規則を解除しておくこと
+  if (p.isTaxExempt) set(M.taxExemptCheck, '✓'); else set(M.taxExemptCheck, '');
   if (!p.isTaxExempt && p.registrationNumber) {
     setFit(M.registrationDigits, String(p.registrationNumber).replace(/^T/i, ''), true);
     sheet.getRange(M.registrationDigits).setHorizontalAlignment('left'); // 列幅拡張で中央寄りになり「T」から離れて見えていたため左寄せに固定
