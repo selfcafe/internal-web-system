@@ -5375,7 +5375,7 @@ async function submitInvoiceForm() {
     bankName: bank.bankName, bankCode: bank.bankCode,
     branchName: bank.branchName, branchCode: bank.branchCode,
     accountType: bank.accountType, accountNumber: bank.accountNumber, accountHolderKana: bank.accountHolderKana,
-    category: p.category || '仕入',
+    bizCode: p.bizCode || '',
     fullAmount: Number(p.fullAmount || 0), baseDays: computeInvoiceBaseDays(p.baseDaysMode || 'full'), actualDays,
     dayRateNote: isoDate.slice(0, 7) + '分',
     otherItems,

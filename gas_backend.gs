@@ -757,7 +757,8 @@ function sendDailyOrderNotification() {
 //   含むため、実際に生成したPDFを見て位置がずれていないか一度確認すること。
 const INVOICE_CELL_MAP = {
   bizCode: 'P3',
-  eraYear: 'R5', eraMonth: 'T5', eraDay: 'V5',
+  // 令和/年/月/日は独立した値セルが無く、ラベルセル自体を「N年」のように書き換える方式
+  eraYear: 'Q5', eraMonth: 'S5', eraDay: 'U5',
   registrationDigits: 'P7', taxExemptCheck: 'Q7',
   partnerName: 'L8',
   storeNameCell: 'B9',
@@ -773,6 +774,7 @@ const INVOICE_CELL_MAP = {
   itemCols: { storeCode: 'A', storeName: 'C', staff: 'H', amount: 'K', note: 'O', category: 'T' },
   grandTotal: 'K41',
 };
+const INVOICE_YEN_FORMAT = '¥#,##0';
 
 function submitInvoice(p) {
   if (!p) return { error: 'payloadがありません' };
@@ -802,11 +804,12 @@ function submitInvoice(p) {
   const M = INVOICE_CELL_MAP;
   const set = (a1, value) => sheet.getRange(a1).setValue(value);
 
-  if (p.bizCode) set(M.bizCode, p.bizCode);
+  // テンプレートに前回の値が残っていることがあるため、未設定でも空文字で必ず上書きする
+  set(M.bizCode, p.bizCode || '');
   const era = p.era || {};
-  if (era.year)  set(M.eraYear,  era.year);
-  if (era.month) set(M.eraMonth, era.month);
-  if (era.day)   set(M.eraDay,   era.day);
+  set(M.eraYear,  era.year  ? era.year  + '年' : '');
+  set(M.eraMonth, era.month ? era.month + '月' : '');
+  set(M.eraDay,   era.day   ? era.day   + '日' : '');
 
   if (p.isTaxExempt) {
     set(M.taxExemptCheck, '✓');
@@ -850,11 +853,15 @@ function submitInvoice(p) {
     sheet.getRange(M.itemCols.storeCode + row).setValue(p.storeCode || p.storeId || '');
     sheet.getRange(M.itemCols.storeName + row).setValue(p.storeName || '');
     sheet.getRange(M.itemCols.staff     + row).setValue(p.partnerName || '');
-    sheet.getRange(M.itemCols.amount    + row).setValue(line.amount);
+    sheet.getRange(M.itemCols.amount    + row).setValue(line.amount).setNumberFormat(INVOICE_YEN_FORMAT);
     sheet.getRange(M.itemCols.note      + row).setValue(line.note);
-    sheet.getRange(M.itemCols.category  + row).setValue(p.category || '');
+    sheet.getRange(M.itemCols.category  + row).setValue('');
   });
   set(M.grandTotal, grandTotal);
+
+  // 金額セルの表示形式をテンプレートの書式ゆれに関わらず統一する
+  [M.claimTotalIncl, M.claimTotalExcl, M.claimTax, M.payTotalIncl, M.payTotalExcl, M.payTax, M.grandTotal]
+    .forEach(a1 => sheet.getRange(a1).setNumberFormat(INVOICE_YEN_FORMAT));
 
   SpreadsheetApp.flush();
 
