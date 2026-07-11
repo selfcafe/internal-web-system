@@ -11,7 +11,7 @@ const INVENTORY_SHEET_ID = '';  // 棚卸集計スプレッドシートのID
 const MANUAL_DELIVERY_SHEET_ID = '';  // 手動納品入力スプレッドシートのID
 // 請求書テンプレート（Googleスプレッドシート版）。このファイルをmakeCopy()で複製し、
 // セルに値を差し込んでからPDFエクスポートする。この実行アカウントに編集権限で共有しておくこと。
-const INVOICE_TEMPLATE_ID = '1nojfTEfzs0-kI6rcIPjcXQ6YIX84DkPgddk-p_35-Ss';
+const INVOICE_TEMPLATE_ID = '1GoprcmRPLAo5A7nAd1lWCSabDa1W8MkCuYy42P852ts'; // 2026-07-11: ユーザーが直接編集していた方の実ファイルに差し替え（旧IDは編集が反映されない別ファイルだった）
 // 生成した請求書PDFの保存先Driveフォルダ（名称・場所は今後変わる可能性あり。移動した場合はこのIDだけ差し替える）
 const INVOICE_PDF_FOLDER_ID = '1ite8mdJR0HcSqeRdmsMNK1rnD4TydIRf';
 
