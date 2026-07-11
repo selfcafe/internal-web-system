@@ -822,22 +822,25 @@ function submitInvoice(p) {
   // 令和/年/月/日：ラベルセルを書き換えるため、テンプレートの飾り文字フォントを引き継がず
   // 標準フォントに揃える（数字が潰れて読み違えられるのを防ぐ）。列幅拡張などで空白が
   // 目立つため左寄せにして、直前の文字（令和／年／月）との間隔を詰める
-  const eraFont = (a1, value) => sheet.getRange(a1).setFontFamily('Arial')
-    .setFontSize(String(value).length >= 3 ? 9 : 11).setHorizontalAlignment('left');
+  const eraFont = a1 => sheet.getRange(a1).setFontFamily('Arial').setFontSize(11).setHorizontalAlignment('left');
   const era = p.era || {};
-  const eraDayText = era.day ? era.day + '日' : '';
-  set(M.eraYear,  era.year  ? era.year  + '年' : ''); eraFont(M.eraYear, era.year ? era.year + '年' : '');
-  set(M.eraMonth, era.month ? era.month + '月' : ''); eraFont(M.eraMonth, era.month ? era.month + '月' : '');
-  set(M.eraDay,   eraDayText); eraFont(M.eraDay, eraDayText);
+  set(M.eraYear,  era.year  ? era.year  + '年' : ''); eraFont(M.eraYear);
+  set(M.eraMonth, era.month ? era.month + '月' : ''); eraFont(M.eraMonth);
+  // 「31日」のような2桁の日は他の日付(8年/7月)と同じ11ptだとU列だけでは幅が足りず見切れる。
+  // ただしU列自体を広げると「仕入/外注」枠(R:S列とT:U列で対になっている)の対称性が崩れるため、
+  // U列は他と揃えたまま、日付だけ隣のV列(他の用途で使っていない列)まで結合して幅を確保する
+  const eraDayRange = sheet.getRange(M.eraDay + ':' + M.eraDay.replace(/[A-Z]+/, 'V'));
+  if (!eraDayRange.isPartOfMerge()) eraDayRange.merge();
+  set(M.eraDay, era.day ? era.day + '日' : ''); eraFont(M.eraDay);
   // 令和/年/月/日の間（P・Q列）の余白を詰める。Q列は明細の備考欄にも使われるが、
   // 日付行を優先し、備考の長文対策はフォントサイズの自動縮小側に任せる
   sheet.setColumnWidth(16, 20); // P列（純粋な余白。他の箇所と共有していない）
   sheet.setColumnWidth(17, 35); // Q列（「8年」の表示にも使うため、余白列ほどは狭めない）
   sheet.setColumnWidth(15, 70); // O列（明細の備考欄用。他の箇所と共有していない）
   // R・S・T・U列（仕入/外注チェック枠、明細の確認印/科目列、担当者/事務欄で共有）は
-  // 見た目の四角い枠を揃えるため必ず同じ幅にする。「31日」が2桁になる見切れ対策は
-  // 列幅ではなくeraDay側のフォント縮小（上のeraFont）で吸収する
+  // 見た目の四角い枠を揃えるため必ず同じ幅にする
   [18, 19, 20, 21].forEach(col => sheet.setColumnWidth(col, 30)); // R・S・T・U列（均等）
+  sheet.setColumnWidth(22, 14); // V列（「31日」がU列だけでは見切れる分の逃がし。他箇所と共有していない）
   // 課税事業者ではないチェックは、常に四角い枠が見える文字（☑/☐）で表現する
   // （テンプレート側のそのセルはデータ入力規則＝ネイティブチェックボックスを解除してプレーンな文字セルにしておくこと）
   // 列幅拡張(Q列)で「課税事業者ではない」の文字から離れて見えるため、右寄せにして隙間を詰める
@@ -914,17 +917,16 @@ function submitInvoice(p) {
 
   SpreadsheetApp.flush();
 
-  // PDFエクスポート（対象シートのgidを指定）
-  // 印刷範囲をA1:U41に明示的に絞り、V列以降の空列が印刷範囲に含まれて右側に余白ができるのを防ぐ
-  // scale=4（縦横比を保ったままページに収める）だと、印刷範囲の縦横比がA4と一致しない場合に
-  // 余白（レターボックス）が生まれてしまうため、scale=2（幅に合わせて拡大）に変更して
-  // 右側の余白を防ぐ（縦は多少はみ出しても構わない想定）
+  // PDFエクスポート（対象シートのgidを指定。scale=4で縦横とも1ページに収める）
+  // 印刷範囲をA1:V41に明示的に絞り、それ以降の空列が印刷範囲に含まれて右側に余白ができるのを防ぐ
+  // ※scale=2（幅に合わせて拡大）にすると1ページに収まらず2ページに分かれてしまうため、
+  //   1ページ厳守を優先してscale=4（縦横ともページに収める）に戻す
   const token = ScriptApp.getOAuthToken();
   const exportUrl = 'https://docs.google.com/spreadsheets/d/' + ss.getId() + '/export'
     + '?format=pdf&gid=' + sheet.getSheetId()
-    + '&size=A4&portrait=true&scale=2&gridlines=false&printtitle=false&sheetnames=false'
+    + '&size=A4&portrait=true&scale=4&gridlines=false&printtitle=false&sheetnames=false'
     + '&top_margin=0.3&bottom_margin=0.3&left_margin=0.3&right_margin=0.3'
-    + '&r1=0&r2=41&c1=0&c2=21';
+    + '&r1=0&r2=41&c1=0&c2=22';
   const pdfResp = UrlFetchApp.fetch(exportUrl, { headers: { Authorization: 'Bearer ' + token } });
   const pdfBlob = pdfResp.getBlob().setName(fileBaseName + '.pdf');
   const pdfFile = folder.createFile(pdfBlob);
