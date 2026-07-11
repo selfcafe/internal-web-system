@@ -762,7 +762,7 @@ const INVOICE_CELL_MAP = {
   // 令和/年/月/日は独立した値セルが無く、ラベルセル自体を「N年」のように書き換える方式
   eraYear: 'Q5', eraMonth: 'S5', eraDay: 'U5',
   registrationDigits: 'M7', // 旧P7。M7:P7が結合されアンカーがM7になったため変更
-  taxExemptCheck: 'Q7', // ネイティブのチェックボックス（TRUE/FALSE）に変わっている
+  taxExemptCheck: 'P7', // 旧Q7。テンプレート編集でチェックボックスセルがP7に移動（ラベルはQ7:U7に）
   partnerName: 'L8',
   storeNameCell: 'A9', // テンプレート編集時にA9:H9で結合され、アンカーがB9からA9に変わったため修正
   address: 'L9',
@@ -838,7 +838,9 @@ function submitInvoice(p) {
   // 課税事業者ではないチェックは、常に四角い枠が見える文字（☑/☐）で表現する
   // （テンプレート側のそのセルはデータ入力規則＝ネイティブチェックボックスを解除してプレーンな文字セルにしておくこと）
   // 列幅拡張(Q列)で「課税事業者ではない」の文字から離れて見えるため、右寄せにして隙間を詰める
-  sheet.getRange(M.taxExemptCheck).setValue(p.isTaxExempt ? '☑' : '☐').setHorizontalAlignment('right');
+  // .setDataValidation(null)でチェックボックス設定を強制解除してから書き込む。
+  // テンプレート側でこのセルにネイティブチェックボックスが設定され直しても、常に文字表示に上書きされる
+  sheet.getRange(M.taxExemptCheck).setDataValidation(null).setValue(p.isTaxExempt ? '☑' : '☐').setHorizontalAlignment('right');
   // 登録番号は「課税事業者ではない」がチェックされていない場合のみ表示する
   // （両立を防ぐ入力チェックはクライアント側（index.html）で行っている）
   if (!p.isTaxExempt && p.registrationNumber) {
