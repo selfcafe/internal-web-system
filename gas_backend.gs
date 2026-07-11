@@ -834,8 +834,10 @@ function submitInvoice(p) {
   sheet.setColumnWidth(17, 70); // Q列
   // 課税事業者ではないチェックは、常に四角い枠が見える文字（☑/☐）で表現する
   // （テンプレート側のそのセルはデータ入力規則＝ネイティブチェックボックスを解除してプレーンな文字セルにしておくこと）
-  set(M.taxExemptCheck, p.isTaxExempt ? '☑' : '☐');
-  if (!p.isTaxExempt && p.registrationNumber) {
+  // 列幅拡張(Q列)で「課税事業者ではない」の文字から離れて見えるため、右寄せにして隙間を詰める
+  sheet.getRange(M.taxExemptCheck).setValue(p.isTaxExempt ? '☑' : '☐').setHorizontalAlignment('right');
+  // 登録番号はチェックの有無に関わらず、入力されていれば常に表示する（両者は独立した項目として扱う）
+  if (p.registrationNumber) {
     setFit(M.registrationDigits, String(p.registrationNumber).replace(/^T/i, ''), true);
     sheet.getRange(M.registrationDigits).setHorizontalAlignment('left'); // 列幅拡張で中央寄りになり「T」から離れて見えていたため左寄せに固定
   }
@@ -845,8 +847,9 @@ function submitInvoice(p) {
   setFit(M.address, p.address || '');
   set(M.tel, p.tel || '');
 
-  set(M.claimTotalIncl, grandTotal);
-  set(M.payTotalIncl, grandTotal);
+  // 金額ボックスは値が右寄り/中央寄りでラベルと離れて見えるため、左寄せにして間を詰める
+  sheet.getRange(M.claimTotalIncl).setValue(grandTotal).setHorizontalAlignment('left');
+  sheet.getRange(M.payTotalIncl).setValue(grandTotal).setHorizontalAlignment('left');
   // 消費税10%を前提に税抜・税額へ逆算（円未満切り上げ）
   const taxExcl = Math.ceil(grandTotal / 1.1);
   const tax = grandTotal - taxExcl;
@@ -856,9 +859,9 @@ function submitInvoice(p) {
   set(M.payTax, tax);
 
   setFit(M.bankName, p.bankName || '', true);
-  sheet.getRange(M.bankCode).setValue(p.bankCode || '').setFontSize(8).setVerticalAlignment('middle');
+  sheet.getRange(M.bankCode).setValue(p.bankCode || '').setFontSize(9).setVerticalAlignment('middle').setHorizontalAlignment('left');
   setFit(M.branchName, p.branchName || '', true);
-  sheet.getRange(M.branchCode).setValue(p.branchCode || '').setFontSize(8).setVerticalAlignment('middle');
+  sheet.getRange(M.branchCode).setValue(p.branchCode || '').setFontSize(9).setVerticalAlignment('middle').setHorizontalAlignment('left');
   if (p.accountType === '当座') set(M.accountType, '当');
   set(M.accountNumber, p.accountNumber || '');
   setFit(M.accountHolderKana, p.accountHolderKana || '', true);
@@ -877,9 +880,9 @@ function submitInvoice(p) {
     const row = M.itemRowStart + i;
     setFit(M.itemCols.storeName + row, 'セルフカフェ' + (p.storeName || '') + '店');
     sheet.getRange(M.itemCols.storeName + row).setHorizontalAlignment('center');
-    sheet.getRange(M.itemCols.storeCode + row).setValue(p.storeCode || p.storeId || '');
+    sheet.getRange(M.itemCols.storeCode + row).setValue(p.storeCode || p.storeId || '').setHorizontalAlignment('center');
     setFit(M.itemCols.staff + row, p.partnerName || '', true);
-    sheet.getRange(M.itemCols.amount    + row).setValue(line.amount).setNumberFormat(INVOICE_YEN_FORMAT);
+    sheet.getRange(M.itemCols.amount    + row).setValue(line.amount).setNumberFormat(INVOICE_YEN_FORMAT).setHorizontalAlignment('center');
     setFit(M.itemCols.note + row, line.note, true);
     sheet.getRange(M.itemCols.category  + row).setValue('');
   });
