@@ -827,6 +827,9 @@ function submitInvoice(p) {
   set(M.eraYear,  era.year  ? era.year  + '年' : ''); eraFont(M.eraYear);
   set(M.eraMonth, era.month ? era.month + '月' : ''); eraFont(M.eraMonth);
   set(M.eraDay,   era.day   ? era.day   + '日' : ''); eraFont(M.eraDay);
+  // 令和/年/月/日の間（R列・T列）の余白を詰める。P列は登録番号の幅確保のため触らない
+  sheet.setColumnWidth(18, 35); // R列
+  sheet.setColumnWidth(20, 35); // T列
 
   // 登録番号は列が狭く、長い数字がチェックボックス欄に重なって見えるため列幅を広げる
   sheet.setColumnWidth(16, 90); // P列
@@ -867,10 +870,10 @@ function submitInvoice(p) {
   // setNumberFormat('@')でプレーンテキスト扱いにしてから書き込む。そうしないと「0005」のような
   // 先頭0付きコードが数値として自動変換され、「5」のように先頭の0が消えて表示されてしまう
   sheet.getRange(M.bankCode).setNumberFormat('@').setValue(p.bankCode || '')
-    .setFontSize(9).setVerticalAlignment('middle').setHorizontalAlignment('left');
+    .setFontSize(9).setVerticalAlignment('top').setHorizontalAlignment('left');
   setFit(M.branchName, p.branchName || '', true);
   sheet.getRange(M.branchCode).setNumberFormat('@').setValue(p.branchCode || '')
-    .setFontSize(9).setVerticalAlignment('middle').setHorizontalAlignment('left');
+    .setFontSize(9).setVerticalAlignment('top').setHorizontalAlignment('left');
   if (p.accountType === '当座') set(M.accountType, '当');
   sheet.getRange(M.accountNumber).setNumberFormat('@').setValue(p.accountNumber || ''); // 口座番号も同様に先頭0が消えるのを防ぐ
   setFit(M.accountHolderKana, p.accountHolderKana || '', true);
