@@ -807,7 +807,11 @@ function submitInvoice(p) {
 
   const sheet = ss.getSheets().find(s => s.getSheetId() === 1628780517) || ss.getSheets()[0];
   // テンプレートの実列数がU列(21)までしか無い場合、V列(22)の幅指定/結合が「範囲外」エラーになるため事前に列を追加する
-  if (sheet.getMaxColumns() < 22) sheet.insertColumnsAfter(sheet.getMaxColumns(), 22 - sheet.getMaxColumns());
+  // 追加した列はU列の書式（明細ヘッダー行の「科目」オレンジ背景など）を引き継いでしまうため、書式だけ消しておく
+  if (sheet.getMaxColumns() < 22) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), 22 - sheet.getMaxColumns());
+    sheet.getRange(1, 22, sheet.getMaxRows(), 1).clearFormat();
+  }
   const M = INVOICE_CELL_MAP;
   const set = (a1, value) => sheet.getRange(a1).setValue(value);
   // 枠からはみ出さないよう、文字数に応じてフォントサイズを自動で縮小する（narrow=幅の狭い列は早めに縮小）
