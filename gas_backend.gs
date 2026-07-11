@@ -836,8 +836,9 @@ function submitInvoice(p) {
   // （テンプレート側のそのセルはデータ入力規則＝ネイティブチェックボックスを解除してプレーンな文字セルにしておくこと）
   // 列幅拡張(Q列)で「課税事業者ではない」の文字から離れて見えるため、右寄せにして隙間を詰める
   sheet.getRange(M.taxExemptCheck).setValue(p.isTaxExempt ? '☑' : '☐').setHorizontalAlignment('right');
-  // 登録番号はチェックの有無に関わらず、入力されていれば常に表示する（両者は独立した項目として扱う）
-  if (p.registrationNumber) {
+  // 登録番号は「課税事業者ではない」がチェックされていない場合のみ表示する
+  // （両立を防ぐ入力チェックはクライアント側（index.html）で行っている）
+  if (!p.isTaxExempt && p.registrationNumber) {
     setFit(M.registrationDigits, String(p.registrationNumber).replace(/^T/i, ''), true);
     sheet.getRange(M.registrationDigits).setHorizontalAlignment('left'); // 列幅拡張で中央寄りになり「T」から離れて見えていたため左寄せに固定
   }

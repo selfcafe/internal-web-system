@@ -5338,9 +5338,17 @@ async function submitInvoiceForm() {
   const actualDays = Number(document.getElementById('inv-actualdays')?.value || 0);
   if (!actualDays) { msg.style.color = '#ef4444'; msg.textContent = '実業務日数を入力してください'; return; }
 
+  const regNumInput = document.getElementById('inv-regnum').value.trim();
+  const isTaxExemptInput = document.getElementById('inv-taxexempt').checked;
+  if (isTaxExemptInput && regNumInput) {
+    msg.style.color = '#ef4444';
+    msg.textContent = '「課税事業者ではない」にチェックが入っている場合、登録番号は入力できません。どちらか一方にしてください。';
+    return;
+  }
+
   const bank = {
-    registrationNumber: document.getElementById('inv-regnum').value.trim(),
-    isTaxExempt: document.getElementById('inv-taxexempt').checked,
+    registrationNumber: regNumInput,
+    isTaxExempt: isTaxExemptInput,
     partnerName: document.getElementById('inv-partnername').value.trim(),
     address: document.getElementById('inv-address').value.trim(),
     tel: document.getElementById('inv-tel').value.trim(),
