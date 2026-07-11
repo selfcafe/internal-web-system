@@ -833,6 +833,7 @@ function submitInvoice(p) {
   sheet.setColumnWidth(17, 35); // Q列
   sheet.setColumnWidth(18, 35); // R列
   sheet.setColumnWidth(20, 35); // T列
+  sheet.setColumnWidth(21, 55); // U列（「31日」のように2桁+日で元の1文字分の幅では収まらず見切れていたため）
   sheet.setColumnWidth(15, 70); // O列（明細の備考欄用）
   // 課税事業者ではないチェックは、常に四角い枠が見える文字（☑/☐）で表現する
   // （テンプレート側のそのセルはデータ入力規則＝ネイティブチェックボックスを解除してプレーンな文字セルにしておくこと）
