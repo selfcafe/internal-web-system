@@ -804,20 +804,26 @@ function submitInvoice(p) {
   const M = INVOICE_CELL_MAP;
   const set = (a1, value) => sheet.getRange(a1).setValue(value);
   // 枠からはみ出さないよう、文字数に応じてフォントサイズを自動で縮小する（narrow=幅の狭い列は早めに縮小）
+  // 文字数が少ない場合は通常サイズ(10pt)のまま、長い場合だけ段階的に縮小する
   const setFit = (a1, value, narrow) => {
     const len = String(value == null ? '' : value).length;
-    const t = narrow ? [10, 7, 5] : [18, 12, 8];
-    const size = len > t[0] ? 6 : len > t[1] ? 7 : len > t[2] ? 8 : 9;
+    const t = narrow ? [22, 16, 10] : [32, 24, 16];
+    const size = len > t[0] ? 7 : len > t[1] ? 8 : len > t[2] ? 9 : 10;
     sheet.getRange(a1).setValue(value).setFontSize(size);
   };
 
   // テンプレートに前回の値が残っていることがあるため、未設定でも空文字で必ず上書きする
   set(M.bizCode, p.bizCode || '');
+  // 令和/年/月/日：ラベルセルを書き換えるため、テンプレートの飾り文字フォントを引き継がず
+  // 標準フォントに揃える（数字が潰れて読み違えられるのを防ぐ）
+  const eraFont = a1 => sheet.getRange(a1).setFontFamily('Arial').setFontSize(11);
   const era = p.era || {};
-  set(M.eraYear,  era.year  ? era.year  + '年' : '');
-  set(M.eraMonth, era.month ? era.month + '月' : '');
-  set(M.eraDay,   era.day   ? era.day   + '日' : '');
+  set(M.eraYear,  era.year  ? era.year  + '年' : ''); eraFont(M.eraYear);
+  set(M.eraMonth, era.month ? era.month + '月' : ''); eraFont(M.eraMonth);
+  set(M.eraDay,   era.day   ? era.day   + '日' : ''); eraFont(M.eraDay);
 
+  // 登録番号は列が狭く、長い数字がチェックボックス欄に重なって見えるため列幅を広げる
+  sheet.setColumnWidth(16, 90); // P列
   if (p.isTaxExempt) {
     set(M.taxExemptCheck, '✓');
   } else if (p.registrationNumber) {
@@ -846,6 +852,9 @@ function submitInvoice(p) {
   if (p.accountType === '当座') set(M.accountType, '当');
   set(M.accountNumber, p.accountNumber || '');
   setFit(M.accountHolderKana, p.accountHolderKana || '', true);
+  // 「口座名義（カナ）」ラベルは元々J18が空のK18へのはみ出し表示で全文を出していたため、
+  // K18に値が入ると自身の列幅までしか表示されず「口座」に切れて見える。ラベル自体を縮小して収める
+  sheet.getRange('J18').setFontSize(7);
 
   // 明細：1行目=日割り計算分、2行目以降=その他（緊急出動・現地購入等、複数行）
   const lines = [{ amount: dayRateAmount, note: p.dayRateNote || '' }].concat(
