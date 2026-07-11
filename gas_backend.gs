@@ -761,7 +761,7 @@ const INVOICE_CELL_MAP = {
   eraYear: 'Q5', eraMonth: 'S5', eraDay: 'U5',
   registrationDigits: 'P7', taxExemptCheck: 'Q7',
   partnerName: 'L8',
-  storeNameCell: 'B9',
+  storeNameCell: 'A9', // テンプレート編集時にA9:H9で結合され、アンカーがB9からA9に変わったため修正（2026-07-11）
   address: 'L9',
   tel: 'L10',
   claimTotalIncl: 'C11', claimTotalExcl: 'B14', claimTax: 'F14',
@@ -824,10 +824,14 @@ function submitInvoice(p) {
 
   // 登録番号は列が狭く、長い数字がチェックボックス欄に重なって見えるため列幅を広げる
   sheet.setColumnWidth(16, 90); // P列
+  // 明細の備考欄が長文で収まらないため、O・Q列も広げる（P列は既に広げ済み）
+  sheet.setColumnWidth(15, 70); // O列
+  sheet.setColumnWidth(17, 70); // Q列
   if (p.isTaxExempt) {
     set(M.taxExemptCheck, '✓');
   } else if (p.registrationNumber) {
     setFit(M.registrationDigits, String(p.registrationNumber).replace(/^T/i, ''), true);
+    sheet.getRange(M.registrationDigits).setHorizontalAlignment('left'); // 列幅拡張で中央寄りになり「T」から離れて見えていたため左寄せに固定
   }
 
   setFit(M.partnerName, p.partnerName || '');
