@@ -1010,18 +1010,26 @@ function buildInvoiceReceiptPdf(otherItems, fileBaseName, folder) {
   body.setMarginTop(20).setMarginBottom(20).setMarginLeft(20).setMarginRight(20);
   const PAGE_WIDTH_PT  = 555; // A4幅(595pt)からマージン(左右20pt×2)を引いた値
   const PAGE_HEIGHT_PT = 802; // A4高さ(842pt)からマージン(上下20pt×2)を引いた値
-  const PER_PAGE = 2; // 1ページに詰め込む枚数
+  const PER_PAGE = 5; // 1ページに詰め込む枚数
   const CAPTION_H = 18; // 備考テキスト分の高さ見込み
   const CELL_H = Math.floor(PAGE_HEIGHT_PT / PER_PAGE) - CAPTION_H - 10;
 
   receiptItems.forEach((it, i) => {
     if (i > 0 && i % PER_PAGE === 0) body.appendPageBreak();
-    if (it.note) body.appendParagraph(it.note).setFontSize(10).setBold(true);
+    if (it.note) {
+      const caption = body.appendParagraph(it.note).setFontSize(10).setBold(true);
+      caption.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+    }
     try {
       const imgBlob = DriveApp.getFileById(it.receiptFileId).getBlob();
       const img = body.appendImage(imgBlob);
       const scale = Math.min(PAGE_WIDTH_PT / img.getWidth(), CELL_H / img.getHeight(), 1);
       img.setWidth(img.getWidth() * scale).setHeight(img.getHeight() * scale);
+      // appendImage()は直前の段落（無ければ新規段落）に画像を差し込むため、その段落を中央寄せにする
+      const parent = img.getParent();
+      if (parent && parent.getType() === DocumentApp.ElementType.PARAGRAPH) {
+        parent.asParagraph().setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+      }
     } catch (e) {
       body.appendParagraph('(領収書画像の読み込みに失敗しました)').setFontSize(10);
     }
