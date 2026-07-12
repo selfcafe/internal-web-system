@@ -933,7 +933,7 @@ function submitInvoice(p) {
     storeName: r.sl.storeName || '', storeCode: r.sl.storeCode || '', staff: r.sl.staffName || p.partnerName || '',
     amount: r.amount, note: p.dayRateNote || '',
   })).concat(otherItems.map(it => ({
-    storeName: it.storeName || '', storeCode: it.storeCode || '', staff: it.staffName || '',
+    storeName: it.storeName || '', storeCode: it.storeCode || '', staff: it.staffName || p.partnerName || '',
     amount: Math.floor(Number(it.amount)), note: it.note || '',
   })));
   const maxRows = M.itemRowEnd - M.itemRowStart + 1;
@@ -997,8 +997,10 @@ function submitInvoice(p) {
   return { ok: true, pdfUrl: pdfFile.getUrl(), receiptPdfUrl: receiptPdfUrl, grandTotal: grandTotal };
 }
 
-// その他項目に添付された領収書写真（Drive file_id）を、1枚1ページのGoogle Docsに差し込んでから
-// PDFとしてエクスポートする。添付が無ければ何もせず空文字を返す。
+// その他項目に添付された領収書写真（Drive file_id）を、1ページに複数枚まとめたGoogle Docsに
+// 差し込んでからPDFとしてエクスポートする。添付が無ければ何もせず空文字を返す。
+// 領収書は縦長の写真になりがちなので、幅基準だけで拡大すると1枚で1ページを超えてしまう。
+// 幅・高さ両方の制約を見て小さい方の倍率で縮小し、1ページに複数枚収まるようにする。
 function buildInvoiceReceiptPdf(otherItems, fileBaseName, folder) {
   const receiptItems = (otherItems || []).filter(it => it && it.receiptFileId);
   if (!receiptItems.length) return '';
@@ -1006,15 +1008,20 @@ function buildInvoiceReceiptPdf(otherItems, fileBaseName, folder) {
   const doc = DocumentApp.create(fileBaseName + '_領収書_作業用');
   const body = doc.getBody();
   body.setMarginTop(20).setMarginBottom(20).setMarginLeft(20).setMarginRight(20);
-  const PAGE_WIDTH_PT = 555; // A4幅(595pt)からマージン(左右20pt×2)を引いた値
+  const PAGE_WIDTH_PT  = 555; // A4幅(595pt)からマージン(左右20pt×2)を引いた値
+  const PAGE_HEIGHT_PT = 802; // A4高さ(842pt)からマージン(上下20pt×2)を引いた値
+  const PER_PAGE = 2; // 1ページに詰め込む枚数
+  const CAPTION_H = 18; // 備考テキスト分の高さ見込み
+  const CELL_H = Math.floor(PAGE_HEIGHT_PT / PER_PAGE) - CAPTION_H - 10;
+
   receiptItems.forEach((it, i) => {
-    if (i > 0) body.appendPageBreak();
-    if (it.note) body.appendParagraph(it.note).setFontSize(11).setBold(true);
+    if (i > 0 && i % PER_PAGE === 0) body.appendPageBreak();
+    if (it.note) body.appendParagraph(it.note).setFontSize(10).setBold(true);
     try {
       const imgBlob = DriveApp.getFileById(it.receiptFileId).getBlob();
       const img = body.appendImage(imgBlob);
-      const ratio = PAGE_WIDTH_PT / img.getWidth();
-      img.setWidth(PAGE_WIDTH_PT).setHeight(img.getHeight() * ratio);
+      const scale = Math.min(PAGE_WIDTH_PT / img.getWidth(), CELL_H / img.getHeight(), 1);
+      img.setWidth(img.getWidth() * scale).setHeight(img.getHeight() * scale);
     } catch (e) {
       body.appendParagraph('(領収書画像の読み込みに失敗しました)').setFontSize(10);
     }
