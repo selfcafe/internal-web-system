@@ -231,7 +231,13 @@ function renderInvoiceAdminList() {
   const partners = getInvoicePartners();
   const body = document.getElementById('invoice-admin-body');
   if (!body) return;
-  body.innerHTML = Object.entries(STORES).map(([sid, sname]) => {
+  const codeVal = c => (c === '' || c == null || isNaN(Number(c))) ? Infinity : Number(c);
+  const storeEntries = Object.entries(STORES).sort((a, b) => {
+    const av = codeVal(getInvoiceStoreCode(a[0])), bv = codeVal(getInvoiceStoreCode(b[0]));
+    if (av !== bv) return av - bv;
+    return String(a[1]).localeCompare(String(b[1]), 'ja');
+  });
+  body.innerHTML = storeEntries.map(([sid, sname]) => {
     const noInvoice = !!(cfg[sid] && cfg[sid].noInvoice);
     const multi = !!(cfg[sid] && cfg[sid].multiPartner);
     const storePartners = Object.entries(partners).filter(([pid, p]) => p.storeId === sid && pid !== sid);
