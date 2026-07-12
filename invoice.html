@@ -250,24 +250,11 @@ function toggleInvoiceNoInvoice(sid, checked) {
   renderInvoiceAdminList();
 }
 
-function renderInvoiceAdminList() {
-  seedInvoiceStoreCodesOnce();
-  seedInvoiceBizCodesOnce();
-  const cfg = getInvoiceStoreCfg();
-  const partners = getInvoicePartners();
-  const body = document.getElementById('invoice-admin-body');
-  if (!body) return;
-  const codeVal = c => (c === '' || c == null || isNaN(Number(c))) ? Infinity : Number(c);
-  const storeEntries = Object.entries(STORES).sort((a, b) => {
-    const av = codeVal(getInvoiceStoreCode(a[0])), bv = codeVal(getInvoiceStoreCode(b[0]));
-    if (av !== bv) return av - bv;
-    return String(a[1]).localeCompare(String(b[1]), 'ja');
-  });
-  body.innerHTML = storeEntries.map(([sid, sname]) => {
-    const noInvoice = !!(cfg[sid] && cfg[sid].noInvoice);
-    const multi = !!(cfg[sid] && cfg[sid].multiPartner);
-    const storePartners = Object.entries(partners).filter(([pid, p]) => p.storeId === sid && pid !== sid);
-    return `
+function _buildInvoiceStoreBlock(sid, sname, cfg, partners) {
+  const noInvoice = !!(cfg[sid] && cfg[sid].noInvoice);
+  const multi = !!(cfg[sid] && cfg[sid].multiPartner);
+  const storePartners = Object.entries(partners).filter(([pid, p]) => p.storeId === sid && pid !== sid);
+  return `
       <div style="border-bottom:1px solid #eee;padding:10px 0">
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
           <span style="width:60px;font-size:12px;color:#888">店舗番号</span>
@@ -286,6 +273,53 @@ function renderInvoiceAdminList() {
             : (multi ? buildInvoiceMultiPartnerRows(sid, storePartners) : buildInvoiceSinglePartnerRow(sid))}
         </div>
       </div>`;
+}
+
+function renderInvoiceAdminList() {
+  seedInvoiceStoreCodesOnce();
+  seedInvoiceBizCodesOnce();
+  const cfg = getInvoiceStoreCfg();
+  const partners = getInvoicePartners();
+  const body = document.getElementById('invoice-admin-body');
+  if (!body) return;
+  const codeVal = c => (c === '' || c == null || isNaN(Number(c))) ? Infinity : Number(c);
+
+  // 業者コードが同じ店舗（＝同一人物が複数店舗を管理しているケース）は、店舗番号順を保ったまま
+  // 隣り合わせにまとめて表示する。複数パートナー店舗は代表となる業者コードを1つに絞れないため、
+  // まとめ対象にはせず単独のまま扱う。
+  const storeEntries = Object.entries(STORES);
+  const clusters = [];
+  const clusterByBizCode = {};
+  storeEntries.forEach(entry => {
+    const [sid] = entry;
+    const multi = !!(cfg[sid] && cfg[sid].multiPartner);
+    const bizCode = !multi ? ((partners[sid] && partners[sid].bizCode) || '') : '';
+    if (bizCode && clusterByBizCode[bizCode]) {
+      clusterByBizCode[bizCode].push(entry);
+    } else {
+      const cluster = [entry];
+      if (bizCode) clusterByBizCode[bizCode] = cluster;
+      clusters.push(cluster);
+    }
+  });
+  clusters.forEach(cluster => cluster.sort((a, b) => {
+    const av = codeVal(getInvoiceStoreCode(a[0])), bv = codeVal(getInvoiceStoreCode(b[0]));
+    if (av !== bv) return av - bv;
+    return String(a[1]).localeCompare(String(b[1]), 'ja');
+  }));
+  clusters.sort((c1, c2) => {
+    const v1 = Math.min(...c1.map(e => codeVal(getInvoiceStoreCode(e[0]))));
+    const v2 = Math.min(...c2.map(e => codeVal(getInvoiceStoreCode(e[0]))));
+    if (v1 !== v2) return v1 - v2;
+    return String(c1[0][1]).localeCompare(String(c2[0][1]), 'ja');
+  });
+
+  body.innerHTML = clusters.map(cluster => {
+    const rowsHtml = cluster.map(([sid, sname]) => _buildInvoiceStoreBlock(sid, sname, cfg, partners)).join('');
+    // 2店舗以上のクラスターだけ、まとまりが分かるよう左に色帯を付ける
+    return cluster.length > 1
+      ? `<div style="border-left:3px solid #0369a1;padding-left:10px;margin-bottom:2px">${rowsHtml}</div>`
+      : rowsHtml;
   }).join('');
 }
 
