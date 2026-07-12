@@ -997,9 +997,17 @@ function submitInvoice(p) {
   return { ok: true, pdfUrl: pdfFile.getUrl(), receiptPdfUrl: receiptPdfUrl, grandTotal: grandTotal };
 }
 
+// ページに乗せる枚数に応じて、写真ができるだけ大きく表示されるようグリッドの列・行数を決める。
+// 1枚なら1マス全体、2枚は横並び（領収書は縦長になりがちなので高さを目一杯使えるように）、
+// 3〜4枚は2列×2行。5枚以上は入り切らない分を次ページへ回す。
+function _receiptGridDims(n) {
+  if (n <= 1) return { cols: 1, rows: 1 };
+  if (n === 2) return { cols: 2, rows: 1 };
+  return { cols: 2, rows: 2 };
+}
+
 // その他項目に添付された領収書写真（Drive file_id）を、1ページに複数枚まとめたGoogle Docsに
 // 差し込んでからPDFとしてエクスポートする。添付が無ければ何もせず空文字を返す。
-// 縦1列に並べるだけだと横幅が余って1枚1枚が小さくなるため、2列×3行の表（グリッド）に配置する。
 function buildInvoiceReceiptPdf(otherItems, fileBaseName, folder) {
   const receiptItems = (otherItems || []).filter(it => it && it.receiptFileId);
   if (!receiptItems.length) return '';
@@ -1009,24 +1017,22 @@ function buildInvoiceReceiptPdf(otherItems, fileBaseName, folder) {
   body.setMarginTop(20).setMarginBottom(20).setMarginLeft(20).setMarginRight(20);
   const PAGE_WIDTH_PT  = 555; // A4幅(595pt)からマージン(左右20pt×2)を引いた値
   const PAGE_HEIGHT_PT = 802; // A4高さ(842pt)からマージン(上下20pt×2)を引いた値
-  const COLS = 2;
-  const ROWS_PER_PAGE = 3;
-  const PER_PAGE = COLS * ROWS_PER_PAGE; // 1ページ6枚（2列×3行）
+  const PER_PAGE = 4; // 1ページ最大4枚
   const CAPTION_H = 14; // 備考テキスト分の高さ見込み
-  const CELL_W = Math.floor(PAGE_WIDTH_PT / COLS) - 12; // セルの内側余白ぶん差し引く
-  const CELL_H = Math.floor(PAGE_HEIGHT_PT / ROWS_PER_PAGE) - CAPTION_H - 16;
 
   for (let pageStart = 0; pageStart < receiptItems.length; pageStart += PER_PAGE) {
     if (pageStart > 0) body.appendPageBreak();
     const pageItems = receiptItems.slice(pageStart, pageStart + PER_PAGE);
-    const rows = Math.ceil(pageItems.length / COLS);
+    const { cols, rows } = _receiptGridDims(pageItems.length);
+    const cellW = Math.floor(PAGE_WIDTH_PT / cols) - 12; // セルの内側余白ぶん差し引く
+    const cellH = Math.floor(PAGE_HEIGHT_PT / rows) - CAPTION_H - 16;
     const seed = [];
-    for (let r = 0; r < rows; r++) seed.push(new Array(COLS).fill(''));
+    for (let r = 0; r < rows; r++) seed.push(new Array(cols).fill(''));
     const table = body.appendTable(seed);
     table.setBorderWidth(0);
 
     pageItems.forEach((it, idx) => {
-      const r = Math.floor(idx / COLS), c = idx % COLS;
+      const r = Math.floor(idx / cols), c = idx % cols;
       const cell = table.getCell(r, c);
       const captionPara = cell.getChild(0).asParagraph();
       captionPara.setText(it.note || '');
@@ -1034,7 +1040,7 @@ function buildInvoiceReceiptPdf(otherItems, fileBaseName, folder) {
       try {
         const imgBlob = DriveApp.getFileById(it.receiptFileId).getBlob();
         const img = cell.appendImage(imgBlob);
-        const scale = Math.min(CELL_W / img.getWidth(), CELL_H / img.getHeight(), 1);
+        const scale = Math.min(cellW / img.getWidth(), cellH / img.getHeight(), 1);
         img.setWidth(img.getWidth() * scale).setHeight(img.getHeight() * scale);
         const imgParent = img.getParent();
         if (imgParent && imgParent.getType() === DocumentApp.ElementType.PARAGRAPH) {
