@@ -1695,7 +1695,7 @@ function addCustomChecksheetItem() {
   const type     = document.getElementById('new-cs-item-type')?.value;
   const msg      = document.getElementById('cs-item-add-msg');
   if (!name) { msg.style.color='#ef4444'; msg.textContent='項目名を入力してください'; return; }
-  if (CHECKSHEET_ITEMS.find(it => it.name === name)) { msg.style.color='#ef4444'; msg.textContent='同じ名前の項目が既に存在します'; return; }
+  if (CHECKSHEET_ITEMS.find(it => it.name === name && it.category === category)) { msg.style.color='#ef4444'; msg.textContent='同じカテゴリ内に同じ名前の項目が既に存在します'; return; }
   CHECKSHEET_ITEMS.push({ id:'custom_' + uid(), category, type, name });
   saveAllChecksheetItems();
   const nameInp = document.getElementById('new-cs-item-name');
