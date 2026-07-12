@@ -342,10 +342,12 @@
     .checksheet-today-list { background:white; border-radius:8px; overflow:hidden; box-shadow:0 1px 4px rgba(0,0,0,.08); }
     .checksheet-today-row { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:16px 14px; border-bottom:1px solid #f0f0f0; font-size:15px; }
     .checksheet-today-row:last-child { border-bottom:none; }
+    .checksheet-today-row > span { flex:1 1 auto; min-width:0; }
     .checksheet-today-row input[type="number"] { width:70px; text-align:right; padding:6px 8px; border:1px solid #d1d5db; border-radius:4px; font-size:14px; }
     .checksheet-today-row input[type="checkbox"] { width:28px; height:28px; accent-color:#22703d; flex-shrink:0; }
-    .checksheet-today-row .qty-btn { width:36px; height:36px; font-size:18px; }
-    .checksheet-today-row .qty-wrap input[type=number] { width:56px; font-size:16px; }
+    .checksheet-today-row .qty-wrap { flex-shrink:0; flex-wrap:nowrap; }
+    .checksheet-today-row .qty-btn { width:36px; height:36px; font-size:18px; flex-shrink:0; }
+    .checksheet-today-row .qty-wrap input[type=number] { width:56px; font-size:16px; flex-shrink:0; }
 
     /* チェックシート 当月/先月履歴：確認用（編集不可）、俯瞰性重視で行高を最小化（データ行のみ） */
     #checksheet-table th, #checksheet-table td { padding:1px 3px !important; line-height:1.1; }
