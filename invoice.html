@@ -327,36 +327,24 @@ async function renderInvoiceAdminView() {
   });
 
   const rows = _invoicePartnerRowsForList(latestThisPeriod);
+  const unsubmittedCount = rows.filter(r => !r.submitted).length;
   const listRows = rows.map(r => `
-    <div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #eee;font-size:13px;flex-wrap:wrap">
+    <div style="display:flex;align-items:center;gap:10px;padding:7px 8px;border-bottom:1px solid #eee;font-size:13px;flex-wrap:wrap${r.submitted ? '' : ';background:#fff3f3'}">
       <span style="width:44px;color:#888">${esc(r.storeCode || '—')}</span>
       <span style="width:150px">${esc(r.sname)}</span>
       <span style="flex:1;min-width:100px;color:#555">${esc(r.partnerName || '—')}</span>
       ${r.submitted
         ? `<span style="font-size:12px;color:#22703d">○ ${Number(r.amount || 0).toLocaleString()}円</span>${r.pdfUrl ? ` <a href="${esc(r.pdfUrl)}" target="_blank" style="font-size:12px;color:#22703d">PDF</a>` : ''}`
-        : `<span style="font-size:12px;color:#ccc">－</span>`}
+        : `<span style="font-size:12px;color:#c0392b;font-weight:700">未提出</span>`}
     </div>`).join('');
-
-  const recent = log.slice().sort((a, b) => new Date(b.submitted_at) - new Date(a.submitted_at)).slice(0, 50);
-  const recentRows = recent.length ? recent.map(row => `
-    <div style="display:flex;align-items:center;gap:10px;padding:7px 0;border-bottom:1px solid #f2f2f2;font-size:12px;flex-wrap:wrap">
-      <span style="width:90px;color:#888">${esc(String(row.submitted_at || '').slice(0, 10))}</span>
-      <span style="min-width:110px">${esc(row.store_name)}</span>
-      <span style="flex:1;text-align:right">${Number(row.amount || 0).toLocaleString()}円</span>
-      <a href="${esc(row.pdf_url)}" target="_blank">PDF</a>
-    </div>`).join('') : '<div style="color:#aaa;font-size:13px">まだ提出はありません</div>';
 
   container.innerHTML = invoiceSubNavHtml('invoice') + `
     <div class="settings-card">
-      <div style="font-weight:700;font-size:15px;margin-bottom:10px">請求一覧（${period}）</div>
-      <div style="display:flex;gap:10px;padding:6px 0;border-bottom:2px solid #ddd;font-size:12px;color:#888;font-weight:600">
+      <div style="font-weight:700;font-size:15px;margin-bottom:10px">請求一覧（${period}）${unsubmittedCount ? `<span style="font-size:12px;color:#c0392b;font-weight:700;margin-left:8px">未提出 ${unsubmittedCount}件</span>` : ''}</div>
+      <div style="display:flex;gap:10px;padding:6px 8px;border-bottom:2px solid #ddd;font-size:12px;color:#888;font-weight:600">
         <span style="width:44px">番号</span><span style="width:150px">店舗名</span><span style="flex:1">パートナー</span><span>請求書</span>
       </div>
       ${listRows}
-    </div>
-    <div class="settings-card" style="margin-top:16px">
-      <div style="font-weight:700;font-size:15px;margin-bottom:10px">提出履歴（新しい順・直近50件）</div>
-      ${recentRows}
     </div>`;
 }
 
