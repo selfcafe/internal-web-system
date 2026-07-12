@@ -5209,7 +5209,16 @@ function saveInvoicePartners(partners) { localStorage.setItem(INVOICE_PARTNERS_K
 function partnerIdsSharingBizCode(bizCode, partners, excludePid) {
   if (!bizCode) return [];
   partners = partners || getInvoicePartners();
-  return Object.keys(partners).filter(pid => pid !== excludePid && pid !== '__bizCodesSeeded' && partners[pid] && partners[pid].bizCode === bizCode);
+  const cfg = getInvoiceStoreCfg();
+  return Object.keys(partners).filter(pid => {
+    if (pid === excludePid || pid === '__bizCodesSeeded') return false;
+    const entry = partners[pid];
+    if (!entry || entry.bizCode !== bizCode) return false;
+    // 店舗を複数パートナー化した後も、店舗ID自体をpidとする古い単独パートナー時代の
+    // データが残っていることがある（UI上は表示されない）。実在の人物ではないため除外する
+    if (cfg[pid] && cfg[pid].multiPartner) return false;
+    return true;
+  });
 }
 function syncInvoiceBizCodeGroup(pid, partners) {
   const src = partners[pid];

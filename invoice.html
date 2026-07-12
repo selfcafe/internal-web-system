@@ -72,7 +72,16 @@ function saveInvoicePartners(partners) { localStorage.setItem(INVOICE_PARTNERS_K
 function partnerIdsSharingBizCode(bizCode, partners, excludePid) {
   if (!bizCode) return [];
   partners = partners || getInvoicePartners();
-  return Object.keys(partners).filter(pid => pid !== excludePid && pid !== '__bizCodesSeeded' && partners[pid] && partners[pid].bizCode === bizCode);
+  const cfg = getInvoiceStoreCfg();
+  return Object.keys(partners).filter(pid => {
+    if (pid === excludePid || pid === '__bizCodesSeeded') return false;
+    const entry = partners[pid];
+    if (!entry || entry.bizCode !== bizCode) return false;
+    // 店舗を複数パートナー化した後も、店舗ID自体をpidとする古い単独パートナー時代の
+    // データが残っていることがある（UI上は表示されない）。実在の人物ではないため除外する
+    if (cfg[pid] && cfg[pid].multiPartner) return false;
+    return true;
+  });
 }
 
 function genInvoicePassword() {
@@ -169,7 +178,7 @@ function buildInvoiceSinglePartnerRow(sid, showBizBadge) {
   return `
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;background:#fffef0;border-radius:8px;padding:10px 12px">
       <span style="font-size:12px;color:#888">満額</span>
-      <input type="number" id="inv-amt-${esc(sid)}" value="${p.fullAmount || ''}" placeholder="例:15000" style="width:90px;border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:13px">
+      <input type="number" id="inv-amt-${esc(sid)}" value="${p.fullAmount || ''}" placeholder="例:15000" step="1000" style="width:90px;border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:13px">
       <span style="font-size:12px;color:#888">基準日数</span>
       <select id="inv-basemode-${esc(sid)}" style="border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:13px">
         <option value="full" ${p.baseDaysMode === 'full' ? 'selected' : ''}>当月日数</option>
@@ -191,7 +200,7 @@ function buildInvoiceMultiPartnerRows(sid, storePartners) {
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;background:#fffef0;border-radius:8px;padding:10px 12px;margin-bottom:8px">
       <span style="font-size:11px;color:#888;background:#fef9c3;border-radius:5px;padding:4px 8px;font-family:monospace">${esc(p.password || '')}</span>
       <span style="font-size:12px;color:#888">満額</span>
-      <input type="number" id="inv-amt-${esc(pid)}" value="${p.fullAmount || ''}" style="width:90px;border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:13px">
+      <input type="number" id="inv-amt-${esc(pid)}" value="${p.fullAmount || ''}" step="1000" style="width:90px;border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:13px">
       <span style="font-size:12px;color:#888">基準日数</span>
       <select id="inv-basemode-${esc(pid)}" style="border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:13px">
         <option value="full" ${p.baseDaysMode === 'full' ? 'selected' : ''}>当月日数</option>
