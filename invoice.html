@@ -148,12 +148,12 @@ function seedInvoiceBizCodesOnce() {
 function _bizCodeSiblingBadge(pid, p, partners) {
   const siblings = partnerIdsSharingBizCode(p.bizCode, partners, pid);
   if (!siblings.length) return '';
-  const names = siblings.map(spid => {
+  const names = [pid, ...siblings].map(spid => {
     const sp = partners[spid] || {};
     return STORES[sp.storeId || spid] || sp.storeId || spid;
   });
   const listId = 'biz-sibling-' + esc(pid);
-  return `<span onclick="toggleBizSiblingList('${esc(pid)}')" style="cursor:pointer;font-size:11px;color:#0369a1;background:#e0f2fe;border-radius:5px;padding:3px 7px;white-space:nowrap">🔗他に同じ業者コードの店舗が${siblings.length}件</span>
+  return `<span onclick="toggleBizSiblingList('${esc(pid)}')" style="cursor:pointer;font-size:11px;color:#0369a1;background:#e0f2fe;border-radius:5px;padding:3px 7px;white-space:nowrap">🔗同じ業者コードの店舗が計${siblings.length + 1}件</span>
     <span id="${listId}" style="display:none;font-size:11px;color:#0369a1;background:#f0f7fc;border:1px solid #bfdbfe;border-radius:6px;padding:5px 9px;width:100%">${names.map(esc).join('、')}</span>`;
 }
 
