@@ -786,16 +786,30 @@ function submitInvoice(p) {
   if (!INVOICE_TEMPLATE_ID)  return { error: 'INVOICE_TEMPLATE_IDが設定されていません' };
   if (!INVOICE_PDF_FOLDER_ID) return { error: 'INVOICE_PDF_FOLDER_IDが設定されていません' };
 
-  // 請求金額は端数切捨てが必須のため、クライアント値を信用せずサーバー側で再計算する
-  const fullAmount = Number(p.fullAmount || 0);
-  const baseDays   = Number(p.baseDays || 0);
-  const actualDays = Number(p.actualDays || 0);
-  const dayRateAmount = baseDays > 0 ? Math.floor(fullAmount / baseDays * actualDays) : 0;
-  const otherItems = (p.otherItems || []).filter(it => it && Number(it.amount) > 0);
+  // 業者コードが同じ複数店舗をまとめて1枚の請求書にする場合、storeLinesに対象店舗が複数入る
+  // （単独店舗の場合は1件のみ）。請求金額は端数切捨てが必須のため、クライアント値を信用せず
+  // サーバー側で店舗ごとに再計算する。
+  const storeLines = (p.storeLines || []).filter(sl => sl);
+  if (!storeLines.length) return { error: '対象店舗がありません' };
+  const storeDayRate = storeLines.map(sl => {
+    const fullAmount = Number(sl.fullAmount || 0);
+    const baseDays   = Number(sl.baseDays || 0);
+    const actualDays = Number(sl.actualDays || 0);
+    return { sl: sl, amount: baseDays > 0 ? Math.floor(fullAmount / baseDays * actualDays) : 0 };
+  });
+  const otherItems = (p.otherItems || []).filter(it => it && Number(it.amount) !== 0);
+  const perStoreOtherTotal = {};
+  otherItems.forEach(it => {
+    if (!it.pid) return;
+    perStoreOtherTotal[it.pid] = (perStoreOtherTotal[it.pid] || 0) + Math.floor(Number(it.amount));
+  });
+  const dayRateTotal = storeDayRate.reduce((s, r) => s + r.amount, 0);
   const otherTotal = otherItems.reduce((s, it) => s + Math.floor(Number(it.amount)), 0);
-  const grandTotal = dayRateAmount + otherTotal;
+  const grandTotal = dayRateTotal + otherTotal;
 
-  const fileBaseName = (p.storeName || p.storeId || 'invoice') + '_' + (p.invoiceDate || Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMM'));
+  const isCombined = storeLines.length > 1;
+  const primaryLabel = isCombined ? (p.partnerName || 'invoice') : (storeLines[0].storeName || storeLines[0].storeId || 'invoice');
+  const fileBaseName = primaryLabel + '_' + (p.invoiceDate || Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMM'));
 
   const folder   = DriveApp.getFolderById(INVOICE_PDF_FOLDER_ID);
   const copyFile = DriveApp.getFileById(INVOICE_TEMPLATE_ID).makeCopy(fileBaseName + '_作業用', folder);
@@ -864,7 +878,10 @@ function submitInvoice(p) {
   // 「社名（名前）」ラベル（J8）は隣のL8に値が入ると右端の「）」が見切れるため縮小
   sheet.getRange('J8').setFontSize(9);
   sheet.getRange(M.partnerName).setValue(p.partnerName || '').setFontSize(11);
-  sheet.getRange(M.storeNameCell).setValue('セルフカフェ' + (p.storeName || '') + '店').setHorizontalAlignment('center');
+  // 複数店舗まとめ請求の場合、店舗名セルは具体的な店名の代わりに「◯店」（対象店舗数）を表示する
+  sheet.getRange(M.storeNameCell)
+    .setValue(isCombined ? ('セルフカフェ　' + storeLines.length + '店') : ('セルフカフェ' + (storeLines[0].storeName || '') + '店'))
+    .setHorizontalAlignment('center');
   // 住所は右端で見切れやすいため、折り返しを許可する（行の高さがテンプレート側で固定されている
   // 場合は折り返し後も窮屈に見えることがあるため、必要なら住所欄の行の高さもテンプレート側で広げること）
   sheet.getRange(M.address).setValue(p.address || '').setFontSize(10).setWrap(true);
@@ -896,21 +913,27 @@ function submitInvoice(p) {
   // 「口座名義（カナ）」ラベル（J18:L18）の表示を整える
   sheet.getRange('J18').setFontSize(9);
 
-  // 明細：1行目=日割り計算分、2行目以降=その他（緊急出動・現地購入等、複数行）
-  const lines = [{ amount: dayRateAmount, note: p.dayRateNote || '' }].concat(
-    otherItems.map(it => ({ amount: Math.floor(Number(it.amount)), note: it.note || '' }))
-  );
+  // 明細：各店舗の日割り行を先に並べ、その後にその他項目（緊急出動・現地購入・割引等）を並べる。
+  // 複数店舗まとめ請求の実際の紙運用でもこの並び順（店舗の行→その他の行）だったため踏襲している。
+  // その他項目は対象店舗が選ばれていればその店舗名で、店舗指定なし（合計調整等）なら店舗名欄は空欄にする。
+  const lines = storeDayRate.map(r => ({
+    storeName: r.sl.storeName || '', storeCode: r.sl.storeCode || '', staff: r.sl.staffName || p.partnerName || '',
+    amount: r.amount, note: p.dayRateNote || '',
+  })).concat(otherItems.map(it => ({
+    storeName: it.storeName || '', storeCode: it.storeCode || '', staff: it.staffName || '',
+    amount: Math.floor(Number(it.amount)), note: it.note || '',
+  })));
   const maxRows = M.itemRowEnd - M.itemRowStart + 1;
   if (lines.length > maxRows) {
     return { error: '明細行が' + maxRows + '行を超えています（' + lines.length + '行）。その他の項目数を減らしてください。' };
   }
   lines.forEach((line, i) => {
     const row = M.itemRowStart + i;
-    setFit(M.itemCols.storeName + row, 'セルフカフェ' + (p.storeName || '') + '店');
+    setFit(M.itemCols.storeName + row, line.storeName ? ('セルフカフェ' + line.storeName + '店') : '');
     sheet.getRange(M.itemCols.storeName + row).setHorizontalAlignment('center');
-    sheet.getRange(M.itemCols.storeCode + row).setValue(p.storeCode || p.storeId || '').setHorizontalAlignment('center');
+    sheet.getRange(M.itemCols.storeCode + row).setValue(line.storeCode).setHorizontalAlignment('center');
     // 担当者欄は幅が狭く、6文字程度でも折り返してしまうため、折り返しを禁止した上で小さめの固定サイズにする
-    sheet.getRange(M.itemCols.staff + row).setValue(p.partnerName || '').setFontSize(8).setWrap(false);
+    sheet.getRange(M.itemCols.staff + row).setValue(line.staff).setFontSize(8).setWrap(false);
     sheet.getRange(M.itemCols.amount    + row).setValue(line.amount).setNumberFormat(INVOICE_YEN_FORMAT).setHorizontalAlignment('right');
     setFit(M.itemCols.note + row, line.note, true);
     sheet.getRange(M.itemCols.category  + row).setValue('');
@@ -940,10 +963,16 @@ function submitInvoice(p) {
   // レイアウト調査用に一時的に残していた中間生成物のシートコピーを削除する（原因特定・解消済みのため復活）
   copyFile.setTrashed(true);
 
-  appendInvoiceLog({
-    storeId: p.storeId, storeName: p.storeName, partnerId: p.partnerId || p.storeId,
-    period: String(p.invoiceDate || '').slice(0, 6),
-    amount: grandTotal, pdfUrl: pdfFile.getUrl(),
+  // 提出履歴（請求一覧の提出済み/未提出判定）は、まとめ請求でも店舗ごとに1件ずつ記録する。
+  // 見た目は1枚のPDFでも、対象の全店舗がそれぞれ正しく「提出済み」と判定されるようにするため。
+  const period = String(p.invoiceDate || '').slice(0, 6);
+  storeDayRate.forEach(r => {
+    appendInvoiceLog({
+      storeId: r.sl.storeId, storeName: r.sl.storeName, partnerId: r.sl.pid || r.sl.storeId,
+      period: period,
+      amount: r.amount + (perStoreOtherTotal[r.sl.pid] || 0),
+      pdfUrl: pdfFile.getUrl(),
+    });
   });
 
   return { ok: true, pdfUrl: pdfFile.getUrl(), grandTotal: grandTotal };

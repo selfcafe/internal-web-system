@@ -64,6 +64,17 @@ function getInvoicePartners() { return JSON.parse(localStorage.getItem(INVOICE_P
 function saveInvoiceStoreCfg(cfg) { localStorage.setItem(INVOICE_STORE_CFG_KEY, JSON.stringify(cfg)); _gasSaveSetting('invoice_store_cfg', JSON.stringify(cfg)); }
 function saveInvoicePartners(partners) { localStorage.setItem(INVOICE_PARTNERS_KEY, JSON.stringify(partners)); _gasSaveSetting('invoice_partners', JSON.stringify(partners)); }
 
+// 同一人物が複数店舗（複数partnerId）を管理しているケースは、専用のグループ管理データを持たず
+// 「業者コードが同じpartnerId同士」を自動的に同一グループとみなす（ここでは件数バッジ表示にのみ使う）。
+// 口座情報の連動は、実際に口座情報を入力する場（index.htmlの請求書提出フォーム）でのみ行う。
+// この管理画面は口座情報を一切扱わないため、ここでの保存を起点に連動させると、まだ口座情報が
+// 空の行で他メンバーの既存データを空で上書きしてしまう事故になる。
+function partnerIdsSharingBizCode(bizCode, partners, excludePid) {
+  if (!bizCode) return [];
+  partners = partners || getInvoicePartners();
+  return Object.keys(partners).filter(pid => pid !== excludePid && pid !== '__bizCodesSeeded' && partners[pid] && partners[pid].bizCode === bizCode);
+}
+
 function genInvoicePassword() {
   const chars = '0123456789abcdefghijklmnopqrstuvwxyz';
   let pw = '';
@@ -134,8 +145,14 @@ function seedInvoiceBizCodesOnce() {
   saveInvoicePartners(partners);
 }
 
+function _bizCodeSiblingBadge(pid, p, partners) {
+  const n = partnerIdsSharingBizCode(p.bizCode, partners, pid).length;
+  return n ? `<span style="font-size:11px;color:#0369a1;background:#e0f2fe;border-radius:5px;padding:3px 7px;white-space:nowrap">🔗他に同じ業者コードの店舗が${n}件</span>` : '';
+}
+
 function buildInvoiceSinglePartnerRow(sid) {
-  const p = getInvoicePartners()[sid] || {};
+  const partners = getInvoicePartners();
+  const p = partners[sid] || {};
   return `
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;background:#fffef0;border-radius:8px;padding:10px 12px">
       <span style="font-size:12px;color:#888">満額</span>
@@ -145,14 +162,18 @@ function buildInvoiceSinglePartnerRow(sid) {
         <option value="full" ${p.baseDaysMode === 'full' ? 'selected' : ''}>当月日数</option>
         <option value="halfRoundUp" ${p.baseDaysMode === 'halfRoundUp' ? 'selected' : ''}>当月日数÷2切り上げ</option>
       </select>
+      <span style="font-size:12px;color:#888">担当者</span>
+      <input type="text" id="inv-staffname-${esc(sid)}" value="${esc(p.staffName || '')}" placeholder="未設定" style="width:70px;border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:13px">
       <span style="font-size:12px;color:#888">業者コード</span>
       <input type="text" id="inv-bizcode-${esc(sid)}" value="${esc(p.bizCode || '')}" placeholder="未設定" style="width:80px;border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:13px">
+      ${_bizCodeSiblingBadge(sid, p, partners)}
       <button onclick="saveInvoicePartnerSettings('${sid}')" style="background:#22703d;color:white;padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer">保存</button>
       <div id="invoice-admin-msg-${esc(sid)}" style="font-size:12px;width:100%;min-height:16px"></div>
     </div>`;
 }
 
 function buildInvoiceMultiPartnerRows(sid, storePartners) {
+  const partners = getInvoicePartners();
   const rows = storePartners.map(([pid, p]) => `
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;background:#fffef0;border-radius:8px;padding:10px 12px;margin-bottom:8px">
       <span style="font-size:11px;color:#888;background:#fef9c3;border-radius:5px;padding:4px 8px;font-family:monospace">${esc(p.password || '')}</span>
@@ -163,8 +184,11 @@ function buildInvoiceMultiPartnerRows(sid, storePartners) {
         <option value="full" ${p.baseDaysMode === 'full' ? 'selected' : ''}>当月日数</option>
         <option value="halfRoundUp" ${p.baseDaysMode === 'halfRoundUp' ? 'selected' : ''}>当月日数÷2切り上げ</option>
       </select>
+      <span style="font-size:12px;color:#888">担当者</span>
+      <input type="text" id="inv-staffname-${esc(pid)}" value="${esc(p.staffName || '')}" placeholder="未設定" style="width:70px;border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:13px">
       <span style="font-size:12px;color:#888">業者コード</span>
       <input type="text" id="inv-bizcode-${esc(pid)}" value="${esc(p.bizCode || '')}" placeholder="未設定" style="width:80px;border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:13px">
+      ${_bizCodeSiblingBadge(pid, p, partners)}
       <button onclick="saveInvoicePartnerSettings('${pid}')" style="background:#22703d;color:white;padding:6px 12px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer">保存</button>
       <button onclick="resetInvoicePartnerPassword('${sid}','${pid}')" style="background:#8a8f7e;color:white;padding:6px 12px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;white-space:nowrap">パス再発行</button>
       <button onclick="removeInvoicePartner('${sid}','${pid}')" style="background:#ef4444;color:white;padding:6px 10px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer">削除</button>
@@ -208,10 +232,12 @@ function saveInvoicePartnerSettings(pid) {
   const p = partners[pid] || { storeId: pid, password: '', bank: {} };
   p.fullAmount = Number(document.getElementById('inv-amt-' + pid)?.value || 0);
   p.baseDaysMode = document.getElementById('inv-basemode-' + pid)?.value || 'full';
+  p.staffName = document.getElementById('inv-staffname-' + pid)?.value.trim() || '';
   p.bizCode = document.getElementById('inv-bizcode-' + pid)?.value.trim() || '';
   if (!p.storeId) p.storeId = pid;
   partners[pid] = p;
   saveInvoicePartners(partners);
+  renderInvoiceAdminList();
   const msg = document.getElementById('invoice-admin-msg-' + p.storeId);
   if (msg) { msg.style.color = '#22703d'; msg.textContent = '✓ 保存しました'; setTimeout(() => { msg.textContent = ''; }, 2000); }
 }

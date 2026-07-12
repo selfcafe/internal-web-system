@@ -5204,6 +5204,22 @@ function getInvoicePartners() { return JSON.parse(localStorage.getItem(INVOICE_P
 function saveInvoiceStoreCfg(cfg) { localStorage.setItem(INVOICE_STORE_CFG_KEY, JSON.stringify(cfg)); _syncInvoiceStoreCfg(); }
 function saveInvoicePartners(partners) { localStorage.setItem(INVOICE_PARTNERS_KEY, JSON.stringify(partners)); _syncInvoicePartners(); }
 
+// 同一人物が複数店舗（複数partnerId）を管理しているケースは、専用のグループ管理データを持たず
+// 「業者コードが同じpartnerId同士」を自動的に同一グループとみなす（invoice.htmlの同名関数と同じロジック）。
+function partnerIdsSharingBizCode(bizCode, partners, excludePid) {
+  if (!bizCode) return [];
+  partners = partners || getInvoicePartners();
+  return Object.keys(partners).filter(pid => pid !== excludePid && pid !== '__bizCodesSeeded' && partners[pid] && partners[pid].bizCode === bizCode);
+}
+function syncInvoiceBizCodeGroup(pid, partners) {
+  const src = partners[pid];
+  if (!src || !src.bizCode) return;
+  partnerIdsSharingBizCode(src.bizCode, partners, pid).forEach(otherPid => {
+    partners[otherPid].bizCode = src.bizCode;
+    partners[otherPid].bank = Object.assign({}, src.bank || {});
+  });
+}
+
 // 基準業務日数：契約方式により当月日数、または当月日数÷2切り上げ
 function computeInvoiceBaseDays(mode) {
   const now = new Date();
@@ -5235,10 +5251,7 @@ function openInvoicePartnerScreen() {
     if (pwMsg) pwMsg.textContent = '';
     setTimeout(() => pwInput?.focus(), 100);
   } else {
-    _invoiceActivePartnerId = storeTab;
-    document.getElementById('invoice-partner-pw-step').style.display = 'none';
-    document.getElementById('invoice-partner-form-step').style.display = 'block';
-    renderInvoicePartnerForm();
+    enterInvoiceForm(storeTab);
   }
 }
 
@@ -5255,13 +5268,25 @@ function submitInvoicePartnerPw() {
     if (msg) { msg.style.color = '#ef4444'; msg.textContent = 'パスワードが違います'; }
     return;
   }
-  _invoiceActivePartnerId = match[0];
-  document.getElementById('invoice-partner-pw-step').style.display = 'none';
-  document.getElementById('invoice-partner-form-step').style.display = 'block';
-  renderInvoicePartnerForm();
+  enterInvoiceForm(match[0]);
 }
 
+// 個人（またはstoreTab）の身元が確定した後に呼ぶ。業者コードが同じ他店舗（＝同一人物が管理する
+// 別店舗）があれば「複数店舗まとめ」フォームへ、無ければ今まで通り単独店舗フォームへ進む。
+function enterInvoiceForm(pid) {
+  _invoiceActivePartnerId = pid;
+  document.getElementById('invoice-partner-pw-step').style.display = 'none';
+  document.getElementById('invoice-partner-form-step').style.display = 'block';
+  const partners = getInvoicePartners();
+  const p = partners[pid] || {};
+  const siblings = partnerIdsSharingBizCode(p.bizCode, partners, pid);
+  if (siblings.length) renderInvoiceCombinedForm(pid, siblings);
+  else renderInvoicePartnerForm();
+}
+
+// 業者コードが同じ他店舗を持たない（＝1店舗のみを管理する）パートナー向けの、今まで通りの単独店舗フォーム
 function renderInvoicePartnerForm() {
+  _invoiceCombinedMembers = null;
   const p = getInvoicePartners()[_invoiceActivePartnerId] || {};
   const bank = p.bank || {};
   const baseDays = computeInvoiceBaseDays(p.baseDaysMode || 'full');
@@ -5269,6 +5294,23 @@ function renderInvoicePartnerForm() {
     <div style="font-size:12px;color:#888;margin-bottom:10px">${esc(STORES[storeTab] || storeTab)} ／ 満額 ${Number(p.fullAmount || 0).toLocaleString()}円 ／ 基準業務日数 ${baseDays}日</div>
     <div style="display:flex;flex-direction:column;gap:8px">
       <label style="font-size:12px;color:#888">実業務日数<input type="number" id="inv-actualdays" min="0" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:8px;font-size:14px;font-family:inherit"></label>
+      ${_invoiceBankFieldsHtml(bank)}
+      <div style="border-top:1px solid #e0ede5;margin-top:6px;padding-top:10px">
+        <div style="font-weight:600;font-size:12px;color:#888;margin-bottom:6px">その他（緊急出動・現地購入など。税込金額で入力。マイナス可）</div>
+        <div id="invoice-other-rows"></div>
+        <button onclick="addInvoiceOtherRow()" style="background:#22703d;color:white;padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;margin-top:6px">+ 行を追加</button>
+      </div>
+      <div style="font-weight:600;font-size:15px;margin-top:10px;text-align:right">合計（税込）: <span id="invoice-total-display">0</span>円</div>
+      <div id="invoice-submit-msg" style="font-size:12px;min-height:16px"></div>
+      <button onclick="submitInvoiceForm()" style="background:#22703d;color:white;padding:10px;font-size:14px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">請求書を作成する</button>
+    </div>`;
+  document.getElementById('inv-actualdays').addEventListener('input', updateInvoiceTotal);
+  updateInvoiceTotal();
+}
+
+// 単独店舗・複数店舗まとめの両フォームで共通の口座・会社情報入力欄
+function _invoiceBankFieldsHtml(bank) {
+  return `
       <label style="font-size:12px;color:#888">登録番号（Tから始まる番号。無い場合は空欄でOK）<input type="text" id="inv-regnum" value="${esc(bank.registrationNumber || '')}" placeholder="例:1234567890123" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:8px;font-size:14px;font-family:inherit"></label>
       <label style="font-size:12px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="inv-taxexempt" ${bank.isTaxExempt ? 'checked' : ''}>課税事業者ではない</label>
       <label style="font-size:12px;color:#888">社名・お名前<input type="text" id="inv-partnername" value="${esc(bank.partnerName || '')}" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:8px;font-size:14px;font-family:inherit"></label>
@@ -5291,64 +5333,13 @@ function renderInvoicePartnerForm() {
         </label>
         <label style="font-size:12px;color:#888;flex:1">口座番号<input type="text" id="inv-accountnum" value="${esc(bank.accountNumber || '')}" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:8px;font-size:14px;font-family:inherit"></label>
       </div>
-      <label style="font-size:12px;color:#888">口座名義（カナ）<input type="text" id="inv-accountkana" value="${esc(bank.accountHolderKana || '')}" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:8px;font-size:14px;font-family:inherit"></label>
-      <div style="border-top:1px solid #e0ede5;margin-top:6px;padding-top:10px">
-        <div style="font-weight:600;font-size:12px;color:#888;margin-bottom:6px">その他（緊急出動・現地購入など。税込金額で入力）</div>
-        <div id="invoice-other-rows"></div>
-        <button onclick="addInvoiceOtherRow()" style="background:#22703d;color:white;padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;margin-top:6px">+ 行を追加</button>
-      </div>
-      <div style="font-weight:600;font-size:15px;margin-top:10px;text-align:right">合計（税込）: <span id="invoice-total-display">0</span>円</div>
-      <div id="invoice-submit-msg" style="font-size:12px;min-height:16px"></div>
-      <button onclick="submitInvoiceForm()" style="background:#22703d;color:white;padding:10px;font-size:14px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">請求書を作成する</button>
-    </div>`;
-  document.getElementById('inv-actualdays').addEventListener('input', updateInvoiceTotal);
-  updateInvoiceTotal();
+      <label style="font-size:12px;color:#888">口座名義（カナ）<input type="text" id="inv-accountkana" value="${esc(bank.accountHolderKana || '')}" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:8px;font-size:14px;font-family:inherit"></label>`;
 }
 
-function addInvoiceOtherRow() {
-  const container = document.getElementById('invoice-other-rows');
-  if (!container) return;
-  if (container.children.length >= 19) { alert('その他の行数が上限（19行）に達しています'); return; }
-  const div = document.createElement('div');
-  div.style.cssText = 'display:flex;gap:6px;align-items:center;margin-bottom:6px';
-  div.innerHTML = `
-    <input type="number" placeholder="金額(税込)" class="inv-other-amount" oninput="updateInvoiceTotal()" style="width:110px;border:1px solid #ddd;border-radius:6px;padding:7px 8px;font-size:13px;font-family:inherit">
-    <input type="text" placeholder="備考(用途)" class="inv-other-note" style="flex:1;border:1px solid #ddd;border-radius:6px;padding:7px 8px;font-size:13px;font-family:inherit">
-    <button style="background:#ef4444;color:white;padding:6px 10px;font-size:12px;border-radius:6px;border:none;cursor:pointer;font-family:inherit">×</button>`;
-  div.querySelector('button').onclick = () => { div.remove(); updateInvoiceTotal(); };
-  container.appendChild(div);
-}
-
-function updateInvoiceTotal() {
-  const p = getInvoicePartners()[_invoiceActivePartnerId] || {};
-  const baseDays = computeInvoiceBaseDays(p.baseDaysMode || 'full');
-  const actualDays = Number(document.getElementById('inv-actualdays')?.value || 0);
-  const fullAmount = Number(p.fullAmount || 0);
-  const dayRate = baseDays > 0 ? Math.floor(fullAmount / baseDays * actualDays) : 0;
-  const otherTotal = Array.from(document.querySelectorAll('.inv-other-amount')).reduce((s, el) => s + Math.floor(Number(el.value) || 0), 0);
-  const disp = document.getElementById('invoice-total-display');
-  if (disp) disp.textContent = (dayRate + otherTotal).toLocaleString();
-}
-
-async function submitInvoiceForm() {
-  const msg = document.getElementById('invoice-submit-msg');
-  const partners = getInvoicePartners();
-  const pid = _invoiceActivePartnerId;
-  const p = partners[pid] || { storeId: storeTab, password: '', bank: {} };
-  const actualDays = Number(document.getElementById('inv-actualdays')?.value || 0);
-  if (!actualDays) { msg.style.color = '#ef4444'; msg.textContent = '実業務日数を入力してください'; return; }
-
-  const regNumInput = document.getElementById('inv-regnum').value.trim();
-  const isTaxExemptInput = document.getElementById('inv-taxexempt').checked;
-  if (isTaxExemptInput && regNumInput) {
-    msg.style.color = '#ef4444';
-    msg.textContent = '「課税事業者ではない」にチェックが入っている場合、登録番号は入力できません。どちらか一方にしてください。';
-    return;
-  }
-
-  const bank = {
-    registrationNumber: regNumInput,
-    isTaxExempt: isTaxExemptInput,
+function _readInvoiceBankFields() {
+  return {
+    registrationNumber: document.getElementById('inv-regnum').value.trim(),
+    isTaxExempt: document.getElementById('inv-taxexempt').checked,
     partnerName: document.getElementById('inv-partnername').value.trim(),
     address: document.getElementById('inv-address').value.trim(),
     tel: document.getElementById('inv-tel').value.trim(),
@@ -5360,37 +5351,9 @@ async function submitInvoiceForm() {
     accountNumber: document.getElementById('inv-accountnum').value.trim(),
     accountHolderKana: document.getElementById('inv-accountkana').value.trim(),
   };
-  if (!bank.partnerName) { msg.style.color = '#ef4444'; msg.textContent = '社名・お名前を入力してください'; return; }
+}
 
-  // 自動入力欄は常に編集可能で、送信内容が次回以降の保存値としても上書きされる
-  p.bank = bank;
-  if (!p.storeId) p.storeId = storeTab;
-  partners[pid] = p;
-  saveInvoicePartners(partners);
-
-  const otherItems = Array.from(document.querySelectorAll('#invoice-other-rows > div')).map(row => ({
-    amount: Number(row.querySelector('.inv-other-amount')?.value || 0),
-    note: row.querySelector('.inv-other-note')?.value.trim() || '',
-  })).filter(it => it.amount > 0);
-
-  const now = new Date();
-  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-  const isoDate = lastDay.toLocaleDateString('sv');
-  const payload = {
-    storeId: storeTab, storeName: STORES[storeTab] || storeTab, storeCode: getInvoiceStoreCode(storeTab) || storeTab, partnerId: pid,
-    partnerName: bank.partnerName, address: bank.address, tel: bank.tel,
-    registrationNumber: bank.registrationNumber, isTaxExempt: bank.isTaxExempt,
-    bankName: bank.bankName, bankCode: bank.bankCode,
-    branchName: bank.branchName, branchCode: bank.branchCode,
-    accountType: bank.accountType, accountNumber: bank.accountNumber, accountHolderKana: bank.accountHolderKana,
-    bizCode: p.bizCode || '',
-    fullAmount: Number(p.fullAmount || 0), baseDays: computeInvoiceBaseDays(p.baseDaysMode || 'full'), actualDays,
-    dayRateNote: isoDate.slice(0, 7) + '分',
-    otherItems,
-    invoiceDate: isoDate.replace(/-/g, ''),
-    era: { year: lastDay.getFullYear() - 2018, month: lastDay.getMonth() + 1, day: lastDay.getDate() },
-  };
-
+async function _postInvoicePayload(payload, msg) {
   msg.style.color = '#888'; msg.textContent = '作成中...';
   try {
     const res = await gasPost('submitInvoice', { payload });
@@ -5400,6 +5363,223 @@ async function submitInvoiceForm() {
   } catch (e) {
     msg.style.color = '#ef4444'; msg.textContent = '送信に失敗しました。通信環境を確認してください。';
   }
+}
+
+// null = 単独店舗フォーム中。配列 = 複数店舗まとめフォーム中（対象店舗一覧）。
+// addInvoiceOtherRow()がその他行に店舗選択を出すかどうかの判定に使う。
+let _invoiceCombinedMembers = null;
+
+function addInvoiceOtherRow() {
+  const container = document.getElementById('invoice-other-rows');
+  if (!container) return;
+  if (container.children.length >= 19) { alert('その他の行数が上限（19行）に達しています'); return; }
+  const div = document.createElement('div');
+  div.style.cssText = 'display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px';
+  const storeSelectHtml = _invoiceCombinedMembers ? `
+    <select class="inv-other-store" style="border:1px solid #ddd;border-radius:6px;padding:7px 8px;font-size:12px;font-family:inherit">
+      <option value="">店舗指定なし</option>
+      ${_invoiceCombinedMembers.map(m => `<option value="${esc(m.pid)}">${esc(m.storeName)}</option>`).join('')}
+    </select>` : '';
+  div.innerHTML = `
+    ${storeSelectHtml}
+    <input type="number" placeholder="金額(税込・マイナス可)" class="inv-other-amount" oninput="updateInvoiceTotal()" style="width:130px;border:1px solid #ddd;border-radius:6px;padding:7px 8px;font-size:13px;font-family:inherit">
+    <input type="text" placeholder="備考(用途)" class="inv-other-note" style="flex:1;min-width:100px;border:1px solid #ddd;border-radius:6px;padding:7px 8px;font-size:13px;font-family:inherit">
+    <button style="background:#ef4444;color:white;padding:6px 10px;font-size:12px;border-radius:6px;border:none;cursor:pointer;font-family:inherit">×</button>`;
+  div.querySelector('button').onclick = () => { div.remove(); updateInvoiceTotal(); };
+  container.appendChild(div);
+}
+
+function updateInvoiceTotal() {
+  if (_invoiceCombinedMembers) { updateInvoiceCombinedTotal(); return; }
+  const p = getInvoicePartners()[_invoiceActivePartnerId] || {};
+  const baseDays = computeInvoiceBaseDays(p.baseDaysMode || 'full');
+  const actualDays = Number(document.getElementById('inv-actualdays')?.value || 0);
+  const fullAmount = Number(p.fullAmount || 0);
+  const dayRate = baseDays > 0 ? Math.floor(fullAmount / baseDays * actualDays) : 0;
+  const otherTotal = Array.from(document.querySelectorAll('.inv-other-amount')).reduce((s, el) => s + Math.floor(Number(el.value) || 0), 0);
+  const disp = document.getElementById('invoice-total-display');
+  if (disp) disp.textContent = (dayRate + otherTotal).toLocaleString();
+}
+
+function updateInvoiceCombinedTotal() {
+  const partners = getInvoicePartners();
+  let total = 0;
+  (_invoiceCombinedMembers || []).forEach(m => {
+    if (!document.getElementById('inv-combined-check-' + m.pid)?.checked) return;
+    const mp = partners[m.pid] || {};
+    const baseDays = computeInvoiceBaseDays(mp.baseDaysMode || 'full');
+    const actualDays = Number(document.getElementById('inv-actualdays-' + m.pid)?.value || 0);
+    total += baseDays > 0 ? Math.floor(Number(mp.fullAmount || 0) / baseDays * actualDays) : 0;
+  });
+  total += Array.from(document.querySelectorAll('.inv-other-amount')).reduce((s, el) => s + Math.floor(Number(el.value) || 0), 0);
+  const disp = document.getElementById('invoice-total-display');
+  if (disp) disp.textContent = total.toLocaleString();
+}
+
+// 業者コードが同じ他店舗を持つパートナー向け：まとめて対象店舗を選び、1回の送信で1枚のPDFにする
+function renderInvoiceCombinedForm(pid, siblingPids) {
+  const partners = getInvoicePartners();
+  const codeVal = c => (c === '' || c == null || isNaN(Number(c))) ? Infinity : Number(c);
+  const members = [pid, ...siblingPids].map(mpid => {
+    const mp = partners[mpid] || {};
+    const msid = mp.storeId || mpid;
+    return { pid: mpid, storeId: msid, storeName: STORES[msid] || msid, storeCode: getInvoiceStoreCode(msid), fullAmount: mp.fullAmount, baseDaysMode: mp.baseDaysMode, staffName: mp.staffName };
+  }).sort((a, b) => {
+    const av = codeVal(a.storeCode), bv = codeVal(b.storeCode);
+    if (av !== bv) return av - bv;
+    return String(a.storeName).localeCompare(String(b.storeName), 'ja');
+  });
+  _invoiceCombinedMembers = members;
+
+  const p = partners[pid] || {};
+  const bank = p.bank || {};
+
+  const memberRows = members.map(m => {
+    const baseDays = computeInvoiceBaseDays(m.baseDaysMode || 'full');
+    return `
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid #f0f0f0">
+        <label style="display:flex;align-items:center;gap:6px;min-width:140px">
+          <input type="checkbox" id="inv-combined-check-${esc(m.pid)}" checked onchange="updateInvoiceTotal()">
+          <span style="font-size:13px;font-weight:600">${esc(m.storeName)}</span>
+        </label>
+        <span style="font-size:11px;color:#888">満額${Number(m.fullAmount || 0).toLocaleString()}円／基準${baseDays}日${m.staffName ? '／担当:' + esc(m.staffName) : ''}</span>
+        <input type="number" id="inv-actualdays-${esc(m.pid)}" placeholder="実業務日数" min="0" oninput="updateInvoiceTotal()" style="width:90px;border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:13px;font-family:inherit;margin-left:auto">
+      </div>`;
+  }).join('');
+
+  document.getElementById('invoice-partner-form-body').innerHTML = `
+    <div style="font-size:12px;color:#0369a1;background:#e0f2fe;border-radius:6px;padding:8px 10px;margin-bottom:10px">🔗 同じ業者コードの${members.length}店舗をまとめて1枚の請求書として作成します。今回対象外にしたい店舗はチェックを外してください。</div>
+    <div style="margin-bottom:10px">${memberRows}</div>
+    <div style="display:flex;flex-direction:column;gap:8px">
+      ${_invoiceBankFieldsHtml(bank)}
+      <div style="border-top:1px solid #e0ede5;margin-top:6px;padding-top:10px">
+        <div style="font-weight:600;font-size:12px;color:#888;margin-bottom:6px">その他（緊急出動・現地購入・割引など。税込金額で入力。マイナス可）</div>
+        <div id="invoice-other-rows"></div>
+        <button onclick="addInvoiceOtherRow()" style="background:#22703d;color:white;padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;margin-top:6px">+ 行を追加</button>
+      </div>
+      <div style="font-weight:600;font-size:15px;margin-top:10px;text-align:right">合計（税込）: <span id="invoice-total-display">0</span>円</div>
+      <div id="invoice-submit-msg" style="font-size:12px;min-height:16px"></div>
+      <button onclick="submitInvoiceCombinedForm()" style="background:#22703d;color:white;padding:10px;font-size:14px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">請求書を作成する</button>
+    </div>`;
+  updateInvoiceTotal();
+}
+
+function _invoiceDateAndEra() {
+  const now = new Date();
+  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
+  const isoDate = lastDay.toLocaleDateString('sv');
+  return {
+    dayRateNote: isoDate.slice(0, 7) + '分',
+    invoiceDate: isoDate.replace(/-/g, ''),
+    era: { year: lastDay.getFullYear() - 2018, month: lastDay.getMonth() + 1, day: lastDay.getDate() },
+  };
+}
+
+async function submitInvoiceForm() {
+  const msg = document.getElementById('invoice-submit-msg');
+  const partners = getInvoicePartners();
+  const pid = _invoiceActivePartnerId;
+  const p = partners[pid] || { storeId: storeTab, password: '', bank: {} };
+  const actualDays = Number(document.getElementById('inv-actualdays')?.value || 0);
+  if (!actualDays) { msg.style.color = '#ef4444'; msg.textContent = '実業務日数を入力してください'; return; }
+
+  const bank = _readInvoiceBankFields();
+  if (bank.isTaxExempt && bank.registrationNumber) {
+    msg.style.color = '#ef4444';
+    msg.textContent = '「課税事業者ではない」にチェックが入っている場合、登録番号は入力できません。どちらか一方にしてください。';
+    return;
+  }
+  if (!bank.partnerName) { msg.style.color = '#ef4444'; msg.textContent = '社名・お名前を入力してください'; return; }
+
+  // 自動入力欄は常に編集可能で、送信内容が次回以降の保存値としても上書きされる
+  p.bank = bank;
+  if (!p.storeId) p.storeId = storeTab;
+  partners[pid] = p;
+  syncInvoiceBizCodeGroup(pid, partners);
+  saveInvoicePartners(partners);
+
+  const otherItems = Array.from(document.querySelectorAll('#invoice-other-rows > div')).map(row => ({
+    pid, storeId: storeTab, storeName: STORES[storeTab] || storeTab, storeCode: getInvoiceStoreCode(storeTab) || storeTab, staffName: p.staffName || '',
+    amount: Number(row.querySelector('.inv-other-amount')?.value || 0),
+    note: row.querySelector('.inv-other-note')?.value.trim() || '',
+  })).filter(it => it.amount !== 0);
+
+  const payload = {
+    partnerId: pid,
+    partnerName: bank.partnerName, address: bank.address, tel: bank.tel,
+    registrationNumber: bank.registrationNumber, isTaxExempt: bank.isTaxExempt,
+    bankName: bank.bankName, bankCode: bank.bankCode,
+    branchName: bank.branchName, branchCode: bank.branchCode,
+    accountType: bank.accountType, accountNumber: bank.accountNumber, accountHolderKana: bank.accountHolderKana,
+    bizCode: p.bizCode || '',
+    storeLines: [{ pid, storeId: storeTab, storeName: STORES[storeTab] || storeTab, storeCode: getInvoiceStoreCode(storeTab) || storeTab, staffName: p.staffName || '', fullAmount: Number(p.fullAmount || 0), baseDays: computeInvoiceBaseDays(p.baseDaysMode || 'full'), actualDays }],
+    otherItems,
+    ..._invoiceDateAndEra(),
+  };
+
+  await _postInvoicePayload(payload, msg);
+}
+
+async function submitInvoiceCombinedForm() {
+  const msg = document.getElementById('invoice-submit-msg');
+  const partners = getInvoicePartners();
+  const pid = _invoiceActivePartnerId;
+  const members = _invoiceCombinedMembers || [];
+
+  const checkedMembers = members.filter(m => document.getElementById('inv-combined-check-' + m.pid)?.checked);
+  if (!checkedMembers.length) { msg.style.color = '#ef4444'; msg.textContent = '対象店舗を1つ以上選択してください'; return; }
+
+  const storeLines = [];
+  for (const m of checkedMembers) {
+    const actualDays = Number(document.getElementById('inv-actualdays-' + m.pid)?.value || 0);
+    if (!actualDays) { msg.style.color = '#ef4444'; msg.textContent = esc(m.storeName) + 'の実業務日数を入力してください'; return; }
+    const mp = partners[m.pid] || {};
+    storeLines.push({
+      pid: m.pid, storeId: m.storeId, storeName: m.storeName, storeCode: getInvoiceStoreCode(m.storeId) || m.storeId,
+      staffName: mp.staffName || '', fullAmount: Number(mp.fullAmount || 0), baseDays: computeInvoiceBaseDays(mp.baseDaysMode || 'full'), actualDays,
+    });
+  }
+
+  const bank = _readInvoiceBankFields();
+  if (bank.isTaxExempt && bank.registrationNumber) {
+    msg.style.color = '#ef4444';
+    msg.textContent = '「課税事業者ではない」にチェックが入っている場合、登録番号は入力できません。どちらか一方にしてください。';
+    return;
+  }
+  if (!bank.partnerName) { msg.style.color = '#ef4444'; msg.textContent = '社名・お名前を入力してください'; return; }
+
+  const p = partners[pid] || { storeId: storeTab, password: '', bank: {} };
+  p.bank = bank;
+  if (!p.storeId) p.storeId = storeTab;
+  partners[pid] = p;
+  syncInvoiceBizCodeGroup(pid, partners);
+  saveInvoicePartners(partners);
+
+  const otherItems = Array.from(document.querySelectorAll('#invoice-other-rows > div')).map(row => {
+    const otherPid = row.querySelector('.inv-other-store')?.value || '';
+    const m = members.find(x => x.pid === otherPid);
+    return {
+      pid: otherPid, storeId: m ? m.storeId : '', storeName: m ? m.storeName : '',
+      storeCode: m ? (getInvoiceStoreCode(m.storeId) || m.storeId) : '',
+      staffName: m ? (partners[m.pid]?.staffName || '') : '',
+      amount: Number(row.querySelector('.inv-other-amount')?.value || 0),
+      note: row.querySelector('.inv-other-note')?.value.trim() || '',
+    };
+  }).filter(it => it.amount !== 0);
+
+  const payload = {
+    partnerId: pid,
+    partnerName: bank.partnerName, address: bank.address, tel: bank.tel,
+    registrationNumber: bank.registrationNumber, isTaxExempt: bank.isTaxExempt,
+    bankName: bank.bankName, bankCode: bank.bankCode,
+    branchName: bank.branchName, branchCode: bank.branchCode,
+    accountType: bank.accountType, accountNumber: bank.accountNumber, accountHolderKana: bank.accountHolderKana,
+    bizCode: p.bizCode || '',
+    storeLines, otherItems,
+    ..._invoiceDateAndEra(),
+  };
+
+  await _postInvoicePayload(payload, msg);
 }
 
 (async () => {
