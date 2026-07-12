@@ -1029,8 +1029,8 @@ function buildInvoiceReceiptPdf(otherItems, fileBaseName, folder) {
       const r = Math.floor(idx / COLS), c = idx % COLS;
       const cell = table.getCell(r, c);
       const captionPara = cell.getChild(0).asParagraph();
-      captionPara.setText(it.note || '').editAsText().setFontSize(9).setBold(true);
-      captionPara.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+      captionPara.setText(it.note || '');
+      captionPara.setFontSize(9).setBold(true).setAlignment(DocumentApp.HorizontalAlignment.CENTER);
       try {
         const imgBlob = DriveApp.getFileById(it.receiptFileId).getBlob();
         const img = cell.appendImage(imgBlob);
@@ -1041,7 +1041,7 @@ function buildInvoiceReceiptPdf(otherItems, fileBaseName, folder) {
           imgParent.asParagraph().setAlignment(DocumentApp.HorizontalAlignment.CENTER);
         }
       } catch (e) {
-        cell.appendParagraph('(画像読込失敗)').editAsText().setFontSize(8);
+        cell.appendParagraph('(画像読込失敗)').setFontSize(8);
       }
     });
   }
