@@ -192,8 +192,8 @@ function buildInvoiceSinglePartnerRow(sid, showBizBadge) {
       <input type="text" id="inv-staffname-${esc(sid)}" value="${esc(p.staffName || '')}" placeholder="未設定" style="width:70px;border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:13px">
       <span style="font-size:12px;color:#888">業者コード</span>
       <input type="text" id="inv-bizcode-${esc(sid)}" value="${esc(p.bizCode || '')}" placeholder="未設定" style="width:80px;border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:13px">
-      ${showBizBadge ? _bizCodeSiblingBadge(sid, p, partners) : ''}
       <button onclick="saveInvoicePartnerSettings('${sid}')" style="background:#22703d;color:white;padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer">保存</button>
+      ${showBizBadge ? _bizCodeSiblingBadge(sid, p, partners) : ''}
       <div id="invoice-admin-msg-${esc(sid)}" style="font-size:12px;width:100%;min-height:16px"></div>
     </div>`;
 }
@@ -214,10 +214,10 @@ function buildInvoiceMultiPartnerRows(sid, storePartners) {
       <input type="text" id="inv-staffname-${esc(pid)}" value="${esc(p.staffName || '')}" placeholder="未設定" style="width:70px;border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:13px">
       <span style="font-size:12px;color:#888">業者コード</span>
       <input type="text" id="inv-bizcode-${esc(pid)}" value="${esc(p.bizCode || '')}" placeholder="未設定" style="width:80px;border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:13px">
-      ${_bizCodeSiblingBadge(pid, p, partners)}
       <button onclick="saveInvoicePartnerSettings('${pid}')" style="background:#22703d;color:white;padding:6px 12px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer">保存</button>
       <button onclick="resetInvoicePartnerPassword('${sid}','${pid}')" style="background:#8a8f7e;color:white;padding:6px 12px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;white-space:nowrap">パス再発行</button>
       <button onclick="removeInvoicePartner('${sid}','${pid}')" style="background:#ef4444;color:white;padding:6px 10px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer">削除</button>
+      ${_bizCodeSiblingBadge(pid, p, partners)}
     </div>`).join('');
   return rows + `<button onclick="addInvoicePartner('${sid}')" style="background:#22703d;color:white;padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer">+ パートナー追加</button>
     <div id="invoice-admin-msg-${esc(sid)}" style="font-size:12px;margin-top:6px;min-height:16px"></div>`;
