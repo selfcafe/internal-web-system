@@ -999,8 +999,7 @@ function submitInvoice(p) {
 
 // その他項目に添付された領収書写真（Drive file_id）を、1ページに複数枚まとめたGoogle Docsに
 // 差し込んでからPDFとしてエクスポートする。添付が無ければ何もせず空文字を返す。
-// 領収書は縦長の写真になりがちなので、幅基準だけで拡大すると1枚で1ページを超えてしまう。
-// 幅・高さ両方の制約を見て小さい方の倍率で縮小し、1ページに複数枚収まるようにする。
+// 縦1列に並べるだけだと横幅が余って1枚1枚が小さくなるため、2列×3行の表（グリッド）に配置する。
 function buildInvoiceReceiptPdf(otherItems, fileBaseName, folder) {
   const receiptItems = (otherItems || []).filter(it => it && it.receiptFileId);
   if (!receiptItems.length) return '';
@@ -1010,30 +1009,42 @@ function buildInvoiceReceiptPdf(otherItems, fileBaseName, folder) {
   body.setMarginTop(20).setMarginBottom(20).setMarginLeft(20).setMarginRight(20);
   const PAGE_WIDTH_PT  = 555; // A4幅(595pt)からマージン(左右20pt×2)を引いた値
   const PAGE_HEIGHT_PT = 802; // A4高さ(842pt)からマージン(上下20pt×2)を引いた値
-  const PER_PAGE = 5; // 1ページに詰め込む枚数
-  const CAPTION_H = 18; // 備考テキスト分の高さ見込み
-  const CELL_H = Math.floor(PAGE_HEIGHT_PT / PER_PAGE) - CAPTION_H - 10;
+  const COLS = 2;
+  const ROWS_PER_PAGE = 3;
+  const PER_PAGE = COLS * ROWS_PER_PAGE; // 1ページ6枚（2列×3行）
+  const CAPTION_H = 14; // 備考テキスト分の高さ見込み
+  const CELL_W = Math.floor(PAGE_WIDTH_PT / COLS) - 12; // セルの内側余白ぶん差し引く
+  const CELL_H = Math.floor(PAGE_HEIGHT_PT / ROWS_PER_PAGE) - CAPTION_H - 16;
 
-  receiptItems.forEach((it, i) => {
-    if (i > 0 && i % PER_PAGE === 0) body.appendPageBreak();
-    if (it.note) {
-      const caption = body.appendParagraph(it.note).setFontSize(10).setBold(true);
-      caption.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
-    }
-    try {
-      const imgBlob = DriveApp.getFileById(it.receiptFileId).getBlob();
-      const img = body.appendImage(imgBlob);
-      const scale = Math.min(PAGE_WIDTH_PT / img.getWidth(), CELL_H / img.getHeight(), 1);
-      img.setWidth(img.getWidth() * scale).setHeight(img.getHeight() * scale);
-      // appendImage()は直前の段落（無ければ新規段落）に画像を差し込むため、その段落を中央寄せにする
-      const parent = img.getParent();
-      if (parent && parent.getType() === DocumentApp.ElementType.PARAGRAPH) {
-        parent.asParagraph().setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+  for (let pageStart = 0; pageStart < receiptItems.length; pageStart += PER_PAGE) {
+    if (pageStart > 0) body.appendPageBreak();
+    const pageItems = receiptItems.slice(pageStart, pageStart + PER_PAGE);
+    const rows = Math.ceil(pageItems.length / COLS);
+    const seed = [];
+    for (let r = 0; r < rows; r++) seed.push(new Array(COLS).fill(''));
+    const table = body.appendTable(seed);
+    table.setBorderWidth(0);
+
+    pageItems.forEach((it, idx) => {
+      const r = Math.floor(idx / COLS), c = idx % COLS;
+      const cell = table.getCell(r, c);
+      const captionPara = cell.getChild(0).asParagraph();
+      captionPara.setText(it.note || '').editAsText().setFontSize(9).setBold(true);
+      captionPara.setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+      try {
+        const imgBlob = DriveApp.getFileById(it.receiptFileId).getBlob();
+        const img = cell.appendImage(imgBlob);
+        const scale = Math.min(CELL_W / img.getWidth(), CELL_H / img.getHeight(), 1);
+        img.setWidth(img.getWidth() * scale).setHeight(img.getHeight() * scale);
+        const imgParent = img.getParent();
+        if (imgParent && imgParent.getType() === DocumentApp.ElementType.PARAGRAPH) {
+          imgParent.asParagraph().setAlignment(DocumentApp.HorizontalAlignment.CENTER);
+        }
+      } catch (e) {
+        cell.appendParagraph('(画像読込失敗)').editAsText().setFontSize(8);
       }
-    } catch (e) {
-      body.appendParagraph('(領収書画像の読み込みに失敗しました)').setFontSize(10);
-    }
-  });
+    });
+  }
   doc.saveAndClose();
 
   const docFile = DriveApp.getFileById(doc.getId());
