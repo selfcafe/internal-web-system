@@ -162,8 +162,12 @@ function _bizCodeSiblingBadge(pid, p, partners) {
     return STORES[sp.storeId || spid] || sp.storeId || spid;
   });
   const listId = 'biz-sibling-' + esc(pid);
-  return `<span onclick="toggleBizSiblingList('${esc(pid)}')" style="cursor:pointer;font-size:11px;color:#0369a1;background:#e0f2fe;border-radius:5px;padding:3px 7px;white-space:nowrap">🔗同じ業者コードの店舗が計${siblings.length + 1}件</span>
-    <span id="${listId}" style="display:none;font-size:11px;color:#0369a1;background:#f0f7fc;border:1px solid #bfdbfe;border-radius:6px;padding:5px 9px;width:100%">${names.map(esc).join('、')}</span>`;
+  // width:100%の行を挟むことで、業者コードが1件だけの店舗と同じ1行の見た目を保ったまま
+  // バッジは常に次の行へ折り返す（flex-wrapのコンテナ内で改行を強制する）
+  return `<div style="width:100%;margin-top:2px">
+    <span onclick="toggleBizSiblingList('${esc(pid)}')" style="cursor:pointer;font-size:11px;color:#0369a1;background:#e0f2fe;border-radius:5px;padding:3px 7px;white-space:nowrap">🔗同じ業者コードの店舗が計${siblings.length + 1}件</span>
+    <span id="${listId}" style="display:none;font-size:11px;color:#0369a1;background:#f0f7fc;border:1px solid #bfdbfe;border-radius:6px;padding:5px 9px;width:100%;margin-top:4px">${names.map(esc).join('、')}</span>
+  </div>`;
 }
 
 function toggleBizSiblingList(pid) {
