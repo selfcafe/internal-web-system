@@ -1067,13 +1067,14 @@ function unitLabelText(name, unitMode) {
   return (unitMode || 'piece') === 'case' ? `ケース（${p.caseUnit}）` : `${p.unit}（${p.caseUnit}）`;
 }
 
-// caseUnit（例："1ケース/20本"）は表示用の自由文字列なので、書式を決め打ちでパースせず
-// 含まれる数字を1つだけ抜き出す。数字が0個または2個以上ある場合はnullを返し、
-// 呼び出し側で「変換できません」の警告を出す（誤った数量でサイレントに計算しない）
+// caseUnit（例："1ケース/20本"）は表示用の自由文字列なので、書式を決め打ちでパースしない。
+// 実際のデータは常に「1ケース/N本」「1セット36箱」のように先頭の「1」＋末尾の実個数という
+// 並びなので、含まれる数字の最後の1つを実個数として抜き出す。数字が1つも無い場合のみ
+// nullを返し、呼び出し側で「変換できません」の警告を出す（誤った数量でサイレントに計算しない）
 function casePiecesFromUnit(caseUnitStr) {
   const nums = String(caseUnitStr || '').match(/\d+/g);
-  if (!nums || nums.length !== 1) return null;
-  return Number(nums[0]);
+  if (!nums || !nums.length) return null;
+  return Number(nums[nums.length - 1]);
 }
 // 依頼数量(qty)を実際の個数（本/袋/箱/個）に変換。caseOnly商品は常にケース換算、
 // それ以外はcaseUnitがあっても行のunitModeが'case'の時だけケース換算する
