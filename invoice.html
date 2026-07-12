@@ -316,9 +316,13 @@ function renderInvoiceAdminList() {
 
   body.innerHTML = clusters.map(cluster => {
     const rowsHtml = cluster.map(([sid, sname]) => _buildInvoiceStoreBlock(sid, sname, cfg, partners)).join('');
-    // 2店舗以上のクラスターだけ、まとまりが分かるよう左に色帯を付ける
+    // 2店舗以上のクラスターは、隣のクラスターと線が繋がって見えないよう背景色付きの
+    // カードで囲み、上下に余白を取って独立した塊だと分かるようにする
     return cluster.length > 1
-      ? `<div style="border-left:3px solid #0369a1;padding-left:10px;margin-bottom:2px">${rowsHtml}</div>`
+      ? `<div style="background:#f0f7fc;border:1px solid #bfdbfe;border-radius:10px;padding:4px 12px;margin:10px 0">
+          <div style="font-size:11px;color:#0369a1;font-weight:700;padding:6px 0 2px">🔗 同じ業者コードのグループ（${cluster.length}店舗）</div>
+          ${rowsHtml}
+        </div>`
       : rowsHtml;
   }).join('');
 }
