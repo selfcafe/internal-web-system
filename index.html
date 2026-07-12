@@ -5373,7 +5373,8 @@ async function _postInvoicePayload(payload, msg) {
     const res = await gasPost('submitInvoice', { payload });
     if (res.error) { msg.style.color = '#ef4444'; msg.textContent = res.error; return; }
     msg.style.color = '#22703d';
-    msg.innerHTML = '✓ 請求書を作成しました。<a href="' + res.pdfUrl + '" target="_blank">PDFを開く</a>';
+    msg.innerHTML = '✓ 請求書を作成しました。<a href="' + res.pdfUrl + '" target="_blank">PDFを開く</a>'
+      + (res.receiptPdfUrl ? ' ／ <a href="' + res.receiptPdfUrl + '" target="_blank">領収書PDFを開く</a>' : '');
   } catch (e) {
     msg.style.color = '#ef4444'; msg.textContent = '送信に失敗しました。通信環境を確認してください。';
   }
@@ -5388,7 +5389,8 @@ function addInvoiceOtherRow() {
   if (!container) return;
   if (container.children.length >= 19) { alert('その他の行数が上限（19行）に達しています'); return; }
   const div = document.createElement('div');
-  div.style.cssText = 'display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:6px';
+  div.className = 'inv-other-row';
+  div.style.cssText = 'display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:10px;padding-bottom:8px;border-bottom:1px dashed #e2e8dd';
   const storeSelectHtml = _invoiceCombinedMembers ? `
     <select class="inv-other-store" style="border:1px solid #ddd;border-radius:6px;padding:7px 8px;font-size:12px;font-family:inherit">
       <option value="">店舗指定なし</option>
@@ -5398,9 +5400,57 @@ function addInvoiceOtherRow() {
     ${storeSelectHtml}
     <input type="number" placeholder="金額(税込・マイナス可)" class="inv-other-amount" oninput="updateInvoiceTotal()" style="width:130px;border:1px solid #ddd;border-radius:6px;padding:7px 8px;font-size:13px;font-family:inherit">
     <input type="text" placeholder="備考(用途)" class="inv-other-note" style="flex:1;min-width:100px;border:1px solid #ddd;border-radius:6px;padding:7px 8px;font-size:13px;font-family:inherit">
-    <button style="background:#ef4444;color:white;padding:6px 10px;font-size:12px;border-radius:6px;border:none;cursor:pointer;font-family:inherit">×</button>`;
-  div.querySelector('button').onclick = () => { div.remove(); updateInvoiceTotal(); };
+    <button type="button" class="inv-other-remove-btn" style="background:#ef4444;color:white;padding:6px 10px;font-size:12px;border-radius:6px;border:none;cursor:pointer;font-family:inherit">×</button>
+    <div style="display:flex;align-items:center;gap:6px;width:100%">
+      <label style="cursor:pointer;font-size:11px;color:#6b7280;background:#f3f4f6;border:1px solid #d1d5db;border-radius:6px;padding:4px 8px;display:inline-flex;align-items:center;gap:4px;font-family:inherit">
+        📁 領収書を添付
+        <input type="file" accept="image/*" style="display:none" onchange="handleInvoiceReceiptUpload(this)">
+      </label>
+      <label style="cursor:pointer;font-size:11px;color:#6b7280;background:#f3f4f6;border:1px solid #d1d5db;border-radius:6px;padding:4px 8px;display:inline-flex;align-items:center;gap:4px;font-family:inherit">
+        📷 撮影
+        <input type="file" accept="image/*" capture="environment" style="display:none" onchange="handleInvoiceReceiptUpload(this)">
+      </label>
+      <span class="inv-other-receipt-uploading" style="display:none;font-size:11px;color:#888">アップロード中...</span>
+      <span class="inv-other-receipt-preview" style="display:none;align-items:center;gap:4px">
+        <img style="height:36px;border-radius:4px;border:1px solid #e5e7eb;cursor:pointer" onclick="showLostImage(this.src)">
+        <button type="button" style="font-size:11px;color:#9ca3af;background:none;border:none;cursor:pointer;font-family:inherit" onclick="removeInvoiceReceipt(this)">✕ 削除</button>
+      </span>
+    </div>`;
+  div.querySelector('.inv-other-remove-btn').onclick = () => { div.remove(); updateInvoiceTotal(); };
   container.appendChild(div);
+}
+
+async function handleInvoiceReceiptUpload(input) {
+  const file = input.files[0]; if (!file) return;
+  const row = input.closest('.inv-other-row');
+  if (!row) return;
+  const uploading = row.querySelector('.inv-other-receipt-uploading');
+  if (uploading) uploading.style.display = 'inline';
+  try {
+    const blob = await compressLostImage(file);
+    const base64 = await _blobToBase64(blob);
+    const r = await gasPost('saveInvoiceReceiptImage', { imageBase64: base64, imageMime: 'image/jpeg', filename: 'invoice_receipt_' + uid() });
+    if (r.error) { alert('領収書のアップロードに失敗しました: ' + r.error); return; }
+    row.dataset.receiptFileId = r.file_id;
+    row.dataset.receiptUrl = r.image_url;
+    const preview = row.querySelector('.inv-other-receipt-preview');
+    preview.querySelector('img').src = r.image_url;
+    preview.style.display = 'inline-flex';
+  } catch (e) {
+    alert('領収書のアップロードに失敗しました: ' + e.message);
+  } finally {
+    if (uploading) uploading.style.display = 'none';
+    input.value = '';
+  }
+}
+
+function removeInvoiceReceipt(btn) {
+  const row = btn.closest('.inv-other-row');
+  if (!row) return;
+  delete row.dataset.receiptFileId;
+  delete row.dataset.receiptUrl;
+  const preview = row.querySelector('.inv-other-receipt-preview');
+  preview.style.display = 'none';
 }
 
 function updateInvoiceTotal() {
@@ -5516,6 +5566,7 @@ async function submitInvoiceForm() {
     pid, storeId: storeTab, storeName: STORES[storeTab] || storeTab, storeCode: getInvoiceStoreCode(storeTab) || storeTab, staffName: p.staffName || '',
     amount: Number(row.querySelector('.inv-other-amount')?.value || 0),
     note: row.querySelector('.inv-other-note')?.value.trim() || '',
+    receiptFileId: row.dataset.receiptFileId || '',
   })).filter(it => it.amount !== 0);
 
   const payload = {
@@ -5578,6 +5629,7 @@ async function submitInvoiceCombinedForm() {
       staffName: m ? (partners[m.pid]?.staffName || '') : '',
       amount: Number(row.querySelector('.inv-other-amount')?.value || 0),
       note: row.querySelector('.inv-other-note')?.value.trim() || '',
+      receiptFileId: row.dataset.receiptFileId || '',
     };
   }).filter(it => it.amount !== 0);
 

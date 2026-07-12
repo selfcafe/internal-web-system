@@ -21,7 +21,7 @@ const SHEET_LOST       = 'lost_items';
 const SHEET_CHECKSHEET = 'checksheet_data';
 const SHEET_INVENTORY  = 'inventory_log';
 const SHEET_INVOICE_LOG = 'invoice_log';
-const INVOICE_LOG_COLS = ['id', 'store_id', 'store_name', 'partner_id', 'period', 'amount', 'pdf_url', 'submitted_at'];
+const INVOICE_LOG_COLS = ['id', 'store_id', 'store_name', 'partner_id', 'period', 'amount', 'pdf_url', 'submitted_at', 'receipt_pdf_url'];
 
 const ORDER_COLS = [
   'id','store_id','group_id','product','label','qty','actual_qty','unit',
@@ -82,6 +82,7 @@ function doPost(e) {
     else if (b.action === 'saveInventorySnapshot') result = saveInventorySnapshot(b.storeId, b.periodLabel, b.rows, b.remarks);
     else if (b.action === 'recordInventoryDelivery') result = recordInventoryDelivery(b.storeId, b.periodLabel, b.product, b.qty);
     else if (b.action === 'submitInvoice')       result = submitInvoice(b.payload);
+    else if (b.action === 'saveInvoiceReceiptImage') result = saveInvoiceReceiptImage(b.imageBase64, b.imageMime, b.filename);
     else result = { error: 'Unknown action: ' + b.action };
     return json(result);
   } catch(err) {
@@ -635,6 +636,18 @@ function saveOrderImage(imageBase64, imageMime, filename) {
 // 画像 (Drive)
 // ----------------------------------------------------------------
 
+// 請求書「その他」項目の領収書写真。請求書PDF本体とは別ファイルとして扱うため、
+// アップロードした時点でDriveに保存し、file_id（後で領収書まとめPDFに埋め込む用）と
+// image_url（プレビュー表示用）の両方を返す。
+function saveInvoiceReceiptImage(imageBase64, imageMime, filename) {
+  if (!IMAGE_FOLDER_ID) return { error: 'IMAGE_FOLDER_IDが設定されていません' };
+  const folder = DriveApp.getFolderById(IMAGE_FOLDER_ID);
+  const blob = Utilities.newBlob(Utilities.base64Decode(imageBase64), imageMime || 'image/jpeg', (filename || 'invoice_receipt') + '.jpg');
+  const file = folder.createFile(blob);
+  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
+  return { ok: true, image_url: 'https://drive.google.com/thumbnail?id=' + file.getId() + '&sz=w800', file_id: file.getId() };
+}
+
 function saveImageToDrive(base64, mimeType, filename) {
   const folder = DriveApp.getFolderById(IMAGE_FOLDER_ID);
   const blob   = Utilities.newBlob(Utilities.base64Decode(base64), mimeType, filename + '.jpg');
@@ -963,6 +976,11 @@ function submitInvoice(p) {
   // レイアウト調査用に一時的に残していた中間生成物のシートコピーを削除する（原因特定・解消済みのため復活）
   copyFile.setTrashed(true);
 
+  // 「その他」項目に添付された領収書写真は、請求書PDF本体とは別ファイル（1枚1ページの領収書
+  // まとめPDF）としてまとめる。Apps Scriptにはシートごとの印刷設定APIも複数PDFの結合機能も
+  // 無いため、請求書本体（Sheet経由）とは別に、Google Docsを経由してPDF化する。
+  const receiptPdfUrl = buildInvoiceReceiptPdf(otherItems, fileBaseName, folder);
+
   // 提出履歴（請求一覧の提出済み/未提出判定）は、まとめ請求でも店舗ごとに1件ずつ記録する。
   // 見た目は1枚のPDFでも、対象の全店舗がそれぞれ正しく「提出済み」と判定されるようにするため。
   const period = String(p.invoiceDate || '').slice(0, 6);
@@ -972,10 +990,42 @@ function submitInvoice(p) {
       period: period,
       amount: r.amount + (perStoreOtherTotal[r.sl.pid] || 0),
       pdfUrl: pdfFile.getUrl(),
+      receiptPdfUrl: receiptPdfUrl,
     });
   });
 
-  return { ok: true, pdfUrl: pdfFile.getUrl(), grandTotal: grandTotal };
+  return { ok: true, pdfUrl: pdfFile.getUrl(), receiptPdfUrl: receiptPdfUrl, grandTotal: grandTotal };
+}
+
+// その他項目に添付された領収書写真（Drive file_id）を、1枚1ページのGoogle Docsに差し込んでから
+// PDFとしてエクスポートする。添付が無ければ何もせず空文字を返す。
+function buildInvoiceReceiptPdf(otherItems, fileBaseName, folder) {
+  const receiptItems = (otherItems || []).filter(it => it && it.receiptFileId);
+  if (!receiptItems.length) return '';
+
+  const doc = DocumentApp.create(fileBaseName + '_領収書_作業用');
+  const body = doc.getBody();
+  body.setMarginTop(20).setMarginBottom(20).setMarginLeft(20).setMarginRight(20);
+  const PAGE_WIDTH_PT = 555; // A4幅(595pt)からマージン(左右20pt×2)を引いた値
+  receiptItems.forEach((it, i) => {
+    if (i > 0) body.appendPageBreak();
+    if (it.note) body.appendParagraph(it.note).setFontSize(11).setBold(true);
+    try {
+      const imgBlob = DriveApp.getFileById(it.receiptFileId).getBlob();
+      const img = body.appendImage(imgBlob);
+      const ratio = PAGE_WIDTH_PT / img.getWidth();
+      img.setWidth(PAGE_WIDTH_PT).setHeight(img.getHeight() * ratio);
+    } catch (e) {
+      body.appendParagraph('(領収書画像の読み込みに失敗しました)').setFontSize(10);
+    }
+  });
+  doc.saveAndClose();
+
+  const docFile = DriveApp.getFileById(doc.getId());
+  const pdfBlob = docFile.getAs('application/pdf').setName(fileBaseName + '_領収書.pdf');
+  const pdfFile = folder.createFile(pdfBlob);
+  docFile.setTrashed(true);
+  return pdfFile.getUrl();
 }
 
 // ----------------------------------------------------------------
@@ -985,11 +1035,18 @@ function submitInvoice(p) {
 function appendInvoiceLog(entry) {
   const sheet = getSheet(SHEET_INVOICE_LOG);
   ensureHeaders(sheet, INVOICE_LOG_COLS);
+  // receipt_pdf_url列を後から追加したため、既存シートで既にヘッダー行がある場合は
+  // 末尾に列を補う（ensureHeadersはシートが空の場合しかヘッダーを書かないため）
+  const lastCol = sheet.getLastColumn();
+  if (lastCol > 0) {
+    const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+    if (headers.indexOf('receipt_pdf_url') === -1) sheet.getRange(1, lastCol + 1).setValue('receipt_pdf_url');
+  }
   // periodは'YYYYMMDD'形式のinvoiceDateから先頭6桁を受け取る想定なので、'YYYY-MM'に整形する
   const period = /^\d{6}$/.test(entry.period) ? entry.period.slice(0, 4) + '-' + entry.period.slice(4, 6) : entry.period;
   sheet.appendRow([
     Utilities.getUuid(), entry.storeId, entry.storeName, entry.partnerId,
-    period, entry.amount, entry.pdfUrl, new Date().toISOString(),
+    period, entry.amount, entry.pdfUrl, new Date().toISOString(), entry.receiptPdfUrl || '',
   ]);
 }
 

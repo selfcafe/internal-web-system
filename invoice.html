@@ -388,13 +388,13 @@ function _invoicePartnerRowsForList(latestThisPeriod) {
       } else {
         storePartners.forEach(([pid, p]) => {
           const entry = latestThisPeriod[pid];
-          rows.push({ storeCode, sname, partnerName: (p.bank && p.bank.partnerName) || '', submitted: !!entry, amount: entry && entry.amount, pdfUrl: entry && entry.pdf_url });
+          rows.push({ storeCode, sname, partnerName: (p.bank && p.bank.partnerName) || '', submitted: !!entry, amount: entry && entry.amount, pdfUrl: entry && entry.pdf_url, receiptPdfUrl: entry && entry.receipt_pdf_url });
         });
       }
     } else {
       const p = partners[sid];
       const entry = latestThisPeriod[sid];
-      rows.push({ storeCode, sname, partnerName: (p && p.bank && p.bank.partnerName) || '', submitted: !!entry, amount: entry && entry.amount, pdfUrl: entry && entry.pdf_url });
+      rows.push({ storeCode, sname, partnerName: (p && p.bank && p.bank.partnerName) || '', submitted: !!entry, amount: entry && entry.amount, pdfUrl: entry && entry.pdf_url, receiptPdfUrl: entry && entry.receipt_pdf_url });
     }
   });
   const codeVal = c => (c === '' || c == null || isNaN(Number(c))) ? Infinity : Number(c);
@@ -431,7 +431,7 @@ async function renderInvoiceAdminView() {
       <span style="width:150px">${esc(r.sname)}</span>
       <span style="flex:1;min-width:100px;color:#555">${esc(r.partnerName || '—')}</span>
       ${r.submitted
-        ? `<span style="font-size:12px;color:#22703d">○ ${Number(r.amount || 0).toLocaleString()}円</span>${r.pdfUrl ? ` <a href="${esc(r.pdfUrl)}" target="_blank" style="font-size:12px;color:#22703d">PDF</a>` : ''}`
+        ? `<span style="font-size:12px;color:#22703d">○ ${Number(r.amount || 0).toLocaleString()}円</span>${r.pdfUrl ? ` <a href="${esc(r.pdfUrl)}" target="_blank" style="font-size:12px;color:#22703d">PDF</a>` : ''}${r.receiptPdfUrl ? ` <a href="${esc(r.receiptPdfUrl)}" target="_blank" style="font-size:12px;color:#0369a1">領収書</a>` : ''}`
         : `<span style="font-size:12px;color:#c0392b;font-weight:700">未提出</span>`}
     </div>`).join('');
 
