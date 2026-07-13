@@ -418,7 +418,7 @@
     <img src="logo-horizontal.png" class="portal-logo" alt="セルフカフェ">
     <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;position:absolute;top:0;right:0">
       <button onclick="siteLogout()" class="portal-logout-btn" style="background:#6b7280;color:white;padding:10px 18px;font-size:15px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">ログアウト</button>
-      <div class="pc-only" style="display:flex;gap:6px">
+      <div style="display:flex;gap:6px">
         <button id="invoice-btn-pc" onclick="openInvoicePartnerScreen()" style="background:#8a8f7e;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">請求書</button>
         <div class="doc-menu-wrap">
           <button onclick="toggleManualMenu('pc')" style="background:#8a8f7e;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">マニュアル</button>
@@ -430,10 +430,6 @@
       <h1>パートナーポータル</h1>
       <div style="display:flex;align-items:baseline;flex:1;align-self:stretch;width:100%;gap:4px 12px">
         <span id="active-store-label" style="font-size:20px;font-weight:700;color:#22703d"></span>
-        <div class="sp-only doc-menu-wrap" style="margin-left:auto">
-          <button onclick="toggleMobileMenu()" style="background:#8a8f7e;color:white;padding:7px 13px;font-size:18px;line-height:1;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit" title="メニュー">☰</button>
-          <div class="doc-menu-dd" id="mobile-menu-dd"></div>
-        </div>
       </div>
     </div>
   </div>
@@ -1050,22 +1046,6 @@ function toggleManualMenu(suffix) {
   const wasOpen = dd.classList.contains('open');
   document.querySelectorAll('.doc-menu-dd.open').forEach(el => el.classList.remove('open'));
   if (!wasOpen) { dd.innerHTML = buildManualMenu(); dd.classList.add('open'); }
-}
-
-/* モバイル版はボタン数を抑えるため、請求書＋マニュアルを☰1個にまとめて表示する */
-function buildMobileMenu() {
-  const cfg = getInvoiceStoreCfg();
-  const hideInvoice = !!(cfg[storeTab] && cfg[storeTab].noInvoice);
-  const invoiceItem = hideInvoice ? '' :
-    `<a class="doc-menu-item" href="javascript:void(0)" onclick="document.getElementById('mobile-menu-dd').classList.remove('open');openInvoicePartnerScreen()">請求書</a>`;
-  return invoiceItem + buildManualMenu();
-}
-
-function toggleMobileMenu() {
-  const dd = document.getElementById('mobile-menu-dd');
-  const wasOpen = dd.classList.contains('open');
-  document.querySelectorAll('.doc-menu-dd.open').forEach(el => el.classList.remove('open'));
-  if (!wasOpen) { dd.innerHTML = buildMobileMenu(); dd.classList.add('open'); }
 }
 
 const hKey = id => 'history_' + id;
@@ -3020,7 +3000,6 @@ function updateInvoiceButtonVisibility() {
   const hide = !!(cfg[storeTab] && cfg[storeTab].noInvoice);
   const pc = document.getElementById('invoice-btn-pc');
   if (pc) pc.style.display = hide ? 'none' : '';
-  // モバイル版の請求書表示可否は、☰メニューを開く都度 buildMobileMenu() 内で判定する
 }
 
 function renderStore() {
