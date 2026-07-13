@@ -177,6 +177,14 @@
     .admin-menu-divider { height:1px; background:#eee; margin:4px 0; }
     .menu-badge { background:#ef4444; color:white; font-size:10px; font-weight:bold; border-radius:99px; padding:1px 6px; min-width:16px; text-align:center; }
 
+    /* マニュアル・資料メニュー（パートナー／管理者共通） */
+    .doc-menu-wrap { position:relative; display:inline-flex; }
+    .doc-menu-dd { display:none; position:absolute; top:calc(100% + 6px); right:0; background:white; border:1px solid #ddd; border-radius:10px; box-shadow:0 6px 20px rgba(0,0,0,.18); min-width:190px; z-index:400; overflow:hidden; }
+    .doc-menu-dd.open { display:block; }
+    .doc-menu-item { display:block; padding:10px 16px; font-size:13px; color:#333; text-decoration:none; white-space:nowrap; }
+    .doc-menu-item:hover { background:#fffde0; color:#22703d; }
+    .doc-menu-empty { padding:10px 16px; font-size:12px; color:#999; white-space:nowrap; }
+
     .pagination { display:flex; align-items:center; justify-content:center; gap:6px; margin-top:14px; flex-wrap:wrap; }
     .page-btn { border:1px solid #ddd; background:white; color:#333; padding:6px 12px; font-size:13px; border-radius:6px; cursor:pointer; font-family:inherit; min-width:36px; text-align:center; }
     .page-btn:hover { background:#fffde0; border-color:#22703d; color:#22703d; }
@@ -410,13 +418,25 @@
     <img src="logo-horizontal.png" class="portal-logo" alt="セルフカフェ">
     <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;position:absolute;top:0;right:0">
       <button onclick="siteLogout()" class="portal-logout-btn" style="background:#6b7280;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">ログアウト</button>
-      <button id="invoice-btn-pc" onclick="openInvoicePartnerScreen()" class="pc-only" style="background:#8a8f7e;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">請求書</button>
+      <div class="pc-only" style="display:flex;gap:6px">
+        <button id="invoice-btn-pc" onclick="openInvoicePartnerScreen()" style="background:#8a8f7e;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">請求書</button>
+        <div class="doc-menu-wrap">
+          <button onclick="toggleManualMenu('pc')" style="background:#8a8f7e;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">マニュアル</button>
+          <div class="doc-menu-dd" id="manual-dd-pc"></div>
+        </div>
+      </div>
     </div>
     <div class="portal-title-store-row">
       <h1>パートナーポータル</h1>
       <div style="display:flex;align-items:baseline;flex:1;align-self:stretch;width:100%;gap:4px 12px">
         <span id="active-store-label" style="font-size:20px;font-weight:700;color:#22703d"></span>
-        <button id="invoice-btn-sp" onclick="openInvoicePartnerScreen()" class="sp-only" style="background:#8a8f7e;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;margin-left:auto">請求書</button>
+        <div class="sp-only" style="display:flex;gap:6px;margin-left:auto">
+          <button id="invoice-btn-sp" onclick="openInvoicePartnerScreen()" style="background:#8a8f7e;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">請求書</button>
+          <div class="doc-menu-wrap">
+            <button onclick="toggleManualMenu('sp')" style="background:#8a8f7e;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">マニュアル</button>
+            <div class="doc-menu-dd" id="manual-dd-sp"></div>
+          </div>
+        </div>
       </div>
     </div>
   </div>
@@ -1014,6 +1034,26 @@ let adminPage   = 1;
 let storeRows   = [];
 const PAGE_SIZE = 10;
 const isMobile  = () => window.innerWidth < 640;
+
+/* マニュアル・資料メニューの中身。今後PDF等を追加する場合はここに1件ずつ足すだけでよい
+   （PDFファイル自体はこのリポジトリ直下に置き、urlをそのファイル名にする）。 */
+const MANUAL_DOCS = [
+  { label: 'パートナー操作ガイド', url: 'guide.html' },
+];
+
+function buildManualMenu() {
+  if (!MANUAL_DOCS.length) return '<div class="doc-menu-empty">資料はまだありません</div>';
+  return MANUAL_DOCS.map(d =>
+    `<a class="doc-menu-item" href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.label)}</a>`
+  ).join('');
+}
+
+function toggleManualMenu(suffix) {
+  const dd = document.getElementById('manual-dd-' + suffix);
+  const wasOpen = dd.classList.contains('open');
+  document.querySelectorAll('.doc-menu-dd.open').forEach(el => el.classList.remove('open'));
+  if (!wasOpen) { dd.innerHTML = buildManualMenu(); dd.classList.add('open'); }
+}
 
 const hKey = id => 'history_' + id;
 
@@ -2887,6 +2927,7 @@ document.addEventListener('click', e => {
   if (!e.target.closest('.prod-wrap')) closeProdAll();
   if (!e.target.closest('#store-nav-search')) document.getElementById('store-search-dd')?.classList.remove('open');
   if (!e.target.closest('.admin-menu-wrap')) document.getElementById('admin-menu-dd')?.classList.remove('open');
+  if (!e.target.closest('.doc-menu-wrap')) document.querySelectorAll('.doc-menu-dd.open').forEach(el => el.classList.remove('open'));
   if (!e.target.closest('#site-store-search') && !e.target.closest('#site-store-dd')) {
     const dd = document.getElementById('site-store-dd');
     if (dd) dd.style.display = 'none';
@@ -2897,6 +2938,7 @@ document.addEventListener('touchstart', e => {
   if (!e.target.closest('.prod-wrap')) closeProdAll();
   if (!e.target.closest('#store-nav-search')) document.getElementById('store-search-dd')?.classList.remove('open');
   if (!e.target.closest('.admin-menu-wrap')) document.getElementById('admin-menu-dd')?.classList.remove('open');
+  if (!e.target.closest('.doc-menu-wrap')) document.querySelectorAll('.doc-menu-dd.open').forEach(el => el.classList.remove('open'));
   if (!e.target.closest('#site-store-search') && !e.target.closest('#site-store-dd')) {
     const dd = document.getElementById('site-store-dd');
     if (dd) dd.style.display = 'none';
