@@ -310,13 +310,18 @@ function renderInvoiceAdminList() {
   if (!body) return;
   const codeVal = c => (c === '' || c == null || isNaN(Number(c))) ? Infinity : Number(c);
 
+  // 「請求無し」店舗は業者コードクラスターの対象から外し、末尾に専用のグループとして
+  // まとめて表示する（店舗番号順の並びに個別ブロックで散らばらないようにするため）。
+  const storeEntries = Object.entries(STORES);
+  const noInvoiceEntries = storeEntries.filter(([sid]) => cfg[sid] && cfg[sid].noInvoice);
+  const activeEntries = storeEntries.filter(([sid]) => !(cfg[sid] && cfg[sid].noInvoice));
+
   // 業者コードが同じ店舗（＝同一人物が複数店舗を管理しているケース）は、店舗番号順を保ったまま
   // 隣り合わせにまとめて表示する。複数パートナー店舗は代表となる業者コードを1つに絞れないため、
   // まとめ対象にはせず単独のまま扱う。
-  const storeEntries = Object.entries(STORES);
   const clusters = [];
   const clusterByBizCode = {};
-  storeEntries.forEach(entry => {
+  activeEntries.forEach(entry => {
     const [sid] = entry;
     const multi = !!(cfg[sid] && cfg[sid].multiPartner);
     const bizCode = !multi ? ((partners[sid] && partners[sid].bizCode) || '') : '';
@@ -340,7 +345,7 @@ function renderInvoiceAdminList() {
     return String(c1[0][1]).localeCompare(String(c2[0][1]), 'ja');
   });
 
-  body.innerHTML = clusters.map(cluster => {
+  let html = clusters.map(cluster => {
     // 業者コードの件数バッジはグループ内で重複表示にならないよう1番目の店舗にだけ出す
     const rowsHtml = cluster.map(([sid, sname], idx) => _buildInvoiceStoreBlock(sid, sname, cfg, partners, idx === 0)).join('');
     // 2店舗以上のクラスターは、隣のクラスターと線が繋がって見えないよう背景色付きの
@@ -352,6 +357,23 @@ function renderInvoiceAdminList() {
         </div>`
       : rowsHtml;
   }).join('');
+
+  if (noInvoiceEntries.length) {
+    noInvoiceEntries.sort((a, b) => String(a[1]).localeCompare(String(b[1]), 'ja'));
+    const rowsHtml = noInvoiceEntries.map(([sid, sname]) => `
+      <div style="display:flex;align-items:center;gap:10px;padding:6px 0;border-bottom:1px solid #fde0e0">
+        <span style="flex:1;min-width:100px;font-size:13px">${esc(sname)}</span>
+        <label style="font-size:12px;display:flex;align-items:center;gap:4px;white-space:nowrap;color:#ef4444">
+          <input type="checkbox" checked onchange="toggleInvoiceNoInvoice('${sid}', this.checked)">請求無し
+        </label>
+      </div>`).join('');
+    html += `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:10px;padding:4px 12px;margin:10px 0">
+        <div style="font-size:11px;color:#b91c1c;font-weight:700;padding:6px 0 2px">🔒 請求無し店舗（${noInvoiceEntries.length}店舗）</div>
+        ${rowsHtml}
+      </div>`;
+  }
+
+  body.innerHTML = html;
 }
 
 /* ---- 請求一覧／請求設定の画面切り替え ---- */
