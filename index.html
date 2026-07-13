@@ -2302,7 +2302,7 @@ async function switchPartnerTab(tab) {
   }
 }
 
-/* ===== 忘れ物（Supabase） ===== */
+/* ===== 忘れ物 ===== */
 const LOST_CACHE = {}; // { [storeId]: [items] }
 
 function getLostItems(storeId) {
@@ -4816,7 +4816,7 @@ function renderSettings() {
           <div id="store-pw-msg" style="font-size:12px;margin-top:8px;min-height:18px;color:#22703d"></div>
           <div style="margin-top:14px;padding-top:12px;border-top:1px solid #e0ede5">
             <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-              <button onclick="syncAllStoreDataToGas()" style="background:#f0f4ff;color:#3b5bdb;border:1px solid #c5cff5;padding:7px 14px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;font-family:inherit;white-space:nowrap">Supabaseに手動同期</button>
+              <button onclick="syncAllStoreDataToGas()" style="background:#f0f4ff;color:#3b5bdb;border:1px solid #c5cff5;padding:7px 14px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;font-family:inherit;white-space:nowrap">サーバーに手動同期</button>
               <span style="font-size:11px;color:#888">新規店舗が別端末でログインできない場合に押してください</span>
             </div>
             <div id="store-sync-msg" style="font-size:12px;margin-top:6px;min-height:16px"></div>
