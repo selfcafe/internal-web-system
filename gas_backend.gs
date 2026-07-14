@@ -58,6 +58,7 @@ function doGet(e) {
     else if (a === 'getInventoryDeliveryAuto') result = getInventoryDeliveryAuto(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'getInventoryDeliveryManual') result = getInventoryDeliveryManual(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'getInvoiceLog')             result = getInvoiceLog();
+    else if (a === 'migrateOrderColumns')       result = migrateOrderColumns();
     else result = { error: 'Unknown action: ' + a };
     return json(result);
   } catch(err) {
@@ -108,6 +109,21 @@ function getSheet(name) {
 
 function ensureHeaders(sheet, cols) {
   if (sheet.getLastRow() === 0) sheet.appendRow(cols);
+}
+
+// ensureHeadersは空シートにしか列を作らないため、既存の運用中シートへ後から
+// 列を足す場合はこちらを一度だけ叩く。ORDER_COLSのうち既存ヘッダーに無いものだけを
+// 末尾に追加する（既存列の並び・データには一切触れない、何度実行しても安全）。
+// actual_unit_mode列追加(2026-07-14)のためのワンショット移行用
+function migrateOrderColumns() {
+  const sheet = getSheet(SHEET_ORDERS);
+  if (sheet.getLastRow() === 0) { ensureHeaders(sheet, ORDER_COLS); return { ok: true, added: ORDER_COLS }; }
+  const hdrs = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
+  const missing = ORDER_COLS.filter(c => hdrs.indexOf(c) < 0);
+  if (missing.length) {
+    sheet.getRange(1, sheet.getLastColumn() + 1, 1, missing.length).setValues([missing]);
+  }
+  return { ok: true, added: missing };
 }
 
 // "YYYY-MM-DD"のような文字列を書き込むと、スプレッドシートが自動的に
