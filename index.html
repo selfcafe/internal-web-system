@@ -194,11 +194,6 @@
     /* サイトログイン画面 */
     .site-lock { position:fixed; inset:0; background-image:linear-gradient(135deg, #f8f7f0 0%, #f8f7f0 45%, #e7f0e4 55%, #cfe3cd 70%, #22703d 130%); z-index:2000; display:flex; flex-direction:column; align-items:center; justify-content:flex-start; padding-top:10vh; }
     .site-lock.hidden { display:none; }
-    .site-lock-bg-fade {
-      position:absolute; inset:0; z-index:-1;
-      background-image:linear-gradient(135deg, #050f09 0%, #0d2717 30%, #164a29 60%, #22703d 100%);
-      opacity:1; transition:opacity .15s linear;
-    }
     .site-lock-box { background:rgba(255,255,255,.92); border-radius:20px; padding:40px 36px; width:min(380px,90vw); text-align:center; box-shadow:0 8px 32px rgba(34,112,61,.12); border:1px solid #d8d6be; }
     .site-lock-logo {
       display:block; width:140px; height:140px; margin:0 auto 32px; border-radius:50%;
@@ -402,7 +397,6 @@
 
 <!-- サイトログイン画面 -->
 <div class="site-lock" id="site-lock">
-  <div class="site-lock-bg-fade" id="site-lock-bg-fade"></div>
   <img src="logo-round.png" class="site-lock-logo" alt="セルフカフェ">
   <div class="site-lock-box">
     <h2>セルフカフェ社内ポータル</h2>
@@ -4307,9 +4301,29 @@ function loadDeletedProducts() {
 }
 
 function saveAllProducts() {
+  if (_productBaseline) {
+    const vendorCounts = {};
+    PRODUCTS.forEach(p => { vendorCounts[p.vendor] = (vendorCounts[p.vendor] || 0) + 1; });
+    const emptiedVendors = Object.keys(_productBaseline.vendorCounts)
+      .filter(v => _productBaseline.vendorCounts[v] > 0 && !vendorCounts[v]);
+    const bigDrop = PRODUCTS.length < _productBaseline.count - 1;
+    if (emptiedVendors.length || bigDrop) {
+      const vendorLabels = emptiedVendors.map(v => (VENDOR_CONFIG.find(vc => vc.key === v) || {}).label || v);
+      const msg = `⚠ 商品データが大きく減っています（${_productBaseline.count}件 → ${PRODUCTS.length}件）` +
+        (vendorLabels.length ? `。特に「${vendorLabels.join('／')}」の商品が全て無くなっています` : '') +
+        `。\n\n誤って削除・上書きしていないか確認してください。このまま保存しますか？\n（キャンセルすると直前の状態に戻します）`;
+      if (!confirm(msg)) {
+        PRODUCTS.length = 0;
+        _productBaseline.snapshot.forEach(p => PRODUCTS.push(p));
+        renderSettings();
+        return;
+      }
+    }
+  }
   const json = JSON.stringify(PRODUCTS);
   localStorage.setItem(ALL_PRODUCTS_KEY, json);
   _gasSaveSetting('all_products', json);
+  _snapshotProductBaseline();
 }
 
 const PRODUCT_RENAMES = {
@@ -4356,6 +4370,17 @@ function loadProductSettings() {
     });
     defaults.forEach(p => { if (!savedKeys.has(keyOf(p))) PRODUCTS.push(p); });
   }
+  _snapshotProductBaseline();
+}
+
+// 直前にサーバーから読み込んだ（≒信頼できる）商品構成を記録しておき、次にsaveAllProducts()
+// する際に「カテゴリが丸ごと消えていないか」「大きく件数が減っていないか」を確認できるようにする。
+// 2026-07-14に消耗品カテゴリの商品が保存の競合で丸ごと消えた事故を受けて追加
+let _productBaseline = null;
+function _snapshotProductBaseline() {
+  const vendorCounts = {};
+  PRODUCTS.forEach(p => { vendorCounts[p.vendor] = (vendorCounts[p.vendor] || 0) + 1; });
+  _productBaseline = { count: PRODUCTS.length, vendorCounts, snapshot: JSON.parse(JSON.stringify(PRODUCTS)) };
 }
 
 function migrateProductRenames() {
@@ -5803,26 +5828,21 @@ async function submitInvoiceCombinedForm() {
   if (sessionStorage.getItem('admin_authed') === '1' || isSiteAuthed()) {
     document.getElementById('site-lock').classList.add('hidden');
   }
-  // GAS読み込み中はログインボタンを無効化し、ゲージが溜まっていく見た目＋背景の暗い
-  // グラデーションが読み込みに合わせて現状の明るいグラデーションへ薄れていく見た目で
-  // 待ち時間を可視化する
+  // GAS読み込み中はログインボタンを無効化し、ゲージが溜まっていく見た目で待ち時間を可視化する
   const loginBtn = document.querySelector('button.btn-pin-submit');
   const loginGauge = document.getElementById('site-login-gauge');
   const loginGaugeFill = document.getElementById('site-login-gauge-fill');
-  const loginBgFade = document.getElementById('site-lock-bg-fade');
   let loadingTimer = null;
   if (loginBtn) {
     loginBtn.disabled = true;
     loginBtn.textContent = '読み込み中…';
     if (loginGauge) loginGauge.style.display = 'block';
     if (loginGaugeFill) loginGaugeFill.style.width = '0%';
-    if (loginBgFade) loginBgFade.style.opacity = '1';
     const targetMs = 2000;
     const startedAt = performance.now();
     loadingTimer = setInterval(() => {
       const pct = Math.min(100, Math.round((performance.now() - startedAt) / targetMs * 100));
       if (loginGaugeFill) loginGaugeFill.style.width = pct + '%';
-      if (loginBgFade) loginBgFade.style.opacity = String(1 - pct / 100);
       if (pct >= 100) clearInterval(loadingTimer);
     }, 30);
   }
@@ -5830,7 +5850,6 @@ async function submitInvoiceCombinedForm() {
   if (loadingTimer) clearInterval(loadingTimer);
   if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = 'ログイン'; }
   if (loginGaugeFill) loginGaugeFill.style.width = '100%';
-  if (loginBgFade) loginBgFade.style.opacity = '0';
   if (loginGauge) setTimeout(() => { loginGauge.style.display = 'none'; }, 150);
   const syncWarning = document.getElementById('site-sync-warning');
   if (syncWarning) {
