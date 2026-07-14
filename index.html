@@ -194,13 +194,16 @@
     /* サイトログイン画面 */
     .site-lock { position:fixed; inset:0; background-image:linear-gradient(135deg, #f8f7f0 0%, #f8f7f0 45%, #e7f0e4 55%, #cfe3cd 70%, #22703d 130%); z-index:2000; display:flex; flex-direction:column; align-items:center; justify-content:flex-start; padding-top:10vh; }
     .site-lock.hidden { display:none; }
+    .site-lock-bg-fade {
+      position:absolute; inset:0; z-index:-1;
+      background-image:linear-gradient(135deg, #050f09 0%, #0d2717 30%, #164a29 60%, #22703d 100%);
+      opacity:1; transition:opacity .15s linear;
+    }
     .site-lock-box { background:rgba(255,255,255,.92); border-radius:20px; padding:40px 36px; width:min(380px,90vw); text-align:center; box-shadow:0 8px 32px rgba(34,112,61,.12); border:1px solid #d8d6be; }
     .site-lock-logo {
-      position:relative; width:140px; height:140px; margin:0 auto 32px; border-radius:50%;
-      box-shadow:0 6px 12px rgba(34,112,61,.35); overflow:hidden;
+      display:block; width:140px; height:140px; margin:0 auto 32px; border-radius:50%;
+      box-shadow:0 6px 12px rgba(34,112,61,.35);
     }
-    .site-lock-logo-img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:block; }
-    .site-lock-logo-main { opacity:0; transition:opacity .15s linear; }
     .portal-logo { height:26px; width:auto; display:block; flex-shrink:0; align-self:flex-start; }
     @media (min-width:640px) {
       .portal-logo { height:32px; }
@@ -399,10 +402,8 @@
 
 <!-- サイトログイン画面 -->
 <div class="site-lock" id="site-lock">
-  <div class="site-lock-logo">
-    <img src="apple-touch-icon.png" class="site-lock-logo-img" alt="">
-    <img src="logo-round.png" class="site-lock-logo-img site-lock-logo-main" id="site-lock-logo-main" alt="セルフカフェ">
-  </div>
+  <div class="site-lock-bg-fade" id="site-lock-bg-fade"></div>
+  <img src="logo-round.png" class="site-lock-logo" alt="セルフカフェ">
   <div class="site-lock-box">
     <h2>セルフカフェ社内ポータル</h2>
     <p>パスワードを入力してください</p>
@@ -1033,6 +1034,16 @@ function loadVendorConfig() {
     savedList.forEach(v => VENDOR_CONFIG.push(v));
     DEFAULT_VENDOR_CONFIG.forEach(v => { if (!savedKeys.has(v.key)) VENDOR_CONFIG.push(v); });
   }
+  _migrateConsumablesExcludeFlag();
+}
+// 棚卸表からの除外は、以前は表示名が「消耗品」かどうかで判定していたため、
+// カテゴリ名を変更すると除外が効かなくなる不具合があった（2026-07-14）。
+// 表示名（いつでも変更したい）と結びつかない安定したexcludeFromInventoryフラグへ
+// 移行する。まだフラグが付いていない「消耗品」という名前のカテゴリにのみ一度だけ
+// 適用し、以後は名前を変えても効果が残る
+function _migrateConsumablesExcludeFlag() {
+  const v = VENDOR_CONFIG.find(v => v.label === '消耗品' && v.excludeFromInventory === undefined);
+  if (v) { v.excludeFromInventory = true; saveVendorConfig(); }
 }
 
 // STORES定数はstores.js（invoice.htmlと共有の単一ファイル。<script src="stores.js">で読み込み）で定義
@@ -1324,9 +1335,9 @@ function setInventoryData(storeId, data) {
 }
 function _inventoryProductList() {
   const productOrder = new Map(PRODUCTS.map((p, i) => [p.name, i]));
-  const consumablesKey = VENDOR_CONFIG.find(v => v.label === '消耗品')?.key;
+  const excludedVendorKeys = new Set(VENDOR_CONFIG.filter(v => v.excludeFromInventory).map(v => v.key));
   const available = getAvailableProducts(storeTab)
-    .filter(p => p.name !== 'その他' && p.vendor !== consumablesKey)
+    .filter(p => p.name !== 'その他' && !excludedVendorKeys.has(p.vendor))
     .sort((a, b) => (productOrder.get(a.name) ?? 999) - (productOrder.get(b.name) ?? 999));
   const result = [];
   VENDOR_CONFIG.forEach(v => available.filter(p => p.vendor === v.key).forEach(p => result.push(p)));
@@ -1526,9 +1537,9 @@ function renderInventory(loading = false) {
   if (!wrap) return;
   if (loading) { wrap.innerHTML = '<div style="color:#aaa;font-size:13px;padding:20px 0">読み込み中…</div>'; return; }
   const productOrder = new Map(PRODUCTS.map((p, i) => [p.name, i]));
-  const consumablesKey = VENDOR_CONFIG.find(v => v.label === '消耗品')?.key;
+  const excludedVendorKeys = new Set(VENDOR_CONFIG.filter(v => v.excludeFromInventory).map(v => v.key));
   const allProducts = getAvailableProducts(storeTab)
-    .filter(p => p.name !== 'その他' && p.vendor !== consumablesKey)
+    .filter(p => p.name !== 'その他' && !excludedVendorKeys.has(p.vendor))
     .sort((a, b) => (productOrder.get(a.name) ?? 999) - (productOrder.get(b.name) ?? 999));
   if (!allProducts.length) {
     wrap.innerHTML = '<div style="color:#aaa;padding:20px">商品が設定されていません</div>';
@@ -4508,6 +4519,10 @@ function buildVendorRows() {
         ontouchend="vendorTouchEnd(event)">⠿</span>
       <input id="vname-${i}" value="${esc(v.label)}"
         style="border:1px solid #ddd;border-radius:6px;padding:6px 10px;font-size:13px;font-family:inherit;flex:1">
+      <label style="display:flex;align-items:center;gap:4px;font-size:11px;color:#888;white-space:nowrap;cursor:pointer" title="この仕入先カテゴリの商品を棚卸表から除外します">
+        <input type="checkbox" ${v.excludeFromInventory ? 'checked' : ''} style="width:14px;height:14px;accent-color:#22703d;cursor:pointer"
+          onchange="setVendorExcludeFromInventory('${esc(v.key)}', this.checked)">棚卸表除外
+      </label>
       <button onclick="renameVendor(${i})"
         style="background:#22703d;color:white;padding:6px 12px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap">保存</button>
       <button onclick="deleteVendor('${esc(v.key)}')"
@@ -4598,14 +4613,19 @@ function renameVendor(idx) {
   if (!inp) return;
   const newLabel = inp.value.trim();
   if (!newLabel) return;
-  const oldLabel = VENDOR_CONFIG[idx].label;
-  if (oldLabel === '消耗品' && newLabel !== '消耗品') {
-    const ok = confirm('「消耗品」は棚卸表から除外する設定になっているカテゴリ名です。\n名前を変更すると、棚卸表からの除外が効かなくなります。\n変更後は担当者に棚卸表の設定を見直してもらってください。\n\nこのまま名前を変更しますか？');
-    if (!ok) { inp.value = oldLabel; return; }
-  }
+  // 棚卸表からの除外はexcludeFromInventoryフラグで管理しているため、
+  // カテゴリ名（表示名）はいつでも自由に変更してよい
   VENDOR_CONFIG[idx].label = newLabel;
   saveVendorConfig();
   refreshVendorRows();
+  document.getElementById('vendor-msg').textContent = '保存しました';
+  setTimeout(() => { const m = document.getElementById('vendor-msg'); if (m) m.textContent = ''; }, 2000);
+}
+function setVendorExcludeFromInventory(key, checked) {
+  const v = VENDOR_CONFIG.find(v => v.key === key);
+  if (!v) return;
+  v.excludeFromInventory = checked;
+  saveVendorConfig();
   document.getElementById('vendor-msg').textContent = '保存しました';
   setTimeout(() => { const m = document.getElementById('vendor-msg'); if (m) m.textContent = ''; }, 2000);
 }
@@ -5783,26 +5803,26 @@ async function submitInvoiceCombinedForm() {
   if (sessionStorage.getItem('admin_authed') === '1' || isSiteAuthed()) {
     document.getElementById('site-lock').classList.add('hidden');
   }
-  // GAS読み込み中はログインボタンを無効化し、ゲージが溜まっていく見た目で待ち時間を可視化する
+  // GAS読み込み中はログインボタンを無効化し、ゲージが溜まっていく見た目＋背景の暗い
+  // グラデーションが読み込みに合わせて現状の明るいグラデーションへ薄れていく見た目で
+  // 待ち時間を可視化する
   const loginBtn = document.querySelector('button.btn-pin-submit');
   const loginGauge = document.getElementById('site-login-gauge');
   const loginGaugeFill = document.getElementById('site-login-gauge-fill');
-  // ロード中はショートカットアイコン（黒金）を表示し、読み込みが進むにつれて現行ロゴに
-  // クロスフェードする。ゲージと同じ経過時間ベースの割合を使い、2つの演出のペースを合わせる
-  const loginLogoMain = document.getElementById('site-lock-logo-main');
+  const loginBgFade = document.getElementById('site-lock-bg-fade');
   let loadingTimer = null;
   if (loginBtn) {
     loginBtn.disabled = true;
     loginBtn.textContent = '読み込み中…';
     if (loginGauge) loginGauge.style.display = 'block';
     if (loginGaugeFill) loginGaugeFill.style.width = '0%';
-    if (loginLogoMain) loginLogoMain.style.opacity = '0';
+    if (loginBgFade) loginBgFade.style.opacity = '1';
     const targetMs = 2000;
     const startedAt = performance.now();
     loadingTimer = setInterval(() => {
       const pct = Math.min(100, Math.round((performance.now() - startedAt) / targetMs * 100));
       if (loginGaugeFill) loginGaugeFill.style.width = pct + '%';
-      if (loginLogoMain) loginLogoMain.style.opacity = String(pct / 100);
+      if (loginBgFade) loginBgFade.style.opacity = String(1 - pct / 100);
       if (pct >= 100) clearInterval(loadingTimer);
     }, 30);
   }
@@ -5810,7 +5830,7 @@ async function submitInvoiceCombinedForm() {
   if (loadingTimer) clearInterval(loadingTimer);
   if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = 'ログイン'; }
   if (loginGaugeFill) loginGaugeFill.style.width = '100%';
-  if (loginLogoMain) loginLogoMain.style.opacity = '1';
+  if (loginBgFade) loginBgFade.style.opacity = '0';
   if (loginGauge) setTimeout(() => { loginGauge.style.display = 'none'; }, 150);
   const syncWarning = document.getElementById('site-sync-warning');
   if (syncWarning) {
