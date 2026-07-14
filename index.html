@@ -243,6 +243,21 @@
     .pin-error { color:#ef4444; font-size:13px; margin-top:8px; min-height:20px; }
     .btn-pin-submit { width:100%; margin-top:16px; background:#22703d; color:white; padding:13px; font-size:15px; font-weight:700; border-radius:10px; border:none; cursor:pointer; font-family:inherit; }
     .btn-pin-submit:hover { background:#1a5c30; }
+    .site-login-gauge { margin-top:10px; background:#eef1e9; border-radius:999px; height:7px; overflow:hidden; }
+    .site-login-gauge-fill {
+      position:relative; height:100%; width:0%; border-radius:999px; overflow:hidden;
+      background:linear-gradient(90deg,#bfe3cd,#7fcda0);
+      transition:width .05s linear;
+    }
+    .site-login-gauge-fill::after {
+      content:''; position:absolute; top:0; bottom:0; left:-60%; width:60%;
+      background:linear-gradient(90deg, rgba(255,255,255,0), rgba(255,255,255,.85), rgba(255,255,255,0));
+      animation: site-login-gauge-shine 1.2s ease-in-out infinite;
+    }
+    @keyframes site-login-gauge-shine {
+      0%   { left:-60%; }
+      100% { left:130%; }
+    }
 
     /* ===== 時間帯メッセージ ===== */
     #time-msg-bar { display:none; background:linear-gradient(135deg,#fffde0 0%,#f0f7e8 100%); border-radius:14px; padding:14px 24px; text-align:center; font-size:15px; color:#333; font-weight:500; box-shadow:0 3px 12px rgba(0,0,0,.09); letter-spacing:.3px; margin-bottom:12px; border:1.5px solid #e8e4c0; }
@@ -395,8 +410,8 @@
       </div>
       <div class="pin-error" id="site-pw-error"></div>
       <button type="submit" class="btn-pin-submit">ログイン</button>
-      <div id="site-login-gauge" style="display:none;margin-top:10px;background:#e5e7eb;border-radius:999px;height:6px;overflow:hidden">
-        <div id="site-login-gauge-fill" style="background:#22703d;height:100%;width:0%;border-radius:999px;transition:width .05s linear"></div>
+      <div id="site-login-gauge" class="site-login-gauge" style="display:none">
+        <div id="site-login-gauge-fill" class="site-login-gauge-fill"></div>
       </div>
     </form>
   </div>
@@ -4346,7 +4361,6 @@ function saveProductSetting(name, field, value) {
   if (!p) return;
   p[field] = value;
   saveAllProducts();
-  if (field === 'caseUnit' || field === 'caseOnly') refreshCaseUnitWarning();
 }
 
 function addCustomProduct() {
@@ -4364,7 +4378,6 @@ function addCustomProduct() {
   setTimeout(() => { if(msg) msg.textContent=''; }, 3000);
   const tbody = document.getElementById('prod-tbl-body');
   if (tbody) tbody.innerHTML = buildProdRows(); else renderSettings();
-  refreshCaseUnitWarning();
 }
 
 function deleteProduct(name) {
@@ -4379,7 +4392,6 @@ function deleteProduct(name) {
   saveAllProducts();
   const tbody = document.getElementById('prod-tbl-body');
   if (tbody) tbody.innerHTML = buildProdRows(); else renderSettings();
-  refreshCaseUnitWarning();
 }
 
 /* ===== 商品カテゴリ開閉 ===== */
@@ -4606,30 +4618,6 @@ function deleteVendor(key) {
   refreshVendorRows();
 }
 
-// 「1ケースの個数」欄から実個数を自動判定できない商品（casePiecesFromUnit==null）を一覧表示する。
-// 発注タブの実際数量欄でケース選択時に個別に「⚠集計不可」が出て初めて気づく運用だったため、
-// 商品設定画面でまとめて確認・修正できるようにした。
-// ただし「ケース発注のみ」でなく「1ケースの個数」も未入力の商品は、そもそもケース発注のトグル自体が
-// 表示されない（unitToggleHTML/actualUnitToggleHTMLがp.caseOnly||p.caseUnitを条件にしている）ため
-// ⚠集計不可が実際に発生し得ない＝対象外。caseOnly商品（常にケース換算が必要）か、
-// 何か入力されているのに数字が拾えない商品（＝旧データ等の入力ミス）だけを対象にする
-function getCaseUnitAmbiguousProducts() {
-  return PRODUCTS.filter(p => casePiecesFromUnit(p.caseUnit) == null && (p.caseOnly || String(p.caseUnit || '').trim()));
-}
-function buildCaseUnitWarning() {
-  const list = getCaseUnitAmbiguousProducts();
-  if (!list.length) return '';
-  const items = list.map(p => `${esc(p.label)}${p.caseOnly ? '（ケース発注のみ）' : ''}`).join('／');
-  return `<div style="font-size:12px;color:#92400e;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:10px 12px;margin-bottom:14px;line-height:1.6">
-    ⚠ 「1ケースの個数」から実個数を自動判定できない商品：<b>${items}</b><br>
-    ケースで発注・実際数量入力された場合、棚卸の当月納品集計に反映されません。「1ケースの個数」欄に数字（例：25）を入力してください。
-  </div>`;
-}
-function refreshCaseUnitWarning() {
-  const el = document.getElementById('case-unit-warning');
-  if (el) el.innerHTML = buildCaseUnitWarning();
-}
-
 function buildProdRows() {
   const VENDOR_LABELS = Object.fromEntries(VENDOR_CONFIG.map(v => [v.key, v.label]));
   const VENDOR_ORDER  = VENDOR_CONFIG.map(v => v.key);
@@ -4782,7 +4770,6 @@ function renderSettings() {
                 <div id="prod-add-msg" style="font-size:12px;margin-top:6px;min-height:18px"></div>
               </div>
               <!-- 商品一覧 -->
-              <div id="case-unit-warning">${buildCaseUnitWarning()}</div>
               <table class="settings-tbl">
                 <thead><tr>
                   <th style="width:44px"></th>
