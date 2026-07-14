@@ -324,6 +324,7 @@
     .partner-tab:hover { background:rgba(34,112,61,.12); color:#22703d; }
     .partner-tab.active { background:#22703d; color:white; }
     .ptab-badge { position:absolute; top:-6px; right:2px; background:#ef4444; color:white; font-size:9px; font-weight:700; padding:1px 5px; border-radius:8px; line-height:1.4; letter-spacing:.02em; }
+    .ptab-badge-delivery { top:11px; background:#f97316; }
     .partner-tab-content { display:none; }
     .partner-tab-content.active { display:block; }
     .partner-coming-soon { padding:60px 20px; text-align:center; color:#aaa; }
@@ -435,7 +436,7 @@
 
   <!-- パートナー機能タブ -->
   <div class="partner-tab-bar">
-    <button class="partner-tab active" id="ptab-order"     onclick="switchPartnerTab('order')">発注<span id="ptab-order-badge" class="ptab-badge" style="display:none">NEW</span></button>
+    <button class="partner-tab active" id="ptab-order"     onclick="switchPartnerTab('order')">発注<span id="ptab-order-badge" class="ptab-badge" style="display:none">NEW</span><span id="ptab-delivery-badge" class="ptab-badge ptab-badge-delivery" style="display:none">納品</span></button>
     <button class="partner-tab"        id="ptab-lost"      onclick="switchPartnerTab('lost')">忘れ物</button>
     <button class="partner-tab"        id="ptab-inventory" onclick="switchPartnerTab('inventory')">棚卸表</button>
     <button class="partner-tab"        id="ptab-checklist" onclick="switchPartnerTab('checklist')">チェック<br class="sp-only">シート</button>
@@ -1155,26 +1156,32 @@ function countNewGroups(sid) {
   return new Set(rows.map(r => r.groupId || r.id)).size;
 }
 
-// 依頼済み履歴のうち「否認されたのに未対応」、または「発注済みで、納品予定日が
-// 未入力／当日／過ぎている（＝そろそろ納品済みボタンを押す必要がある）」ものがあれば、
-// パートナーが対応すべき通知として上部の発注タブに「NEW」を出す。
-// 否認は取り下げ操作で、納品予定日絡みは納品済み操作でstoreRowsから行自体が消えるデータ上の
-// 状態なので、localStorageに「見た/見ていない」を別管理する必要がなく、常にstoreRowsの現在値
-// だけで判定できる。まだ発注日が入っていない「確認中」状態（isNew===true・未否認）は、
-// パートナー側に対応事項が無いためNEW対象外のまま。
+// 発注タブには2種類のバッジがある。
+// 1) 赤い「NEW」: 依頼済み履歴のうち「発注済みまたは否認」に管理者側が状態を返したもの
+//    （納品予定日の状況は問わない）。ただし「依頼済み履歴」パネルを開いている間は、
+//    パートナーが今まさに見ているので表示しない＝既読的に隠す（_historyOpenを見る）。
+// 2) オレンジの「納品」: 否認されておらず発注済み（確認中ではない）グループのうち、
+//    納品予定日が未入力／当日／過ぎているもの。まだ納品済みボタンを押していないものへの
+//    リマインダーなので、履歴パネルの開閉に関係なく常に実データの状態をそのまま反映する。
+// いずれも取り下げ／納品済み操作でstoreRowsから行自体が消えるデータ上の状態なので、
+// localStorageに「見た/見ていない」を別管理する必要がなく、常にstoreRowsの現在値だけで判定できる。
 function updatePartnerOrderBadge() {
-  const badge = document.getElementById('ptab-order-badge');
-  if (!badge) return;
   const groups = buildStoreGroups(storeRows).filter(g => g[0].locked);
   const t = today();
-  const needsAttention = groups.some(g => {
-    if (g.some(r => r.denied)) return true;
-    if (g[0].isNew) return false; // 確認中（発注日未入力）はパートナー対応不要
+
+  const needsAttention = groups.some(g => g[0].denied || !g[0].isNew);
+  const badge = document.getElementById('ptab-order-badge');
+  if (badge) badge.style.display = (needsAttention && !_historyOpen) ? '' : 'none';
+  const msg = document.getElementById('order-new-msg');
+  if (msg) msg.style.display = (needsAttention && !_historyOpen) ? '' : 'none';
+
+  const needsDelivery = groups.some(g => {
+    if (g.some(r => r.denied)) return false;
+    if (g[0].isNew) return false; // 確認中（発注日未入力）は対象外
     return g.some(r => !r.deliveryDate || r.deliveryDate <= t); // 未入力・当日・過ぎている
   });
-  badge.style.display = needsAttention ? '' : 'none';
-  const msg = document.getElementById('order-new-msg');
-  if (msg) msg.style.display = needsAttention ? '' : 'none';
+  const deliveryBadge = document.getElementById('ptab-delivery-badge');
+  if (deliveryBadge) deliveryBadge.style.display = needsDelivery ? '' : 'none';
 }
 
 function updateBadges() {
@@ -3171,6 +3178,7 @@ function switchOrderSubTab(view) {
   reqBtn?.classList.toggle('active', !_historyOpen);
   histBtn?.classList.toggle('active', _historyOpen);
   if (_historyOpen) renderOrderHistory();
+  updatePartnerOrderBadge();
 }
 
 function renderOrderHistory() {
