@@ -1194,24 +1194,37 @@ function countNewGroups(sid) {
 // 1) 赤い「NEW」: 依頼済み履歴のうち「発注済みまたは否認」に管理者側が状態を返したもの
 //    （納品予定日の状況は問わない）。「依頼済み履歴」パネルを一度開くと、その時点で
 //    対応待ちのグループは既読扱いになり、発注依頼タブに戻ってもNEWは再表示されない
-//    （seenAttentionGroupsに記録）。その後、別のグループが新たに発注済み／否認になると、
-//    そのグループはまだ未読なので再びNEWが表示される。
+//    （店舗ごとにlocalStorageのseen_attention_{storeId}キーへ既読groupIdを保存するため、
+//    ページを再読み込みしても既読状態が保持される）。その後、別のグループが新たに
+//    発注済み／否認になると、そのグループはまだ未読なので再びNEWが表示される。
 // 2) オレンジの「納品」: 否認されておらず発注済み（確認中ではない）グループのうち、
 //    納品予定日が未入力／当日／過ぎているもの。まだ納品済みボタンを押していないものへの
 //    リマインダーなので、既読状態は関係なく常に実データの状態をそのまま反映する。
 // いずれも取り下げ／納品済み操作でstoreRowsから行自体が消えるデータ上の状態なので、
-// 「見た/見ていない」を店舗ごとに保持するのはNEWバッジの既読管理(seenAttentionGroups)だけでよく、
+// 「見た/見ていない」を店舗ごとに保持するのはNEWバッジの既読管理だけでよく、
 // 集計自体は常にstoreRowsの現在値だけで判定できる。
-const seenAttentionGroups = {}; // storeId -> Set(既読にしたgroupId) ページ再読み込みでリセットされる一時状態
+const seenAttentionKey = id => `seen_attention_${id}`;
+function loadSeenAttention(id) {
+  try { return new Set(JSON.parse(localStorage.getItem(seenAttentionKey(id)) || '[]')); }
+  catch(e) { return new Set(); }
+}
+function saveSeenAttention(id, seenSet) {
+  localStorage.setItem(seenAttentionKey(id), JSON.stringify([...seenSet]));
+}
 function updatePartnerOrderBadge() {
   const groups = buildStoreGroups(storeRows).filter(g => g[0].locked);
   const t = today();
 
-  const seen = seenAttentionGroups[storeTab] || (seenAttentionGroups[storeTab] = new Set());
+  const seen = loadSeenAttention(storeTab);
   const attentionGroups = groups.filter(g => g[0].denied || !g[0].isNew);
   if (_historyOpen) {
     // 履歴を開いている間に見えている対応待ちグループは、その都度既読にする
-    attentionGroups.forEach(g => seen.add(g[0].groupId || g[0].id));
+    let changed = false;
+    attentionGroups.forEach(g => {
+      const gid = g[0].groupId || g[0].id;
+      if (!seen.has(gid)) { seen.add(gid); changed = true; }
+    });
+    if (changed) saveSeenAttention(storeTab, seen);
   }
   const needsAttention = attentionGroups.some(g => !seen.has(g[0].groupId || g[0].id));
   const badge = document.getElementById('ptab-order-badge');
