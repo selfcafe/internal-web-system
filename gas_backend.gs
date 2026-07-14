@@ -26,7 +26,7 @@ const INVOICE_LOG_COLS = ['id', 'store_id', 'store_name', 'partner_id', 'period'
 const ORDER_COLS = [
   'id','store_id','group_id','product','label','qty','actual_qty','unit',
   'case_unit','unit_mode','note','locked','is_new','request_date','order_date',
-  'delivery_date','created_at','denied','image_url'
+  'delivery_date','created_at','denied','image_url','actual_unit_mode'
 ];
 const LOST_COLS = ['id','store_id','found_date','note','image_url','added_at'];
 // 店舗×年月で1行、その月の日別データはJSON文字列として1セルに保存する
@@ -168,6 +168,7 @@ function getOrders() {
     created_at:    r.created_at    || null,
     denied:        r.denied === true || r.denied === 'TRUE',
     image_url:     r.image_url     || null,
+    actual_unit_mode: r.actual_unit_mode || null,
   }));
 }
 
