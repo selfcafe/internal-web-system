@@ -3209,7 +3209,6 @@ function renderOrderHistory() {
     const gid = group[0].groupId || group[0].id;
     const N   = group.length;
     const isDenied    = group.some(r => r.denied);
-    const hasOrderDate = group.some(r => r.orderDate);
     const gPhoto = group[0].imageUrl;
     const photoHtml = gPhoto
       ? `<img src="${esc(gPhoto)}" style="height:36px;border-radius:5px;cursor:pointer;border:1px solid #e5e7eb;margin-left:6px;vertical-align:middle" onclick="showLostImage(this.src)" title="写真を拡大">`
@@ -3217,9 +3216,9 @@ function renderOrderHistory() {
 
     const isOrdered = !group[0].isNew;
 
-    // 発注済みの依頼で、商品によって納品予定日が異なる（未記入を含む）場合は、
-    // 納品予定日ごとに別々の「納品済み」ボタンを設置し、届いた分から個別に納品済みにできるようにする。
-    // 全商品が同じ納品予定日（未記入含む）ならこれまで通りグループ全体で1つのボタンにする。
+    // 発注済みの依頼は、納品予定日が同じ商品同士でも実際の到着タイミングが商品ごとに
+    // ずれることがあるため、納品予定日でグルーピングせず商品(行)ごとに個別の
+    // 「納品済み」ボタンを出す。届いた商品から個別に納品済みにできる。
     let actionGroups;
     if (isDenied) {
       actionGroups = [{
@@ -3234,26 +3233,12 @@ function renderOrderHistory() {
         actionBtn: `<button class="btn-cancel-lock" onclick="unlockGroup('${gid}')">取り下げ</button>`,
       }];
     } else {
-      const deliveryKeys = [...new Set(group.map(r => r.deliveryDate || ''))];
-      if (deliveryKeys.length <= 1) {
-        actionGroups = [{
-          rows: group,
-          statusHtml: `<span class="locked-status">✓ 依頼済み</span>${photoHtml}`,
-          actionBtn: `<button class="btn-done" onclick="markGroupDelivered('${esc(gid)}')"
-              ${!hasOrderDate ? 'disabled title="発注日が記載されてから押せます" style="opacity:0.4;cursor:not-allowed"' : ''}>納品済み</button>`,
-        }];
-      } else {
-        actionGroups = deliveryKeys.map((dKey, di) => {
-          const subRows = group.filter(r => (r.deliveryDate || '') === dKey);
-          const subHasOrderDate = subRows.some(r => r.orderDate);
-          return {
-            rows: subRows,
-            statusHtml: `<span class="locked-status">✓ 依頼済み</span>${di === 0 ? photoHtml : ''}`,
-            actionBtn: `<button class="btn-done" onclick="markGroupDeliveredByDate('${esc(gid)}','${esc(dKey)}')"
-                ${!subHasOrderDate ? 'disabled title="発注日が記載されてから押せます" style="opacity:0.4;cursor:not-allowed"' : ''}>納品済み</button>`,
-          };
-        });
-      }
+      actionGroups = group.map((row, di) => ({
+        rows: [row],
+        statusHtml: `<span class="locked-status">✓ 依頼済み</span>${di === 0 ? photoHtml : ''}`,
+        actionBtn: `<button class="btn-done" onclick="markDelivered('${row.id}')"
+            ${!row.orderDate ? 'disabled title="発注日が記載されてから押せます" style="opacity:0.4;cursor:not-allowed"' : ''}>納品済み</button>`,
+      }));
     }
 
     let rowIdxInGroup = 0;
@@ -3395,39 +3380,6 @@ function markDelivered(id) {
   saveH(storeTab, [...loadH(storeTab), {...row, deliveredAt:Date.now()}]);
   recordDeliveredRows(storeTab, [row]);
   storeRows = storeRows.filter(r=>r.id!==id);
-  saveA(storeTab, storeRows);
-  renderStore();
-}
-
-function markGroupDelivered(gid) {
-  const group = storeRows.filter(r => (r.groupId||r.id) === gid);
-  if (!group.length) return;
-  if (!group.some(r => r.orderDate)) { alert('発注日が記載されてから納品済みにできます。'); return; }
-  if (!confirm('この依頼を納品済みにして履歴へ移動しますか？')) return;
-  const hist = loadH(storeTab);
-  const now = Date.now();
-  group.forEach(r => hist.push({...r, deliveredAt: now}));
-  saveH(storeTab, hist);
-  recordDeliveredRows(storeTab, group);
-  storeRows = storeRows.filter(r => (r.groupId||r.id) !== gid);
-  saveA(storeTab, storeRows);
-  renderStore();
-}
-
-/* 商品によって納品予定日が異なるグループで、指定した納品予定日（未記入は''）の商品分だけを
-   納品済みにする。他の納品予定日の商品はそのまま依頼済み履歴に残る */
-function markGroupDeliveredByDate(gid, deliveryDate) {
-  const group = storeRows.filter(r => (r.groupId||r.id) === gid && (r.deliveryDate||'') === deliveryDate);
-  if (!group.length) return;
-  if (!group.some(r => r.orderDate)) { alert('発注日が記載されてから納品済みにできます。'); return; }
-  if (!confirm('この納品予定日の商品を納品済みにして履歴へ移動しますか？')) return;
-  const hist = loadH(storeTab);
-  const now = Date.now();
-  group.forEach(r => hist.push({...r, deliveredAt: now}));
-  saveH(storeTab, hist);
-  recordDeliveredRows(storeTab, group);
-  const ids = new Set(group.map(r => r.id));
-  storeRows = storeRows.filter(r => !ids.has(r.id));
   saveA(storeTab, storeRows);
   renderStore();
 }
