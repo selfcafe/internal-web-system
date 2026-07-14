@@ -1174,7 +1174,7 @@ function actualQtyCell(sid, row) {
         placeholder="${actualMode === 'piece' && fallback != null ? esc(fallback) : ''}"
         style="width:60px;font-size:12px;border:1px solid #ddd;border-radius:5px;padding:3px 4px;font-family:inherit"
         onchange="adminUpd('${sid}','${row.id}','actualQty',this.value)">
-      <span style="font-size:11px;color:#888">${esc(actualUnitLabelText(product, actualMode))}</span>
+      <span style="font-size:11px;color:#888;display:inline-block;min-width:64px">${esc(actualUnitLabelText(product, actualMode))}</span>
       ${actualUnitToggleHTML(sid, row)}
     </div>
     ${warn}${actualWarn}
