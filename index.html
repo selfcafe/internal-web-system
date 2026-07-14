@@ -1155,15 +1155,23 @@ function countNewGroups(sid) {
   return new Set(rows.map(r => r.groupId || r.id)).size;
 }
 
-// 依頼済み履歴のうち「否認されたのに未対応」または「発注済みだが、まだ納品済みボタンを
-// 押していない」ものがあれば、パートナーが対応すべき通知として上部の発注タブに「NEW」を出す。
-// いずれも取り下げ／納品済み操作でstoreRowsから行自体が消えるデータ上の状態なので、
-// localStorageに「見た/見ていない」を別管理する必要がなく、常にstoreRowsの現在値だけで判定できる。
+// 依頼済み履歴のうち「否認されたのに未対応」、または「発注済みで、納品予定日が
+// 未入力／当日／過ぎている（＝そろそろ納品済みボタンを押す必要がある）」ものがあれば、
+// パートナーが対応すべき通知として上部の発注タブに「NEW」を出す。
+// 否認は取り下げ操作で、納品予定日絡みは納品済み操作でstoreRowsから行自体が消えるデータ上の
+// 状態なので、localStorageに「見た/見ていない」を別管理する必要がなく、常にstoreRowsの現在値
+// だけで判定できる。まだ発注日が入っていない「確認中」状態（isNew===true・未否認）は、
+// パートナー側に対応事項が無いためNEW対象外のまま。
 function updatePartnerOrderBadge() {
   const badge = document.getElementById('ptab-order-badge');
   if (!badge) return;
   const groups = buildStoreGroups(storeRows).filter(g => g[0].locked);
-  const needsAttention = groups.some(g => g[0].denied || !g[0].isNew);
+  const t = today();
+  const needsAttention = groups.some(g => {
+    if (g.some(r => r.denied)) return true;
+    if (g[0].isNew) return false; // 確認中（発注日未入力）はパートナー対応不要
+    return g.some(r => !r.deliveryDate || r.deliveryDate <= t); // 未入力・当日・過ぎている
+  });
   badge.style.display = needsAttention ? '' : 'none';
   const msg = document.getElementById('order-new-msg');
   if (msg) msg.style.display = needsAttention ? '' : 'none';
