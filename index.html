@@ -3300,6 +3300,18 @@ function renderOrderHistory() {
           ? `<td class="c-req" data-label="依頼日"${rowspanAttr} style="vertical-align:middle;font-size:13px;font-weight:600;text-align:center">${esc(row.requestDate)}</td>`
           : '';
 
+        // 実際に発注した数量(実際数量)が依頼数量と異なる場合のみ、パートナー側にも
+        // 「実際：」を追記して表示する。同じ数量なら依頼数量の表記のみで十分なため出さない
+        // （2026-07-14、ユーザー要望：管理者ポータルとパートナーポータルの認識ズレ防止）
+        const _qtyProduct = prodByName(row.product);
+        const _hasActual = row.actualQty !== '' && row.actualQty != null;
+        const _reqPieces = qtyToPieces(_qtyProduct, row.qty, row.unitMode);
+        const _actualPieces = _hasActual ? actualQtyToPieces(_qtyProduct, row.actualQty, row.actualUnitMode) : null;
+        const showActualQty = _hasActual && (_actualPieces == null || _actualPieces !== _reqPieces);
+        const actualQtyLine = showActualQty
+          ? `<div style="font-size:12px;font-weight:700;color:#c2410c">実際：${esc(row.actualQty)} ${esc(actualUnitLabelText(_qtyProduct, row.actualUnitMode || 'piece'))}</div>`
+          : '';
+
         // c-action: 各アクショングループの最初の行にのみ（rowspan=そのグループの件数）ステータス＋納品済みを表示
         let actionCell = '';
         if (iInSub === 0) {
@@ -3317,7 +3329,7 @@ function renderOrderHistory() {
           <td class="c-order" data-label="発注日">${displayCell(row.orderDate)}</td>
           <td class="c-delivery" data-label="納品予定日">${displayCell(row.deliveryDate)}</td>
           <td class="c-product" data-label="商品名" style="font-size:13px">${pLabel ? esc(pLabel) : '<span style="color:#bbb">未選択</span>'}</td>
-          <td class="c-qty" data-label="数量"><span style="font-size:13px">${esc(row.qty)||'—'}</span> <span class="unit-label">${esc(unitLabelText(row.product, row.unitMode))}</span></td>
+          <td class="c-qty" data-label="数量"><span style="font-size:13px">${esc(row.qty)||'—'}</span> <span class="unit-label">${esc(unitLabelText(row.product, row.unitMode))}</span>${actualQtyLine}</td>
           <td class="c-note" data-label="備考" style="font-size:13px;color:#555;white-space:pre-wrap">${esc(row.note)}</td>
           ${actionCell}`;
         tbody.appendChild(tr);
