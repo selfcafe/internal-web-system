@@ -196,9 +196,11 @@
     .site-lock.hidden { display:none; }
     .site-lock-box { background:rgba(255,255,255,.92); border-radius:20px; padding:40px 36px; width:min(380px,90vw); text-align:center; box-shadow:0 8px 32px rgba(34,112,61,.12); border:1px solid #d8d6be; }
     .site-lock-logo {
-      display:block; width:140px; height:140px; margin:0 auto 32px; border-radius:50%;
-      box-shadow:0 6px 12px rgba(34,112,61,.35);
+      position:relative; width:140px; height:140px; margin:0 auto 32px; border-radius:50%;
+      box-shadow:0 6px 12px rgba(34,112,61,.35); overflow:hidden;
     }
+    .site-lock-logo-img { position:absolute; inset:0; width:100%; height:100%; object-fit:cover; display:block; }
+    .site-lock-logo-main { opacity:0; transition:opacity .15s linear; }
     .portal-logo { height:26px; width:auto; display:block; flex-shrink:0; align-self:flex-start; }
     @media (min-width:640px) {
       .portal-logo { height:32px; }
@@ -397,7 +399,10 @@
 
 <!-- サイトログイン画面 -->
 <div class="site-lock" id="site-lock">
-  <img src="logo-round.png" class="site-lock-logo" alt="セルフカフェ">
+  <div class="site-lock-logo">
+    <img src="apple-touch-icon.png" class="site-lock-logo-img" alt="">
+    <img src="logo-round.png" class="site-lock-logo-img site-lock-logo-main" id="site-lock-logo-main" alt="セルフカフェ">
+  </div>
   <div class="site-lock-box">
     <h2>セルフカフェ社内ポータル</h2>
     <p>パスワードを入力してください</p>
@@ -738,11 +743,22 @@ function _syncStoreToDb(storeId, rows, deletedIds) {
   return run;
 }
 
+// キーごとに直列化する。並列で複数回呼ばれると（例：商品設定画面で複数商品のcaseUnitを
+// 続けて編集）、リクエストがネットワーク側で呼び出し順と逆に完了することがあり、
+// 後から呼んだはずの新しい値が先に呼んだ古い値で上書きされてしまう事故になる
+// （_syncStoreToDbで発注データに起きた既知の不具合と同じ根本原因）。呼び出し順に
+// 実行させることで、最後に呼ばれた保存が必ず最後にサーバーへ反映されるようにする
+const _settingSyncChain = {};
 async function _gasSaveSetting(key, value) {
-  try {
-    const r = await gasPost('saveSetting', { key, value });
-    return !r.error;
-  } catch(e) { console.error('GAS saveSetting error:', e); return false; }
+  const prev = _settingSyncChain[key] || Promise.resolve();
+  const run = prev.catch(() => {}).then(async () => {
+    try {
+      const r = await gasPost('saveSetting', { key, value });
+      return !r.error;
+    } catch(e) { console.error('GAS saveSetting error:', e); return false; }
+  });
+  _settingSyncChain[key] = run;
+  return run;
 }
 function _syncStorePw() {
   _gasSaveSetting('store_passwords', localStorage.getItem(STORE_PW_KEY) || '{}');
@@ -5771,17 +5787,22 @@ async function submitInvoiceCombinedForm() {
   const loginBtn = document.querySelector('button.btn-pin-submit');
   const loginGauge = document.getElementById('site-login-gauge');
   const loginGaugeFill = document.getElementById('site-login-gauge-fill');
+  // ロード中はショートカットアイコン（黒金）を表示し、読み込みが進むにつれて現行ロゴに
+  // クロスフェードする。ゲージと同じ経過時間ベースの割合を使い、2つの演出のペースを合わせる
+  const loginLogoMain = document.getElementById('site-lock-logo-main');
   let loadingTimer = null;
   if (loginBtn) {
     loginBtn.disabled = true;
     loginBtn.textContent = '読み込み中…';
     if (loginGauge) loginGauge.style.display = 'block';
     if (loginGaugeFill) loginGaugeFill.style.width = '0%';
+    if (loginLogoMain) loginLogoMain.style.opacity = '0';
     const targetMs = 2000;
     const startedAt = performance.now();
     loadingTimer = setInterval(() => {
       const pct = Math.min(100, Math.round((performance.now() - startedAt) / targetMs * 100));
       if (loginGaugeFill) loginGaugeFill.style.width = pct + '%';
+      if (loginLogoMain) loginLogoMain.style.opacity = String(pct / 100);
       if (pct >= 100) clearInterval(loadingTimer);
     }, 30);
   }
@@ -5789,6 +5810,7 @@ async function submitInvoiceCombinedForm() {
   if (loadingTimer) clearInterval(loadingTimer);
   if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = 'ログイン'; }
   if (loginGaugeFill) loginGaugeFill.style.width = '100%';
+  if (loginLogoMain) loginLogoMain.style.opacity = '1';
   if (loginGauge) setTimeout(() => { loginGauge.style.display = 'none'; }, 150);
   const syncWarning = document.getElementById('site-sync-warning');
   if (syncWarning) {
