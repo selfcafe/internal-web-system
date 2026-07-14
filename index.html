@@ -3114,11 +3114,10 @@ function renderStore() {
         ? `<td class="c-note" data-label="備考" style="font-size:13px;color:#555;white-space:pre-wrap">${esc(row.note)}</td>`
         : `<td class="c-note" data-label="備考"><textarea placeholder="備考" oninput="autoGrow(this)" onchange="updStore('${row.id}','note',this.value)">${esc(row.note)}</textarea></td>`;
 
-      const hasOrderDate = !!row.orderDate;
+      // このテーブルはgroups(未依頼のみ)しか描画しないため、isLockedは常にfalse。
+      // 納品済みボタンは依頼済み履歴(renderOrderHistory)にのみ存在するべきもので、
+      // ここに出ていたのは実質常時disabledの不要な残骸だったため削除した(2026-07-14)。
       const actionCell = `<td class="c-action">
-        <button class="btn-done" onclick="markDelivered('${row.id}')"
-          ${!hasOrderDate ? 'disabled title="発注日が記載されてから押せます"' : ''}
-          style="${!hasOrderDate ? 'opacity:0.4;cursor:not-allowed;' : ''}">納品済み</button>
         ${isLocked ? '' : `<button class="btn-del" onclick="delRow('${row.id}')">削除</button>`}
       </td>`;
 
