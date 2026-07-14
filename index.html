@@ -1139,7 +1139,7 @@ function actualUnitToggleHTML(sid, row) {
   const mode = row.actualUnitMode || 'piece';
   const btn = (val, label) => `<span class="unit-toggle-btn" onclick="setActualUnitMode('${sid}','${row.id}','${val}')"
     style="${mode===val ? 'background:#22703d;color:#fff' : 'color:#22703d'}">${esc(label)}</span>`;
-  return `<span class="unit-toggle-wrap">${btn('piece', p.unit)}${btn('case', 'ケース')}</span>`;
+  return `<span class="unit-toggle-wrap">${btn('piece', 'バラ')}${btn('case', 'ケース')}</span>`;
 }
 
 function actualUnitLabelText(product, actualMode) {
@@ -3362,7 +3362,7 @@ function unitToggleHTML(row) {
   const mode = row.unitMode || 'piece';
   const btn = (val, label) => `<span class="unit-toggle-btn" onclick="setRowUnitMode('${row.id}','${val}')"
     style="${mode===val ? 'background:#22703d;color:#fff' : 'color:#22703d'}">${esc(label)}</span>`;
-  return `<span class="unit-toggle-wrap">${btn('piece', p.unit)}${btn('case', 'ケース')}</span>`;
+  return `<span class="unit-toggle-wrap">${btn('piece', 'バラ')}${btn('case', 'ケース')}</span>`;
 }
 function setRowUnitMode(id, mode) {
   updStore(id, 'unitMode', mode);
