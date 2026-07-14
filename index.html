@@ -3199,7 +3199,9 @@ function renderOrderHistory() {
   const tbody = document.getElementById('history-tbody');
   tbody.innerHTML = '';
 
-  const groups = buildStoreGroups(storeRows).filter(g => g[0].locked);
+  // 依頼済み履歴は依頼日の新しい順に表示する（buildStoreGroups自体は発注依頼タブと共用で古い順のため、ここだけ反転）
+  const groups = buildStoreGroups(storeRows).filter(g => g[0].locked)
+    .sort((a, b) => (b[0].requestDate||'').localeCompare(a[0].requestDate||''));
   if (!groups.length) {
     tbody.innerHTML = '<tr><td colspan="7" class="empty-msg">依頼済みの発注はありません</td></tr>';
     return;
