@@ -21,6 +21,11 @@ const SHEET_LOST       = 'lost_items';
 const SHEET_CHECKSHEET = 'checksheet_data';
 const SHEET_INVENTORY  = 'inventory_log';
 const SHEET_INVOICE_LOG = 'invoice_log';
+// app_settingsの上書き前の値を追記専用で残しておく履歴ログ。2026-07-14に消耗品カテゴリの
+// 商品データが保存の競合で丸ごと消え、Google Driveの古いコピーから手作業で復旧する羽目に
+// なったため追加。以後は同じ事故が起きても最新の履歴行から直前の値をすぐ確認・復元できる
+const SHEET_SETTINGS_HISTORY = 'settings_history';
+const SETTINGS_HISTORY_COLS = ['timestamp', 'key', 'old_value'];
 const INVOICE_LOG_COLS = ['id', 'store_id', 'store_name', 'partner_id', 'period', 'amount', 'pdf_url', 'submitted_at', 'receipt_pdf_url'];
 
 const ORDER_COLS = [
@@ -59,6 +64,7 @@ function doGet(e) {
     else if (a === 'getInventoryDeliveryManual') result = getInventoryDeliveryManual(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'getInvoiceLog')             result = getInvoiceLog();
     else if (a === 'migrateOrderColumns')       result = migrateOrderColumns();
+    else if (a === 'getSettingHistory')         result = getSettingHistory(e.parameter.key, e.parameter.limit);
     else result = { error: 'Unknown action: ' + a };
     return json(result);
   } catch(err) {
@@ -298,12 +304,44 @@ function saveSetting(key, value) {
   const ki = data[0].indexOf('key'), vi = data[0].indexOf('value');
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][ki]) === String(key)) {
+      _logSettingHistory(key, data[i][vi]);
       sheet.getRange(i + 1, vi + 1).setValue(value);
       return { ok: true };
     }
   }
+  _logSettingHistory(key, '');
   sheet.appendRow([key, value]);
   return { ok: true };
+}
+
+// 上書き前の値を追記専用ログに残す（削除・上書きは一切しない）。事故発生時はこのシートを
+// 新しい順に見て、壊れる直前の正しい値をold_valueからそのまま復元できる
+function _logSettingHistory(key, oldValue) {
+  const sheet = getSheet(SHEET_SETTINGS_HISTORY);
+  ensureHeaders(sheet, SETTINGS_HISTORY_COLS);
+  sheet.appendRow([new Date(), key, oldValue]);
+}
+
+// 指定キーの履歴を新しい順にlimit件返す（デフォルト20件）。復旧作業時に直接APIを叩いて確認する用途
+function getSettingHistory(key, limit) {
+  const sheet = getSheet(SHEET_SETTINGS_HISTORY);
+  if (sheet.getLastRow() <= 1) return [];
+  const data = sheet.getDataRange().getValues();
+  const hdr = data[0];
+  const ti = hdr.indexOf('timestamp'), ki = hdr.indexOf('key'), vi = hdr.indexOf('old_value');
+  const n = Number(limit) > 0 ? Number(limit) : 20;
+  return data.slice(1)
+    .filter(r => String(r[ki]) === String(key))
+    .map(r => ({ timestamp: _dateTimeStr(r[ti]), key: r[ki], old_value: r[vi] }))
+    .reverse()
+    .slice(0, n);
+}
+
+// _dateStr()は日付のみ（発注日等）向けのため、履歴ログでは何時何分の保存かも分かるよう
+// 日時まで含めて文字列化する専用ヘルパー
+function _dateTimeStr(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, _sheetTz(), 'yyyy-MM-dd HH:mm:ss');
+  return v || null;
 }
 
 // ----------------------------------------------------------------
