@@ -1125,7 +1125,29 @@ function qtyToPieces(product, qty, unitMode) {
   return pieces == null ? null : n * pieces;
 }
 
-// 発注タブ（管理者）用：本部が実際数量（個数単位）を編集できる欄。
+// 実際数量のトグル（個数/ケース）。依頼側のunitToggleHTMLと違い、caseOnly商品でも
+// 本部側はケース数のまま把握していることが多いため、caseUnitさえあれば caseOnly かどうかに
+// 関わらず出す。デフォルトは常に'piece'（今までの「実際数量＝個数で入力」という挙動を維持）。
+function actualUnitToggleHTML(sid, row) {
+  const p = prodByName(row.product);
+  if (!p || !p.caseUnit) return '';
+  const mode = row.actualUnitMode || 'piece';
+  const btn = (val, label) => `<span class="unit-toggle-btn" onclick="setActualUnitMode('${sid}','${row.id}','${val}')"
+    style="${mode===val ? 'background:#22703d;color:#fff' : 'color:#22703d'}">${esc(label)}</span>`;
+  return `<span class="unit-toggle-wrap">${btn('piece', p.unit)}${btn('case', 'ケース')}</span>`;
+}
+
+function actualUnitLabelText(product, actualMode) {
+  if (!product) return '';
+  if (!product.caseUnit) return product.unit;
+  return actualMode === 'case' ? `ケース（${product.caseUnit}）` : product.unit;
+}
+
+// 発注タブ（管理者）用：本部が実際数量を編集できる欄。パートナー側のqty/unitModeと同じく
+// 個数/ケースをトグルで選べる（2026-07-14追加）。ケースを選んだ場合、実際数量欄には
+// ケース数をそのまま入力してもらい、棚卸への集計時（deliveredPiecesForRow）にactualUnitModeを
+// 見て個数へ変換する。actualUnitModeが無い/pieceの既存データは今まで通りNumber(actualQty)を
+// そのまま個数として扱うため、この変更による既存データ・集計済みの棚卸数値への影響はない。
 // 未編集ならqtyToPiecesのフォールバック値をプレースホルダー表示するだけで、
 // row.actualQty自体は空のまま（フォールバックは集計側で判定する）
 function actualQtyCell(sid, row) {
@@ -1134,17 +1156,23 @@ function actualQtyCell(sid, row) {
   const effectiveMode = product && (product.caseOnly ? 'case' : (row.unitMode || 'piece'));
   const caseAmbiguous = !!(product && effectiveMode === 'case' && casePiecesFromUnit(product.caseUnit) == null && row.qty !== '' && row.qty != null);
   const warn = caseAmbiguous ? `<span title="1ケースあたりの個数を自動判定できません。実際数量を直接入力してください" style="color:#dc2626;font-size:11px;cursor:help">⚠変換不可</span>` : '';
+
+  const actualMode = row.actualUnitMode || 'piece';
+  const actualAmbiguous = !!(product && actualMode === 'case' && casePiecesFromUnit(product.caseUnit) == null && row.actualQty !== '' && row.actualQty != null);
+  const actualWarn = actualAmbiguous ? `<span title="1ケースあたりの個数を自動判定できないため、この実際数量（ケース）は棚卸の集計に反映されません" style="color:#dc2626;font-size:11px;cursor:help">⚠集計不可</span>` : '';
+
   return `<div style="display:flex;flex-direction:column;gap:2px;min-width:110px">
     <div style="font-size:11px;color:#888">依頼：${esc(row.qty)||'—'} ${esc(unitLabelText(row.product, row.unitMode))}</div>
-    <div style="display:flex;align-items:center;gap:4px">
+    <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">
       <span style="font-size:10px;color:#888;white-space:nowrap">実際数量</span>
       <input type="number" min="0" value="${row.actualQty !== '' && row.actualQty != null ? esc(row.actualQty) : ''}"
-        placeholder="${fallback != null ? esc(fallback) : ''}"
+        placeholder="${actualMode === 'piece' && fallback != null ? esc(fallback) : ''}"
         style="width:60px;font-size:12px;border:1px solid #ddd;border-radius:5px;padding:3px 4px;font-family:inherit"
         onchange="adminUpd('${sid}','${row.id}','actualQty',this.value)">
-      <span style="font-size:11px;color:#888">${esc(product ? product.unit : '')}</span>
+      <span style="font-size:11px;color:#888">${esc(actualUnitLabelText(product, actualMode))}</span>
+      ${actualUnitToggleHTML(sid, row)}
     </div>
-    ${warn}
+    ${warn}${actualWarn}
   </div>`;
 }
 
@@ -2996,7 +3024,7 @@ function selectStoreFromDD(id) {
 
 function newRow(groupId, requestDate) {
   const gid = groupId || uid();
-  return { id:uid(), groupId:gid, requestDate:requestDate||today(), orderDate:'', deliveryDate:'', product:'', qty:'', actualQty:'', unitMode:'piece', note:'', isNew:false, denied:false, imageUrl:null };
+  return { id:uid(), groupId:gid, requestDate:requestDate||today(), orderDate:'', deliveryDate:'', product:'', qty:'', actualQty:'', unitMode:'piece', actualUnitMode:'piece', note:'', isNew:false, denied:false, imageUrl:null };
 }
 
 function buildStoreGroups(rows) {
@@ -3359,10 +3387,22 @@ function updStore(id, field, value) {
   saveA(storeTab, storeRows);
 }
 
+// 実際数量→個数変換。qtyToPiecesと違い、caseOnly商品でもactualUnitModeが明示的に
+// 'case'でない限り常に'piece'として扱う（実際数量は今まで通り「個数を直接入力」がデフォルトの
+// ため、既存の保存済みactualQty＝Number(actualQty)そのままという解釈を変えないための措置）
+function actualQtyToPieces(product, qty, unitMode) {
+  const n = Number(qty);
+  if (!product || qty === '' || qty == null || Number.isNaN(n)) return null;
+  if (unitMode !== 'case') return n;
+  const pieces = casePiecesFromUnit(product.caseUnit);
+  return pieces == null ? null : n * pieces;
+}
 // 「納品済み」で確定した個数を棚卸の当月納品（自動）へ加算する。実際数量が
 // 本部により編集済みならそれを、無ければ依頼数量をピース単位に変換した値を使う
 function deliveredPiecesForRow(row) {
-  if (row.actualQty !== '' && row.actualQty != null) return Number(row.actualQty);
+  if (row.actualQty !== '' && row.actualQty != null) {
+    return actualQtyToPieces(prodByName(row.product), row.actualQty, row.actualUnitMode);
+  }
   return qtyToPieces(prodByName(row.product), row.qty, row.unitMode);
 }
 function recordDeliveredRows(storeId, rows) {
@@ -3931,6 +3971,15 @@ function adminUpd(storeId, rowId, field, value) {
   const row = active.find(r => r.id === rowId);
   if (row) { row[field] = value; saveA(storeId, active); }
   updateBadges();
+}
+
+// 実際数量の個数/ケーストグル切替。ボタンの選択状態を再描画する必要があるため、
+// テキスト系の項目を扱うadminUpdと違いrenderAdmin()で表示を更新する
+function setActualUnitMode(storeId, rowId, mode) {
+  const active = loadA(storeId);
+  const row = active.find(r => r.id === rowId);
+  if (row) { row.actualUnitMode = mode; saveA(storeId, active); }
+  renderAdmin();
 }
 
 /* グループ単位で備考を一括更新 */
