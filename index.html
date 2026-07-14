@@ -4424,6 +4424,15 @@ function addCustomProduct() {
   if (!name) { msg.style.color='#ef4444'; msg.textContent='商品名を入力してください'; return; }
   if (PRODUCTS.find(p => p.name === name)) { msg.style.color='#ef4444'; msg.textContent='同じ名前の商品が既に存在します'; return; }
   PRODUCTS.push({ vendor, name, label:name, unit, caseUnit });
+  // 同じ仕入先・商品名を一度削除してから再登録した場合、削除トゥームストーン(deleted_products)が
+  // 残っているとloadDeletedProducts()が次回読み込み時に今追加した商品を再び消してしまう
+  // （実際に発生した不具合：削除→追加が「画面上は追加できるがリロードで消える」ように見えた）
+  const key = vendor + '|' + name;
+  const deletedNow = JSON.parse(localStorage.getItem(DELETED_PRODUCTS_KEY) || '[]');
+  if (deletedNow.includes(key)) {
+    localStorage.setItem(DELETED_PRODUCTS_KEY, JSON.stringify(deletedNow.filter(k => k !== key)));
+    _syncDeletedProducts();
+  }
   saveAllProducts();
   ['new-prod-name','new-prod-unit','new-prod-case'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
   msg.style.color='#22703d'; msg.textContent=`✓ 「${name}」を追加しました`;
