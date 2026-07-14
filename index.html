@@ -445,6 +445,7 @@
   <!-- 発注タブ -->
   <div id="partner-tab-order" class="partner-tab-content active">
     <div id="order-new-msg" style="display:none;font-size:13px;font-weight:700;color:#dc2626;background:#fee2e2;border:1px solid #fca5a5;border-radius:8px;padding:8px 12px;margin-bottom:10px">依頼済み履歴に新着があります</div>
+    <div id="delivery-new-msg" style="display:none;font-size:13px;font-weight:700;color:#c2410c;background:#ffedd5;border:1px solid #fdba74;border-radius:8px;padding:8px 12px;margin-bottom:10px">納品予定の商品があります。</div>
     <div class="toolbar">
       <button class="btn-history active" id="ptab-order-request" onclick="switchOrderSubTab('request')">発注依頼</button>
       <button class="btn-history" id="ptab-order-history" onclick="switchOrderSubTab('history')">依頼済み履歴 <span class="history-badge" id="history-badge" style="display:none"></span></button>
@@ -1182,6 +1183,8 @@ function updatePartnerOrderBadge() {
   });
   const deliveryBadge = document.getElementById('ptab-delivery-badge');
   if (deliveryBadge) deliveryBadge.style.display = needsDelivery ? '' : 'none';
+  const deliveryMsg = document.getElementById('delivery-new-msg');
+  if (deliveryMsg) deliveryMsg.style.display = needsDelivery ? '' : 'none';
 }
 
 function updateBadges() {
