@@ -280,20 +280,21 @@
       .store-name-wrap { flex-basis:100%; width:auto; }
       .partner-hdr-btns { display:none; }
       .partner-hdr-pinwheel {
-        display:block; position:relative; flex-shrink:0; width:150px; height:76px;
-        border-radius:8px; overflow:hidden; background:#eef1ea;
+        display:grid; grid-template-columns:repeat(100,1fr); grid-template-rows:repeat(100,1fr);
+        flex-shrink:0; width:150px; height:76px;
+        border-radius:8px; overflow:hidden; background:#eef1ea; gap:0;
       }
       .phw-piece {
-        position:absolute; border:none; margin:0; padding:2px; cursor:pointer; overflow:hidden;
+        border:none; margin:0; padding:2px; cursor:pointer; overflow:hidden; min-width:0; min-height:0;
         font-family:inherit; font-size:10px; font-weight:700; color:white; line-height:1.15;
         display:flex; align-items:center; justify-content:center; text-align:center; box-sizing:border-box;
         white-space:nowrap; -webkit-text-size-adjust:100%; text-size-adjust:100%;
       }
-      .phw-tl { left:0; top:0; width:58%; height:42%; background:#eef1ea; cursor:default; }
-      .phw-tr { left:58%; top:0; width:42%; height:58%; background:#6b7280; }
-      .phw-bl { left:0; top:42%; width:42%; height:58%; background:#22703d; }
+      .phw-tl { grid-column:1/59; grid-row:1/43; background:#eef1ea; cursor:default; }
+      .phw-tr { grid-column:59/101; grid-row:1/59; background:#6b7280; }
+      .phw-bl { grid-column:1/43; grid-row:43/101; background:#22703d; }
       .phw-bl.phw-piece-empty { background:#eef1ea; cursor:default; }
-      .phw-br { left:42%; top:58%; width:58%; height:42%; background:#8a8f7e; }
+      .phw-br { grid-column:43/101; grid-row:59/101; background:#8a8f7e; }
       .admin-title-row h1 { flex-basis:100%; }
       .link-btn { padding:8px 12px; font-size:13px; }
       table.card-mode { display:block; box-shadow:none; background:transparent; border-radius:0; }
@@ -360,11 +361,9 @@
     .partner-tab { position:relative; flex:1; padding:10px 6px; background:transparent; color:#555; font-size:13px; font-weight:600; border-radius:8px; cursor:pointer; font-family:inherit; transition:background .2s,color .2s; border:none; text-align:center; }
     .partner-tab:hover { background:rgba(34,112,61,.12); color:#22703d; }
     .partner-tab.active { background:#22703d; color:white; }
-    .partner-tab.tab-blink { animation:tabGlow 1.8s step-start infinite; }
+    .partner-tab.tab-blink { animation:tabGlow 2.4s step-start infinite; }
     @keyframes tabGlow {
-      0%, 100% { box-shadow:none; filter:none; }
-      8% { box-shadow:inset 0 0 18px 5px rgba(255,255,255,.95), 0 0 10px 2px rgba(255,255,255,.4); filter:brightness(1.15); }
-      22% { box-shadow:none; filter:none; }
+      50% { box-shadow:inset 0 0 22px 10px rgba(255,255,255,.9); filter:brightness(1.35); }
     }
     .ptab-badge { position:absolute; top:-6px; right:2px; background:#ef4444; color:white; font-size:9px; font-weight:700; padding:1px 5px; border-radius:8px; line-height:1.4; letter-spacing:.02em; min-width:22px; box-sizing:border-box; text-align:center; }
     .ptab-badge-delivery { top:11px; background:#f97316; }
