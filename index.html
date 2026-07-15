@@ -340,6 +340,7 @@
     .partner-tab.active { background:#22703d; color:white; }
     .ptab-badge { position:absolute; top:-6px; right:2px; background:#ef4444; color:white; font-size:9px; font-weight:700; padding:1px 5px; border-radius:8px; line-height:1.4; letter-spacing:.02em; min-width:22px; box-sizing:border-box; text-align:center; }
     .ptab-badge-delivery { top:11px; background:#f97316; }
+    .ptab-badge-prep { background:#9ca3af; }
     .partner-tab-content { display:none; }
     .partner-tab-content.active { display:block; }
     .partner-coming-soon { padding:60px 20px; text-align:center; color:#aaa; }
@@ -456,7 +457,7 @@
   <div class="partner-tab-bar">
     <button class="partner-tab active" id="ptab-order"     onclick="switchPartnerTab('order')">発注<span id="ptab-order-badge" class="ptab-badge" style="display:none">NEW</span><span id="ptab-delivery-badge" class="ptab-badge ptab-badge-delivery" style="display:none">納品</span></button>
     <button class="partner-tab"        id="ptab-lost"      onclick="switchPartnerTab('lost')">忘れ物</button>
-    <button class="partner-tab"        id="ptab-inventory" onclick="switchPartnerTab('inventory')">棚卸表</button>
+    <button class="partner-tab"        id="ptab-inventory" onclick="switchPartnerTab('inventory')">棚卸表<span class="ptab-badge ptab-badge-prep">準備中</span></button>
     <button class="partner-tab"        id="ptab-checklist" onclick="switchPartnerTab('checklist')">チェック<br class="sp-only">シート</button>
   </div>
 
