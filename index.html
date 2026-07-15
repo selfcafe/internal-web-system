@@ -208,6 +208,7 @@
     .portal-hdr-row .portal-logo { order:1; }
     .portal-title-store-row { display:flex; align-items:baseline; flex-wrap:wrap; gap:4px 12px; }
     .store-title-txt { font-size:20px; font-weight:700; color:#22703d; }
+    .store-name-wrap { flex:1; width:100%; }
     .partner-hdr-btns { display:flex; flex-direction:column; gap:6px; align-items:flex-end; position:absolute; top:0; right:0; }
     .partner-hdr-pinwheel { display:none; }
     .site-lock-box h2 { font-size:20px; color:#22703d; margin-bottom:6px; font-weight:700; }
@@ -275,25 +276,24 @@
       .page-header h1 { font-size:19px; }
       .store-title-txt { font-size:15px; }
       .portal-title-row { flex-direction:column; align-items:flex-start; gap:2px; }
-      .portal-title-store-row { flex-direction:column; align-items:flex-start; gap:2px; }
+      .portal-title-store-row { align-items:center; justify-content:space-between; gap:6px 10px; }
+      .store-name-wrap { flex-basis:100%; width:auto; }
       .partner-hdr-btns { display:none; }
       .partner-hdr-pinwheel {
-        display:block; position:relative; width:100%; height:168px; margin-bottom:6px;
-        border-radius:10px; overflow:hidden;
+        display:block; position:relative; flex-shrink:0; width:150px; height:76px;
+        border-radius:8px; overflow:hidden; background:#eef1ea;
       }
       .phw-piece {
-        position:absolute; inset:0; border:none; margin:0; padding:0; cursor:pointer;
-        font-family:inherit; font-size:13px; font-weight:700; color:white;
+        position:absolute; border:none; margin:0; padding:2px; cursor:pointer;
+        font-family:inherit; font-size:10px; font-weight:700; color:white; line-height:1.15;
+        display:flex; align-items:center; justify-content:center; text-align:center; box-sizing:border-box;
+        white-space:nowrap;
       }
-      .phw-piece > span { position:absolute; transform:translate(-50%,-50%); white-space:nowrap; }
-      .phw-tl { background:#eef1ea; clip-path:polygon(0% 0%,45% 0%,45% 50%,60% 50%,60% 60%,0% 60%); cursor:default; }
-      .phw-tr { background:#6b7280; clip-path:polygon(45% 0%,100% 0%,100% 35%,60% 35%,60% 50%,45% 50%); }
-      .phw-tr > span { left:74%; top:17%; }
-      .phw-bl { background:#22703d; clip-path:polygon(0% 60%,60% 60%,60% 50%,70% 50%,70% 100%,0% 100%); }
-      .phw-bl > span { left:28%; top:82%; }
+      .phw-tl { left:0; top:0; width:58%; height:42%; background:#eef1ea; cursor:default; }
+      .phw-tr { left:58%; top:0; width:42%; height:58%; background:#6b7280; }
+      .phw-bl { left:0; top:42%; width:42%; height:58%; background:#22703d; }
       .phw-bl.phw-piece-empty { background:#eef1ea; cursor:default; }
-      .phw-br { background:#8a8f7e; clip-path:polygon(60% 35%,100% 35%,100% 100%,70% 100%,70% 50%,60% 50%); font-size:12px; }
-      .phw-br > span { left:85%; top:66%; }
+      .phw-br { left:42%; top:58%; width:58%; height:42%; background:#8a8f7e; }
       .admin-title-row h1 { flex-basis:100%; }
       .link-btn { padding:8px 12px; font-size:13px; }
       table.card-mode { display:block; box-shadow:none; background:transparent; border-radius:0; }
@@ -472,15 +472,15 @@
         </div>
       </div>
     </div>
-    <div class="partner-hdr-pinwheel">
-      <div class="phw-piece phw-tl" id="phw-empty"></div>
-      <button class="phw-piece phw-tr" onclick="siteLogout()"><span>ログアウト</span></button>
-      <button id="ptab-attendance-sp" class="phw-piece phw-bl" onclick="if(isAttendanceEnabled(storeTab))switchPartnerTab('attendance')"><span>業務開始</span></button>
-      <button class="phw-piece phw-br" onclick="alert('パートナー操作ガイドは現在準備中です。今しばらくお待ちください。')"><span>マニュアル</span></button>
-    </div>
     <div class="portal-title-store-row">
       <h1>パートナーポータル</h1>
-      <div style="display:flex;align-items:baseline;flex:1;align-self:stretch;width:100%;gap:4px 12px">
+      <div class="partner-hdr-pinwheel">
+        <div class="phw-piece phw-tl" id="phw-empty"></div>
+        <button class="phw-piece phw-tr" onclick="siteLogout()"><span>ログアウト</span></button>
+        <button id="ptab-attendance-sp" class="phw-piece phw-bl" onclick="if(isAttendanceEnabled(storeTab))switchPartnerTab('attendance')"><span>業務開始</span></button>
+        <button class="phw-piece phw-br" onclick="alert('パートナー操作ガイドは現在準備中です。今しばらくお待ちください。')"><span>マニュアル</span></button>
+      </div>
+      <div class="store-name-wrap" style="display:flex;align-items:baseline;align-self:stretch;gap:4px 12px">
         <span id="active-store-label" class="store-title-txt"></span>
       </div>
     </div>
