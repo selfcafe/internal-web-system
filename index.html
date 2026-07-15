@@ -459,6 +459,7 @@
     <button class="partner-tab"        id="ptab-lost"      onclick="switchPartnerTab('lost')">忘れ物</button>
     <button class="partner-tab"        id="ptab-inventory" onclick="switchPartnerTab('inventory')">棚卸表<span class="ptab-badge ptab-badge-prep">準備中</span></button>
     <button class="partner-tab"        id="ptab-checklist" onclick="switchPartnerTab('checklist')">チェック<br class="sp-only">シート</button>
+    <button class="partner-tab"        id="ptab-attendance" onclick="switchPartnerTab('attendance')" style="display:none">出勤</button>
   </div>
 
   <!-- 発注タブ -->
@@ -517,6 +518,20 @@
         <button class="checksheet-view-btn" id="checksheet-view-toggle" onclick="toggleChecksheetView()"></button>
       </div>
       <div id="checksheet-table-wrap"></div>
+    </div>
+  </div>
+
+  <!-- 出勤タブ（試験導入・店舗ごとON/OFF） -->
+  <div id="partner-tab-attendance" class="partner-tab-content">
+    <div style="max-width:500px">
+      <div class="note-box">名前を選んで「出勤する」を押してください。位置情報の許可が必要です。</div>
+      <div style="background:white;border-radius:10px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:16px">
+        <select id="attendance-name-sel" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:10px;font-size:15px;font-family:inherit;margin-bottom:10px"></select>
+        <button onclick="doAttendanceClockIn()" style="width:100%;background:#22703d;color:white;padding:12px;font-size:16px;font-weight:700;border-radius:8px;border:none;cursor:pointer;font-family:inherit">出勤する</button>
+        <div id="attendance-msg" style="font-size:13px;margin-top:8px;min-height:18px"></div>
+      </div>
+      <div style="font-weight:700;font-size:14px;color:#22703d;margin-bottom:8px">出勤履歴（自店舗）</div>
+      <div id="attendance-history-wrap"></div>
     </div>
   </div>
 
@@ -840,6 +855,9 @@ async function initGas() {
       if (r.key === 'checksheet_categories') localStorage.setItem(CHECKSHEET_CATEGORIES_KEY, clean(r.value));
       if (r.key === 'invoice_store_cfg') localStorage.setItem(INVOICE_STORE_CFG_KEY, clean(r.value));
       if (r.key === 'invoice_partners')  localStorage.setItem(INVOICE_PARTNERS_KEY,  clean(r.value));
+      if (r.key === 'attendance_enabled_stores') localStorage.setItem(ATTENDANCE_ENABLED_KEY, clean(r.value));
+      if (r.key === 'attendance_staff_list')     localStorage.setItem(ATTENDANCE_STAFF_KEY,   clean(r.value));
+      if (r.key === 'attendance_store_coords')   localStorage.setItem(ATTENDANCE_COORDS_KEY,  clean(r.value));
     });
     if (gasKeys.has('all_products') || gasKeys.has('vendor_config')) {
       loadVendorConfig();
@@ -859,12 +877,16 @@ async function initGas() {
     if (!gasKeys.has('checksheet_categories') && localStorage.getItem(CHECKSHEET_CATEGORIES_KEY)) _gasSaveSetting('checksheet_categories', localStorage.getItem(CHECKSHEET_CATEGORIES_KEY));
     if (!gasKeys.has('invoice_store_cfg') && localStorage.getItem(INVOICE_STORE_CFG_KEY)) _syncInvoiceStoreCfg();
     if (!gasKeys.has('invoice_partners')  && localStorage.getItem(INVOICE_PARTNERS_KEY))  _syncInvoicePartners();
+    if (!gasKeys.has('attendance_enabled_stores') && localStorage.getItem(ATTENDANCE_ENABLED_KEY)) _gasSaveSetting('attendance_enabled_stores', localStorage.getItem(ATTENDANCE_ENABLED_KEY));
+    if (!gasKeys.has('attendance_staff_list')     && localStorage.getItem(ATTENDANCE_STAFF_KEY))   _gasSaveSetting('attendance_staff_list',     localStorage.getItem(ATTENDANCE_STAFF_KEY));
+    if (!gasKeys.has('attendance_store_coords')   && localStorage.getItem(ATTENDANCE_COORDS_KEY))  _gasSaveSetting('attendance_store_coords',   localStorage.getItem(ATTENDANCE_COORDS_KEY));
     loadCustomStores();
     loadDeletedStores();
     loadDeletedProducts();
     // パスワード一覧が開いている場合は再描画
     const pwList = document.getElementById('store-pw-list');
     if (pwList && pwList.innerHTML) pwList.innerHTML = buildStorePwList();
+    updatePartnerAttendanceTabVisibility();
     return true;
   } catch(e) { console.error('GAS init error:', e); return false; }
 }
@@ -2294,6 +2316,46 @@ function getAvailableChecksheetItems(storeId) {
   return cfg ? CHECKSHEET_ITEMS.filter(it => !cfg.includes(it.id)) : CHECKSHEET_ITEMS;
 }
 
+/* ===== 出勤（試験導入・店舗ごとON/OFF） ===== */
+const ATTENDANCE_ENABLED_KEY = 'attendance_enabled_stores'; // JSON配列 ["shibuya", ...]
+const ATTENDANCE_STAFF_KEY   = 'attendance_staff_list';     // JSON {storeId:[name,...]}
+const ATTENDANCE_COORDS_KEY  = 'attendance_store_coords';   // JSON {storeId:{lat,lng}}
+
+function getAttendanceEnabledStores() {
+  try { return JSON.parse(localStorage.getItem(ATTENDANCE_ENABLED_KEY) || '[]'); } catch(_) { return []; }
+}
+function isAttendanceEnabled(storeId) { return getAttendanceEnabledStores().includes(storeId); }
+function setAttendanceEnabled(storeId, enabled) {
+  const list = getAttendanceEnabledStores();
+  const idx = list.indexOf(storeId);
+  if (enabled && idx < 0) list.push(storeId);
+  if (!enabled && idx >= 0) list.splice(idx, 1);
+  localStorage.setItem(ATTENDANCE_ENABLED_KEY, JSON.stringify(list));
+  _gasSaveSetting('attendance_enabled_stores', JSON.stringify(list));
+}
+
+function getAttendanceStaffList(storeId) {
+  try { return JSON.parse(localStorage.getItem(ATTENDANCE_STAFF_KEY) || '{}')[storeId] || []; } catch(_) { return []; }
+}
+function setAttendanceStaffList(storeId, names) {
+  let all = {};
+  try { all = JSON.parse(localStorage.getItem(ATTENDANCE_STAFF_KEY) || '{}'); } catch(_) {}
+  all[storeId] = names;
+  localStorage.setItem(ATTENDANCE_STAFF_KEY, JSON.stringify(all));
+  _gasSaveSetting('attendance_staff_list', JSON.stringify(all));
+}
+
+function getAttendanceStoreCoords(storeId) {
+  try { return JSON.parse(localStorage.getItem(ATTENDANCE_COORDS_KEY) || '{}')[storeId] || null; } catch(_) { return null; }
+}
+function setAttendanceStoreCoords(storeId, lat, lng) {
+  let all = {};
+  try { all = JSON.parse(localStorage.getItem(ATTENDANCE_COORDS_KEY) || '{}'); } catch(_) {}
+  all[storeId] = { lat, lng };
+  localStorage.setItem(ATTENDANCE_COORDS_KEY, JSON.stringify(all));
+  _gasSaveSetting('attendance_store_coords', JSON.stringify(all));
+}
+
 // 暦月（1日〜月末）で1期間とする
 function getChecksheetPeriod(baseDate) {
   const d = baseDate || new Date();
@@ -2570,7 +2632,7 @@ function updateChecksheetTotals(period) {
 let partnerTabCurrent = 'order';
 async function switchPartnerTab(tab) {
   partnerTabCurrent = tab;
-  ['order','inventory','checklist','lost'].forEach(t => {
+  ['order','inventory','checklist','lost','attendance'].forEach(t => {
     document.getElementById('ptab-'+t)?.classList.toggle('active', t===tab);
     document.getElementById('partner-tab-'+t)?.classList.toggle('active', t===tab);
   });
@@ -2593,6 +2655,89 @@ async function switchPartnerTab(tab) {
     await loadChecksheetDataFromDb(storeTab);
     renderChecksheet();
   }
+  if (tab === 'attendance') {
+    renderAttendanceNameSelect();
+    document.getElementById('attendance-history-wrap').innerHTML = '<div style="color:#aaa;font-size:13px;padding:10px 0">読み込み中…</div>';
+    await loadAttendanceHistory(storeTab);
+    renderAttendanceHistory();
+  }
+}
+
+/* ===== 出勤（試験導入） ===== */
+function updatePartnerAttendanceTabVisibility() {
+  const btn = document.getElementById('ptab-attendance');
+  if (btn) btn.style.display = isAttendanceEnabled(storeTab) ? '' : 'none';
+}
+
+function renderAttendanceNameSelect() {
+  const sel = document.getElementById('attendance-name-sel');
+  if (!sel) return;
+  const names = getAttendanceStaffList(storeTab);
+  sel.innerHTML = names.length
+    ? names.map(n => `<option value="${esc(n)}">${esc(n)}</option>`).join('')
+    : '<option value="">スタッフが未登録です（管理者にご連絡ください）</option>';
+}
+
+function doAttendanceClockIn() {
+  const sel = document.getElementById('attendance-name-sel');
+  const msg = document.getElementById('attendance-msg');
+  const name = sel?.value;
+  if (!name) { msg.style.color = '#dc2626'; msg.textContent = '名前を選択してください'; return; }
+  if (!navigator.geolocation) {
+    msg.style.color = '#dc2626';
+    msg.textContent = 'この端末では位置情報が利用できません';
+    return;
+  }
+  msg.style.color = '#888';
+  msg.textContent = '位置情報を取得しています…';
+  // getCurrentPosition()はボタン押下ハンドラの中でだけ呼ぶ（バックグラウンド取得は行わない）
+  navigator.geolocation.getCurrentPosition(async (pos) => {
+    try {
+      const { latitude, longitude } = pos.coords;
+      const r = await gasPost('saveAttendance', { storeId: storeTab, name, lat: latitude, lng: longitude });
+      if (r.error) throw new Error(r.error);
+      if (r.withinRange === false) {
+        msg.style.color = '#dc2626';
+        msg.textContent = '打刻しましたが、店舗から離れた場所での打刻として記録されました。';
+      } else {
+        msg.style.color = '#22703d';
+        msg.textContent = `${name}さん、出勤を記録しました（${new Date().toLocaleTimeString('ja-JP')}）`;
+      }
+      await loadAttendanceHistory(storeTab);
+      renderAttendanceHistory();
+    } catch(e) {
+      msg.style.color = '#dc2626';
+      msg.textContent = '打刻に失敗しました: ' + e.message;
+    }
+  }, (err) => {
+    // B案：位置情報が許可されない限り打刻不可（ブロック）
+    msg.style.color = '#dc2626';
+    msg.textContent = '位置情報の使用が許可されていません。ブラウザの設定で位置情報を許可してから、もう一度お試しください。';
+  }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+}
+
+let ATTENDANCE_HISTORY_CACHE = [];
+async function loadAttendanceHistory(storeId) {
+  try {
+    ATTENDANCE_HISTORY_CACHE = await gasGet('getAttendance', { storeId });
+  } catch(e) { console.error('getAttendance error:', e); ATTENDANCE_HISTORY_CACHE = []; }
+}
+function renderAttendanceHistory() {
+  const wrap = document.getElementById('attendance-history-wrap');
+  if (!wrap) return;
+  if (!ATTENDANCE_HISTORY_CACHE.length) {
+    wrap.innerHTML = '<div style="color:#aaa;font-size:13px;padding:10px 0">まだ記録がありません</div>';
+    return;
+  }
+  wrap.innerHTML = `<div class="table-wrap"><table style="width:100%;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+    <thead><tr style="background:#22703d;color:white"><th style="padding:6px 10px;font-size:12px">日時</th><th style="padding:6px 10px;font-size:12px">名前</th><th style="padding:6px 10px;font-size:12px">判定</th></tr></thead>
+    <tbody>${ATTENDANCE_HISTORY_CACHE.map(r => `
+      <tr style="border-bottom:1px solid #eee">
+        <td style="padding:6px 10px;font-size:13px;white-space:nowrap">${esc(r.clocked_at || '')}</td>
+        <td style="padding:6px 10px;font-size:13px">${esc(r.name || '')}</td>
+        <td style="padding:6px 10px;font-size:13px;text-align:center">${r.within_range === false ? '<span style="color:#dc2626">要確認</span>' : (r.within_range === true ? '<span style="color:#22703d">✓</span>' : '<span style="color:#aaa">未判定</span>')}</td>
+      </tr>`).join('')}
+    </tbody></table></div>`;
 }
 
 /* ===== 忘れ物 ===== */
@@ -3034,6 +3179,7 @@ async function showPage(p) {
       ensureBlankDraftRow(authedStore);
       const lbl = document.getElementById('active-store-label');
       if (lbl) lbl.textContent = STORES[authedStore] + '店';
+      updatePartnerAttendanceTabVisibility();
     }
     const navSearch = document.getElementById('store-nav-search');
     if (navSearch) navSearch.style.display = 'none';
@@ -5132,6 +5278,43 @@ function renderSettings() {
       </div>
     </div>
 
+    <!-- 出勤管理（試験導入・店舗ごとON/OFF） -->
+    <div class="settings-card">
+      <div class="settings-accordion-hdr" onclick="toggleAttendanceGroup()">
+        <span>出勤管理（試験導入）</span>
+        <span id="attendance-group-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
+      </div>
+      <div id="attendance-group-body" style="display:none;margin-top:10px">
+        <div class="settings-accordion-body">
+          <div style="font-size:12px;color:#888;margin-bottom:10px">店舗ごとに出勤機能のON/OFF・スタッフ一覧・基準座標を設定します。基準座標から300m以内での打刻のみ「OK」判定になります。</div>
+          <select id="attendance-cfg-store-sel" style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:100%;margin-bottom:12px" onchange="renderAttendanceCfg()">
+            ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}
+          </select>
+          <div id="attendance-cfg-body"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 出勤履歴（全店舗） -->
+    <div class="settings-card">
+      <div class="settings-accordion-hdr" onclick="toggleAttendanceHistoryGroup()">
+        <span>出勤履歴（全店舗）</span>
+        <span id="attendance-history-group-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
+      </div>
+      <div id="attendance-history-group-body" style="display:none;margin-top:10px">
+        <div class="settings-accordion-body">
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+            <select id="attendance-admin-store-sel" style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit" onchange="renderAttendanceAdminHistory()">
+              <option value="">全店舗</option>
+              ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}
+            </select>
+            <button onclick="renderAttendanceAdminHistory(true)" style="background:#22703d;color:white;padding:7px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">更新</button>
+          </div>
+          <div id="attendance-admin-history-wrap"><div style="color:#aaa;font-size:13px;padding:10px 0">「更新」を押して読み込んでください</div></div>
+        </div>
+      </div>
+    </div>
+
     <!-- 店舗別パスワード設定 -->
     <div class="settings-card">
       <div class="settings-accordion-hdr" onclick="toggleStorePwSettings()">
@@ -5425,6 +5608,132 @@ function clearChecksheetCfg() {
   setStoreChecksheetConfig(sid, null);
   renderChecksheetCfg();
   if (msg) { msg.textContent = '✓ 全項目表示に戻しました'; setTimeout(() => { if(msg) msg.textContent=''; }, 2500); }
+}
+
+/* ===== 出勤管理（管理画面、試験導入） ===== */
+function toggleAttendanceGroup() {
+  const body  = document.getElementById('attendance-group-body');
+  const arrow = document.getElementById('attendance-group-arrow');
+  const open  = body.style.display === 'none';
+  body.style.display = open ? 'block' : 'none';
+  arrow.textContent  = open ? '▼ 閉じる' : '▶ タップして開く';
+  if (open) renderAttendanceCfg();
+}
+
+function renderAttendanceCfg() {
+  const sel = document.getElementById('attendance-cfg-store-sel');
+  const body = document.getElementById('attendance-cfg-body');
+  if (!sel || !body) return;
+  const sid = sel.value;
+  const enabled = isAttendanceEnabled(sid);
+  const names = getAttendanceStaffList(sid);
+  const coords = getAttendanceStoreCoords(sid) || { lat: '', lng: '' };
+
+  body.innerHTML = `
+    <label style="display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600;margin-bottom:14px">
+      <input type="checkbox" id="attendance-enabled-chk" ${enabled ? 'checked' : ''} onchange="setAttendanceEnabled('${esc(sid)}', this.checked)">
+      この店舗で出勤機能を有効にする
+    </label>
+
+    <div style="background:#fffef0;border-radius:8px;padding:12px 14px;margin-bottom:14px">
+      <div style="font-weight:600;font-size:12px;color:#888;margin-bottom:8px">基準座標（Googleマップで検索して緯度経度を貼り付け）</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <input id="attendance-lat-input" type="text" inputmode="decimal" placeholder="緯度（例: 35.6595）" value="${esc(coords.lat)}"
+          style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:160px">
+        <input id="attendance-lng-input" type="text" inputmode="decimal" placeholder="経度（例: 139.6989）" value="${esc(coords.lng)}"
+          style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:160px">
+        <button onclick="saveAttendanceCoords('${esc(sid)}')" style="background:#22703d;color:white;padding:7px 16px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">保存</button>
+        <span id="attendance-coords-msg" style="font-size:12px;color:#22703d;min-height:18px"></span>
+      </div>
+    </div>
+
+    <div style="background:#fffef0;border-radius:8px;padding:12px 14px">
+      <div style="font-weight:600;font-size:12px;color:#888;margin-bottom:8px">スタッフ一覧（パートナー画面のドロップダウンに表示されます）</div>
+      <div id="attendance-staff-rows">${buildAttendanceStaffRows(sid, names)}</div>
+      <div style="display:flex;gap:6px;align-items:center;margin-top:8px">
+        <input id="new-attendance-staff-name" placeholder="スタッフ名"
+          style="border:1px solid #ddd;border-radius:6px;padding:6px 10px;font-size:13px;font-family:inherit;flex:1">
+        <button onclick="addAttendanceStaff('${esc(sid)}')" style="background:#22703d;color:white;padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap">追加</button>
+      </div>
+    </div>`;
+}
+
+function buildAttendanceStaffRows(storeId, names) {
+  if (!names.length) return '<div style="color:#aaa;font-size:12px;padding:6px 0">未登録</div>';
+  return names.map((n, i) => `
+    <div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid #eee">
+      <span style="font-size:13px">${esc(n)}</span>
+      <button onclick="removeAttendanceStaff('${esc(storeId)}', ${i})" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:12px">削除</button>
+    </div>`).join('');
+}
+
+function addAttendanceStaff(storeId) {
+  const input = document.getElementById('new-attendance-staff-name');
+  const name = input.value.trim();
+  if (!name) return;
+  const names = getAttendanceStaffList(storeId);
+  if (!names.includes(name)) names.push(name);
+  setAttendanceStaffList(storeId, names);
+  input.value = '';
+  renderAttendanceCfg();
+}
+function removeAttendanceStaff(storeId, idx) {
+  const names = getAttendanceStaffList(storeId);
+  names.splice(idx, 1);
+  setAttendanceStaffList(storeId, names);
+  renderAttendanceCfg();
+}
+
+function saveAttendanceCoords(storeId) {
+  const latInput = document.getElementById('attendance-lat-input');
+  const lngInput = document.getElementById('attendance-lng-input');
+  const msg = document.getElementById('attendance-coords-msg');
+  const lat = parseFloat(latInput.value);
+  const lng = parseFloat(lngInput.value);
+  if (isNaN(lat) || isNaN(lng)) {
+    msg.style.color = '#dc2626';
+    msg.textContent = '緯度・経度は数値で入力してください';
+    return;
+  }
+  setAttendanceStoreCoords(storeId, lat, lng);
+  msg.style.color = '#22703d';
+  msg.textContent = '✓ 保存しました';
+  setTimeout(() => { if (msg) msg.textContent = ''; }, 2500);
+}
+
+function toggleAttendanceHistoryGroup() {
+  const body  = document.getElementById('attendance-history-group-body');
+  const arrow = document.getElementById('attendance-history-group-arrow');
+  const open  = body.style.display === 'none';
+  body.style.display = open ? 'block' : 'none';
+  arrow.textContent  = open ? '▼ 閉じる' : '▶ タップして開く';
+}
+
+async function renderAttendanceAdminHistory() {
+  const sel = document.getElementById('attendance-admin-store-sel');
+  const wrap = document.getElementById('attendance-admin-history-wrap');
+  if (!sel || !wrap) return;
+  wrap.innerHTML = '<div style="color:#aaa;font-size:13px;padding:10px 0">読み込み中…</div>';
+  let rows = [];
+  try { rows = await gasGet('getAttendance', sel.value ? { storeId: sel.value } : {}); }
+  catch(e) { console.error('getAttendance error:', e); }
+  if (!rows.length) {
+    wrap.innerHTML = '<div style="color:#aaa;font-size:13px;padding:10px 0">記録がありません</div>';
+    return;
+  }
+  wrap.innerHTML = `<div class="table-wrap"><table style="width:100%;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+    <thead><tr style="background:#22703d;color:white">
+      <th style="padding:6px 10px;font-size:12px">日時</th><th style="padding:6px 10px;font-size:12px">店舗</th>
+      <th style="padding:6px 10px;font-size:12px">名前</th><th style="padding:6px 10px;font-size:12px">判定</th>
+    </tr></thead>
+    <tbody>${rows.map(r => `
+      <tr style="border-bottom:1px solid #eee">
+        <td style="padding:6px 10px;font-size:13px;white-space:nowrap">${esc(r.clocked_at || '')}</td>
+        <td style="padding:6px 10px;font-size:13px;color:#22703d;font-weight:600">${esc(STORES[r.store_id] || r.store_id)}</td>
+        <td style="padding:6px 10px;font-size:13px">${esc(r.name || '')}</td>
+        <td style="padding:6px 10px;font-size:13px;text-align:center">${r.within_range === false ? '<span style="color:#dc2626">要確認</span>' : (r.within_range === true ? '<span style="color:#22703d">✓</span>' : '<span style="color:#aaa">未判定</span>')}</td>
+      </tr>`).join('')}
+    </tbody></table></div>`;
 }
 
 function toggleStorePwSettings() {
