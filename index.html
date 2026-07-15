@@ -459,7 +459,7 @@
     <button class="partner-tab"        id="ptab-lost"      onclick="switchPartnerTab('lost')">忘れ物</button>
     <button class="partner-tab"        id="ptab-inventory" onclick="switchPartnerTab('inventory')">棚卸表<span class="ptab-badge ptab-badge-prep">準備中</span></button>
     <button class="partner-tab"        id="ptab-checklist" onclick="switchPartnerTab('checklist')">チェック<br class="sp-only">シート</button>
-    <button class="partner-tab"        id="ptab-attendance" onclick="switchPartnerTab('attendance')" style="display:none">出勤</button>
+    <button class="partner-tab"        id="ptab-attendance" onclick="switchPartnerTab('attendance')" style="display:none">業務開始</button>
   </div>
 
   <!-- 発注タブ -->
@@ -521,16 +521,16 @@
     </div>
   </div>
 
-  <!-- 出勤タブ（試験導入・店舗ごとON/OFF） -->
+  <!-- 業務開始タブ（試験導入・店舗ごとON/OFF） -->
   <div id="partner-tab-attendance" class="partner-tab-content">
     <div style="max-width:500px">
-      <div class="note-box">名前を選んで「出勤する」を押してください。位置情報の許可が必要です。</div>
+      <div class="note-box">名前を選んで「業務開始する」を押してください。位置情報の許可が必要です。</div>
       <div style="background:white;border-radius:10px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:16px">
         <select id="attendance-name-sel" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:10px;font-size:15px;font-family:inherit;margin-bottom:10px"></select>
-        <button onclick="doAttendanceClockIn()" style="width:100%;background:#22703d;color:white;padding:12px;font-size:16px;font-weight:700;border-radius:8px;border:none;cursor:pointer;font-family:inherit">出勤する</button>
+        <button onclick="doAttendanceClockIn()" style="width:100%;background:#22703d;color:white;padding:12px;font-size:16px;font-weight:700;border-radius:8px;border:none;cursor:pointer;font-family:inherit">業務開始する</button>
         <div id="attendance-msg" style="font-size:13px;margin-top:8px;min-height:18px"></div>
       </div>
-      <div style="font-weight:700;font-size:14px;color:#22703d;margin-bottom:8px">出勤履歴（自店舗）</div>
+      <div style="font-weight:700;font-size:14px;color:#22703d;margin-bottom:8px">業務開始履歴（自店舗）</div>
       <div id="attendance-history-wrap"></div>
     </div>
   </div>
@@ -2316,7 +2316,7 @@ function getAvailableChecksheetItems(storeId) {
   return cfg ? CHECKSHEET_ITEMS.filter(it => !cfg.includes(it.id)) : CHECKSHEET_ITEMS;
 }
 
-/* ===== 出勤（試験導入・店舗ごとON/OFF） ===== */
+/* ===== 業務開始（試験導入・店舗ごとON/OFF） ===== */
 const ATTENDANCE_ENABLED_KEY = 'attendance_enabled_stores'; // JSON配列 ["shibuya", ...]
 const ATTENDANCE_STAFF_KEY   = 'attendance_staff_list';     // JSON {storeId:[name,...]}
 const ATTENDANCE_COORDS_KEY  = 'attendance_store_coords';   // JSON {storeId:{lat,lng}}
@@ -2663,7 +2663,7 @@ async function switchPartnerTab(tab) {
   }
 }
 
-/* ===== 出勤（試験導入） ===== */
+/* ===== 業務開始（試験導入） ===== */
 function updatePartnerAttendanceTabVisibility() {
   const btn = document.getElementById('ptab-attendance');
   if (btn) btn.style.display = isAttendanceEnabled(storeTab) ? '' : 'none';
@@ -2701,7 +2701,7 @@ function doAttendanceClockIn() {
         msg.textContent = '打刻しましたが、店舗から離れた場所での打刻として記録されました。';
       } else {
         msg.style.color = '#22703d';
-        msg.textContent = `${name}さん、出勤を記録しました（${new Date().toLocaleTimeString('ja-JP')}）`;
+        msg.textContent = `${name}さん、業務開始を記録しました（${new Date().toLocaleTimeString('ja-JP')}）`;
       }
       await loadAttendanceHistory(storeTab);
       renderAttendanceHistory();
@@ -5278,15 +5278,15 @@ function renderSettings() {
       </div>
     </div>
 
-    <!-- 出勤管理（試験導入・店舗ごとON/OFF） -->
+    <!-- 業務開始管理（試験導入・店舗ごとON/OFF） -->
     <div class="settings-card">
       <div class="settings-accordion-hdr" onclick="toggleAttendanceGroup()">
-        <span>出勤管理（試験導入）</span>
+        <span>業務開始管理（試験導入）</span>
         <span id="attendance-group-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
       </div>
       <div id="attendance-group-body" style="display:none;margin-top:10px">
         <div class="settings-accordion-body">
-          <div style="font-size:12px;color:#888;margin-bottom:10px">店舗ごとに出勤機能のON/OFF・スタッフ一覧・基準座標を設定します。基準座標から300m以内での打刻のみ「OK」判定になります。</div>
+          <div style="font-size:12px;color:#888;margin-bottom:10px">店舗ごとに業務開始機能のON/OFF・スタッフ一覧・基準座標を設定します。基準座標から300m以内での打刻のみ「OK」判定になります。</div>
           <select id="attendance-cfg-store-sel" style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:100%;margin-bottom:12px" onchange="renderAttendanceCfg()">
             ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}
           </select>
@@ -5295,10 +5295,10 @@ function renderSettings() {
       </div>
     </div>
 
-    <!-- 出勤履歴（全店舗） -->
+    <!-- 業務開始履歴（全店舗） -->
     <div class="settings-card">
       <div class="settings-accordion-hdr" onclick="toggleAttendanceHistoryGroup()">
-        <span>出勤履歴（全店舗）</span>
+        <span>業務開始履歴（全店舗）</span>
         <span id="attendance-history-group-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
       </div>
       <div id="attendance-history-group-body" style="display:none;margin-top:10px">
@@ -5610,7 +5610,7 @@ function clearChecksheetCfg() {
   if (msg) { msg.textContent = '✓ 全項目表示に戻しました'; setTimeout(() => { if(msg) msg.textContent=''; }, 2500); }
 }
 
-/* ===== 出勤管理（管理画面、試験導入） ===== */
+/* ===== 業務開始管理（管理画面、試験導入） ===== */
 function toggleAttendanceGroup() {
   const body  = document.getElementById('attendance-group-body');
   const arrow = document.getElementById('attendance-group-arrow');
@@ -5632,7 +5632,7 @@ function renderAttendanceCfg() {
   body.innerHTML = `
     <label style="display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600;margin-bottom:14px">
       <input type="checkbox" id="attendance-enabled-chk" ${enabled ? 'checked' : ''} onchange="setAttendanceEnabled('${esc(sid)}', this.checked)">
-      この店舗で出勤機能を有効にする
+      この店舗で業務開始機能を有効にする
     </label>
 
     <div style="background:#fffef0;border-radius:8px;padding:12px 14px;margin-bottom:14px">
