@@ -293,8 +293,8 @@
         -webkit-text-size-adjust:100%; text-size-adjust:100%;
       }
       .phw-tl { grid-column:1/59; grid-row:1/43; background:#eef1ea; cursor:default; }
-      .phw-tr { grid-column:59/101; grid-row:1/59; background:#6b7280; }
-      .phw-tr span { writing-mode:vertical-rl; text-orientation:upright; letter-spacing:1px; font-size:12px; }
+      .phw-tr { grid-column:59/101; grid-row:1/59; background:#6b7280; align-items:flex-start; padding-top:6px; }
+      .phw-tr span { writing-mode:vertical-rl; text-orientation:upright; letter-spacing:1px; font-size:17px; text-align:start; }
       .phw-bl { grid-column:1/43; grid-row:43/101; background:#22703d; }
       .phw-bl.phw-piece-empty { background:#eef1ea; cursor:default; }
       .phw-br { grid-column:43/101; grid-row:59/101; background:#8a8f7e; font-size:16px; white-space:nowrap; }
@@ -369,13 +369,14 @@
     @media (max-width:314px) {
       /* この幅ではロゴが横に長く伸びるため、ピンホイールをロゴ行に被せず、その下から開始する */
       .partner-hdr-pinwheel { top:30px; height:96px; }
+      .phw-tr span { font-size:14px; }
     }
     @media (max-width:255px) {
       .page-header h1 { font-size:15px; }
       .partner-hdr-pinwheel { width:88px; height:88px; top:30px; }
       .phw-piece { font-size:13px; padding:1px; }
       .phw-br { font-size:9px; }
-      .phw-tr span { font-size:8px; letter-spacing:0; }
+      .phw-tr span { font-size:12px; letter-spacing:0; }
       .portal-title-store-row { padding-right:100px; }
       .page-header { min-height:118px; }
     }
