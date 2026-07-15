@@ -1375,13 +1375,14 @@ function _prevPeriodLabel(label) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
-// 消費期限の管理が不要な商品（その他ベンダーの商品、カップ・カップ蓋類、ペーパーフィルターは
-// 賞味期限の概念がないため、棚卸表の消費期限①〜③の入力欄自体を出さない）
+// 消費期限の管理が不要な商品（その他ベンダーの商品、カップ・カップ蓋類、ペーパーフィルター、
+// アイス（冷凍のため賞味期限切れの概念で管理していない）は棚卸表の消費期限①〜③の入力欄自体を出さない）
 function needsExpiryTracking(p) {
   if (p.vendor === 'other') return false;
   if (p.name.includes('カップ')) return false;
   if (p.name === 'ペーパーフィルター') return false;
   if (p.name === '水') return false;
+  if (p.name.startsWith('アイス')) return false;
   return true;
 }
 
