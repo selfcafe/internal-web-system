@@ -38,7 +38,10 @@ const LOST_COLS = ['id','store_id','found_date','note','image_url','added_at'];
 // （日ごと・項目ごとに行を分けると増え続けて管理しづらいため、月単位でまとめる）
 const CHECKSHEET_COLS = ['store_id','period_label','data','updated_at'];
 // 店舗×年月×商品で1行。同じ店舗×年月で再送信した場合はその行を上書きする
-const INVENTORY_COLS = ['period_label','store_id','code','product','label','open_stock','delivery','end_stock','consumption','disposed_qty','price','amount','remarks','updated_at'];
+// anomaly_noteは2026-07-15追加。既存の運用中シートには自動で列が増えないため、
+// migrateInventoryColumns()で末尾に追加する（列の並び順を変えると位置ズレで既存データが
+// 壊れるため、新規列は必ずORDER_COLS/INVENTORY_COLSの末尾に足すこと。actual_unit_mode追加時と同じ運用）
+const INVENTORY_COLS = ['period_label','store_id','code','product','label','open_stock','delivery','end_stock','consumption','disposed_qty','price','amount','remarks','updated_at','anomaly_note'];
 
 // エリア別店舗ID
 const AREA_STORES = {
@@ -62,8 +65,10 @@ function doGet(e) {
     else if (a === 'getInventoryHistory') result = getInventoryHistory(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'getInventoryDeliveryAuto') result = getInventoryDeliveryAuto(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'getInventoryDeliveryManual') result = getInventoryDeliveryManual(e.parameter.storeId, e.parameter.periodLabel);
+    else if (a === 'getInventoryTabData')       result = getInventoryTabData(e.parameter.storeId, e.parameter.periodLabel, e.parameter.prevPeriodLabel);
     else if (a === 'getInvoiceLog')             result = getInvoiceLog();
     else if (a === 'migrateOrderColumns')       result = migrateOrderColumns();
+    else if (a === 'migrateInventoryColumns')   result = migrateInventoryColumns();
     else if (a === 'getSettingHistory')         result = getSettingHistory(e.parameter.key, e.parameter.limit);
     else result = { error: 'Unknown action: ' + a };
     return json(result);
@@ -675,6 +680,34 @@ function getInventoryDeliveryManual(storeId, periodLabel) {
     totals[name] = (totals[name] || 0) + Number(row[qIdx] || 0);
   }
   return { totals, skipped };
+}
+
+// 棚卸表タブを開いた時に必要な4種類の読み取り（前月履歴／当月納品自動／当月納品手動／
+// チェックシート）を1回のHTTPリクエストにまとめる複合エンドポイント（2026-07-15追加）。
+// クライアント側の並列fetch自体は既にPromise.allで並列化済みだったため、往復回数（＝
+// Apps Script呼び出しごとの起動オーバーヘッド）を4回→1回に減らすことが主目的。
+// 各データの絞り込み・集計ロジック自体は既存の各関数をそのまま呼ぶだけで変えていない
+function getInventoryTabData(storeId, periodLabel, prevPeriodLabel) {
+  return {
+    history: getInventoryHistory(storeId, prevPeriodLabel),
+    deliveryAuto: getInventoryDeliveryAuto(storeId, periodLabel),
+    deliveryManual: getInventoryDeliveryManual(storeId, periodLabel),
+    checksheet: getChecksheetData(storeId),
+  };
+}
+
+// anomaly_note列追加(2026-07-15)のためのワンショット移行用。ensureHeadersは空シートにしか
+// 列を作らないため、既存の運用中「棚卸集計」シートには手動で一度叩く必要がある
+// （migrateOrderColumnsと同じパターン。既存列・データには一切触れない、何度実行しても安全）
+function migrateInventoryColumns() {
+  const sheet = getInventorySheet();
+  if (sheet.getLastRow() === 0) { ensureHeaders(sheet, INVENTORY_COLS); return { ok: true, added: INVENTORY_COLS }; }
+  const hdrs = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
+  const missing = INVENTORY_COLS.filter(c => hdrs.indexOf(c) < 0);
+  if (missing.length) {
+    sheet.getRange(1, sheet.getLastColumn() + 1, 1, missing.length).setValues([missing]);
+  }
+  return { ok: true, added: missing };
 }
 
 // ----------------------------------------------------------------

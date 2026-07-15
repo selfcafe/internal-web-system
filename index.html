@@ -1387,7 +1387,7 @@ const INVENTORY_PERIOD_KEY = 'inventory_period_data';
 function getInventoryPeriodData(storeId, periodLabel) {
   const all = JSON.parse(localStorage.getItem(INVENTORY_PERIOD_KEY) || '{}');
   const rec = (all[storeId] && all[storeId][periodLabel]) || {};
-  return { endStock: rec.endStock || {}, expQty: rec.expQty || {}, disposedQty: rec.disposedQty || {}, remarks: rec.remarks || '', lastSentAt: rec.lastSentAt || null };
+  return { endStock: rec.endStock || {}, expQty: rec.expQty || {}, disposedQty: rec.disposedQty || {}, anomalyNote: rec.anomalyNote || {}, remarks: rec.remarks || '', lastSentAt: rec.lastSentAt || null };
 }
 // 発注タブで「納品済み」にした分の当月納品（自動）。店舗×期間×商品名で個数を積算。
 // GAS側はappend-onlyのログシートに記録し、読み出し時に合計する（saveOrders等の
@@ -1438,19 +1438,8 @@ function updateInventoryExpQty(productName, slot, value) {
 // 期首在庫＝前月分としてスプレッドシートへ送信済みの期末在庫。サーバー履歴を
 // 優先し、まだ一度も送信できていない場合はローカルに残る前月分の入力値で代替する
 const _inventoryOpeningCache = {}; // storeId -> { periodLabel(前月分): {productName: qty} }
-async function loadInventoryOpeningStock(storeId, periodLabel) {
-  const prevLabel = _prevPeriodLabel(periodLabel);
-  try {
-    const rows = await gasGet('getInventoryHistory', { storeId, periodLabel: prevLabel });
-    if (Array.isArray(rows) && rows.length) {
-      if (!_inventoryOpeningCache[storeId]) _inventoryOpeningCache[storeId] = {};
-      const map = {};
-      rows.forEach(r => { map[r.product] = r.end_stock; });
-      _inventoryOpeningCache[storeId][prevLabel] = map;
-      renderInventory();
-    }
-  } catch(e) { console.error('getInventoryHistory error:', e); }
-}
+// 異常検知（今月消費量が先月消費量よりどれだけ増えたか）の比較基準＝前月分の消費量
+const _inventoryPrevConsumptionCache = {}; // storeId -> { periodLabel(前月分): {productName: qty} }
 function getInventoryOpeningStock(storeId, periodLabel, productName) {
   const prevLabel = _prevPeriodLabel(periodLabel);
   const server = _inventoryOpeningCache[storeId] && _inventoryOpeningCache[storeId][prevLabel];
@@ -1458,29 +1447,53 @@ function getInventoryOpeningStock(storeId, periodLabel, productName) {
   const local = getInventoryPeriodData(storeId, prevLabel).endStock;
   return local[productName] !== undefined ? local[productName] : '';
 }
+function getInventoryPrevConsumption(storeId, periodLabel, productName) {
+  const prevLabel = _prevPeriodLabel(periodLabel);
+  const rec = _inventoryPrevConsumptionCache[storeId] && _inventoryPrevConsumptionCache[storeId][prevLabel];
+  const v = rec && rec[productName];
+  return (v === undefined || v === null || v === '') ? null : Number(v);
+}
 
 // 当月納品＝発注タブの「納品済み」から自動集計した分（getInventoryDeliveryAuto）＋
 // 本部が外部スプレッドシートに手入力した分（getInventoryDeliveryManual、月初納品分など）の合計。
 // 両方サーバー側の値のみを見る（ローカルの自動集計はGAS送信前の一時値でしかないため、
 // 表示用の合計は必ずサーバーの値で揃える）
 const _inventoryDeliveryCache = {}; // storeId -> { periodLabel: { totals:{productName:qty}, skipped:[...] } }
-async function loadInventoryDelivery(storeId, periodLabel) {
-  try {
-    const [autoTotals, manualRes] = await Promise.all([
-      gasGet('getInventoryDeliveryAuto', { storeId, periodLabel }),
-      gasGet('getInventoryDeliveryManual', { storeId, periodLabel }),
-    ]);
-    const totals = {};
-    Object.entries(autoTotals || {}).forEach(([name, qty]) => { totals[name] = (totals[name] || 0) + Number(qty || 0); });
-    Object.entries((manualRes && manualRes.totals) || {}).forEach(([name, qty]) => { totals[name] = (totals[name] || 0) + Number(qty || 0); });
-    if (!_inventoryDeliveryCache[storeId]) _inventoryDeliveryCache[storeId] = {};
-    _inventoryDeliveryCache[storeId][periodLabel] = { totals, skipped: (manualRes && manualRes.skipped) || [] };
-    renderInventory();
-  } catch (e) { console.error('getInventoryDelivery error:', e); }
-}
 function getInventoryDelivery(storeId, periodLabel, productName) {
   const rec = _inventoryDeliveryCache[storeId] && _inventoryDeliveryCache[storeId][periodLabel];
   return (rec && rec.totals[productName]) || 0;
+}
+
+// 棚卸表タブを開いた時に必要な4種類のデータ（期首在庫の元になる前月履歴／当月納品自動＋手動／
+// チェックシート）をGAS側の複合アクション1本にまとめて取得する（往復回数を1回に減らすための統合、
+// 2026-07-15）。各データの絞り込み・集計ロジック自体はgas_backend.gs側で変えていない
+async function loadInventoryTabData(storeId, periodLabel) {
+  const prevLabel = _prevPeriodLabel(periodLabel);
+  try {
+    const res = await gasGet('getInventoryTabData', { storeId, periodLabel, prevPeriodLabel: prevLabel });
+    const historyRows = res.history || [];
+    if (historyRows.length) {
+      if (!_inventoryOpeningCache[storeId]) _inventoryOpeningCache[storeId] = {};
+      if (!_inventoryPrevConsumptionCache[storeId]) _inventoryPrevConsumptionCache[storeId] = {};
+      const openMap = {}, consumeMap = {};
+      historyRows.forEach(r => { openMap[r.product] = r.end_stock; consumeMap[r.product] = r.consumption; });
+      _inventoryOpeningCache[storeId][prevLabel] = openMap;
+      _inventoryPrevConsumptionCache[storeId][prevLabel] = consumeMap;
+    }
+    const totals = {};
+    Object.entries(res.deliveryAuto || {}).forEach(([name, qty]) => { totals[name] = (totals[name] || 0) + Number(qty || 0); });
+    Object.entries((res.deliveryManual && res.deliveryManual.totals) || {}).forEach(([name, qty]) => { totals[name] = (totals[name] || 0) + Number(qty || 0); });
+    if (!_inventoryDeliveryCache[storeId]) _inventoryDeliveryCache[storeId] = {};
+    _inventoryDeliveryCache[storeId][periodLabel] = { totals, skipped: (res.deliveryManual && res.deliveryManual.skipped) || [] };
+    const csRows = res.checksheet || [];
+    if (csRows.length) {
+      const all = JSON.parse(localStorage.getItem(CHECKSHEET_DATA_KEY) || '{}');
+      if (!all[storeId]) all[storeId] = {};
+      csRows.forEach(r => { all[storeId][r.period_label] = r.data || {}; });
+      localStorage.setItem(CHECKSHEET_DATA_KEY, JSON.stringify(all));
+    }
+    renderInventory();
+  } catch (e) { console.error('getInventoryTabData error:', e); }
 }
 function getInventoryDeliverySkipped(storeId, periodLabel) {
   const rec = _inventoryDeliveryCache[storeId] && _inventoryDeliveryCache[storeId][periodLabel];
@@ -1512,6 +1525,21 @@ function computeInventoryConfirmInfo(p, period, periodData) {
   const disposedRaw = periodData.disposedQty[p.name];
   const disposedQty = (disposedRaw === undefined || disposedRaw === '') ? '' : Number(disposedRaw);
   return { openStock, endStockRaw, endStock, delivery, consumption, disposedQty };
+}
+
+// 消費量の異常判定（数え間違い・盗難対策）。2026-07-15追加。
+// ①消費量がマイナス（期末在庫が期首在庫＋当月納品より多い）＝物理的にありえないので常に異常。
+// ②今月の消費量が先月の消費量より1以上増えている＝先月分の棚卸表（consumption列）と比較。
+//   前月の棚卸データが無い（初月・未送信）場合は比較できないためスキップする。
+function computeInventoryAnomaly(p, period, periodData) {
+  const { consumption } = computeInventoryConfirmInfo(p, period, periodData);
+  if (consumption === '') return { flag: false };
+  if (consumption < 0) return { flag: true, reason: 'negative', message: '期末在庫が期首在庫＋当月納品より多くなっています（入力ミスの可能性）' };
+  const prevConsumption = getInventoryPrevConsumption(storeTab, period.label, p.name);
+  if (prevConsumption !== null && consumption - prevConsumption >= 1) {
+    return { flag: true, reason: 'increase', message: `先月の消費量(${prevConsumption})より${consumption - prevConsumption}増えています` };
+  }
+  return { flag: false };
 }
 
 let inventoryStep = 'input'; // 'input'（数字入力） | 'confirm'（確認・棚卸完了）
@@ -1667,14 +1695,29 @@ function renderInventoryConfirmScreen(wrap, allProducts, period, periodData) {
     const hdr = `<tr><td style="padding:5px 8px;font-size:11px;font-weight:700;color:#22703d;background:#edf2d4;border-top:2px solid #aabf28;position:sticky;left:0;z-index:1">${esc(VENDOR_LABELS[v.key] || v.key)}</td>${vendorFillerCells}</tr>`;
     const rows = items.map(p => {
       const { openStock, delivery, endStock, consumption, disposedQty } = computeInventoryConfirmInfo(p, period, periodData);
-      return `<tr style="border-bottom:1px solid #f0f0f0">
+      const anomaly = computeInventoryAnomaly(p, period, periodData);
+      const consumptionCellStyle = anomaly.flag
+        ? 'padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px;background:#fee2e2;color:#b91c1c;font-weight:700'
+        : 'padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px;background:#f6f7f1';
+      const mainRow = `<tr style="border-bottom:1px solid #f0f0f0">
         <td data-label="${COLS[0]}" style="padding:5px 6px;font-size:12px;position:sticky;left:0;z-index:1;background:#fff;border-right:1px solid #e5e7eb">${esc(p.label)}</td>
         <td data-label="${COLS[1]}" style="padding:5px 6px;text-align:right;color:#8a8f7e;white-space:nowrap;font-size:11.5px">${openStock === '' ? '―' : esc(openStock)}</td>
         <td data-label="${COLS[2]}" style="padding:5px 6px;text-align:right;color:#8a8f7e;white-space:nowrap;font-size:11.5px" title="発注タブの納品済み分（自動）＋本部手入力分（月初納品分など）の合計・閲覧のみ">${delivery ? esc(delivery) : '―'}</td>
         <td data-label="${COLS[3]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px">${endStock === '' ? '―' : esc(endStock)}</td>
-        <td data-label="${COLS[4]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px;background:#f6f7f1">${consumption === '' ? '―' : esc(consumption)}</td>
+        <td data-label="${COLS[4]}" style="${consumptionCellStyle}">${consumption === '' ? '―' : esc(consumption)}</td>
         <td data-label="${COLS[5]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px;background:#f6f7f1" title="消費期限切れ等で処分した数量">${disposedQty === '' ? '―' : esc(disposedQty)}</td>
       </tr>`;
+      if (!anomaly.flag) return mainRow;
+      const note = periodData.anomalyNote[p.name] || '';
+      const noteRow = `<tr style="border-bottom:1px solid #f0f0f0;background:#fef2f2">
+        <td colspan="6" style="padding:6px 8px 8px">
+          <div style="font-size:11.5px;color:#b91c1c;font-weight:700;margin-bottom:4px">⚠ ${esc(p.label)}：${esc(anomaly.message)}。理由を入力してください（未入力だと棚卸完了を送信できません）</div>
+          <input type="text" value="${esc(note)}" placeholder="例：棚卸忘れの繰越、大量注文で消費が多かった 等"
+            style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #fca5a5;border-radius:6px;font-size:12px;font-family:inherit;background:white"
+            onchange="updateInventoryPeriodField('anomalyNote', '${esc(p.name)}', this.value)">
+        </td>
+      </tr>`;
+      return mainRow + noteRow;
     }).join('');
     return hdr + rows;
   }).join('');
@@ -1738,8 +1781,16 @@ async function submitInventory() {
     const ok = confirm(`${expiredProducts.join('／')} の消費期限が切れています。${INVENTORY_EXPIRED_NOTICE}\n\nこのまま送信しますか？`);
     if (!ok) return;
   }
+  const unexplainedAnomalies = allProducts
+    .filter(p => computeInventoryAnomaly(p, period, periodData).flag && !(periodData.anomalyNote[p.name] || '').trim())
+    .map(p => p.label || p.name);
+  if (unexplainedAnomalies.length) {
+    alert(`${unexplainedAnomalies.join('／')} の消費量に異常があります。確認画面で理由を入力してから送信してください。`);
+    return;
+  }
   const rows = allProducts.map(p => {
     const { openStock, delivery, endStock, consumption, disposedQty } = computeInventoryConfirmInfo(p, period, periodData);
+    const anomaly = computeInventoryAnomaly(p, period, periodData);
     const price = Number(p.price) || 0;
     return {
       code: p.code || '', product: p.name, label: p.label || p.name,
@@ -1748,6 +1799,7 @@ async function submitInventory() {
       end_stock: endStock === '' ? null : endStock,
       consumption: consumption === '' ? null : consumption,
       disposed_qty: disposedQty === '' ? null : disposedQty,
+      anomaly_note: anomaly.flag ? (periodData.anomalyNote[p.name] || '') : '',
       price, amount: endStock === '' ? null : price * endStock,
     };
   });
@@ -2434,12 +2486,9 @@ async function switchPartnerTab(tab) {
   }
   if (tab === 'inventory') {
     renderInventory(true); // ローディング表示（サーバー取得中に古い/空のデータが一瞬見えるのを防ぐ）
-    // デイリーカウントはチェックシートの補充数量から算出するため、最新のチェックシートデータも取得する
-    await Promise.all([
-      loadInventoryOpeningStock(storeTab, getInventoryPeriod().label),
-      loadInventoryDelivery(storeTab, getInventoryPeriod().label),
-      loadChecksheetDataFromDb(storeTab),
-    ]);
+    // デイリーカウントはチェックシートの補充数量から算出するため、最新のチェックシートデータも合わせて取得する
+    // （期首在庫/当月納品/チェックシートの4リクエストはGAS側の複合アクション1本にまとめている）
+    await loadInventoryTabData(storeTab, getInventoryPeriod().label);
     renderInventory();
   }
   if (tab === 'checklist') {
