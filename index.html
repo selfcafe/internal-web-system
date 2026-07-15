@@ -284,10 +284,10 @@
         border-radius:8px; overflow:hidden; background:#eef1ea;
       }
       .phw-piece {
-        position:absolute; border:none; margin:0; padding:2px; cursor:pointer;
+        position:absolute; border:none; margin:0; padding:2px; cursor:pointer; overflow:hidden;
         font-family:inherit; font-size:10px; font-weight:700; color:white; line-height:1.15;
         display:flex; align-items:center; justify-content:center; text-align:center; box-sizing:border-box;
-        white-space:nowrap;
+        white-space:nowrap; -webkit-text-size-adjust:100%; text-size-adjust:100%;
       }
       .phw-tl { left:0; top:0; width:58%; height:42%; background:#eef1ea; cursor:default; }
       .phw-tr { left:58%; top:0; width:42%; height:58%; background:#6b7280; }
@@ -360,9 +360,11 @@
     .partner-tab { position:relative; flex:1; padding:10px 6px; background:transparent; color:#555; font-size:13px; font-weight:600; border-radius:8px; cursor:pointer; font-family:inherit; transition:background .2s,color .2s; border:none; text-align:center; }
     .partner-tab:hover { background:rgba(34,112,61,.12); color:#22703d; }
     .partner-tab.active { background:#22703d; color:white; }
-    .partner-tab.tab-blink { animation:tabGlow 1s step-start infinite; }
+    .partner-tab.tab-blink { animation:tabGlow 1.8s step-start infinite; }
     @keyframes tabGlow {
-      50% { box-shadow:inset 0 0 16px 4px rgba(255,255,255,.9); }
+      0%, 100% { box-shadow:none; filter:none; }
+      8% { box-shadow:inset 0 0 18px 5px rgba(255,255,255,.95), 0 0 10px 2px rgba(255,255,255,.4); filter:brightness(1.15); }
+      22% { box-shadow:none; filter:none; }
     }
     .ptab-badge { position:absolute; top:-6px; right:2px; background:#ef4444; color:white; font-size:9px; font-weight:700; padding:1px 5px; border-radius:8px; line-height:1.4; letter-spacing:.02em; min-width:22px; box-sizing:border-box; text-align:center; }
     .ptab-badge-delivery { top:11px; background:#f97316; }
