@@ -338,6 +338,10 @@
     .partner-tab { position:relative; flex:1; padding:10px 6px; background:transparent; color:#555; font-size:13px; font-weight:600; border-radius:8px; cursor:pointer; font-family:inherit; transition:background .2s,color .2s; border:none; text-align:center; }
     .partner-tab:hover { background:rgba(34,112,61,.12); color:#22703d; }
     .partner-tab.active { background:#22703d; color:white; }
+    .partner-tab.tab-blink { animation:tabGlow 1s step-start infinite; }
+    @keyframes tabGlow {
+      50% { box-shadow:0 0 14px 5px rgba(239,68,68,.65); }
+    }
     .ptab-badge { position:absolute; top:-6px; right:2px; background:#ef4444; color:white; font-size:9px; font-weight:700; padding:1px 5px; border-radius:8px; line-height:1.4; letter-spacing:.02em; min-width:22px; box-sizing:border-box; text-align:center; }
     .ptab-badge-delivery { top:11px; background:#f97316; }
     .ptab-badge-prep { background:#9ca3af; }
@@ -1309,6 +1313,9 @@ function updatePartnerOrderBadge() {
   if (deliveryBadge) deliveryBadge.style.display = needsDelivery ? '' : 'none';
   const deliveryMsg = document.getElementById('delivery-new-msg');
   if (deliveryMsg) deliveryMsg.style.display = needsDelivery ? '' : 'none';
+
+  const orderTabBtn = document.getElementById('ptab-order');
+  if (orderTabBtn) orderTabBtn.classList.toggle('tab-blink', needsAttention || needsDelivery);
 }
 
 function updateBadges() {
