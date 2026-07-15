@@ -209,6 +209,7 @@
     .portal-title-store-row { display:flex; align-items:baseline; flex-wrap:wrap; gap:4px 12px; }
     .store-title-txt { font-size:20px; font-weight:700; color:#22703d; }
     .partner-hdr-btns { display:flex; flex-direction:column; gap:6px; align-items:flex-end; position:absolute; top:0; right:0; }
+    .partner-hdr-pinwheel { display:none; }
     .site-lock-box h2 { font-size:20px; color:#22703d; margin-bottom:6px; font-weight:700; }
     .site-lock-box p  { font-size:13px; color:#888; margin-bottom:20px; }
     .site-lock-box .pin-input { font-size:16px; letter-spacing:2px; }
@@ -275,21 +276,24 @@
       .store-title-txt { font-size:15px; }
       .portal-title-row { flex-direction:column; align-items:flex-start; gap:2px; }
       .portal-title-store-row { flex-direction:column; align-items:flex-start; gap:2px; }
-      .partner-hdr-btns {
-        position:static; margin-bottom:6px;
-        display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr;
-        gap:3px; align-items:stretch;
-        border-radius:10px; overflow:hidden; background:#d7ddd0;
+      .partner-hdr-btns { display:none; }
+      .partner-hdr-pinwheel {
+        display:block; position:relative; width:100%; height:168px; margin-bottom:6px;
+        border-radius:10px; overflow:hidden;
       }
-      .partner-hdr-cell { justify-content:center; margin:0; }
-      .partner-hdr-cell .doc-menu-wrap { width:100%; height:100%; justify-content:center; }
-      .partner-hdr-cell button, .partner-hdr-cell .doc-menu-wrap button {
-        width:100%; height:100%; box-sizing:border-box; flex:1;
-        border-radius:0 !important; min-height:48px;
+      .phw-piece {
+        position:absolute; inset:0; border:none; margin:0; padding:0; cursor:pointer;
+        font-family:inherit; font-size:13px; font-weight:700; color:white;
       }
-      .partner-hdr-cell-empty {
-        min-height:48px; background:#eef1ea;
-      }
+      .phw-piece > span { position:absolute; transform:translate(-50%,-50%); white-space:nowrap; }
+      .phw-tl { background:#eef1ea; clip-path:polygon(0% 0%,45% 0%,45% 50%,60% 50%,60% 60%,0% 60%); cursor:default; }
+      .phw-tr { background:#6b7280; clip-path:polygon(45% 0%,100% 0%,100% 35%,60% 35%,60% 50%,45% 50%); }
+      .phw-tr > span { left:74%; top:17%; }
+      .phw-bl { background:#22703d; clip-path:polygon(0% 60%,60% 60%,60% 50%,70% 50%,70% 100%,0% 100%); }
+      .phw-bl > span { left:28%; top:82%; }
+      .phw-bl.phw-piece-empty { background:#eef1ea; cursor:default; }
+      .phw-br { background:#8a8f7e; clip-path:polygon(60% 35%,100% 35%,100% 100%,70% 100%,70% 50%,60% 50%); font-size:12px; }
+      .phw-br > span { left:85%; top:66%; }
       .admin-title-row h1 { flex-basis:100%; }
       .link-btn { padding:8px 12px; font-size:13px; }
       table.card-mode { display:block; box-shadow:none; background:transparent; border-radius:0; }
@@ -358,7 +362,7 @@
     .partner-tab.active { background:#22703d; color:white; }
     .partner-tab.tab-blink { animation:tabGlow 1s step-start infinite; }
     @keyframes tabGlow {
-      50% { box-shadow:inset 0 0 16px 4px rgba(239,68,68,.85); }
+      50% { box-shadow:inset 0 0 16px 4px rgba(255,255,255,.9); }
     }
     .ptab-badge { position:absolute; top:-6px; right:2px; background:#ef4444; color:white; font-size:9px; font-weight:700; padding:1px 5px; border-radius:8px; line-height:1.4; letter-spacing:.02em; min-width:22px; box-sizing:border-box; text-align:center; }
     .ptab-badge-delivery { top:11px; background:#f97316; }
@@ -467,8 +471,12 @@
           <div class="doc-menu-dd" id="manual-dd-pc"></div>
         </div>
       </div>
-      <button id="ptab-attendance-sp" class="sp-only partner-hdr-cell" onclick="switchPartnerTab('attendance')" style="display:none;background:#22703d;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">業務開始</button>
-      <div class="sp-only partner-hdr-cell partner-hdr-cell-empty"></div>
+    </div>
+    <div class="partner-hdr-pinwheel">
+      <div class="phw-piece phw-tl" id="phw-empty"></div>
+      <button class="phw-piece phw-tr" onclick="siteLogout()"><span>ログアウト</span></button>
+      <button id="ptab-attendance-sp" class="phw-piece phw-bl" onclick="if(isAttendanceEnabled(storeTab))switchPartnerTab('attendance')"><span>業務開始</span></button>
+      <button class="phw-piece phw-br" onclick="alert('パートナー操作ガイドは現在準備中です。今しばらくお待ちください。')"><span>マニュアル</span></button>
     </div>
     <div class="portal-title-store-row">
       <h1>パートナーポータル</h1>
@@ -2695,10 +2703,14 @@ async function switchPartnerTab(tab) {
 /* ===== 業務開始（試験導入） ===== */
 function updatePartnerAttendanceTabVisibility() {
   const enabled = isAttendanceEnabled(storeTab);
-  ['ptab-attendance-pc', 'ptab-attendance-sp'].forEach(id => {
-    const btn = document.getElementById(id);
-    if (btn) btn.style.display = enabled ? '' : 'none';
-  });
+  const pcBtn = document.getElementById('ptab-attendance-pc');
+  if (pcBtn) pcBtn.style.display = enabled ? '' : 'none';
+  const spBtn = document.getElementById('ptab-attendance-sp');
+  if (spBtn) {
+    spBtn.classList.toggle('phw-piece-empty', !enabled);
+    const lbl = spBtn.querySelector('span');
+    if (lbl) lbl.style.visibility = enabled ? '' : 'hidden';
+  }
 }
 
 function renderAttendanceNameSelect() {
