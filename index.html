@@ -296,7 +296,7 @@
       .phw-tr { grid-column:59/101; grid-row:1/59; background:#6b7280; }
       .phw-bl { grid-column:1/43; grid-row:43/101; background:#22703d; }
       .phw-bl.phw-piece-empty { background:#eef1ea; cursor:default; }
-      .phw-br { grid-column:43/101; grid-row:59/101; background:#8a8f7e; }
+      .phw-br { grid-column:43/101; grid-row:59/101; background:#8a8f7e; font-size:16px; white-space:nowrap; }
       .admin-title-row h1 { flex-basis:100%; }
       .link-btn { padding:8px 12px; font-size:13px; }
       table.card-mode { display:block; box-shadow:none; background:transparent; border-radius:0; }
@@ -361,6 +361,7 @@
       .page-header h1 { font-size:20px; }
       .partner-hdr-pinwheel { width:128px; height:126px; }
       .phw-piece { font-size:17px; padding:2px; }
+      .phw-br { font-size:13px; }
       .portal-title-store-row { padding-right:142px; }
       .page-header { min-height:126px; }
     }
@@ -372,6 +373,7 @@
       .page-header h1 { font-size:15px; }
       .partner-hdr-pinwheel { width:88px; height:88px; top:30px; }
       .phw-piece { font-size:13px; padding:1px; }
+      .phw-br { font-size:9px; }
       .portal-title-store-row { padding-right:100px; }
       .page-header { min-height:118px; }
     }
@@ -498,7 +500,7 @@
       <h1>パートナーポータル</h1>
       <div class="partner-hdr-pinwheel">
         <div class="phw-piece phw-tl" id="phw-empty"></div>
-        <button class="phw-piece phw-tr" onclick="siteLogout()"><span>ログアウト</span></button>
+        <button class="phw-piece phw-tr" onclick="siteLogout()"><span>ログ<br>アウト</span></button>
         <button id="ptab-attendance-sp" class="phw-piece phw-bl" onclick="if(isAttendanceEnabled(storeTab))switchPartnerTab('attendance')"><span>業務開始</span></button>
         <button class="phw-piece phw-br" onclick="alert('パートナー操作ガイドは現在準備中です。今しばらくお待ちください。')"><span>マニュアル</span></button>
       </div>
