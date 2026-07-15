@@ -2379,13 +2379,13 @@ function stepChecksheetQty(dayKey, itemId, delta) {
 }
 
 // デイリーカウント（補充数量）列：棚卸表と同じ商品リストのうち、アペックス100RS／トーヨーベンディング／55D CS3の全商品と、
-// その他のペーパータオル、販売品の水のみを対象にする（店舗別取扱商品設定に連動）
+// その他のペーパータオル・ストロー、販売品の水のみを対象にする（店舗別取扱商品設定に連動）
 const CHECKSHEET_QTY_VENDOR_ALL = ['apex', 'toyo', 'cs3'];
 function _checksheetProductColumns() {
   const VENDOR_LABELS = Object.fromEntries(VENDOR_CONFIG.map(v => [v.key, v.label]));
   const products = _inventoryProductList().filter(p => {
     if (CHECKSHEET_QTY_VENDOR_ALL.includes(p.vendor)) return true;
-    if (p.vendor === 'other') return p.name === 'ペーパータオル';
+    if (p.vendor === 'other') return p.name === 'ペーパータオル' || p.name === 'ストロー';
     if (p.vendor === 'sales') return p.name === '水';
     return false;
   });
