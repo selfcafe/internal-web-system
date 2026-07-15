@@ -275,7 +275,19 @@
       .store-title-txt { font-size:15px; }
       .portal-title-row { flex-direction:column; align-items:flex-start; gap:2px; }
       .portal-title-store-row { flex-direction:column; align-items:flex-start; gap:2px; }
-      .partner-hdr-btns { position:static; margin-bottom:2px; }
+      .partner-hdr-btns {
+        position:static; margin-bottom:6px;
+        display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr;
+        gap:8px; align-items:stretch;
+      }
+      .partner-hdr-cell { justify-content:center; }
+      .partner-hdr-cell .doc-menu-wrap { width:100%; height:100%; justify-content:center; }
+      .partner-hdr-cell button, .partner-hdr-cell .doc-menu-wrap button {
+        width:100%; height:100%; box-sizing:border-box; flex:1;
+      }
+      .partner-hdr-cell-empty {
+        border:1.5px dashed #cbd5c4; border-radius:8px; min-height:44px;
+      }
       .admin-title-row h1 { flex-basis:100%; }
       .link-btn { padding:8px 12px; font-size:13px; }
       table.card-mode { display:block; box-shadow:none; background:transparent; border-radius:0; }
@@ -443,17 +455,18 @@
   <div class="page-header" style="flex-direction:column;align-items:stretch;gap:4px;position:relative">
     <img src="logo-horizontal.png" class="portal-logo" alt="セルフカフェ">
     <div class="partner-hdr-btns">
-      <div style="display:flex;gap:8px;align-items:center">
+      <div class="partner-hdr-cell" style="display:flex;gap:8px;align-items:center">
         <button id="ptab-attendance-pc" class="pc-only" onclick="switchPartnerTab('attendance')" style="display:none;background:#22703d;color:white;padding:10px 16px;font-size:14px;font-weight:700;border-radius:8px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">業務開始</button>
         <button onclick="siteLogout()" class="portal-logout-btn" style="background:#6b7280;color:white;padding:10px 18px;font-size:15px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">ログアウト</button>
       </div>
-      <div style="display:flex;gap:6px">
+      <div class="partner-hdr-cell" style="display:flex;gap:6px">
         <div class="doc-menu-wrap">
           <button onclick="alert('パートナー操作ガイドは現在準備中です。今しばらくお待ちください。')" style="background:#8a8f7e;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">マニュアル</button>
           <div class="doc-menu-dd" id="manual-dd-pc"></div>
         </div>
       </div>
-      <button id="ptab-attendance-sp" class="sp-only" onclick="switchPartnerTab('attendance')" style="display:none;background:#22703d;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">業務開始</button>
+      <button id="ptab-attendance-sp" class="sp-only partner-hdr-cell" onclick="switchPartnerTab('attendance')" style="display:none;background:#22703d;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">業務開始</button>
+      <div class="sp-only partner-hdr-cell partner-hdr-cell-empty"></div>
     </div>
     <div class="portal-title-store-row">
       <h1>パートナーポータル</h1>
