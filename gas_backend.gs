@@ -21,6 +21,7 @@ const SHEET_LOST       = 'lost_items';
 const SHEET_CHECKSHEET = 'checksheet_data';
 const SHEET_INVENTORY  = 'inventory_log';
 const SHEET_INVOICE_LOG = 'invoice_log';
+const SHEET_ATTENDANCE = 'attendance';
 // app_settingsの上書き前の値を追記専用で残しておく履歴ログ。2026-07-14に消耗品カテゴリの
 // 商品データが保存の競合で丸ごと消え、Google Driveの古いコピーから手作業で復旧する羽目に
 // なったため追加。以後は同じ事故が起きても最新の履歴行から直前の値をすぐ確認・復元できる
@@ -42,6 +43,10 @@ const CHECKSHEET_COLS = ['store_id','period_label','data','updated_at'];
 // migrateInventoryColumns()で末尾に追加する（列の並び順を変えると位置ズレで既存データが
 // 壊れるため、新規列は必ずORDER_COLS/INVENTORY_COLSの末尾に足すこと。actual_unit_mode追加時と同じ運用）
 const INVENTORY_COLS = ['period_label','store_id','code','product','label','open_stock','delivery','end_stock','consumption','disposed_qty','price','amount','remarks','updated_at','anomaly_note'];
+// 出勤打刻ログ。1回の打刻で1行追加（append-onlyのログシート、ordersのような全件削除→再送信はしない）
+const ATTENDANCE_COLS = ['id','store_id','name','clocked_at','lat','lng','within_range'];
+// 基準座標からこの距離(m)以内なら出勤OKと判定する（全店舗共通の固定値、2026-07-15確定）
+const ATTENDANCE_THRESHOLD_M = 300;
 
 // エリア別店舗ID
 const AREA_STORES = {
@@ -70,6 +75,7 @@ function doGet(e) {
     else if (a === 'migrateOrderColumns')       result = migrateOrderColumns();
     else if (a === 'migrateInventoryColumns')   result = migrateInventoryColumns();
     else if (a === 'getSettingHistory')         result = getSettingHistory(e.parameter.key, e.parameter.limit);
+    else if (a === 'getAttendance')             result = getAttendance(e.parameter.storeId);
     else result = { error: 'Unknown action: ' + a };
     return json(result);
   } catch(err) {
@@ -95,6 +101,7 @@ function doPost(e) {
     else if (b.action === 'recordInventoryDelivery') result = recordInventoryDelivery(b.storeId, b.periodLabel, b.product, b.qty);
     else if (b.action === 'submitInvoice')       result = submitInvoice(b.payload);
     else if (b.action === 'saveInvoiceReceiptImage') result = saveInvoiceReceiptImage(b.imageBase64, b.imageMime, b.filename);
+    else if (b.action === 'saveAttendance')      result = saveAttendance(b.storeId, b.name, b.lat, b.lng);
     else result = { error: 'Unknown action: ' + b.action };
     return json(result);
   } catch(err) {
@@ -460,6 +467,45 @@ function saveChecksheetData(storeId, periodLabel, data) {
   sheet.getRange(startRow, CHECKSHEET_COLS.indexOf('period_label') + 1).setNumberFormat('@');
   sheet.appendRow([storeId, periodLabel, json, now]);
   return { ok: true };
+}
+
+// ----------------------------------------------------------------
+// attendance（出勤打刻）
+// ----------------------------------------------------------------
+
+// storeIdを渡すと自店舗分のみ、省略すると全店舗分を返す（パートナー/管理者で共通利用）
+function getAttendance(storeId) {
+  let rows = sheetRows(getSheet(SHEET_ATTENDANCE), ATTENDANCE_COLS);
+  if (storeId) rows = rows.filter(r => String(r.store_id) === String(storeId));
+  return rows.map(r => Object.assign({}, r, { clocked_at: _dateTimeStr(r.clocked_at) }))
+    .sort((a, b) => String(b.clocked_at).localeCompare(String(a.clocked_at)));
+}
+
+// 2点の緯度経度間の距離をメートルで返す（Haversine formula）
+function _haversineMeters(lat1, lng1, lat2, lng2) {
+  const R = 6371000, toRad = d => d * Math.PI / 180;
+  const dLat = toRad(lat2 - lat1), dLng = toRad(lng2 - lng1);
+  const a = Math.sin(dLat / 2) ** 2 + Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+// 店舗の基準座標（app_settingsの'attendance_store_coords'キー、{storeId:{lat,lng}}のJSON）と
+// 打刻位置の距離を計算し、ATTENDANCE_THRESHOLD_M以内かどうかを判定してから1行追加する
+function saveAttendance(storeId, name, lat, lng) {
+  const sheet = getSheet(SHEET_ATTENDANCE);
+  ensureHeaders(sheet, ATTENDANCE_COLS);
+
+  const coordsSetting = getSettings().find(s => s.key === 'attendance_store_coords');
+  const coordsMap = coordsSetting ? JSON.parse(coordsSetting.value || '{}') : {};
+  const base = coordsMap[storeId];
+  let withinRange = '';
+  if (base && base.lat != null && base.lng != null && lat != null && lng != null) {
+    const dist = _haversineMeters(Number(lat), Number(lng), Number(base.lat), Number(base.lng));
+    withinRange = dist <= ATTENDANCE_THRESHOLD_M;
+  }
+
+  sheet.appendRow([Utilities.getUuid(), storeId, name, new Date(), lat, lng, withinRange]);
+  return { ok: true, withinRange };
 }
 
 // 修正前のperiod_label自動変換バグにより、同じ店舗×年月の行が複数重複してしまったものを
