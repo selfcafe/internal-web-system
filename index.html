@@ -207,6 +207,8 @@
     .portal-hdr-row { display:flex; flex-wrap:wrap; align-items:flex-start; gap:8px 12px; }
     .portal-hdr-row .portal-logo { order:1; }
     .portal-title-store-row { display:flex; align-items:baseline; flex-wrap:wrap; gap:4px 12px; }
+    .store-title-txt { font-size:20px; font-weight:700; color:#22703d; }
+    .partner-hdr-btns { display:flex; flex-direction:column; gap:6px; align-items:flex-end; position:absolute; top:0; right:0; }
     .site-lock-box h2 { font-size:20px; color:#22703d; margin-bottom:6px; font-weight:700; }
     .site-lock-box p  { font-size:13px; color:#888; margin-bottom:20px; }
     .site-lock-box .pin-input { font-size:16px; letter-spacing:2px; }
@@ -269,9 +271,11 @@
       .sp-only { display:inline; }
       .pc-only { display:none; }
       .page { padding:10px; }
-      .page-header h1 { font-size:24px; }
+      .page-header h1 { font-size:19px; }
+      .store-title-txt { font-size:15px; }
       .portal-title-row { flex-direction:column; align-items:flex-start; gap:2px; }
       .portal-title-store-row { flex-direction:column; align-items:flex-start; gap:2px; }
+      .partner-hdr-btns { position:static; margin-bottom:2px; }
       .admin-title-row h1 { flex-basis:100%; }
       .link-btn { padding:8px 12px; font-size:13px; }
       table.card-mode { display:block; box-shadow:none; background:transparent; border-radius:0; }
@@ -438,7 +442,7 @@
 <div id="page-store" class="page">
   <div class="page-header" style="flex-direction:column;align-items:stretch;gap:4px;position:relative">
     <img src="logo-horizontal.png" class="portal-logo" alt="セルフカフェ">
-    <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;position:absolute;top:0;right:0">
+    <div class="partner-hdr-btns">
       <div style="display:flex;gap:8px;align-items:center">
         <button id="ptab-attendance-pc" class="pc-only" onclick="switchPartnerTab('attendance')" style="display:none;background:#22703d;color:white;padding:10px 16px;font-size:14px;font-weight:700;border-radius:8px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">業務開始</button>
         <button onclick="siteLogout()" class="portal-logout-btn" style="background:#6b7280;color:white;padding:10px 18px;font-size:15px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">ログアウト</button>
@@ -454,7 +458,7 @@
     <div class="portal-title-store-row">
       <h1>パートナーポータル</h1>
       <div style="display:flex;align-items:baseline;flex:1;align-self:stretch;width:100%;gap:4px 12px">
-        <span id="active-store-label" style="font-size:20px;font-weight:700;color:#22703d"></span>
+        <span id="active-store-label" class="store-title-txt"></span>
       </div>
     </div>
   </div>
