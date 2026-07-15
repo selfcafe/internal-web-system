@@ -207,8 +207,8 @@
     .portal-hdr-row { display:flex; flex-wrap:wrap; align-items:flex-start; gap:8px 12px; }
     .portal-hdr-row .portal-logo { order:1; }
     .portal-title-store-row { display:flex; align-items:baseline; flex-wrap:wrap; gap:4px 12px; }
-    .store-title-txt { font-size:20px; font-weight:700; color:#22703d; }
-    .store-name-wrap { flex:1; width:100%; }
+    .store-title-txt { font-size:20px; font-weight:700; color:#22703d; overflow-wrap:break-word; min-width:0; }
+    .store-name-wrap { flex:1; width:100%; min-width:0; }
     .partner-hdr-btns { display:flex; flex-direction:column; gap:6px; align-items:flex-end; position:absolute; top:0; right:0; }
     .partner-hdr-pinwheel { display:none; }
     .site-lock-box h2 { font-size:20px; color:#22703d; margin-bottom:6px; font-weight:700; }
@@ -281,12 +281,12 @@
       .partner-hdr-btns { display:none; }
       .partner-hdr-pinwheel {
         display:grid; grid-template-columns:repeat(100,1fr); grid-template-rows:repeat(100,1fr);
-        flex-shrink:0; width:150px; height:76px;
+        flex-shrink:0; width:150px; height:96px;
         border-radius:8px; overflow:hidden; background:#eef1ea; gap:0;
       }
       .phw-piece {
         border:none; margin:0; padding:2px; cursor:pointer; overflow:hidden; min-width:0; min-height:0;
-        font-family:inherit; font-size:10px; font-weight:700; color:white; line-height:1.15;
+        font-family:inherit; font-size:11px; font-weight:700; color:white; line-height:1.15;
         display:flex; align-items:center; justify-content:center; text-align:center; box-sizing:border-box;
         white-space:nowrap; -webkit-text-size-adjust:100%; text-size-adjust:100%;
       }
@@ -354,6 +354,11 @@
       #cs-item-tbl-body tr[data-csid] td:nth-child(3) { grid-area:ct; }
       #cs-item-tbl-body tr[data-csid] td:nth-child(4) { grid-area:ty; }
       #cs-item-tbl-body tr[data-csid] td:nth-child(5) { grid-area:dl; align-self:start; }
+    }
+    @media (max-width:300px) {
+      .page-header h1 { font-size:14px; }
+      .partner-hdr-pinwheel { width:100px; }
+      .phw-piece { font-size:7.5px; padding:1px; }
     }
 
     /* パートナーポータル タブ */
