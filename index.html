@@ -1435,22 +1435,26 @@ function updateInventoryExpQty(productName, slot, value) {
   renderInventory();
 }
 
+// 前月分としてスプレッドシートへ送信済みの棚卸表1行分（期首在庫＝この行のend_stock、
+// 異常検知の比較基準＝この行のconsumption、他のカラムは異常検知時の参考表示用）をまとめて持つ
+const _inventoryPrevRowCache = {}; // storeId -> { periodLabel(前月分): {productName: {open_stock,delivery,end_stock,consumption,disposed_qty}} }
+function _getInventoryPrevRow(storeId, periodLabel, productName) {
+  const prevLabel = _prevPeriodLabel(periodLabel);
+  const rec = _inventoryPrevRowCache[storeId] && _inventoryPrevRowCache[storeId][prevLabel];
+  return (rec && rec[productName]) || null;
+}
 // 期首在庫＝前月分としてスプレッドシートへ送信済みの期末在庫。サーバー履歴を
 // 優先し、まだ一度も送信できていない場合はローカルに残る前月分の入力値で代替する
-const _inventoryOpeningCache = {}; // storeId -> { periodLabel(前月分): {productName: qty} }
-// 異常検知（今月消費量が先月消費量よりどれだけ増えたか）の比較基準＝前月分の消費量
-const _inventoryPrevConsumptionCache = {}; // storeId -> { periodLabel(前月分): {productName: qty} }
 function getInventoryOpeningStock(storeId, periodLabel, productName) {
-  const prevLabel = _prevPeriodLabel(periodLabel);
-  const server = _inventoryOpeningCache[storeId] && _inventoryOpeningCache[storeId][prevLabel];
-  if (server && server[productName] !== undefined && server[productName] !== null) return server[productName];
-  const local = getInventoryPeriodData(storeId, prevLabel).endStock;
+  const row = _getInventoryPrevRow(storeId, periodLabel, productName);
+  if (row && row.end_stock !== undefined && row.end_stock !== null && row.end_stock !== '') return Number(row.end_stock);
+  const local = getInventoryPeriodData(storeId, _prevPeriodLabel(periodLabel)).endStock;
   return local[productName] !== undefined ? local[productName] : '';
 }
+// 異常検知（今月消費量が先月消費量よりどれだけ増えたか）の比較基準＝前月分の消費量
 function getInventoryPrevConsumption(storeId, periodLabel, productName) {
-  const prevLabel = _prevPeriodLabel(periodLabel);
-  const rec = _inventoryPrevConsumptionCache[storeId] && _inventoryPrevConsumptionCache[storeId][prevLabel];
-  const v = rec && rec[productName];
+  const row = _getInventoryPrevRow(storeId, periodLabel, productName);
+  const v = row && row.consumption;
   return (v === undefined || v === null || v === '') ? null : Number(v);
 }
 
@@ -1471,14 +1475,16 @@ async function loadInventoryTabData(storeId, periodLabel) {
   const prevLabel = _prevPeriodLabel(periodLabel);
   try {
     const res = await gasGet('getInventoryTabData', { storeId, periodLabel, prevPeriodLabel: prevLabel });
+    if (res.historyError) console.error('getInventoryHistory error:', res.historyError);
+    if (res.deliveryAutoError) console.error('getInventoryDeliveryAuto error:', res.deliveryAutoError);
+    if (res.deliveryManualError) console.error('getInventoryDeliveryManual error:', res.deliveryManualError);
+    if (res.checksheetError) console.error('getChecksheetData error:', res.checksheetError);
     const historyRows = res.history || [];
     if (historyRows.length) {
-      if (!_inventoryOpeningCache[storeId]) _inventoryOpeningCache[storeId] = {};
-      if (!_inventoryPrevConsumptionCache[storeId]) _inventoryPrevConsumptionCache[storeId] = {};
-      const openMap = {}, consumeMap = {};
-      historyRows.forEach(r => { openMap[r.product] = r.end_stock; consumeMap[r.product] = r.consumption; });
-      _inventoryOpeningCache[storeId][prevLabel] = openMap;
-      _inventoryPrevConsumptionCache[storeId][prevLabel] = consumeMap;
+      if (!_inventoryPrevRowCache[storeId]) _inventoryPrevRowCache[storeId] = {};
+      const map = {};
+      historyRows.forEach(r => { map[r.product] = r; });
+      _inventoryPrevRowCache[storeId][prevLabel] = map;
     }
     const totals = {};
     Object.entries(res.deliveryAuto || {}).forEach(([name, qty]) => { totals[name] = (totals[name] || 0) + Number(qty || 0); });
@@ -1534,10 +1540,11 @@ function computeInventoryConfirmInfo(p, period, periodData) {
 function computeInventoryAnomaly(p, period, periodData) {
   const { consumption } = computeInventoryConfirmInfo(p, period, periodData);
   if (consumption === '') return { flag: false };
-  if (consumption < 0) return { flag: true, reason: 'negative', message: '期末在庫が期首在庫＋当月納品より多くなっています（入力ミスの可能性）' };
+  const prevRow = _getInventoryPrevRow(storeTab, period.label, p.name);
+  if (consumption < 0) return { flag: true, reason: 'negative', message: '期末在庫が期首在庫＋当月納品より多くなっています（入力ミスの可能性）', prevRow };
   const prevConsumption = getInventoryPrevConsumption(storeTab, period.label, p.name);
   if (prevConsumption !== null && consumption - prevConsumption >= 1) {
-    return { flag: true, reason: 'increase', message: `先月の消費量(${prevConsumption})より${consumption - prevConsumption}増えています` };
+    return { flag: true, reason: 'increase', message: `先月の消費量(${prevConsumption})より${consumption - prevConsumption}増えています`, prevRow };
   }
   return { flag: false };
 }
@@ -1712,6 +1719,7 @@ function renderInventoryConfirmScreen(wrap, allProducts, period, periodData) {
       const noteRow = `<tr style="border-bottom:1px solid #f0f0f0;background:#fef2f2">
         <td colspan="6" style="padding:6px 8px 8px">
           <div style="font-size:11.5px;color:#b91c1c;font-weight:700;margin-bottom:4px">⚠ ${esc(p.label)}：${esc(anomaly.message)}。理由を入力してください（未入力だと棚卸完了を送信できません）</div>
+          ${anomaly.prevRow ? `<div style="font-size:11px;color:#7f1d1d;margin-bottom:6px">${_prevPeriodLabel(period.label).split('-')[1].replace(/^0/,'')}月実績参考：期首在庫${esc(anomaly.prevRow.open_stock ?? '―')}／当月納品${esc(anomaly.prevRow.delivery ?? '―')}／期末在庫${esc(anomaly.prevRow.end_stock ?? '―')}／消費量${esc(anomaly.prevRow.consumption ?? '―')}</div>` : ''}
           <input type="text" value="${esc(note)}" placeholder="例：棚卸忘れの繰越、大量注文で消費が多かった 等"
             style="width:100%;box-sizing:border-box;padding:6px 8px;border:1px solid #fca5a5;border-radius:6px;font-size:12px;font-family:inherit;background:white"
             onchange="updateInventoryPeriodField('anomalyNote', '${esc(p.name)}', this.value)">

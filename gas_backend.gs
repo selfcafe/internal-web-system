@@ -686,14 +686,22 @@ function getInventoryDeliveryManual(storeId, periodLabel) {
 // チェックシート）を1回のHTTPリクエストにまとめる複合エンドポイント（2026-07-15追加）。
 // クライアント側の並列fetch自体は既にPromise.allで並列化済みだったため、往復回数（＝
 // Apps Script呼び出しごとの起動オーバーヘッド）を4回→1回に減らすことが主目的。
-// 各データの絞り込み・集計ロジック自体は既存の各関数をそのまま呼ぶだけで変えていない
+// 各データの絞り込み・集計ロジック自体は既存の各関数をそのまま呼ぶだけで変えていない。
+// 4つを1つのtryでまとめて呼ぶと、INVENTORY_SHEET_ID/MANUAL_DELIVERY_SHEET_ID未設定など
+// どれか1つが例外を投げただけで残り3つの正常なデータまで巻き添えでエラーになってしまう
+// （統合前は4本の独立したリクエストだったため、1つの失敗が他に影響しなかった）。
+// それぞれ個別にtry/catchし、失敗した項目だけ空データ＋エラーメッセージを返す
 function getInventoryTabData(storeId, periodLabel, prevPeriodLabel) {
-  return {
-    history: getInventoryHistory(storeId, prevPeriodLabel),
-    deliveryAuto: getInventoryDeliveryAuto(storeId, periodLabel),
-    deliveryManual: getInventoryDeliveryManual(storeId, periodLabel),
-    checksheet: getChecksheetData(storeId),
-  };
+  const result = { history: [], deliveryAuto: {}, deliveryManual: { totals: {}, skipped: [] }, checksheet: [] };
+  try { result.history = getInventoryHistory(storeId, prevPeriodLabel); }
+  catch (e) { result.historyError = e.message; }
+  try { result.deliveryAuto = getInventoryDeliveryAuto(storeId, periodLabel); }
+  catch (e) { result.deliveryAutoError = e.message; }
+  try { result.deliveryManual = getInventoryDeliveryManual(storeId, periodLabel); }
+  catch (e) { result.deliveryManualError = e.message; }
+  try { result.checksheet = getChecksheetData(storeId); }
+  catch (e) { result.checksheetError = e.message; }
+  return result;
 }
 
 // anomaly_note列追加(2026-07-15)のためのワンショット移行用。ensureHeadersは空シートにしか
