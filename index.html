@@ -294,6 +294,7 @@
       }
       .phw-tl { grid-column:1/59; grid-row:1/43; background:#eef1ea; cursor:default; }
       .phw-tr { grid-column:59/101; grid-row:1/59; background:#6b7280; }
+      .phw-tr span { writing-mode:vertical-rl; text-orientation:upright; letter-spacing:1px; font-size:12px; }
       .phw-bl { grid-column:1/43; grid-row:43/101; background:#22703d; }
       .phw-bl.phw-piece-empty { background:#eef1ea; cursor:default; }
       .phw-br { grid-column:43/101; grid-row:59/101; background:#8a8f7e; font-size:16px; white-space:nowrap; }
@@ -374,6 +375,7 @@
       .partner-hdr-pinwheel { width:88px; height:88px; top:30px; }
       .phw-piece { font-size:13px; padding:1px; }
       .phw-br { font-size:9px; }
+      .phw-tr span { font-size:8px; letter-spacing:0; }
       .portal-title-store-row { padding-right:100px; }
       .page-header { min-height:118px; }
     }
@@ -500,7 +502,7 @@
       <h1>パートナーポータル</h1>
       <div class="partner-hdr-pinwheel">
         <div class="phw-piece phw-tl" id="phw-empty"></div>
-        <button class="phw-piece phw-tr" onclick="siteLogout()"><span>ログ<br>アウト</span></button>
+        <button class="phw-piece phw-tr" onclick="siteLogout()"><span>ログアウト</span></button>
         <button id="ptab-attendance-sp" class="phw-piece phw-bl" onclick="if(isAttendanceEnabled(storeTab))switchPartnerTab('attendance')"><span>業務<br>開始</span></button>
         <button class="phw-piece phw-br" onclick="alert('パートナー操作ガイドは現在準備中です。今しばらくお待ちください。')"><span>マニュアル</span></button>
       </div>
