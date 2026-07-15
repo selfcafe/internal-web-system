@@ -278,15 +278,17 @@
       .partner-hdr-btns {
         position:static; margin-bottom:6px;
         display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr;
-        gap:8px; align-items:stretch;
+        gap:3px; align-items:stretch;
+        border-radius:10px; overflow:hidden; background:#d7ddd0;
       }
-      .partner-hdr-cell { justify-content:center; }
+      .partner-hdr-cell { justify-content:center; margin:0; }
       .partner-hdr-cell .doc-menu-wrap { width:100%; height:100%; justify-content:center; }
       .partner-hdr-cell button, .partner-hdr-cell .doc-menu-wrap button {
         width:100%; height:100%; box-sizing:border-box; flex:1;
+        border-radius:0 !important; min-height:48px;
       }
       .partner-hdr-cell-empty {
-        border:1.5px dashed #cbd5c4; border-radius:8px; min-height:44px;
+        min-height:48px; background:#eef1ea;
       }
       .admin-title-row h1 { flex-basis:100%; }
       .link-btn { padding:8px 12px; font-size:13px; }
@@ -356,7 +358,7 @@
     .partner-tab.active { background:#22703d; color:white; }
     .partner-tab.tab-blink { animation:tabGlow 1s step-start infinite; }
     @keyframes tabGlow {
-      50% { box-shadow:0 0 14px 5px rgba(239,68,68,.65); }
+      50% { box-shadow:inset 0 0 16px 4px rgba(239,68,68,.85); }
     }
     .ptab-badge { position:absolute; top:-6px; right:2px; background:#ef4444; color:white; font-size:9px; font-weight:700; padding:1px 5px; border-radius:8px; line-height:1.4; letter-spacing:.02em; min-width:22px; box-sizing:border-box; text-align:center; }
     .ptab-badge-delivery { top:11px; background:#f97316; }
