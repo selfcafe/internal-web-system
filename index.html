@@ -5808,7 +5808,9 @@ async function renderAttendanceAdminHistory() {
         <td style="padding:6px 10px;font-size:13px;white-space:nowrap">${esc(r.clocked_at || '')}</td>
         <td style="padding:6px 10px;font-size:13px;color:#22703d;font-weight:600">${esc(STORES[r.store_id] || r.store_id)}</td>
         <td style="padding:6px 10px;font-size:13px">${esc(r.name || '')}</td>
-        <td style="padding:6px 10px;font-size:13px;text-align:center">${r.within_range === false ? '<span style="color:#dc2626">要確認</span>' : (r.within_range === true ? '<span style="color:#22703d">✓</span>' : '<span style="color:#aaa">未判定</span>')}</td>
+        <td style="padding:6px 10px;font-size:13px;text-align:center">${r.within_range === false
+          ? `<span style="color:#dc2626">要確認</span>${r.lat != null && r.lng != null ? ` <a href="https://www.google.com/maps?q=${esc(r.lat)},${esc(r.lng)}" target="_blank" rel="noopener" style="font-size:11px">📍地図</a>` : ''}`
+          : (r.within_range === true ? '<span style="color:#22703d">✓</span>' : '<span style="color:#aaa">未判定</span>')}</td>
       </tr>`).join('')}
     </tbody></table></div>`;
 }

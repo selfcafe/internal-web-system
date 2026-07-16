@@ -482,10 +482,29 @@ function saveChecksheetData(storeId, periodLabel, data) {
 
 // storeIdを渡すと自店舗分のみ、省略すると全店舗分を返す（パートナー/管理者で共通利用）
 function getAttendance(storeId) {
+  purgeOldAttendance();
   let rows = sheetRows(getSheet(SHEET_ATTENDANCE), ATTENDANCE_COLS);
   if (storeId) rows = rows.filter(r => String(r.store_id) === String(storeId));
   return rows.map(r => Object.assign({}, r, { clocked_at: _dateTimeStr(r.clocked_at) }))
     .sort((a, b) => String(b.clocked_at).localeCompare(String(a.clocked_at)));
+}
+
+// 打刻日時から3ヶ月経過した出勤履歴を自動削除（全店舗運用時のシート肥大化・一覧描画の重さ対策）
+function purgeOldAttendance() {
+  const sheet = getSheet(SHEET_ATTENDANCE);
+  if (sheet.getLastRow() <= 1) return;
+  const cutoff = new Date();
+  cutoff.setMonth(cutoff.getMonth() - 3);
+  const limitStr = Utilities.formatDate(cutoff, _sheetTz(), 'yyyy-MM-dd HH:mm:ss');
+  const data = sheet.getDataRange().getValues();
+  const hdrs = data[0].map(String);
+  const dateIdx = hdrs.indexOf('clocked_at');
+  if (dateIdx < 0) return;
+  for (let i = data.length - 1; i >= 1; i--) {
+    const clocked = _dateTimeStr(data[i][dateIdx]);
+    if (!clocked || clocked >= limitStr) continue;
+    sheet.deleteRow(i + 1);
+  }
 }
 
 // 2点の緯度経度間の距離をメートルで返す（Haversine formula）
