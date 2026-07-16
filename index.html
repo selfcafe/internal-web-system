@@ -2780,9 +2780,17 @@ function doAttendanceClockIn() {
       msg.textContent = '打刻に失敗しました: ' + e.message;
     }
   }, (err) => {
-    // B案：位置情報が許可されない限り打刻不可（ブロック）
+    // B案：位置情報が許可されない限り打刻不可（ブロック）。エラー種別ごとにメッセージを分ける
+    // （地下店舗などGPSが弱い環境では許可拒否ではなくタイムアウト/取得不可が起きうるため、
+    // 一律「許可されていません」と表示すると誤って設定確認を促してしまう）
     msg.style.color = '#dc2626';
-    msg.textContent = '位置情報の使用が許可されていません。ブラウザの設定で位置情報を許可してから、もう一度お試しください。';
+    if (err.code === err.PERMISSION_DENIED) {
+      msg.textContent = '位置情報の使用が許可されていません。ブラウザの設定で位置情報を許可してから、もう一度お試しください。';
+    } else if (err.code === err.TIMEOUT) {
+      msg.textContent = '位置情報の取得に時間がかかり、タイムアウトしました。電波の入りやすい場所（窓際・店外など）でもう一度お試しください。';
+    } else {
+      msg.textContent = '位置情報を取得できませんでした。電波の入りやすい場所（窓際・店外など）でもう一度お試しください。';
+    }
   }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
 }
 
