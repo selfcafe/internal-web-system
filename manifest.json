@@ -1,6 +1,6 @@
 {
-  "name": "Self\nCafe",
-  "short_name": "Self\nCafe",
+  "name": "selfcafe",
+  "short_name": "selfcafe",
   "start_url": "/internal-web-system/",
   "display": "standalone",
   "background_color": "#141414",
