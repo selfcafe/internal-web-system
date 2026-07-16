@@ -623,10 +623,10 @@
             style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:100%;resize:none;overflow-y:hidden;line-height:1.4"></textarea>
         </div>
         <div>
-          <div style="font-size:11px;color:#888;margin-bottom:4px">画像</div>
+          <div style="font-size:11px;color:#888;margin-bottom:4px">画像（複数可）</div>
           <label style="display:inline-flex;align-items:center;gap:6px;background:#f0f7e8;border:1px solid #b8d4a0;border-radius:6px;padding:7px 12px;font-size:13px;cursor:pointer;font-family:inherit;white-space:nowrap">
             📁 写真を添付
-            <input type="file" id="lost-image-input" accept="image/*"
+            <input type="file" id="lost-image-input" accept="image/*" multiple
               style="display:none" onchange="previewLostImage(this)">
           </label>
           <label style="display:inline-flex;align-items:center;gap:6px;background:#f0f7e8;border:1px solid #b8d4a0;border-radius:6px;padding:7px 12px;font-size:13px;cursor:pointer;font-family:inherit;white-space:nowrap">
@@ -638,10 +638,7 @@
         <button id="lost-add-btn" onclick="addLostItem()"
           style="background:#22703d;color:white;padding:8px 18px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap">追加</button>
       </div>
-      <div id="lost-image-preview" style="display:none;margin-bottom:10px">
-        <img id="lost-image-preview-img" style="max-height:120px;max-width:200px;border-radius:6px;border:1px solid #ddd;object-fit:cover">
-        <button onclick="clearLostImage()" style="margin-left:8px;background:#e0e0e0;color:#555;border:none;border-radius:5px;padding:4px 10px;font-size:12px;cursor:pointer;font-family:inherit">削除</button>
-      </div>
+      <div id="lost-image-preview" style="display:none;flex-wrap:wrap;gap:8px;margin-bottom:10px"></div>
       <div id="lost-items-list"></div>
     </div>
   </div>
@@ -953,7 +950,8 @@ async function initGas() {
 }
 
 function _dbToLostItem(r) {
-  return { id: r.id, foundDate: r.found_date || '', note: r.note || '', imageUrl: r.image_url || null, addedAt: r.added_at || 0 };
+  return { id: r.id, foundDate: r.found_date || '', note: r.note || '',
+    imageUrls: r.image_url ? String(r.image_url).split(',').filter(Boolean) : [], addedAt: r.added_at || 0 };
 }
 
 function _notifyLostChanged(storeId) {
@@ -2823,7 +2821,7 @@ async function loadLostItemsFromDb(storeId) {
     const data = await gasGet('getLostItems', { storeId });
     LOST_CACHE[storeId] = (data || []).map(r => ({
       id: r.id, foundDate: r.found_date || '', note: r.note || '',
-      imageUrl: r.image_url || null, addedAt: r.added_at || 0,
+      imageUrls: r.image_url ? String(r.image_url).split(',').filter(Boolean) : [], addedAt: r.added_at || 0,
     })).sort((a, b) => b.addedAt - a.addedAt);
   } catch(e) { console.error('loadLostItems error:', e); LOST_CACHE[storeId] = []; }
 }
@@ -2860,18 +2858,6 @@ function _blobToBase64(blob) {
   });
 }
 
-async function uploadLostImage(blob) {
-  const base64 = await _blobToBase64(blob);
-  const id = uid();
-  const r = await gasPost('saveLostItem', {
-    item: { id, image_url: null },
-    imageBase64: base64,
-    imageMime: 'image/jpeg',
-  });
-  if (r.error) throw new Error(r.error);
-  return r.image_url;
-}
-
 async function uploadOrderImage(file) {
   try {
     const blob   = await compressLostImage(file);
@@ -2899,29 +2885,44 @@ function removeOrderPhoto(groupId) {
   if (grp) { grp[0].imageUrl = null; saveA(storeTab, storeRows); renderStore(); }
 }
 
-let _lostImageBlob = null;
-let _lostImagePreviewUrl = null;
+let _lostImageItems = []; // [{blob, url}] 複数枚を保持
 
 function previewLostImage(input) {
-  const file = input.files?.[0];
-  if (!file) return;
-  compressLostImage(file).then(blob => {
-    _lostImageBlob = blob;
-    if (_lostImagePreviewUrl) URL.revokeObjectURL(_lostImagePreviewUrl);
-    _lostImagePreviewUrl = URL.createObjectURL(blob);
-    const prev = document.getElementById('lost-image-preview');
-    const img  = document.getElementById('lost-image-preview-img');
-    if (prev && img) { img.src = _lostImagePreviewUrl; prev.style.display = 'flex'; prev.style.alignItems = 'center'; }
+  const files = Array.from(input.files || []);
+  if (!files.length) return;
+  Promise.all(files.map(f => compressLostImage(f))).then(blobs => {
+    blobs.forEach(blob => _lostImageItems.push({ blob, url: URL.createObjectURL(blob) }));
+    renderLostImagePreview();
   });
+  input.value = ''; // 同じファイルの再選択・連続撮影でも変化を検知できるようにする
 }
 
-function clearLostImage() {
-  _lostImageBlob = null;
-  if (_lostImagePreviewUrl) { URL.revokeObjectURL(_lostImagePreviewUrl); _lostImagePreviewUrl = null; }
-  const inp  = document.getElementById('lost-image-input');
+function removeLostImage(idx) {
+  const it = _lostImageItems[idx];
+  if (it) URL.revokeObjectURL(it.url);
+  _lostImageItems.splice(idx, 1);
+  renderLostImagePreview();
+}
+
+function renderLostImagePreview() {
   const prev = document.getElementById('lost-image-preview');
-  if (inp)  inp.value = '';
-  if (prev) prev.style.display = 'none';
+  if (!prev) return;
+  if (!_lostImageItems.length) { prev.style.display = 'none'; prev.innerHTML = ''; return; }
+  prev.style.display = 'flex';
+  prev.innerHTML = _lostImageItems.map((it, idx) => `
+    <div style="position:relative">
+      <img src="${it.url}" style="width:70px;height:70px;object-fit:cover;border-radius:6px;border:1px solid #ddd">
+      <button onclick="removeLostImage(${idx})" title="削除"
+        style="position:absolute;top:-6px;right:-6px;background:#ef4444;color:#fff;border:none;border-radius:50%;width:20px;height:20px;font-size:12px;line-height:18px;cursor:pointer;padding:0">×</button>
+    </div>`).join('');
+}
+
+function clearLostImages() {
+  _lostImageItems.forEach(it => URL.revokeObjectURL(it.url));
+  _lostImageItems = [];
+  const inp = document.getElementById('lost-image-input');
+  if (inp) inp.value = '';
+  renderLostImagePreview();
 }
 
 function showLostImage(src) {
@@ -2947,22 +2948,21 @@ async function addLostItem() {
   try {
     const itemId = uid();
     const addedAt = Date.now();
-    let imageUrl = null;
-    const base64 = _lostImageBlob ? await _blobToBase64(_lostImageBlob) : null;
-    const item = { id: itemId, foundDate, note, imageUrl, addedAt };
+    const imagesBase64 = await Promise.all(_lostImageItems.map(it => _blobToBase64(it.blob)));
+    const item = { id: itemId, foundDate, note, imageUrls: [], addedAt };
     const r = await gasPost('saveLostItem', {
       item: { id: itemId, store_id: storeTab, found_date: foundDate || null,
               note: note || null, image_url: null, added_at: addedAt },
-      imageBase64: base64,
+      imagesBase64,
       imageMime: 'image/jpeg',
     });
     if (r.error) throw new Error(r.error);
-    if (r.image_url) item.imageUrl = r.image_url;
+    if (r.image_url) item.imageUrls = String(r.image_url).split(',').filter(Boolean);
     if (!LOST_CACHE[storeTab]) LOST_CACHE[storeTab] = [];
     LOST_CACHE[storeTab].unshift(item);
     if (dateEl) dateEl.value = new Date().toLocaleDateString('sv');
     if (noteEl) noteEl.value = '';
-    clearLostImage();
+    clearLostImages();
     renderLostItems();
     _notifyLostChanged(storeTab);
   } catch(e) {
@@ -2979,8 +2979,14 @@ async function deleteLostItem(storeId, itemId) {
   if (storeId === storeTab && partnerTabCurrent === 'lost') renderLostItems();
   if (adminView === 'lost') renderLostAdmin();
   try {
-    await gasPost('deleteLostItem', { id: itemId, imageUrl: item?.imageUrl || null });
+    await gasPost('deleteLostItem', { id: itemId, imageUrl: (item?.imageUrls || []).join(',') || null });
   } catch(e) { console.error('deleteLostItem error:', e); }
+}
+
+function buildLostImageCell(imageUrls, size) {
+  if (!imageUrls || !imageUrls.length) return '<span style="color:#ccc;font-size:11px">なし</span>';
+  return `<div style="display:flex;gap:4px;flex-wrap:wrap">${imageUrls.map(u => `<img src="${esc(u)}" onclick="showLostImage(this.src)"
+    style="width:${size}px;height:${size}px;object-fit:cover;border-radius:5px;border:1px solid #ddd;cursor:zoom-in">`).join('')}</div>`;
 }
 
 function buildLostTable(items, storeId) {
@@ -2989,17 +2995,14 @@ function buildLostTable(items, storeId) {
     <thead><tr style="background:#c2d63a;color:#1a2a05">
       <th style="padding:8px 10px;text-align:left;font-size:12px;width:100px">発見日</th>
       <th style="padding:8px 10px;text-align:left;font-size:12px;width:140px">備考</th>
-      <th style="padding:8px 10px;text-align:left;font-size:12px;width:70px">画像</th>
+      <th style="padding:8px 10px;text-align:left;font-size:12px;width:120px">画像</th>
       <th style="padding:8px 10px;width:60px"></th>
     </tr></thead><tbody>
     ${items.map(item => `<tr style="border-bottom:1px solid #eee">
       <td style="padding:8px 10px;white-space:nowrap;width:100px">${esc(item.foundDate)||'—'}</td>
       <td style="padding:8px 10px;white-space:pre-wrap;word-break:break-all">${esc(item.note)}</td>
       <td style="padding:6px 8px">
-        ${item.imageUrl
-          ? `<img src="${esc(item.imageUrl)}" onclick="showLostImage(this.src)"
-              style="width:52px;height:52px;object-fit:cover;border-radius:5px;border:1px solid #ddd;cursor:zoom-in">`
-          : '<span style="color:#ccc;font-size:11px">なし</span>'}
+        ${buildLostImageCell(item.imageUrls, 52)}
       </td>
       <td style="padding:8px 10px;text-align:center">
         <button onclick="deleteLostItem('${storeId}','${item.id}')" style="background:#ef4444;color:white;padding:4px 10px;font-size:12px;border-radius:5px;border:none;cursor:pointer;font-family:inherit">削除</button>
@@ -3947,7 +3950,7 @@ async function renderLostAdmin() {
   const mapLostApiRows = data => (data || []).map(r => ({
     id: r.id, storeId: r.store_id, storeName: STORES[r.store_id] || r.store_id,
     foundDate: r.found_date || '', note: r.note || '',
-    imageUrl: r.image_url || null, addedAt: r.added_at || 0,
+    imageUrls: r.image_url ? String(r.image_url).split(',').filter(Boolean) : [], addedAt: r.added_at || 0,
   })).sort((a,b) => (b.foundDate||'').localeCompare(a.foundDate||''));
   const monthAllItems     = mapLostApiRows(monthData);
   const lastMonthAllItems = mapLostApiRows(lastMonthData);
@@ -3958,10 +3961,7 @@ async function renderLostAdmin() {
       <td style="font-size:13px;padding:7px 10px;white-space:nowrap;color:#22703d;font-weight:600">${esc(item.storeName)}</td>
       <td style="font-size:13px;padding:7px 10px;word-break:break-all">${esc(item.note)}</td>
       <td style="padding:5px 8px">
-        ${item.imageUrl
-          ? `<img src="${esc(item.imageUrl)}" onclick="showLostImage(this.src)"
-              style="width:48px;height:48px;object-fit:cover;border-radius:5px;border:1px solid #ddd;cursor:zoom-in">`
-          : '<span style="color:#ccc;font-size:11px">なし</span>'}
+        ${buildLostImageCell(item.imageUrls, 44)}
       </td>
       <td style="padding:5px 8px;white-space:nowrap">
         <button onclick="deleteLostItem('${esc(item.storeId)}','${item.id}')"
@@ -3979,10 +3979,7 @@ async function renderLostAdmin() {
       <td style="font-size:13px;padding:7px 10px;white-space:nowrap">${esc(item.foundDate)||'—'}</td>
       <td style="font-size:13px;padding:7px 10px;word-break:break-all">${esc(item.note)}</td>
       <td style="padding:5px 8px">
-        ${item.imageUrl
-          ? `<img src="${esc(item.imageUrl)}" onclick="showLostImage(this.src)"
-              style="width:52px;height:52px;object-fit:cover;border-radius:5px;border:1px solid #ddd;cursor:zoom-in">`
-          : '<span style="color:#ccc;font-size:11px">なし</span>'}
+        ${buildLostImageCell(item.imageUrls, 48)}
       </td>
       <td style="padding:5px 8px;white-space:nowrap">
         <button onclick="deleteLostItem('${esc(adminLostStore)}','${item.id}')"
@@ -4004,8 +4001,8 @@ async function renderLostAdmin() {
           <thead><tr style="background:#c2d63a;color:#1a2a05">
             <th style="text-align:left;font-size:13px;padding:9px 10px;width:100px">発見日</th>
             <th style="text-align:left;font-size:13px;padding:9px 10px;width:130px">店舗</th>
-            <th style="text-align:left;font-size:13px;padding:9px 10px;width:160px">備考</th>
-            <th style="font-size:13px;padding:9px 10px;width:64px">画像</th>
+            <th style="text-align:left;font-size:13px;padding:9px 10px;width:130px">備考</th>
+            <th style="font-size:13px;padding:9px 10px;width:110px">画像</th>
             <th style="width:70px"></th>
           </tr></thead>
           <tbody>${monthRows}</tbody>
@@ -4026,8 +4023,8 @@ async function renderLostAdmin() {
           <thead><tr style="background:#c2d63a;color:#1a2a05">
             <th style="text-align:left;font-size:13px;padding:9px 10px;width:100px">発見日</th>
             <th style="text-align:left;font-size:13px;padding:9px 10px;width:130px">店舗</th>
-            <th style="text-align:left;font-size:13px;padding:9px 10px;width:160px">備考</th>
-            <th style="font-size:13px;padding:9px 10px;width:64px">画像</th>
+            <th style="text-align:left;font-size:13px;padding:9px 10px;width:130px">備考</th>
+            <th style="font-size:13px;padding:9px 10px;width:110px">画像</th>
             <th style="width:70px"></th>
           </tr></thead>
           <tbody>${lastMonthRows}</tbody>
@@ -4050,8 +4047,8 @@ async function renderLostAdmin() {
     <table style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 2px 8px rgba(34,112,61,.1);table-layout:fixed">
       <thead><tr style="background:#c2d63a;color:#1a2a05">
         <th style="text-align:left;font-size:13px;padding:9px 10px;width:110px">発見日</th>
-        <th style="text-align:left;font-size:13px;padding:9px 10px;width:160px">備考</th>
-        <th style="font-size:13px;padding:9px 10px;width:70px">画像</th>
+        <th style="text-align:left;font-size:13px;padding:9px 10px;width:140px">備考</th>
+        <th style="font-size:13px;padding:9px 10px;width:110px">画像</th>
         <th style="width:70px"></th>
       </tr></thead>
       <tbody>${rows}</tbody>

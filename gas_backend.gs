@@ -93,7 +93,7 @@ function doPost(e) {
     else if (b.action === 'upsertOrders')       result = upsertOrderRows(b.storeId, b.rows);
     else if (b.action === 'deleteOrders')       result = deleteOrderRows(b.ids);
     else if (b.action === 'saveSetting')        result = saveSetting(b.key, b.value);
-    else if (b.action === 'saveLostItem')       result = saveLostItem(b.item, b.imageBase64, b.imageMime);
+    else if (b.action === 'saveLostItem')       result = saveLostItem(b.item, b.imagesBase64, b.imageMime);
     else if (b.action === 'deleteLostItem')     result = deleteLostItem(b.id, b.imageUrl);
     else if (b.action === 'saveOrderImage')     result = saveOrderImage(b.imageBase64, b.imageMime, b.filename);
     else if (b.action === 'saveChecksheetData') result = saveChecksheetData(b.storeId, b.periodLabel, b.data);
@@ -382,22 +382,21 @@ function purgeOldLostItems() {
     const found = _dateStr(data[i][dateIdx]);
     if (!found || found >= limitStr) continue;
     const imgUrl = urlIdx >= 0 ? data[i][urlIdx] : '';
-    if (imgUrl && String(imgUrl).includes('drive.google.com')) {
-      try {
-        const m = String(imgUrl).match(/[?&]id=([^&]+)/);
-        if (m) DriveApp.getFileById(m[1]).setTrashed(true);
-      } catch(e) {}
-    }
+    _trashDriveImages(imgUrl);
     sheet.deleteRow(i + 1);
   }
 }
 
-function saveLostItem(item, imageBase64, imageMime) {
+// imagesBase64: 画像0枚以上の配列（複数枚添付対応）。DriveにアップロードしたURLを
+// カンマ区切りで既存のimage_url列にそのまま格納する（シート列追加のマイグレーション不要）。
+function saveLostItem(item, imagesBase64, imageMime) {
   const sheet = getSheet(SHEET_LOST);
   ensureHeaders(sheet, LOST_COLS);
   let imageUrl = item.image_url || null;
-  if (imageBase64 && IMAGE_FOLDER_ID) {
-    imageUrl = saveImageToDrive(imageBase64, imageMime || 'image/jpeg', item.id);
+  if (imagesBase64 && imagesBase64.length && IMAGE_FOLDER_ID) {
+    imageUrl = imagesBase64
+      .map((b64, i) => saveImageToDrive(b64, imageMime || 'image/jpeg', item.id + '_' + i))
+      .join(',');
   }
   sheet.appendRow(LOST_COLS.map(c =>
     c === 'image_url' ? (imageUrl || '') : (item[c] === undefined || item[c] === null ? '' : item[c])
@@ -405,6 +404,7 @@ function saveLostItem(item, imageBase64, imageMime) {
   return { ok: true, image_url: imageUrl };
 }
 
+// imageUrl: カンマ区切りの複数URLを想定（後方互換で単一URLでも動作）
 function deleteLostItem(id, imageUrl) {
   const sheet = getSheet(SHEET_LOST);
   if (sheet.getLastRow() <= 1) return { ok: true };
@@ -413,13 +413,20 @@ function deleteLostItem(id, imageUrl) {
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][idIdx]) === String(id)) { sheet.deleteRow(i + 1); break; }
   }
-  if (imageUrl && imageUrl.includes('drive.google.com')) {
+  _trashDriveImages(imageUrl);
+  return { ok: true };
+}
+
+function _trashDriveImages(imageUrlList) {
+  if (!imageUrlList) return;
+  String(imageUrlList).split(',').forEach(url => {
+    url = url.trim();
+    if (!url || !url.includes('drive.google.com')) return;
     try {
-      const m = imageUrl.match(/[?&]id=([^&]+)/);
+      const m = url.match(/[?&]id=([^&]+)/);
       if (m) DriveApp.getFileById(m[1]).setTrashed(true);
     } catch(e) {}
-  }
-  return { ok: true };
+  });
 }
 
 // ----------------------------------------------------------------
