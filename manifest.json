@@ -1,6 +1,6 @@
 {
-  "name": "セルフカフェ社内ポータル",
-  "short_name": "セルフカフェ社内ポータル",
+  "name": "SelfCafe",
+  "short_name": "SelfCafe",
   "start_url": "/internal-web-system/",
   "display": "standalone",
   "background_color": "#141414",
