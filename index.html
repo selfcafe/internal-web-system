@@ -1211,11 +1211,12 @@ const saveA = (id, rows) => {
   _syncStoreToDb(id, rows, deletedIds);
 };
 // 発注を「納品済み」にした履歴は、以前はlocalStorageにのみ保存していたため、
-// ボタンを押した端末以外では見えず、30日で自動的に消える仕様になっていた
-// （2026-07-18、渋谷神南店で履歴が消えたように見える不具合として発覚し修正）。
-// 現在はGAS側の専用スプレッドシート（DELIVERY_HISTORY_SHEET_ID）に追記専用で保存し、
-// どの端末からも同じ履歴が見え、自動削除もしない。DELIVERY_HISTORY_CACHEは
-// fetchDeliveryHistory()で店舗ごとに取得したものを保持するだけの読み取り用キャッシュ。
+// ボタンを押した端末以外では見えなかった（2026-07-18、渋谷神南店で履歴が消えたように
+// 見える不具合として発覚し修正）。現在はGAS側の専用スプレッドシート
+// （DELIVERY_HISTORY_SHEET_ID）に追記専用で保存し、どの端末からも同じ履歴が見える。
+// 「納品確認日から1ヶ月で自動削除」という保存期間の仕様自体は従来通り維持（GAS側の
+// purgeOldDeliveryHistoryで実施）。DELIVERY_HISTORY_CACHEはfetchDeliveryHistory()で
+// 店舗ごとに取得したものを保持するだけの読み取り用キャッシュ。
 let DELIVERY_HISTORY_CACHE = {}; // storeId -> rows[]
 
 function _dbToHistRow(r) {
@@ -4420,7 +4421,7 @@ async function renderHistory() {
 
   const region = REGIONS[adminRegion];
 
-  // 直近3ヶ月分をGASから店舗ごとに取得（データ自体は削除されず、表示のみ直近分に絞っている）
+  // 店舗ごとにGASから取得（納品確認日から1ヶ月経過分はGAS側で自動削除済み）
   await Promise.all(region.stores.map(sid => fetchDeliveryHistory(sid)));
 
   // 全店舗の履歴件数を集計
@@ -4431,7 +4432,7 @@ async function renderHistory() {
   });
 
   const totalCnt = storeData.reduce((n, s) => n + s.cnt, 0);
-  document.getElementById('admin-summary').innerHTML = `【${region.label}】履歴 ${totalCnt} 件（直近3ヶ月分を表示。データ自体は削除されません）`;
+  document.getElementById('admin-summary').innerHTML = `【${region.label}】履歴 ${totalCnt} 件（納品確認日から1ヶ月で自動削除）`;
 
   // デフォルト店舗
   if (!adminHistDropdownStore || !STORES[adminHistDropdownStore]) {

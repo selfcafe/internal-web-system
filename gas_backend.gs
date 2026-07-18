@@ -9,6 +9,10 @@ const INVENTORY_SHEET_ID = '';  // 棚卸集計スプレッドシートのID
 // 月初納品分など、アプリを通さず本部が直接手配・受領した納品を本部が手入力するスプレッドシート
 // （棚卸集計とは別。この実行アカウントに編集権限で共有しておくこと。列は「期間ラベル/店舗ID/商品コード/数量」）
 const MANUAL_DELIVERY_SHEET_ID = '';  // 手動納品入力スプレッドシートのID
+// 発注を「納品済み」にした際の履歴ログ専用スプレッドシート（2026-07-18追加）。メインのSHEET_ID側は
+// 過去に複数回の事故（部署マスター誤上書き、注文データの巻き戻り削除、設定の競合消失）を起こしている
+// ため、消えては困る履歴ログはあえて別ファイルに分離する（この実行アカウントに編集権限で共有しておくこと）
+const DELIVERY_HISTORY_SHEET_ID = '';  // 発注履歴スプレッドシートのID
 // 請求書テンプレート（Googleスプレッドシート版）。このファイルをmakeCopy()で複製し、
 // セルに値を差し込んでからPDFエクスポートする。この実行アカウントに編集権限で共有しておくこと。
 const INVOICE_TEMPLATE_ID = '1GoprcmRPLAo5A7nAd1lWCSabDa1W8MkCuYy42P852ts'; // 2026-07-11: ユーザーが直接編集していた方の実ファイルに差し替え（旧IDは編集が反映されない別ファイルだった）
@@ -548,29 +552,56 @@ function saveAttendance(storeId, name, lat, lng) {
 // ----------------------------------------------------------------
 // delivery_history（発注を「納品済み」にした際の履歴ログ）
 // ----------------------------------------------------------------
-// メインのSHEET_ID側ではなく、既存の棚卸集計スプレッドシート（INVENTORY_SHEET_ID）内に
-// 新しいタブとして追記専用で記録する。同じ「納品済み」操作で書き込むinventory_delivery_auto
-// （棚卸への集計値）の隣に、明細ログとして共存させる形（新規スプレッドシートの作成・共有は不要）。
+// メインのSHEET_ID側とは別スプレッドシート（DELIVERY_HISTORY_SHEET_ID）に追記専用で記録する
+// （INVENTORY_SHEET_IDへの相乗りも検討したが、棚卸機能自体がまだ未着手でこのIDが存在しない
+// ため、2026-07-18時点では独立した専用スプレッドシートとする）。
 // ordersのような全件削除→再送信ではなく1行追記のみのため、複数リクエストが競合しても
 // 既存データを巻き添えで消すことがない。自動削除もしない（消えては困る記録のため）——
 // 取得側はgetLostItemsと同じ「month指定で絞り込み」に対応しつつ、month省略時はデフォルトで
 // 直近3ヶ月分のみ返す（店舗の運用年数が経つにつれ全件取得・描画が重くなるのを防ぐため。
 // データ自体は消えないので、古い分を見たい時はmonthを指定して呼び出せばよい）。
 function getDeliveryHistorySheet() {
-  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const ss = SpreadsheetApp.openById(DELIVERY_HISTORY_SHEET_ID);
   return ss.getSheetByName(SHEET_DELIVERY_HISTORY) || ss.insertSheet(SHEET_DELIVERY_HISTORY);
 }
-// タイムゾーンはSHEET_ID側と共有せず、INVENTORY_SHEET_ID（既存の_invSheetTz）のものを使う
+// タイムゾーンはSHEET_ID側と共有せず、発注履歴スプレッドシート自体のものを使う
+// （_invSheetTzと同じ理由。別Driveのスプレッドシートなのでタイムゾーンが異なる可能性がある）
+let _cachedDelHistTz = null;
+function _delHistSheetTz() {
+  if (!_cachedDelHistTz) _cachedDelHistTz = SpreadsheetApp.openById(DELIVERY_HISTORY_SHEET_ID).getSpreadsheetTimeZone();
+  return _cachedDelHistTz;
+}
 function _delHistDateStr(v) {
-  if (v instanceof Date) return Utilities.formatDate(v, _invSheetTz(), 'yyyy-MM-dd');
+  if (v instanceof Date) return Utilities.formatDate(v, _delHistSheetTz(), 'yyyy-MM-dd');
   return v || null;
 }
 function _delHistDateTimeStr(v) {
-  if (v instanceof Date) return Utilities.formatDate(v, _invSheetTz(), 'yyyy-MM-dd HH:mm:ss');
+  if (v instanceof Date) return Utilities.formatDate(v, _delHistSheetTz(), 'yyyy-MM-dd HH:mm:ss');
   return v || null;
 }
 
+// 納品確認日（delivered_at）から30日経過した履歴を自動削除する
+// （2026-07-18時点でのユーザー指示：以前のlocalStorage版purgeHistoryと同じ「1ヶ月保存→自動削除」の
+// 仕様を維持する。ただし今回はGAS側の共有スプレッドシートに対して行うため、どの端末から見ても
+// 同じ基準で削除・表示される）
+function purgeOldDeliveryHistory() {
+  const sheet = getDeliveryHistorySheet();
+  if (sheet.getLastRow() <= 1) return;
+  const limit = Date.now() - 30*24*60*60*1000;
+  const data = sheet.getDataRange().getValues();
+  const hdrs = data[0].map(String);
+  const idx = hdrs.indexOf('delivered_at');
+  if (idx < 0) return;
+  for (let i = data.length - 1; i >= 1; i--) {
+    const v = data[i][idx];
+    const t = v instanceof Date ? v.getTime() : Number(v);
+    if (t && t > limit) continue;
+    sheet.deleteRow(i + 1);
+  }
+}
+
 function getDeliveryHistory(storeId, month) {
+  purgeOldDeliveryHistory();
   const sheet = getDeliveryHistorySheet();
   let rows = sheetRows(sheet, DELIVERY_HISTORY_COLS).map(r => ({
     ...r,
@@ -581,14 +612,7 @@ function getDeliveryHistory(storeId, month) {
     delivered_at: r.delivered_at instanceof Date ? r.delivered_at.getTime() : (Number(r.delivered_at) || null),
   }));
   if (storeId) rows = rows.filter(r => String(r.store_id) === String(storeId));
-  if (month) {
-    rows = rows.filter(r => String(r.delivered_at_str || '').startsWith(month));
-  } else {
-    const cutoff = new Date();
-    cutoff.setMonth(cutoff.getMonth() - 3);
-    const cutoffStr = Utilities.formatDate(cutoff, _invSheetTz(), 'yyyy-MM-dd HH:mm:ss');
-    rows = rows.filter(r => (r.delivered_at_str || '') >= cutoffStr);
-  }
+  if (month) rows = rows.filter(r => String(r.delivered_at_str || '').startsWith(month));
   return rows.sort((a, b) => (b.delivered_at||0) - (a.delivered_at||0));
 }
 
