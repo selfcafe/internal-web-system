@@ -1182,8 +1182,6 @@ function toggleManualMenu(suffix) {
   if (!wasOpen) { dd.innerHTML = buildManualMenu(); dd.classList.add('open'); }
 }
 
-const hKey = id => 'history_' + id;
-
 /* items配列を持つ旧形式 → フラット行に変換、groupId を付与 */
 function migrateRows(rows) {
   const result = [];
@@ -1212,12 +1210,42 @@ const saveA = (id, rows) => {
   ORDERS_CACHE[id] = rows;
   _syncStoreToDb(id, rows, deletedIds);
 };
-const loadH = id => migrateRows(JSON.parse(localStorage.getItem(hKey(id)) || '[]'));
-const saveH = (id, r) => localStorage.setItem(hKey(id), JSON.stringify(r));
+// 発注を「納品済み」にした履歴は、以前はlocalStorageにのみ保存していたため、
+// ボタンを押した端末以外では見えず、30日で自動的に消える仕様になっていた
+// （2026-07-18、渋谷神南店で履歴が消えたように見える不具合として発覚し修正）。
+// 現在はGAS側の専用スプレッドシート（DELIVERY_HISTORY_SHEET_ID）に追記専用で保存し、
+// どの端末からも同じ履歴が見え、自動削除もしない。DELIVERY_HISTORY_CACHEは
+// fetchDeliveryHistory()で店舗ごとに取得したものを保持するだけの読み取り用キャッシュ。
+let DELIVERY_HISTORY_CACHE = {}; // storeId -> rows[]
 
-function purgeHistory() {
-  const limit = Date.now() - 30*24*60*60*1000;
-  Object.keys(STORES).forEach(id => saveH(id, loadH(id).filter(r => (r.deliveredAt||0) > limit)));
+function _dbToHistRow(r) {
+  return {
+    id: r.id,
+    groupId: r.group_id,
+    product: r.product,
+    label: r.label,
+    qty: r.qty != null ? String(r.qty) : '',
+    actualQty: r.actual_qty != null ? String(r.actual_qty) : '',
+    actualUnitMode: r.actual_unit_mode || null,
+    unit: r.unit,
+    caseUnit: r.case_unit,
+    unitMode: r.unit_mode || 'piece',
+    note: r.note,
+    requestDate: r.request_date || '',
+    orderDate: r.order_date || '',
+    deliveryDate: r.delivery_date || '',
+    deliveredAt: r.delivered_at || null,
+    isNew: false,
+  };
+}
+
+const loadH = id => migrateRows(DELIVERY_HISTORY_CACHE[id] || []);
+
+async function fetchDeliveryHistory(id) {
+  try {
+    const rows = await gasGet('getDeliveryHistory', { storeId: id });
+    DELIVERY_HISTORY_CACHE[id] = rows.map(_dbToHistRow);
+  } catch(e) { console.error('getDeliveryHistory error:', e); DELIVERY_HISTORY_CACHE[id] = []; }
 }
 
 const uid     = () => Date.now().toString(36) + Math.random().toString(36).slice(2);
@@ -3890,11 +3918,17 @@ function recordDeliveredRows(storeId, rows) {
   });
 }
 
-function markDelivered(id) {
+async function markDelivered(id) {
   const row = storeRows.find(r=>r.id===id); if (!row) return;
   if (!row.orderDate) { alert('発注日が記載されてから納品済みにできます。'); return; }
   if (!confirm('この依頼を納品済みにして履歴へ移動しますか？')) return;
-  saveH(storeTab, [...loadH(storeTab), {...row, deliveredAt:Date.now()}]);
+  try {
+    await gasPost('saveDeliveryHistory', { storeId: storeTab, row: _rowToDb(row, storeTab) });
+  } catch(e) {
+    console.error('saveDeliveryHistory error:', e);
+    alert('履歴の保存に失敗しました。通信状況を確認してもう一度お試しください。');
+    return;
+  }
   recordDeliveredRows(storeTab, [row]);
   storeRows = storeRows.filter(r=>r.id!==id);
   saveA(storeTab, storeRows);
@@ -4374,7 +4408,7 @@ function buildHistTable(sid) {
   return html;
 }
 
-function renderHistory() {
+async function renderHistory() {
   document.querySelector('#page-admin .table-wrap').style.display = 'none';
   document.getElementById('pagination').style.display = 'none';
   document.getElementById('admin-thead').innerHTML = '';
@@ -4382,8 +4416,12 @@ function renderHistory() {
 
   const container = document.getElementById('settings-container');
   container.style.display = 'block';
+  container.innerHTML = '<div style="color:#aaa;font-size:13px;padding:12px 0">読み込み中…</div>';
 
   const region = REGIONS[adminRegion];
+
+  // 直近3ヶ月分をGASから店舗ごとに取得（データ自体は削除されず、表示のみ直近分に絞っている）
+  await Promise.all(region.stores.map(sid => fetchDeliveryHistory(sid)));
 
   // 全店舗の履歴件数を集計
   const storeData = region.stores.map(sid => {
@@ -4393,7 +4431,7 @@ function renderHistory() {
   });
 
   const totalCnt = storeData.reduce((n, s) => n + s.cnt, 0);
-  document.getElementById('admin-summary').innerHTML = `【${region.label}】履歴 ${totalCnt} 件（納品後1ヶ月で自動削除）`;
+  document.getElementById('admin-summary').innerHTML = `【${region.label}】履歴 ${totalCnt} 件（直近3ヶ月分を表示。データ自体は削除されません）`;
 
   // デフォルト店舗
   if (!adminHistDropdownStore || !STORES[adminHistDropdownStore]) {
@@ -5459,7 +5497,8 @@ async function clearAllOrders() {
   const allStores = Object.keys(STORES);
   for (const sid of allStores) {
     ORDERS_CACHE[sid] = [];
-    localStorage.removeItem(hKey(sid));
+    delete DELIVERY_HISTORY_CACHE[sid];
+    try { await gasPost('clearDeliveryHistory', { storeId: sid }); } catch(e) { console.error('clearDeliveryHistory error:', e); }
     await _syncStoreToDb(sid, []);
   }
   if (msg) { msg.textContent = '✓ 全データを消去しました'; setTimeout(() => { if(msg) msg.textContent=''; }, 3000); }
@@ -5949,7 +5988,6 @@ loadVendorConfig();
 loadProductSettings();
 loadDeletedProducts();
 migrateProductRenames();
-purgeHistory();
 applyTimeMsg();
 populateLoginStoreSelect();
 if (!(sessionStorage.getItem('admin_authed') === '1' || isSiteAuthed())) {

@@ -9,6 +9,10 @@ const INVENTORY_SHEET_ID = '';  // 棚卸集計スプレッドシートのID
 // 月初納品分など、アプリを通さず本部が直接手配・受領した納品を本部が手入力するスプレッドシート
 // （棚卸集計とは別。この実行アカウントに編集権限で共有しておくこと。列は「期間ラベル/店舗ID/商品コード/数量」）
 const MANUAL_DELIVERY_SHEET_ID = '';  // 手動納品入力スプレッドシートのID
+// 発注を「納品済み」にした際の履歴ログ専用スプレッドシート（2026-07-18追加）。メインのSHEET_ID側は
+// 過去に複数回の事故（部署マスター誤上書き、注文データの巻き戻り削除、設定の競合消失）を起こしている
+// ため、消えては困る履歴ログはあえて別ファイルに分離する（この実行アカウントに編集権限で共有しておくこと）
+const DELIVERY_HISTORY_SHEET_ID = '';  // 発注履歴スプレッドシートのID
 // 請求書テンプレート（Googleスプレッドシート版）。このファイルをmakeCopy()で複製し、
 // セルに値を差し込んでからPDFエクスポートする。この実行アカウントに編集権限で共有しておくこと。
 const INVOICE_TEMPLATE_ID = '1GoprcmRPLAo5A7nAd1lWCSabDa1W8MkCuYy42P852ts'; // 2026-07-11: ユーザーが直接編集していた方の実ファイルに差し替え（旧IDは編集が反映されない別ファイルだった）
@@ -35,6 +39,14 @@ const ORDER_COLS = [
   'delivery_date','created_at','denied','image_url','actual_unit_mode'
 ];
 const LOST_COLS = ['id','store_id','found_date','note','image_url','added_at'];
+// 発注を「納品済み」にした際のログ。1回の操作で1行追加（append-onlyのログシート、
+// ordersのような全件削除→再送信はしない。自動削除もしない——消えては困る記録のため）
+const SHEET_DELIVERY_HISTORY = 'delivery_history';
+const DELIVERY_HISTORY_COLS = [
+  'id','store_id','group_id','product','label','qty','actual_qty','unit',
+  'case_unit','unit_mode','actual_unit_mode','note','request_date','order_date',
+  'delivery_date','delivered_at'
+];
 // 店舗×年月で1行、その月の日別データはJSON文字列として1セルに保存する
 // （日ごと・項目ごとに行を分けると増え続けて管理しづらいため、月単位でまとめる）
 const CHECKSHEET_COLS = ['store_id','period_label','data','updated_at'];
@@ -76,6 +88,7 @@ function doGet(e) {
     else if (a === 'migrateInventoryColumns')   result = migrateInventoryColumns();
     else if (a === 'getSettingHistory')         result = getSettingHistory(e.parameter.key, e.parameter.limit);
     else if (a === 'getAttendance')             result = getAttendance(e.parameter.storeId);
+    else if (a === 'getDeliveryHistory')        result = getDeliveryHistory(e.parameter.storeId, e.parameter.month);
     else result = { error: 'Unknown action: ' + a };
     return json(result);
   } catch(err) {
@@ -102,6 +115,8 @@ function doPost(e) {
     else if (b.action === 'submitInvoice')       result = submitInvoice(b.payload);
     else if (b.action === 'saveInvoiceReceiptImage') result = saveInvoiceReceiptImage(b.imageBase64, b.imageMime, b.filename);
     else if (b.action === 'saveAttendance')      result = saveAttendance(b.storeId, b.name, b.lat, b.lng);
+    else if (b.action === 'saveDeliveryHistory') result = saveDeliveryHistory(b.storeId, b.row);
+    else if (b.action === 'clearDeliveryHistory') result = clearDeliveryHistory(b.storeId);
     else result = { error: 'Unknown action: ' + b.action };
     return json(result);
   } catch(err) {
@@ -532,6 +547,83 @@ function saveAttendance(storeId, name, lat, lng) {
 
   sheet.appendRow([Utilities.getUuid(), storeId, name, new Date(), lat, lng, withinRange]);
   return { ok: true, withinRange };
+}
+
+// ----------------------------------------------------------------
+// delivery_history（発注を「納品済み」にした際の履歴ログ）
+// ----------------------------------------------------------------
+// メインのSHEET_ID側とは別スプレッドシート（DELIVERY_HISTORY_SHEET_ID）に追記専用で記録する。
+// ordersのような全件削除→再送信ではなく1行追記のみのため、複数リクエストが競合しても
+// 既存データを巻き添えで消すことがない。自動削除もしない（消えては困る記録のため）——
+// 取得側はgetLostItemsと同じ「month指定で絞り込み」に対応しつつ、month省略時はデフォルトで
+// 直近3ヶ月分のみ返す（店舗の運用年数が経つにつれ全件取得・描画が重くなるのを防ぐため。
+// データ自体は消えないので、古い分を見たい時はmonthを指定して呼び出せばよい）。
+function getDeliveryHistorySheet() {
+  const ss = SpreadsheetApp.openById(DELIVERY_HISTORY_SHEET_ID);
+  return ss.getSheetByName(SHEET_DELIVERY_HISTORY) || ss.insertSheet(SHEET_DELIVERY_HISTORY);
+}
+// タイムゾーンはSHEET_ID側と共有せず、発注履歴スプレッドシート自体のものを使う
+// （_invSheetTzと同じ理由。別Driveのスプレッドシートなのでタイムゾーンが異なる可能性がある）
+let _cachedDelHistTz = null;
+function _delHistSheetTz() {
+  if (!_cachedDelHistTz) _cachedDelHistTz = SpreadsheetApp.openById(DELIVERY_HISTORY_SHEET_ID).getSpreadsheetTimeZone();
+  return _cachedDelHistTz;
+}
+function _delHistDateStr(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, _delHistSheetTz(), 'yyyy-MM-dd');
+  return v || null;
+}
+function _delHistDateTimeStr(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, _delHistSheetTz(), 'yyyy-MM-dd HH:mm:ss');
+  return v || null;
+}
+
+function getDeliveryHistory(storeId, month) {
+  const sheet = getDeliveryHistorySheet();
+  let rows = sheetRows(sheet, DELIVERY_HISTORY_COLS).map(r => ({
+    ...r,
+    request_date: _delHistDateStr(r.request_date),
+    order_date: _delHistDateStr(r.order_date),
+    delivery_date: _delHistDateStr(r.delivery_date),
+    delivered_at_str: _delHistDateTimeStr(r.delivered_at),
+    delivered_at: r.delivered_at instanceof Date ? r.delivered_at.getTime() : (Number(r.delivered_at) || null),
+  }));
+  if (storeId) rows = rows.filter(r => String(r.store_id) === String(storeId));
+  if (month) {
+    rows = rows.filter(r => String(r.delivered_at_str || '').startsWith(month));
+  } else {
+    const cutoff = new Date();
+    cutoff.setMonth(cutoff.getMonth() - 3);
+    const cutoffStr = Utilities.formatDate(cutoff, _delHistSheetTz(), 'yyyy-MM-dd HH:mm:ss');
+    rows = rows.filter(r => (r.delivered_at_str || '') >= cutoffStr);
+  }
+  return rows.sort((a, b) => (b.delivered_at||0) - (a.delivered_at||0));
+}
+
+function saveDeliveryHistory(storeId, row) {
+  const sheet = getDeliveryHistorySheet();
+  ensureHeaders(sheet, DELIVERY_HISTORY_COLS);
+  sheet.appendRow(DELIVERY_HISTORY_COLS.map(c => {
+    if (c === 'store_id') return storeId;
+    if (c === 'delivered_at') return new Date();
+    const v = row ? row[c] : null;
+    return (v === undefined || v === null) ? '' : v;
+  }));
+  return { ok: true };
+}
+
+// 全店舗一括削除（clearAllOrders）からのみ呼ばれる想定。対象店舗の行をすべて削除する
+function clearDeliveryHistory(storeId) {
+  const sheet = getDeliveryHistorySheet();
+  if (sheet.getLastRow() <= 1) return { ok: true };
+  const data = sheet.getDataRange().getValues();
+  const hdrs = data[0].map(String);
+  const sidIdx = hdrs.indexOf('store_id');
+  if (sidIdx < 0) return { ok: true };
+  for (let i = data.length - 1; i >= 1; i--) {
+    if (String(data[i][sidIdx]) === String(storeId)) sheet.deleteRow(i + 1);
+  }
+  return { ok: true };
 }
 
 // 修正前のperiod_label自動変換バグにより、同じ店舗×年月の行が複数重複してしまったものを
