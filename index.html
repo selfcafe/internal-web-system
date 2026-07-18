@@ -1215,9 +1215,24 @@ const saveA = (id, rows) => {
 // 見える不具合として発覚し修正）。現在はGAS側の専用スプレッドシート
 // （DELIVERY_HISTORY_SHEET_ID）に追記専用で保存し、どの端末からも同じ履歴が見える。
 // 「納品確認日から1ヶ月で自動削除」という保存期間の仕様自体は従来通り維持（GAS側の
-// purgeOldDeliveryHistoryで実施）。DELIVERY_HISTORY_CACHEはfetchDeliveryHistory()で
-// 店舗ごとに取得したものを保持するだけの読み取り用キャッシュ。
-let DELIVERY_HISTORY_CACHE = {}; // storeId -> rows[]
+// purgeOldDeliveryHistoryで実施）。
+//
+// ただしDELIVERY_HISTORY_SHEET_IDのスプレッドシート作成・本番デプロイはユーザーの指示で
+// 保留中（2026-07-18）。デプロイされるまではGAS側にgetDeliveryHistory/saveDeliveryHistory
+// が存在せず呼び出しが失敗するため、その間だけ従来通りlocalStorageで動作するようフォール
+// バックする（＝この移行の前後で「納品済み」操作や履歴閲覧が一切止まらないようにするため）。
+// デプロイ完了後はGAS呼び出しが成功するようになり、自動的に新方式（全端末共通）に切り替わる
+// ——このフォールバック用コードを later 消す必要はない（GASが成功する限り使われないだけ）。
+const hKey = id => 'history_' + id;
+const _loadLocalH = id => migrateRows(JSON.parse(localStorage.getItem(hKey(id)) || '[]'));
+const _saveLocalH = (id, rows) => localStorage.setItem(hKey(id), JSON.stringify(rows));
+function _purgeLocalH() {
+  const limit = Date.now() - 30*24*60*60*1000;
+  Object.keys(STORES).forEach(id => _saveLocalH(id, _loadLocalH(id).filter(r => (r.deliveredAt||0) > limit)));
+}
+
+let DELIVERY_HISTORY_CACHE = {}; // storeId -> rows[]（GAS取得成功分のみ）
+let _deliveryHistoryGasOk = {};  // storeId -> そのstoreIdのGAS取得が成功したか
 
 function _dbToHistRow(r) {
   return {
@@ -1240,13 +1255,20 @@ function _dbToHistRow(r) {
   };
 }
 
-const loadH = id => migrateRows(DELIVERY_HISTORY_CACHE[id] || []);
+// GAS取得に成功した店舗はGASのデータを、まだ失敗する（＝未デプロイ）店舗はlocalStorageの
+// フォールバックデータを返す
+const loadH = id => _deliveryHistoryGasOk[id] ? migrateRows(DELIVERY_HISTORY_CACHE[id] || []) : _loadLocalH(id);
 
 async function fetchDeliveryHistory(id) {
   try {
     const rows = await gasGet('getDeliveryHistory', { storeId: id });
+    if (rows && rows.error) throw new Error(rows.error);
     DELIVERY_HISTORY_CACHE[id] = rows.map(_dbToHistRow);
-  } catch(e) { console.error('getDeliveryHistory error:', e); DELIVERY_HISTORY_CACHE[id] = []; }
+    _deliveryHistoryGasOk[id] = true;
+  } catch(e) {
+    console.error('getDeliveryHistory error (falling back to localStorage):', e);
+    _deliveryHistoryGasOk[id] = false;
+  }
 }
 
 const uid     = () => Date.now().toString(36) + Math.random().toString(36).slice(2);
@@ -3924,11 +3946,13 @@ async function markDelivered(id) {
   if (!row.orderDate) { alert('発注日が記載されてから納品済みにできます。'); return; }
   if (!confirm('この依頼を納品済みにして履歴へ移動しますか？')) return;
   try {
-    await gasPost('saveDeliveryHistory', { storeId: storeTab, row: _rowToDb(row, storeTab) });
+    const res = await gasPost('saveDeliveryHistory', { storeId: storeTab, row: _rowToDb(row, storeTab) });
+    if (res && res.error) throw new Error(res.error);
   } catch(e) {
-    console.error('saveDeliveryHistory error:', e);
-    alert('履歴の保存に失敗しました。通信状況を確認してもう一度お試しください。');
-    return;
+    // DELIVERY_HISTORY_SHEET_ID未デプロイ・通信エラー時のフォールバック。
+    // 従来通りlocalStorageに保存し、「納品済み」操作自体は止めない
+    console.error('saveDeliveryHistory error (falling back to localStorage):', e);
+    _saveLocalH(storeTab, [..._loadLocalH(storeTab), {...row, deliveredAt:Date.now()}]);
   }
   recordDeliveredRows(storeTab, [row]);
   storeRows = storeRows.filter(r=>r.id!==id);
@@ -5499,6 +5523,7 @@ async function clearAllOrders() {
   for (const sid of allStores) {
     ORDERS_CACHE[sid] = [];
     delete DELIVERY_HISTORY_CACHE[sid];
+    localStorage.removeItem(hKey(sid)); // フォールバック用ローカル履歴も消す
     try { await gasPost('clearDeliveryHistory', { storeId: sid }); } catch(e) { console.error('clearDeliveryHistory error:', e); }
     await _syncStoreToDb(sid, []);
   }
@@ -5989,6 +6014,7 @@ loadVendorConfig();
 loadProductSettings();
 loadDeletedProducts();
 migrateProductRenames();
+_purgeLocalH(); // GAS未デプロイの間のフォールバック用ローカル履歴の30日パージ
 applyTimeMsg();
 populateLoginStoreSelect();
 if (!(sessionStorage.getItem('admin_authed') === '1' || isSiteAuthed())) {
