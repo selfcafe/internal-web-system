@@ -4363,7 +4363,7 @@ function buildHistTable(sid) {
         </tr>`;
       } else {
         html += `<tr>
-          <td style="padding:6px 10px 6px 22px;border-left:3px solid #b8d8c5">${esc(pLabel)}</td>
+          <td style="padding:6px 10px 6px 22px">${esc(pLabel)}</td>
           <td style="padding:6px 10px;white-space:nowrap">${esc(row.qty)||'—'} <span style="font-size:11px;color:#aaa">${esc(unitTxt)}</span>${row.actualQty !== '' && row.actualQty != null ? `<div style="font-size:11px;color:#888">実際：${esc(row.actualQty)}${esc(prodByName(row.product)?.unit||'')}</div>` : ''}</td>
         </tr>`;
       }
