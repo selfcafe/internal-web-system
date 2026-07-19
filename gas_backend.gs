@@ -1,6 +1,9 @@
 // ============================================================
 // セルフカフェ社内ポータル - Google Apps Script バックエンド
 // ============================================================
+// ⚠️ このファイル内の *_SHEET_ID 定数（SHEET_ID/INVENTORY_SHEET_ID/MANUAL_DELIVERY_SHEET_ID/
+// DELIVERY_HISTORY_SHEET_ID）は全て空文字のまま維持すること。本リポジトリはGitHub公開リポジトリのため、
+// 実IDは絶対にここへコミットしない。実IDはApps Scriptエディタ側（本番デプロイ環境）にのみ設定する。
 // 【設定】デプロイ前に以下2行を入力してください
 const SHEET_ID        = '';  // GoogleスプレッドシートのID
 const IMAGE_FOLDER_ID = '1adg7TQIYXSkWIo19ohVo93raDY2HsTW_';  // 画像保存用DriveフォルダのID
