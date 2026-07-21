@@ -54,10 +54,11 @@ const DELIVERY_HISTORY_COLS = [
 // （日ごと・項目ごとに行を分けると増え続けて管理しづらいため、月単位でまとめる）
 const CHECKSHEET_COLS = ['store_id','period_label','data','updated_at'];
 // 店舗×年月×商品で1行。同じ店舗×年月で再送信した場合はその行を上書きする
-// anomaly_noteは2026-07-15追加。既存の運用中シートには自動で列が増えないため、
-// migrateInventoryColumns()で末尾に追加する（列の並び順を変えると位置ズレで既存データが
-// 壊れるため、新規列は必ずORDER_COLS/INVENTORY_COLSの末尾に足すこと。actual_unit_mode追加時と同じ運用）
-const INVENTORY_COLS = ['period_label','store_id','code','product','label','open_stock','delivery','end_stock','consumption','disposed_qty','price','amount','remarks','updated_at','anomaly_note'];
+// anomaly_noteは2026-07-15追加。daily_count/matchedは2026-07-10に一旦廃止したものを
+// 2026-07-21に「盗難・カウントミスの早期発見用に本部側の記録としても残したい」との要望で復活。
+// いずれも既存の運用中シートには自動で列が増えないため、migrateInventoryColumns()で末尾に追加する
+// （列の並び順を変えると位置ズレで既存データが壊れるため、新規列は必ずINVENTORY_COLSの末尾に足すこと）
+const INVENTORY_COLS = ['period_label','store_id','code','product','label','open_stock','delivery','end_stock','consumption','disposed_qty','price','amount','remarks','updated_at','anomaly_note','daily_count','matched'];
 // 出勤打刻ログ。1回の打刻で1行追加（append-onlyのログシート、ordersのような全件削除→再送信はしない）
 const ATTENDANCE_COLS = ['id','store_id','name','clocked_at','lat','lng','within_range'];
 // 基準座標からこの距離(m)以内なら出勤OKと判定する（全店舗共通の固定値、2026-07-15確定）
@@ -887,9 +888,10 @@ function getInventoryTabData(storeId, periodLabel, prevPeriodLabel) {
   return result;
 }
 
-// anomaly_note列追加(2026-07-15)のためのワンショット移行用。ensureHeadersは空シートにしか
-// 列を作らないため、既存の運用中「棚卸集計」シートには手動で一度叩く必要がある
-// （migrateOrderColumnsと同じパターン。既存列・データには一切触れない、何度実行しても安全）
+// INVENTORY_COLSに新規列（anomaly_note、daily_count/matchedなど）を追加した際のワンショット移行用。
+// ensureHeadersは空シートにしか列を作らないため、既存の運用中「棚卸集計」シートには手動で一度叩く必要がある
+// （migrateOrderColumnsと同じパターン。既存列・データには一切触れない、何度実行しても安全。
+// INVENTORY_COLSとの差分を見て不足分だけ末尾に足すので、今後列を追加してもこの関数自体は変更不要）
 function migrateInventoryColumns() {
   const sheet = getInventorySheet();
   if (sheet.getLastRow() === 0) { ensureHeaders(sheet, INVENTORY_COLS); return { ok: true, added: INVENTORY_COLS }; }

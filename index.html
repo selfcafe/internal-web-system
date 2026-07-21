@@ -1529,6 +1529,15 @@ function _prevPeriodLabel(label) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
+// デイリーカウント対象商品かどうか（チェックシートの補充対象と同じ基準を再利用。表示専用の
+// 参考値であり、2026-07-10に廃止した送信ブロック・不一致による送信不可は復活させない）
+function isDailyCountTracked(p) {
+  if (CHECKSHEET_QTY_VENDOR_ALL.includes(p.vendor)) return true;
+  if (p.vendor === 'other') return p.name === 'ペーパータオル';
+  if (p.vendor === 'sales') return p.name === '水';
+  return false;
+}
+
 // 消費期限の管理が不要な商品（その他ベンダーの商品、カップ・カップ蓋類、ペーパーフィルター、
 // アイス（冷凍のため賞味期限切れの概念で管理していない）は棚卸表の消費期限①〜③の入力欄自体を出さない）
 function needsExpiryTracking(p) {
@@ -1626,6 +1635,19 @@ function getInventoryDelivery(storeId, periodLabel, productName) {
   return (rec && rec.totals[productName]) || 0;
 }
 
+// デイリーカウント＝チェックシートの「補充」列（'prod:'+商品名）のその月の日別入力の合計。
+// 消費量との一致確認用の参考表示（閲覧のみ、2026-07-21に表示のみ復活。送信ブロックは復活させない）
+function getInventoryDailyCount(storeId, periodLabel, productName) {
+  const data = getChecksheetData(storeId, periodLabel);
+  const itemId = 'prod:' + productName;
+  let sum = 0, has = false;
+  Object.values(data).forEach(dayData => {
+    const v = dayData[itemId];
+    if (typeof v === 'number') { sum += v; has = true; }
+  });
+  return has ? sum : '';
+}
+
 // 棚卸表タブを開いた時に必要な4種類のデータ（期首在庫の元になる前月履歴／当月納品自動＋手動／
 // チェックシート）をGAS側の複合アクション1本にまとめて取得する（往復回数を1回に減らすための統合、
 // 2026-07-15）。各データの絞り込み・集計ロジック自体はgas_backend.gs側で変えていない
@@ -1678,7 +1700,7 @@ function computeInventoryExpiryInfo(p, data) {
   const isNearing = nearFlags.exp1 || nearFlags.exp2 || nearFlags.exp3;
   return { d, expFlags, isExpired, nearFlags, isNearing };
 }
-// 期首在庫／当月納品／期末在庫／消費量／処分数量を算出する（確認画面・送信処理で共通利用）
+// 期首在庫／当月納品／期末在庫／消費量／処分数量／デイリーカウント（参考表示のみ）を算出する（確認画面・送信処理で共通利用）
 function computeInventoryConfirmInfo(p, period, periodData) {
   const openStockRaw = getInventoryOpeningStock(storeTab, period.label, p.name);
   const openStock = (openStockRaw === '' || openStockRaw === null || openStockRaw === undefined) ? '' : Number(openStockRaw);
@@ -1688,7 +1710,10 @@ function computeInventoryConfirmInfo(p, period, periodData) {
   const consumption = (openStock !== '' && endStock !== '') ? (openStock + delivery - endStock) : '';
   const disposedRaw = periodData.disposedQty[p.name];
   const disposedQty = (disposedRaw === undefined || disposedRaw === '') ? '' : Number(disposedRaw);
-  return { openStock, endStockRaw, endStock, delivery, consumption, disposedQty };
+  const tracked = isDailyCountTracked(p);
+  const dailyCount = tracked ? getInventoryDailyCount(storeTab, period.label, p.name) : '';
+  const mismatch = tracked && consumption !== '' && dailyCount !== '' && consumption !== dailyCount;
+  return { openStock, endStockRaw, endStock, delivery, consumption, disposedQty, tracked, dailyCount, mismatch };
 }
 
 // 消費量の異常判定（数え間違い・盗難対策）。2026-07-15追加。
@@ -1934,33 +1959,44 @@ function renderInventoryInputScreen(wrap, allProducts, period, periodData) {
 
 function renderInventoryConfirmScreen(wrap, allProducts, period, periodData) {
   const VENDOR_LABELS = Object.fromEntries(VENDOR_CONFIG.map(v => [v.key, v.label]));
-  const COLS = ['商品名','期首在庫','当月納品','期末在庫','消費量','処分数量'];
+  const COLS = ['商品名','期首在庫','当月納品','期末在庫','消費量','処分数量','デイリーカウント'];
+
+  // 消費量とデイリーカウントの不一致（送信ブロックはしない・盗難/カウントミスの早期発見用の参考表示のみ）
+  const mismatches = [];
 
   const bodyRows = VENDOR_CONFIG.map(v => {
     const items = allProducts.filter(p => p.vendor === v.key);
     if (!items.length) return '';
     // colspanセルにposition:stickyを指定すると横スクロール中に固定されない環境があったため、
     // データ行と同じく個別セル(1列目のみ固定)で構成する
-    const vendorFillerCells = '<td style="background:#edf2d4;border-top:2px solid #aabf28"></td>'.repeat(5);
+    const vendorFillerCells = '<td style="background:#edf2d4;border-top:2px solid #aabf28"></td>'.repeat(6);
     const hdr = `<tr><td style="padding:5px 8px;font-size:11px;font-weight:700;color:#22703d;background:#edf2d4;border-top:2px solid #aabf28;position:sticky;left:0;z-index:1">${esc(VENDOR_LABELS[v.key] || v.key)}</td>${vendorFillerCells}</tr>`;
     const rows = items.map(p => {
-      const { openStock, delivery, endStock, consumption, disposedQty } = computeInventoryConfirmInfo(p, period, periodData);
+      const { openStock, delivery, endStock, consumption, disposedQty, tracked, dailyCount, mismatch } = computeInventoryConfirmInfo(p, period, periodData);
+      if (mismatch) mismatches.push({ name: p.label || p.name, consumption, dailyCount });
       const anomaly = computeInventoryAnomaly(p, period, periodData);
-      const consumptionCellStyle = anomaly.flag
-        ? 'padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px;background:#fee2e2;color:#b91c1c;font-weight:700'
+      const mismatchCellStyle = 'padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px;background:#fee2e2;color:#b91c1c;font-weight:700';
+      const consumptionCellStyle = (anomaly.flag || mismatch)
+        ? mismatchCellStyle
+        : 'padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px;background:#f6f7f1';
+      const dailyCountCellStyle = mismatch
+        ? mismatchCellStyle
         : 'padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px;background:#f6f7f1';
       const mainRow = `<tr style="border-bottom:1px solid #f0f0f0">
-        <td data-label="${COLS[0]}" style="padding:5px 6px;font-size:12px;position:sticky;left:0;z-index:1;background:#fff;border-right:1px solid #e5e7eb">${esc(p.label)}</td>
+        <td data-label="${COLS[0]}" style="padding:5px 6px;font-size:12px;position:sticky;left:0;z-index:1;background:#fff;border-right:1px solid #e5e7eb">${esc(p.label)}${mismatch ? ' <span style="color:#ef4444;font-size:11px">⚠</span>' : ''}</td>
         <td data-label="${COLS[1]}" style="padding:5px 6px;text-align:right;color:#8a8f7e;white-space:nowrap;font-size:11.5px">${openStock === '' ? '―' : esc(openStock)}</td>
         <td data-label="${COLS[2]}" style="padding:5px 6px;text-align:right;color:#8a8f7e;white-space:nowrap;font-size:11.5px" title="発注タブの納品済み分（自動）＋本部手入力分（月初納品分など）の合計・閲覧のみ">${delivery ? esc(delivery) : '―'}</td>
         <td data-label="${COLS[3]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px">${endStock === '' ? '―' : esc(endStock)}</td>
         <td data-label="${COLS[4]}" style="${consumptionCellStyle}">${consumption === '' ? '―' : esc(consumption)}</td>
         <td data-label="${COLS[5]}" style="padding:5px 6px;text-align:right;white-space:nowrap;font-size:11.5px;background:#f6f7f1" title="消費期限切れ等で処分した数量">${disposedQty === '' ? '―' : esc(disposedQty)}</td>
+        <td data-label="${COLS[6]}" style="${dailyCountCellStyle}" title="チェックシートの補充数量の月間合計（閲覧のみ）">
+          ${!tracked ? '<span style="color:#bbb;font-size:11px">対象外</span>' : (dailyCount === '' ? '―' : esc(dailyCount))}
+        </td>
       </tr>`;
       if (!anomaly.flag) return mainRow;
       const note = periodData.anomalyNote[p.name] || '';
       const noteRow = `<tr style="border-bottom:1px solid #f0f0f0;background:#fef2f2">
-        <td colspan="6" style="padding:6px 8px 8px">
+        <td colspan="7" style="padding:6px 8px 8px">
           <div style="font-size:11.5px;color:#b91c1c;font-weight:700;margin-bottom:4px">⚠ ${esc(p.label)}：${esc(anomaly.message)}。理由を入力してください（未入力だと棚卸完了を送信できません）</div>
           ${anomaly.prevRow ? `<div style="font-size:11px;color:#7f1d1d;margin-bottom:6px">${_prevPeriodLabel(period.label).split('-')[1].replace(/^0/,'')}月実績参考：期首在庫${esc(anomaly.prevRow.open_stock ?? '―')}／当月納品${esc(anomaly.prevRow.delivery ?? '―')}／期末在庫${esc(anomaly.prevRow.end_stock ?? '―')}／消費量${esc(anomaly.prevRow.consumption ?? '―')}</div>` : ''}
           <input type="text" value="${esc(note)}" placeholder="例：棚卸忘れの繰越、大量注文で消費が多かった 等"
@@ -1972,6 +2008,12 @@ function renderInventoryConfirmScreen(wrap, allProducts, period, periodData) {
     }).join('');
     return hdr + rows;
   }).join('');
+
+  const mismatchBanner = mismatches.length
+    ? `<div style="font-size:12px;color:#b91c1c;background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:10px 12px;margin-bottom:10px;line-height:1.6">
+        ⚠ ${mismatches.map(m => `<b>${esc(m.name)}</b>：消費量(${esc(m.consumption)})とデイリーカウント(${esc(m.dailyCount)})が一致しません`).join('／')}。期末在庫または処分数量の入力に誤りがないか確認してください（参考表示のみ・送信は可能です）。
+      </div>`
+    : '';
 
   const skippedDelivery = getInventoryDeliverySkipped(storeTab, period.label);
   const skippedBanner = skippedDelivery.length
@@ -1988,6 +2030,7 @@ function renderInventoryConfirmScreen(wrap, allProducts, period, periodData) {
     <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
       <span style="font-size:12px;color:#6b7263">${period.year}年${period.month}月分の確認</span>
     </div>
+    ${mismatchBanner}
     ${skippedBanner}
     <div style="overflow-x:auto">
       <table id="inventory-table" style="width:100%;border-collapse:separate;border-spacing:0;background:white;border-radius:8px;overflow:visible;box-shadow:0 1px 4px rgba(0,0,0,.08)">
@@ -1998,6 +2041,7 @@ function renderInventoryConfirmScreen(wrap, allProducts, period, periodData) {
           <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap">${COLS[3]}</th>
           <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap">${COLS[4]}</th>
           <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap" title="消費期限切れ等で処分した数量">${COLS[5]}</th>
+          <th style="padding:5px 6px;font-size:11px;text-align:right;white-space:nowrap" title="チェックシートの補充数量の月間合計（閲覧のみ）">${COLS[6]}</th>
         </tr></thead>
         <tbody>${bodyRows}</tbody>
       </table>
@@ -2040,7 +2084,7 @@ async function submitInventory() {
     return;
   }
   const rows = allProducts.map(p => {
-    const { openStock, delivery, endStock, consumption, disposedQty } = computeInventoryConfirmInfo(p, period, periodData);
+    const { openStock, delivery, endStock, consumption, disposedQty, tracked, dailyCount, mismatch } = computeInventoryConfirmInfo(p, period, periodData);
     const anomaly = computeInventoryAnomaly(p, period, periodData);
     const price = Number(p.price) || 0;
     return {
@@ -2050,6 +2094,8 @@ async function submitInventory() {
       end_stock: endStock === '' ? null : endStock,
       consumption: consumption === '' ? null : consumption,
       disposed_qty: disposedQty === '' ? null : disposedQty,
+      daily_count: tracked && dailyCount !== '' ? dailyCount : null,
+      matched: !mismatch,
       anomaly_note: anomaly.flag ? (periodData.anomalyNote[p.name] || '') : '',
       price, amount: endStock === '' ? null : price * endStock,
     };
