@@ -3084,19 +3084,22 @@ function renderAttendanceNameSelect() {
       : '<option value="">スタッフが未登録です（管理者にご連絡ください）</option>');
 }
 
+// 1名モードは登録済みの唯一の名前（未登録なら空文字）、複数名モードはドロップダウンの選択値
+function _attendanceActiveName() {
+  if (isAttendanceSolo(storeTab)) return getAttendanceStaffList(storeTab)[0] || '';
+  return document.getElementById('attendance-name-sel')?.value || '';
+}
+
 // 複数名店舗では、実際に名前を選ぶまで履歴・成功日数を表示しない
 // （1名モードは選択の概念が無いので常にtrue扱い）
 function _attendanceNameChosen() {
-  if (isAttendanceSolo(storeTab)) return true;
-  const sel = document.getElementById('attendance-name-sel');
-  return !!(sel && sel.value);
+  return isAttendanceSolo(storeTab) || !!_attendanceActiveName();
 }
 
 function doAttendanceClockIn() {
-  const sel = document.getElementById('attendance-name-sel');
   const msg = document.getElementById('attendance-msg');
   const solo = isAttendanceSolo(storeTab);
-  const name = solo ? (getAttendanceStaffList(storeTab)[0] || '') : sel?.value;
+  const name = _attendanceActiveName();
   if (!solo && !name) { msg.style.color = '#dc2626'; msg.textContent = '名前を選択してください'; return; }
   if (!navigator.geolocation) {
     msg.style.color = '#dc2626';
@@ -3154,18 +3157,17 @@ function renderAttendanceHistory() {
     wrap.innerHTML = '<div style="color:#aaa;font-size:13px;padding:10px 0">名前を選択すると履歴が表示されます</div>';
     return;
   }
-  if (!ATTENDANCE_HISTORY_CACHE.length) {
+  const activeName = _attendanceActiveName();
+  const rows = ATTENDANCE_HISTORY_CACHE.filter(r => (r.name || '') === activeName);
+  if (!rows.length) {
     wrap.innerHTML = '<div style="color:#aaa;font-size:13px;padding:10px 0">まだ記録がありません</div>';
     return;
   }
-  const solo = isAttendanceSolo(storeTab);
-  const nameTh = solo ? '' : '<th style="padding:6px 10px;font-size:12px">名前</th>';
   wrap.innerHTML = `<div class="table-wrap"><table style="width:100%;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
-    <thead><tr style="background:#22703d;color:white"><th style="padding:6px 10px;font-size:12px">日時</th>${nameTh}<th style="padding:6px 10px;font-size:12px">判定</th></tr></thead>
-    <tbody>${ATTENDANCE_HISTORY_CACHE.map(r => `
+    <thead><tr style="background:#22703d;color:white"><th style="padding:6px 10px;font-size:12px">日時</th><th style="padding:6px 10px;font-size:12px">判定</th></tr></thead>
+    <tbody>${rows.map(r => `
       <tr style="border-bottom:1px solid #eee">
         <td style="padding:6px 10px;font-size:13px;white-space:nowrap">${esc(r.clocked_at || '')}</td>
-        ${solo ? '' : `<td style="padding:6px 10px;font-size:13px">${esc(r.name || '')}</td>`}
         <td style="padding:6px 10px;font-size:13px;text-align:center">${r.within_range === false ? '<span style="color:#dc2626">要確認</span>' : (r.within_range === true ? '<span style="color:#22703d">✓</span>' : '<span style="color:#aaa">未判定</span>')}</td>
       </tr>`).join('')}
     </tbody></table></div>`;
@@ -3195,19 +3197,12 @@ function renderAttendanceTally() {
   const label = _attendanceTallyPeriod === 'prev'
     ? _attendanceMonthLabel(new Date(now.getFullYear(), now.getMonth() - 1, 1))
     : _attendanceMonthLabel(now);
-  const rows = ATTENDANCE_HISTORY_CACHE.filter(r => r.within_range === true && String(r.clocked_at || '').startsWith(label));
+  const activeName = _attendanceActiveName();
+  const rows = ATTENDANCE_HISTORY_CACHE.filter(r => r.within_range === true && (r.name || '') === activeName && String(r.clocked_at || '').startsWith(label));
   const cardStyle = 'background:#f5fdf8;border:1px solid #e0ede5;border-radius:10px;padding:14px 16px;margin-bottom:10px';
   const numStyle = 'font-size:28px;font-weight:700;color:#22703d;font-variant-numeric:tabular-nums';
-  if (isAttendanceSolo(storeTab)) {
-    const days = new Set(rows.map(r => String(r.clocked_at).slice(0, 10))).size;
-    wrap.innerHTML = `<div style="${cardStyle}"><div style="${numStyle}">${days}<span style="font-size:13px;font-weight:600;color:#888;margin-left:3px">日</span></div></div>`;
-    return;
-  }
-  const names = getAttendanceStaffList(storeTab);
-  wrap.innerHTML = names.map(n => {
-    const days = new Set(rows.filter(r => r.name === n).map(r => String(r.clocked_at).slice(0, 10))).size;
-    return `<div style="${cardStyle}"><div style="font-size:12px;color:#888;font-weight:600;margin-bottom:2px">${esc(n)}</div><div style="${numStyle}">${days}<span style="font-size:13px;font-weight:600;color:#888;margin-left:3px">日</span></div></div>`;
-  }).join('');
+  const days = new Set(rows.map(r => String(r.clocked_at).slice(0, 10))).size;
+  wrap.innerHTML = `<div style="${cardStyle}"><div style="${numStyle}">${days}<span style="font-size:13px;font-weight:600;color:#888;margin-left:3px">日</span></div></div>`;
 }
 
 /* ===== 忘れ物 ===== */
