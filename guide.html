@@ -417,6 +417,15 @@
       .phone-wrap { padding-left: 16px; }
       .site-header { padding: 24px 16px 20px; }
     }
+  
+    /* スクリーンショットのタップ/クリックで全画面拡大表示するライトボックス。下スワイプで閉じる */
+    figure.shot img { cursor: zoom-in; }
+    #img-lightbox {
+      display:none; position:fixed; inset:0; background:rgba(0,0,0,.9);
+      z-index:5000; align-items:center; justify-content:center; cursor:zoom-out; touch-action:none;
+    }
+    #img-lightbox.open { display:flex; }
+    #img-lightbox img { max-width:96vw; max-height:96vh; object-fit:contain; border-radius:6px; }
   </style>
 </head>
 <body>
@@ -1150,6 +1159,54 @@
     発行：2026年6月／改訂：2026年7月（チェックシートの使い方を追加）</p>
   </div>
 </footer>
+
+
+<div id="img-lightbox" onclick="closeImgLightbox()">
+  <img id="img-lightbox-img" alt="">
+</div>
+<script>
+function openImgLightbox(src) {
+  const ov = document.getElementById('img-lightbox');
+  const img = document.getElementById('img-lightbox-img');
+  img.src = src;
+  img.style.transform = '';
+  img.style.opacity = '1';
+  ov.classList.add('open');
+}
+function closeImgLightbox() {
+  document.getElementById('img-lightbox').classList.remove('open');
+}
+// 下にスワイプして閉じる
+(function() {
+  let startY = null;
+  document.addEventListener('touchstart', function(e) {
+    if (!e.target.closest('#img-lightbox')) return;
+    startY = e.touches[0].clientY;
+  }, { passive: true });
+  document.addEventListener('touchmove', function(e) {
+    if (startY == null) return;
+    const dy = e.touches[0].clientY - startY;
+    const img = document.getElementById('img-lightbox-img');
+    if (dy > 0) {
+      img.style.transform = 'translateY(' + dy + 'px) scale(' + Math.max(1 - dy / 600, 0.7) + ')';
+      img.style.opacity = String(Math.max(1 - dy / 400, 0.3));
+    }
+  }, { passive: true });
+  document.addEventListener('touchend', function() {
+    if (startY == null) return;
+    const img = document.getElementById('img-lightbox-img');
+    const m = img.style.transform.match(/translateY\(([-\d.]+)px\)/);
+    const dy = m ? parseFloat(m[1]) : 0;
+    if (dy > 80) {
+      closeImgLightbox();
+    } else {
+      img.style.transform = '';
+      img.style.opacity = '1';
+    }
+    startY = null;
+  });
+})();
+</script>
 
 </body>
 </html>
