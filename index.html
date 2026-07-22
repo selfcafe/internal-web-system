@@ -3721,7 +3721,7 @@ document.addEventListener('click', e => {
   if (!e.target.closest('.prod-wrap')) closeProdAll();
   if (!e.target.closest('#store-nav-search')) document.getElementById('store-search-dd')?.classList.remove('open');
   if (!e.target.closest('.admin-menu-wrap')) document.getElementById('admin-menu-dd')?.classList.remove('open');
-  if (!e.target.closest('.doc-menu-wrap') && !e.target.closest('.manual-menu-btn')) document.querySelectorAll('.doc-menu-dd.open').forEach(el => el.classList.remove('open'));
+  if (!e.target.closest('.doc-menu-wrap') && !e.target.closest('.manual-menu-btn') && !e.target.closest('.doc-menu-dd')) document.querySelectorAll('.doc-menu-dd.open').forEach(el => el.classList.remove('open'));
   if (!e.target.closest('#site-store-search') && !e.target.closest('#site-store-dd')) {
     const dd = document.getElementById('site-store-dd');
     if (dd) dd.style.display = 'none';
@@ -3732,7 +3732,7 @@ document.addEventListener('touchstart', e => {
   if (!e.target.closest('.prod-wrap')) closeProdAll();
   if (!e.target.closest('#store-nav-search')) document.getElementById('store-search-dd')?.classList.remove('open');
   if (!e.target.closest('.admin-menu-wrap')) document.getElementById('admin-menu-dd')?.classList.remove('open');
-  if (!e.target.closest('.doc-menu-wrap') && !e.target.closest('.manual-menu-btn')) document.querySelectorAll('.doc-menu-dd.open').forEach(el => el.classList.remove('open'));
+  if (!e.target.closest('.doc-menu-wrap') && !e.target.closest('.manual-menu-btn') && !e.target.closest('.doc-menu-dd')) document.querySelectorAll('.doc-menu-dd.open').forEach(el => el.classList.remove('open'));
   if (!e.target.closest('#site-store-search') && !e.target.closest('#site-store-dd')) {
     const dd = document.getElementById('site-store-dd');
     if (dd) dd.style.display = 'none';
