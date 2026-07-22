@@ -722,6 +722,26 @@
   </div>
 </div>
 
+<div id="item-scope-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:2000;align-items:center;justify-content:center;padding:16px">
+  <div style="background:white;border-radius:14px;max-width:420px;width:100%;max-height:90vh;overflow-y:auto;padding:20px">
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <span style="font-weight:700;font-size:15px">表示する店舗を選択</span>
+      <button onclick="closeItemStoreScopeEditor()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#888">×</button>
+    </div>
+    <div id="item-scope-title" style="font-size:13px;color:#555;margin-bottom:10px;font-weight:600"></div>
+    <input type="text" id="item-scope-search" placeholder="店舗名で検索..." oninput="filterStorePickerCheckboxes('item-scope', this.value)"
+      style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:100%;margin-bottom:8px;box-sizing:border-box">
+    <div id="item-scope-body" style="max-height:320px;overflow-y:auto;border:1px solid #eee;border-radius:6px;padding:8px 10px"></div>
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center">
+      <button onclick="saveItemStoreScope()"
+        style="background:#22703d;color:white;padding:8px 18px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">保存</button>
+      <button onclick="itemScopeShowAll()"
+        style="background:#e0e0e0;color:#555;padding:8px 14px;font-size:13px;border-radius:6px;border:none;cursor:pointer;font-family:inherit">全店にチェック（全店表示に戻す）</button>
+      <span id="item-scope-msg" style="font-size:12px;color:#22703d;min-height:18px"></span>
+    </div>
+  </div>
+</div>
+
 <script src="stores.js"></script>
 <script>
 /* ===== Google Apps Script バックエンド ===== */
@@ -1213,6 +1233,53 @@ function applyNewItemStoreScope(prefix, itemKey, kind) {
   });
   localStorage.setItem(storageKey, JSON.stringify(cfg));
   if (kind === 'product') _syncStoreProductCfg(); else _syncStoreChecksheetCfg();
+}
+
+// ===== 既存の商品・チェック項目の表示店舗を、あとからまとめて編集する =====
+// 新規追加時のピッカーと違い、既にどこかの店舗で除外/非除外になっている可能性があるので
+// 開いた時点の除外リストを読み込んでチェック状態を復元し、保存時は双方向（表示にする＝除外
+// リストから外す／非表示にする＝除外リストに足す）で1回のJSON読み書き＋1回の同期にまとめる。
+let _itemScopeEditing = null; // { itemKey, kind }
+function openItemStoreScopeEditor(itemKey, kind) {
+  _itemScopeEditing = { itemKey, kind };
+  const storageKey = kind === 'product' ? STORE_PRODUCTS_KEY : STORE_CHECKSHEET_KEY;
+  const cfg = JSON.parse(localStorage.getItem(storageKey) || '{}');
+  const title = document.getElementById('item-scope-title');
+  if (title) title.textContent = kind === 'product' ? itemKey : (CHECKSHEET_ITEMS.find(i => i.id === itemKey)?.name || itemKey);
+  const body = document.getElementById('item-scope-body');
+  if (body) body.innerHTML = buildStorePickerCheckboxes('item-scope');
+  // 現状「表示されている」＝その店舗の除外リストに入っていない、をチェック済みとして復元する
+  document.querySelectorAll('[data-store-pick="item-scope"]').forEach(chk => {
+    chk.checked = !(cfg[chk.value] || []).includes(itemKey);
+  });
+  const search = document.getElementById('item-scope-search'); if (search) search.value = '';
+  const msg = document.getElementById('item-scope-msg'); if (msg) msg.textContent = '';
+  document.getElementById('item-scope-overlay').style.display = 'flex';
+}
+function closeItemStoreScopeEditor() {
+  document.getElementById('item-scope-overlay').style.display = 'none';
+  _itemScopeEditing = null;
+}
+function itemScopeShowAll() {
+  document.querySelectorAll('[data-store-pick="item-scope"]').forEach(c => c.checked = true);
+}
+function saveItemStoreScope() {
+  if (!_itemScopeEditing) return;
+  const { itemKey, kind } = _itemScopeEditing;
+  const storageKey = kind === 'product' ? STORE_PRODUCTS_KEY : STORE_CHECKSHEET_KEY;
+  const cfg = JSON.parse(localStorage.getItem(storageKey) || '{}');
+  document.querySelectorAll('[data-store-pick="item-scope"]').forEach(chk => {
+    const sid = chk.value;
+    const cur = cfg[sid] || [];
+    const isExcluded = cur.includes(itemKey);
+    if (chk.checked && isExcluded)       cfg[sid] = cur.filter(k => k !== itemKey);
+    else if (!chk.checked && !isExcluded) cfg[sid] = [...cur, itemKey];
+  });
+  localStorage.setItem(storageKey, JSON.stringify(cfg));
+  if (kind === 'product') _syncStoreProductCfg(); else _syncStoreChecksheetCfg();
+  const msg = document.getElementById('item-scope-msg');
+  if (msg) { msg.textContent = '✓ 保存しました'; }
+  setTimeout(() => closeItemStoreScopeEditor(), 900);
 }
 
 let storeTab    = 'sasashima';
@@ -2324,6 +2391,8 @@ function buildChecksheetItemRows() {
         <option value="qty" ${it.type==='qty'?'selected':''}>数量</option>
       </select></td>
       <td style="text-align:center;white-space:nowrap">
+        <button onclick="openItemStoreScopeEditor('${esc(it.id)}','checksheet')"
+          style="background:#22703d;color:white;border:none;border-radius:5px;padding:4px 8px;font-size:11px;cursor:pointer;font-family:inherit;margin-right:4px">表示店舗</button>
         <button onclick="deleteChecksheetItem('${esc(it.id)}')"
           style="background:#ef4444;color:white;border:none;border-radius:5px;padding:4px 10px;font-size:12px;cursor:pointer;font-family:inherit">削除</button>
       </td>
@@ -5315,6 +5384,8 @@ function buildProdRows() {
           style="width:100%;max-width:130px;border:1px solid #ddd;border-radius:5px;padding:5px 7px;font-size:13px;font-family:inherit"
           onchange="saveProductSetting('${esc(p.name)}','code',this.value)"></td>
         <td style="text-align:center;white-space:nowrap">
+          <button onclick="openItemStoreScopeEditor('${esc(p.name)}','product')"
+            style="background:#22703d;color:white;border:none;border-radius:5px;padding:4px 8px;font-size:11px;cursor:pointer;font-family:inherit;margin-right:4px">表示店舗</button>
           <button onclick="deleteProduct('${esc(p.name)}')"
             style="background:#ef4444;color:white;border:none;border-radius:5px;padding:4px 10px;font-size:12px;cursor:pointer;font-family:inherit">削除</button>
         </td>
