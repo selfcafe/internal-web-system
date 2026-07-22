@@ -90,6 +90,7 @@ function doGet(e) {
     else if (a === 'getInvoiceLog')             result = getInvoiceLog();
     else if (a === 'migrateOrderColumns')       result = migrateOrderColumns();
     else if (a === 'migrateInventoryColumns')   result = migrateInventoryColumns();
+    else if (a === 'setupInventoryDisposedHighlight') result = setupInventoryDisposedHighlight();
     else if (a === 'getSettingHistory')         result = getSettingHistory(e.parameter.key, e.parameter.limit);
     else if (a === 'getAttendance')             result = getAttendance(e.parameter.storeId);
     else if (a === 'getDeliveryHistory')        result = getDeliveryHistory(e.parameter.storeId, e.parameter.month);
@@ -901,6 +902,37 @@ function migrateInventoryColumns() {
     sheet.getRange(1, sheet.getLastColumn() + 1, 1, missing.length).setValues([missing]);
   }
   return { ok: true, added: missing };
+}
+
+// 処分数量(disposed_qty)が入力されている行をスプレッドシート上で目立たせる条件付き書式を設定する。
+// 範囲ベースのルールとして設定するため一度実行すればよく、以降saveInventorySnapshotが行を
+// 削除・追記してもルールは自動的に効き続ける（migrateInventoryColumnsと同じ「一度だけ叩く」運用）。
+// ?action=setupInventoryDisposedHighlight で実行する。migrateInventoryColumnsで
+// disposed_qty列を追加済みであること（列が無ければエラーを返す）。
+function setupInventoryDisposedHighlight() {
+  const sheet = getInventorySheet();
+  const hdrs = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
+  const colIdx = hdrs.indexOf('disposed_qty');
+  if (colIdx < 0) return { error: 'disposed_qty列が見つかりません。先にmigrateInventoryColumnsを実行してください' };
+  const colLetter = String.fromCharCode(65 + colIdx);
+  const numRows = 5000; // 想定データ行数に余裕を持たせた固定値（将来これを超える見込みなら数値を増やして再実行）
+  const range = sheet.getRange(2, 1, numRows, hdrs.length);
+  const formula = '=$' + colLetter + '2>0';
+
+  // 同じ条件のルールが既にあれば入れ替え、無関係な既存ルールはそのまま残す
+  const rules = sheet.getConditionalFormatRules().filter(r => {
+    const c = r.getBooleanCondition();
+    return !(c && c.getCriteriaType() === SpreadsheetApp.BooleanCriteria.CUSTOM_FORMULA && c.getCriteriaValues()[0] === formula);
+  });
+  rules.push(
+    SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied(formula)
+      .setBackground('#ffe0b2')
+      .setRanges([range])
+      .build()
+  );
+  sheet.setConditionalFormatRules(rules);
+  return { ok: true, column: colLetter, rows: numRows };
 }
 
 // ----------------------------------------------------------------
