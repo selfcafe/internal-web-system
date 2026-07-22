@@ -2821,7 +2821,7 @@ function _checksheetProductColumns() {
   const VENDOR_LABELS = Object.fromEntries(VENDOR_CONFIG.map(v => [v.key, v.label]));
   const products = _inventoryProductList().filter(p => {
     if (CHECKSHEET_QTY_VENDOR_ALL.includes(p.vendor)) return true;
-    if (p.vendor === 'other') return p.name === 'ペーパータオル' || p.name === 'ストロー';
+    if (p.vendor === 'other') return p.name === 'ペーパータオル' || p.name === 'ストロー' || p.name === 'トイレットペーパー';
     if (p.vendor === 'sales') return p.name === '水';
     return false;
   });
