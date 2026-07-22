@@ -1154,6 +1154,67 @@ const REGIONS = {
   ]},
 };
 
+// ===== 新規追加時の「特定の店舗だけに表示」ピッカー（商品追加・チェック項目追加で共有） =====
+// 未チェックのまま追加すれば今まで通り全店に表示される（デフォルト挙動は変更なし）。
+// チェックして店舗を選ぶと、選ばなかった店舗の除外リスト（store_product_cfg/store_checksheet_cfg）に
+// 新項目のキーをまとめて追加する——既存の「除外リストで非表示」という仕組みはそのまま使う。
+// ここで店舗ごとの除外リストを個別にsetStoreProductConfig/setStoreChecksheetConfigで書き込むと
+// 店舗数ぶんの無駄なGAS保存リクエストが飛んでしまうため、必ずJSONを1つにまとめてから一度だけ同期すること。
+function buildStorePickerCheckboxes(prefix) {
+  return Object.entries(REGIONS).map(([rkey, r]) => {
+    const rows = r.stores.map(sid => `
+      <label data-store-pick-row style="display:flex;align-items:center;gap:6px;font-size:12.5px;padding:2px 0">
+        <input type="checkbox" data-store-pick="${esc(prefix)}" value="${esc(sid)}"> ${esc(STORES[sid] || sid)}
+      </label>`).join('');
+    return `<div style="font-weight:600;font-size:11px;color:#888;margin:6px 0 2px">${esc(r.label)}</div>${rows}`;
+  }).join('');
+}
+function filterStorePickerCheckboxes(prefix, keyword) {
+  const kw = (keyword || '').trim();
+  document.querySelectorAll(`[data-store-pick="${prefix}"]`).forEach(chk => {
+    const name = STORES[chk.value] || chk.value;
+    chk.closest('[data-store-pick-row]').style.display = (!kw || name.includes(kw) || chk.value.includes(kw)) ? '' : 'none';
+  });
+}
+function getStorePickerSelected(prefix) {
+  return [...document.querySelectorAll(`[data-store-pick="${prefix}"]:checked`)].map(el => el.value);
+}
+function toggleStorePickerUI(bodyId, checked) {
+  const body = document.getElementById(bodyId);
+  if (body) body.style.display = checked ? '' : 'none';
+}
+function resetStorePickerUI(prefix) {
+  const limitChk = document.getElementById(prefix + '-store-limit');
+  if (limitChk) limitChk.checked = false;
+  const body = document.getElementById(prefix + '-store-limit-body');
+  if (body) {
+    body.style.display = 'none';
+    const searchInp = body.querySelector('input[type=text]');
+    if (searchInp) searchInp.value = '';
+  }
+  document.querySelectorAll(`[data-store-pick="${prefix}"]`).forEach(c => {
+    c.checked = false;
+    c.closest('[data-store-pick-row]').style.display = '';
+  });
+}
+// limitチェックが外れている（＝全店表示のデフォルト）場合は何もしない。
+// 個別選択で1店舗も選ばれていない場合も「限定なし」扱いにして全店表示のまま進める（誤って全店除外にしない安全策）
+function applyNewItemStoreScope(prefix, itemKey, kind) {
+  const limitChk = document.getElementById(prefix + '-store-limit');
+  if (!limitChk || !limitChk.checked) return;
+  const selected = new Set(getStorePickerSelected(prefix));
+  if (!selected.size) return;
+  const storageKey = kind === 'product' ? STORE_PRODUCTS_KEY : STORE_CHECKSHEET_KEY;
+  const cfg = JSON.parse(localStorage.getItem(storageKey) || '{}');
+  Object.keys(STORES).forEach(sid => {
+    if (selected.has(sid)) return;
+    const cur = cfg[sid] || [];
+    if (!cur.includes(itemKey)) cfg[sid] = [...cur, itemKey];
+  });
+  localStorage.setItem(storageKey, JSON.stringify(cfg));
+  if (kind === 'product') _syncStoreProductCfg(); else _syncStoreChecksheetCfg();
+}
+
 let storeTab    = 'sasashima';
 let adminRegion = 'tokai';
 let adminView   = 'overview';
@@ -2192,8 +2253,11 @@ function addCustomChecksheetItem() {
   const msg      = document.getElementById('cs-item-add-msg');
   if (!name) { msg.style.color='#ef4444'; msg.textContent='項目名を入力してください'; return; }
   if (CHECKSHEET_ITEMS.find(it => it.name === name && it.category === category)) { msg.style.color='#ef4444'; msg.textContent='同じカテゴリ内に同じ名前の項目が既に存在します'; return; }
-  CHECKSHEET_ITEMS.push({ id:'custom_' + uid(), category, type, name });
+  const newId = 'custom_' + uid();
+  CHECKSHEET_ITEMS.push({ id: newId, category, type, name });
   saveAllChecksheetItems();
+  applyNewItemStoreScope('new-cs-item', newId, 'checksheet');
+  resetStorePickerUI('new-cs-item');
   const nameInp = document.getElementById('new-cs-item-name');
   if (nameInp) nameInp.value = '';
   msg.style.color='#22703d'; msg.textContent=`✓ 「${name}」を追加しました`;
@@ -4948,6 +5012,8 @@ function addCustomProduct() {
     _syncDeletedProducts();
   }
   saveAllProducts();
+  applyNewItemStoreScope('new-prod', name, 'product');
+  resetStorePickerUI('new-prod');
   ['new-prod-name','new-prod-unit','new-prod-case'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
   msg.style.color='#22703d'; msg.textContent=`✓ 「${name}」を追加しました`;
   setTimeout(() => { if(msg) msg.textContent=''; }, 3000);
@@ -5351,6 +5417,19 @@ function renderSettings() {
                   <button onclick="addCustomProduct()"
                     style="background:#22703d;color:white;padding:8px 16px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap">追加</button>
                 </div>
+                <div style="margin-top:8px;padding-top:8px;border-top:1px dashed #ddd">
+                  <label style="font-size:12px;color:#555;display:flex;align-items:center;gap:6px;cursor:pointer">
+                    <input type="checkbox" id="new-prod-store-limit" onchange="toggleStorePickerUI('new-prod-store-limit-body', this.checked)">
+                    特定の店舗だけに表示する（未チェックなら全店に表示されます）
+                  </label>
+                  <div id="new-prod-store-limit-body" style="display:none;margin-top:8px">
+                    <input type="text" placeholder="店舗名で検索..." oninput="filterStorePickerCheckboxes('new-prod', this.value)"
+                      style="border:1px solid #ddd;border-radius:6px;padding:6px 10px;font-size:12px;font-family:inherit;width:100%;margin-bottom:6px;box-sizing:border-box">
+                    <div style="max-height:180px;overflow-y:auto;border:1px solid #eee;border-radius:6px;padding:8px 10px">
+                      ${buildStorePickerCheckboxes('new-prod')}
+                    </div>
+                  </div>
+                </div>
                 <div id="prod-add-msg" style="font-size:12px;margin-top:6px;min-height:18px"></div>
               </div>
               <!-- 商品一覧 -->
@@ -5449,6 +5528,19 @@ function renderSettings() {
                   </select>
                   <button onclick="addCustomChecksheetItem()"
                     style="background:#22703d;color:white;padding:8px 16px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap">追加</button>
+                </div>
+                <div style="margin-top:8px;padding-top:8px;border-top:1px dashed #ddd">
+                  <label style="font-size:12px;color:#555;display:flex;align-items:center;gap:6px;cursor:pointer">
+                    <input type="checkbox" id="new-cs-item-store-limit" onchange="toggleStorePickerUI('new-cs-item-store-limit-body', this.checked)">
+                    特定の店舗だけに表示する（未チェックなら全店に表示されます）
+                  </label>
+                  <div id="new-cs-item-store-limit-body" style="display:none;margin-top:8px">
+                    <input type="text" placeholder="店舗名で検索..." oninput="filterStorePickerCheckboxes('new-cs-item', this.value)"
+                      style="border:1px solid #ddd;border-radius:6px;padding:6px 10px;font-size:12px;font-family:inherit;width:100%;margin-bottom:6px;box-sizing:border-box">
+                    <div style="max-height:180px;overflow-y:auto;border:1px solid #eee;border-radius:6px;padding:8px 10px">
+                      ${buildStorePickerCheckboxes('new-cs-item')}
+                    </div>
+                  </div>
                 </div>
                 <div id="cs-item-add-msg" style="font-size:12px;margin-top:6px;min-height:18px"></div>
               </div>
