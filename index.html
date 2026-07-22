@@ -5407,11 +5407,26 @@ function deleteVendor(key) {
   refreshVendorRows();
 }
 
+// ちょうど1店舗にしか表示されていない商品は「全店共通」の仕入先別一覧から除いて
+// buildProdRows()内の専用セクションに回す（チェック項目設定と同じ考え方、[[feature_checksheet_phase2]]参照）。
+// 判定はstore_product_cfgの除外リストから逆算するだけで、商品自体のvendorやその他の
+// フィールドは一切変えない——棚卸表除外（VENDOR_CONFIG.excludeFromInventory）は仕入先
+// カテゴリ単位の別設定なので、この表示上の分離とは無関係にそのまま効き続ける
+function productVisibleStoreIds(productName) {
+  const cfg = JSON.parse(localStorage.getItem(STORE_PRODUCTS_KEY) || '{}');
+  return Object.keys(STORES).filter(sid => !(cfg[sid] || []).includes(productName));
+}
 function buildProdRows() {
   const VENDOR_LABELS = Object.fromEntries(VENDOR_CONFIG.map(v => [v.key, v.label]));
   const VENDOR_ORDER  = VENDOR_CONFIG.map(v => v.key);
-  return VENDOR_ORDER.map(vendor => {
-    const items  = PRODUCTS.filter(p => p.vendor === vendor);
+  const singleStoreProducts = [];
+  const vendorBlocks = VENDOR_ORDER.map(vendor => {
+    const items  = PRODUCTS.filter(p => {
+      if (p.vendor !== vendor) return false;
+      const visible = productVisibleStoreIds(p.name);
+      if (visible.length === 1) { singleStoreProducts.push({ p, storeId: visible[0] }); return false; }
+      return true;
+    });
     const isOpen = _openVendors.has(vendor);
     const hdr = `<tr class="settings-vendor-hdr" onclick="toggleVendorSection('${vendor}')" style="cursor:pointer">
       <td colspan="8"><div style="display:flex;justify-content:space-between;align-items:center">
@@ -5454,6 +5469,55 @@ function buildProdRows() {
         </td>
       </tr>`).join('');
   }).join('');
+
+  // ちょうど1店舗にしか表示されていない商品は、上の仕入先別一覧から外し、専用セクションに
+  // まとめる。通常のvendorグループから外れるため、対象店舗名に加えて仕入先名もバッジで示す
+  const singleBlock = !singleStoreProducts.length ? '' : (() => {
+    const vendorKey = '__single_store__';
+    const isOpen = _openVendors.has(vendorKey);
+    const hdr = `<tr class="settings-vendor-hdr" onclick="toggleVendorSection('${vendorKey}')" style="cursor:pointer">
+      <td colspan="8"><div style="display:flex;justify-content:space-between;align-items:center">
+        <span>店舗限定の商品（1店舗のみ表示）</span>
+        <span id="vendor-arrow-${vendorKey}" style="font-size:11px;color:#22703d">${isOpen ? '▼' : '▶'}</span>
+      </div></td></tr>`;
+    const rows = singleStoreProducts.map(({ p, storeId }) => {
+      const storeName = STORES[storeId] || storeId;
+      return `<tr data-pname="${esc(p.name)}" data-vendor="${vendorKey}" style="${isOpen ? '' : 'display:none'}">
+        <td></td>
+        <td data-label="商品名" style="min-width:150px">
+          <div style="font-size:10.5px;color:#c07a1f;font-weight:600;margin-bottom:2px">${esc(storeName)}のみ表示・仕入先：${esc(VENDOR_LABELS[p.vendor] || p.vendor)}</div>
+          <input type="text" value="${esc(p.label)}"
+            style="width:100%;border:1px solid #ddd;border-radius:5px;padding:5px 7px;font-size:13px;font-family:inherit"
+            onchange="saveProductSetting('${esc(p.name)}','label',this.value)">
+        </td>
+        <td data-label="単位"><input type="text" value="${esc(p.unit)}"
+          style="width:76px;border:1px solid #ddd;border-radius:5px;padding:5px 7px;font-size:13px;font-family:inherit"
+          onchange="saveProductSetting('${esc(p.name)}','unit',this.value)"></td>
+        <td data-label="単価（円）"><input type="number" min="0" value="${p.price||''}" placeholder="未設定"
+          style="width:96px;border:1px solid #ddd;border-radius:5px;padding:5px 7px;font-size:13px;font-family:inherit;text-align:right"
+          onchange="saveProductSetting('${esc(p.name)}','price',this.value?Number(this.value):'')"></td>
+        <td data-label="1ケースの入り数"><input type="text" value="${esc(p.caseUnit)}" placeholder="なし（例：25）"
+          style="width:100%;max-width:260px;border:1px solid #ddd;border-radius:5px;padding:5px 7px;font-size:13px;font-family:inherit"
+          onchange="saveProductSetting('${esc(p.name)}','caseUnit',this.value)"></td>
+        <td data-label="ケース発注のみ" style="text-align:center">
+          <input type="checkbox" ${p.caseOnly ? 'checked' : ''} style="width:16px;height:16px;accent-color:#22703d;cursor:pointer"
+            onchange="saveProductSetting('${esc(p.name)}','caseOnly',this.checked)">
+        </td>
+        <td data-label="コード"><input type="text" value="${esc(p.code||'')}" placeholder="未設定"
+          style="width:100%;max-width:130px;border:1px solid #ddd;border-radius:5px;padding:5px 7px;font-size:13px;font-family:inherit"
+          onchange="saveProductSetting('${esc(p.name)}','code',this.value)"></td>
+        <td style="text-align:center;white-space:nowrap">
+          <button onclick="openItemStoreScopeEditor('${esc(p.name)}','product')"
+            style="background:#22703d;color:white;border:none;border-radius:5px;padding:4px 8px;font-size:11px;cursor:pointer;font-family:inherit;margin-right:4px">表示店舗</button>
+          <button onclick="deleteProduct('${esc(p.name)}')"
+            style="background:#ef4444;color:white;border:none;border-radius:5px;padding:4px 10px;font-size:12px;cursor:pointer;font-family:inherit">削除</button>
+        </td>
+      </tr>`;
+    }).join('');
+    return hdr + rows;
+  })();
+
+  return vendorBlocks + singleBlock;
 }
 
 function applyProdReorder(srcName, dstName) {
