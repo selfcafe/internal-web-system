@@ -5118,15 +5118,17 @@ function migrateProductRenames() {
   if (invChanged) localStorage.setItem(INVENTORY_KEY, JSON.stringify(inv));
 }
 
-function saveProductSetting(name, field, value) {
+function saveProductSetting(name, field, value, el) {
   const p = PRODUCTS.find(q => q.name === name);
   if (!p) return;
-  // 既存の商品コードを変更する場合のみ警告する（未設定→設定は初回割当なので対象外）。
+  // 既存の商品コードを変更する場合のみ確認する（未設定→設定は初回割当なので対象外）。
   // 「手動納品」機能（MANUAL_DELIVERY_SHEET_ID）は外部スプレッドシートに本部が直接書いた
   // 商品コードを、読み取り時点のall_productsと照合して商品名に変換する仕組みのため、
-  // アプリ側だけコードを振り直すと外部シート側の古いコードが別の商品として誤集計されうる
+  // アプリ側だけコードを振り直すと外部シート側の古いコードが別の商品として誤集計されうる。
+  // confirm()でキャンセルされたら変更を反映せず、入力欄の表示も元のコードへ戻す
   if (field === 'code' && p.code && String(p.code) !== String(value)) {
-    alert(`商品コードを変更します（${p.code} → ${value || '未設定'}）。\n\n「手動納品」機能の外部スプレッドシートに旧コード「${p.code}」で入力済みの行が残っている場合、そのシート側のコードもこの新しい番号に直さないと、別の商品として誤って集計される可能性があります。`);
+    const ok = confirm(`商品コードを変更します（${p.code} → ${value || '未設定'}）。\n\n「手動納品」機能の外部スプレッドシートに旧コード「${p.code}」で入力済みの行が残っている場合、そのシート側のコードもこの新しい番号に直さないと、別の商品として誤って集計される可能性があります。\n\nこのまま変更しますか？`);
+    if (!ok) { if (el) el.value = p.code; return; }
   }
   p[field] = value;
   saveAllProducts();
@@ -5460,7 +5462,7 @@ function buildProdRows() {
         </td>
         <td data-label="コード"><input type="text" value="${esc(p.code||'')}" placeholder="未設定"
           style="width:100%;max-width:130px;border:1px solid #ddd;border-radius:5px;padding:5px 7px;font-size:13px;font-family:inherit"
-          onchange="saveProductSetting('${esc(p.name)}','code',this.value)"></td>
+          onchange="saveProductSetting('${esc(p.name)}','code',this.value,this)"></td>
         <td style="text-align:center;white-space:nowrap">
           <button onclick="openItemStoreScopeEditor('${esc(p.name)}','product')"
             style="background:#22703d;color:white;border:none;border-radius:5px;padding:4px 8px;font-size:11px;cursor:pointer;font-family:inherit;margin-right:4px">表示店舗</button>
@@ -5505,7 +5507,7 @@ function buildProdRows() {
         </td>
         <td data-label="コード"><input type="text" value="${esc(p.code||'')}" placeholder="未設定"
           style="width:100%;max-width:130px;border:1px solid #ddd;border-radius:5px;padding:5px 7px;font-size:13px;font-family:inherit"
-          onchange="saveProductSetting('${esc(p.name)}','code',this.value)"></td>
+          onchange="saveProductSetting('${esc(p.name)}','code',this.value,this)"></td>
         <td style="text-align:center;white-space:nowrap">
           <button onclick="openItemStoreScopeEditor('${esc(p.name)}','product')"
             style="background:#22703d;color:white;border:none;border-radius:5px;padding:4px 8px;font-size:11px;cursor:pointer;font-family:inherit;margin-right:4px">表示店舗</button>
