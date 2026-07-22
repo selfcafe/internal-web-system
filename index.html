@@ -736,7 +736,9 @@
       <button onclick="saveItemStoreScope()"
         style="background:#22703d;color:white;padding:8px 18px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">保存</button>
       <button onclick="itemScopeShowAll()"
-        style="background:#e0e0e0;color:#555;padding:8px 14px;font-size:13px;border-radius:6px;border:none;cursor:pointer;font-family:inherit">全店にチェック（全店表示に戻す）</button>
+        style="background:#e0e0e0;color:#555;padding:8px 14px;font-size:13px;border-radius:6px;border:none;cursor:pointer;font-family:inherit">全選択（全店表示に戻す）</button>
+      <button onclick="itemScopeHideAll()"
+        style="background:#e0e0e0;color:#555;padding:8px 14px;font-size:13px;border-radius:6px;border:none;cursor:pointer;font-family:inherit">全選択解除</button>
       <span id="item-scope-msg" style="font-size:12px;color:#22703d;min-height:18px"></span>
     </div>
   </div>
@@ -1262,6 +1264,9 @@ function closeItemStoreScopeEditor() {
 }
 function itemScopeShowAll() {
   document.querySelectorAll('[data-store-pick="item-scope"]').forEach(c => c.checked = true);
+}
+function itemScopeHideAll() {
+  document.querySelectorAll('[data-store-pick="item-scope"]').forEach(c => c.checked = false);
 }
 function saveItemStoreScope() {
   if (!_itemScopeEditing) return;
