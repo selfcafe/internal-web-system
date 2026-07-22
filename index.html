@@ -4989,6 +4989,13 @@ function migrateProductRenames() {
 function saveProductSetting(name, field, value) {
   const p = PRODUCTS.find(q => q.name === name);
   if (!p) return;
+  // 既存の商品コードを変更する場合のみ警告する（未設定→設定は初回割当なので対象外）。
+  // 「手動納品」機能（MANUAL_DELIVERY_SHEET_ID）は外部スプレッドシートに本部が直接書いた
+  // 商品コードを、読み取り時点のall_productsと照合して商品名に変換する仕組みのため、
+  // アプリ側だけコードを振り直すと外部シート側の古いコードが別の商品として誤集計されうる
+  if (field === 'code' && p.code && String(p.code) !== String(value)) {
+    alert(`商品コードを変更します（${p.code} → ${value || '未設定'}）。\n\n「手動納品」機能の外部スプレッドシートに旧コード「${p.code}」で入力済みの行が残っている場合、そのシート側のコードもこの新しい番号に直さないと、別の商品として誤って集計される可能性があります。`);
+  }
   p[field] = value;
   saveAllProducts();
 }
