@@ -1281,7 +1281,8 @@ function saveItemStoreScope() {
     else if (!chk.checked && !isExcluded) cfg[sid] = [...cur, itemKey];
   });
   localStorage.setItem(storageKey, JSON.stringify(cfg));
-  if (kind === 'product') _syncStoreProductCfg(); else _syncStoreChecksheetCfg();
+  if (kind === 'product') { _syncStoreProductCfg(); const tb = document.getElementById('prod-tbl-body'); if (tb) tb.innerHTML = buildProdRows(); }
+  else { _syncStoreChecksheetCfg(); const tb = document.getElementById('cs-item-tbl-body'); if (tb) tb.innerHTML = buildChecksheetItemRows(); }
   const msg = document.getElementById('item-scope-msg');
   if (msg) { msg.textContent = '✓ 保存しました'; }
   setTimeout(() => closeItemStoreScopeEditor(), 900);
@@ -2363,9 +2364,22 @@ function toggleChecksheetCatSection(catKey) {
   });
 }
 
+// ちょうど1店舗にしか表示されていない項目は「全店共通」のデフォルト一覧から除いて
+// buildChecksheetItemRows()内の専用セクションに回す。判定はstore_checksheet_cfgの
+// 除外リストから逆算するだけで、項目自体のデータ構造・IDは一切変えない
+function checksheetItemVisibleStoreIds(itemId) {
+  const cfg = JSON.parse(localStorage.getItem(STORE_CHECKSHEET_KEY) || '{}');
+  return Object.keys(STORES).filter(sid => !(cfg[sid] || []).includes(itemId));
+}
 function buildChecksheetItemRows() {
-  return CHECKSHEET_CATEGORIES.map(c => {
-    const items = CHECKSHEET_ITEMS.filter(it => it.category === c.key);
+  const singleStoreItems = [];
+  const catBlocks = CHECKSHEET_CATEGORIES.map(c => {
+    const items = CHECKSHEET_ITEMS.filter(it => {
+      if (it.category !== c.key) return false;
+      const visible = checksheetItemVisibleStoreIds(it.id);
+      if (visible.length === 1) { singleStoreItems.push({ it, storeId: visible[0] }); return false; }
+      return true;
+    });
     if (!items.length) return '';
     const isOpen = _openChecksheetCats.has(c.key);
     const hdr = `<tr class="settings-vendor-hdr" onclick="toggleChecksheetCatSection('${esc(c.key)}')" style="cursor:pointer">
@@ -2404,6 +2418,50 @@ function buildChecksheetItemRows() {
     </tr>`).join('');
     return hdr + rows;
   }).join('');
+
+  // ちょうど1店舗にしか表示されていない項目は、上のカテゴリ別一覧から外し、
+  // ここで専用セクションとしてまとめる（全店共通のデフォルト一覧を見づらくしないため）
+  const singleBlock = !singleStoreItems.length ? '' : (() => {
+    const catKey = '__single_store__';
+    const isOpen = _openChecksheetCats.has(catKey);
+    const hdr = `<tr class="settings-vendor-hdr" onclick="toggleChecksheetCatSection('${catKey}')" style="cursor:pointer">
+      <td colspan="5"><div style="display:flex;justify-content:space-between;align-items:center">
+        <span>店舗限定の項目（1店舗のみ表示）</span>
+        <span id="cs-cat-arrow-${catKey}" style="font-size:11px;color:#22703d">${isOpen ? '▼' : '▶'}</span>
+      </div></td></tr>`;
+    const rows = singleStoreItems.map(({ it, storeId }) => {
+      const storeName = STORES[storeId] || storeId;
+      return `<tr data-csid="${esc(it.id)}" data-cscat="${catKey}" style="${isOpen ? '' : 'display:none'}">
+      <td></td>
+      <td data-label="項目名">
+        <div style="font-size:10.5px;color:#c07a1f;font-weight:600;margin-bottom:2px">${esc(storeName)}のみ表示</div>
+        <input type="text" value="${esc(it.name)}"
+          style="width:100%;border:1px solid #ddd;border-radius:5px;padding:5px 7px;font-size:13px;font-family:inherit"
+          onchange="saveChecksheetItemSetting('${esc(it.id)}','name',this.value)">
+      </td>
+      <td data-label="カテゴリ"><select
+        style="width:100%;border:1px solid #ddd;border-radius:5px;padding:5px 7px;font-size:13px;font-family:inherit"
+        onchange="saveChecksheetItemSetting('${esc(it.id)}','category',this.value)">
+        ${CHECKSHEET_CATEGORIES.map(c2 => `<option value="${esc(c2.key)}" ${c2.key===it.category?'selected':''}>${esc(c2.label)}</option>`).join('')}
+      </select></td>
+      <td data-label="種別"><select
+        style="width:100%;border:1px solid #ddd;border-radius:5px;padding:5px 7px;font-size:13px;font-family:inherit"
+        onchange="saveChecksheetItemSetting('${esc(it.id)}','type',this.value)">
+        <option value="check" ${it.type==='check'?'selected':''}>チェック</option>
+        <option value="qty" ${it.type==='qty'?'selected':''}>数量</option>
+      </select></td>
+      <td style="text-align:center;white-space:nowrap">
+        <button onclick="openItemStoreScopeEditor('${esc(it.id)}','checksheet')"
+          style="background:#22703d;color:white;border:none;border-radius:5px;padding:4px 8px;font-size:11px;cursor:pointer;font-family:inherit;margin-right:4px">表示店舗</button>
+        <button onclick="deleteChecksheetItem('${esc(it.id)}')"
+          style="background:#ef4444;color:white;border:none;border-radius:5px;padding:4px 10px;font-size:12px;cursor:pointer;font-family:inherit">削除</button>
+      </td>
+    </tr>`;
+    }).join('');
+    return hdr + rows;
+  })();
+
+  return catBlocks + singleBlock;
 }
 
 /* ===== チェック項目 ドラッグ並び替え（商品設定の商品ドラッグ並び替えと同じ挙動、カテゴリ内のみ） ===== */
