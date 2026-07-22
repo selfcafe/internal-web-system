@@ -514,7 +514,7 @@
         <div class="phw-piece phw-tl" id="phw-empty"></div>
         <button class="phw-piece phw-tr" onclick="siteLogout()"><span>ログ<br>アウト</span></button>
         <button id="ptab-attendance-sp" class="phw-piece phw-bl" onclick="if(isAttendanceEnabled(storeTab))switchPartnerTab('attendance')"><span>業務<br>開始</span></button>
-        <button class="phw-piece phw-br" onclick="toggleManualMenu('sp')"><span>マニュアル</span></button>
+        <button class="phw-piece phw-br manual-menu-btn" onclick="toggleManualMenu('sp')"><span>マニュアル</span></button>
       </div>
       <div class="doc-menu-dd" id="manual-dd-sp" style="position:absolute;top:134px;right:0"></div>
       <div class="store-name-wrap" style="display:flex;align-items:baseline;align-self:stretch;gap:4px 12px">
@@ -3721,7 +3721,7 @@ document.addEventListener('click', e => {
   if (!e.target.closest('.prod-wrap')) closeProdAll();
   if (!e.target.closest('#store-nav-search')) document.getElementById('store-search-dd')?.classList.remove('open');
   if (!e.target.closest('.admin-menu-wrap')) document.getElementById('admin-menu-dd')?.classList.remove('open');
-  if (!e.target.closest('.doc-menu-wrap')) document.querySelectorAll('.doc-menu-dd.open').forEach(el => el.classList.remove('open'));
+  if (!e.target.closest('.doc-menu-wrap') && !e.target.closest('.manual-menu-btn')) document.querySelectorAll('.doc-menu-dd.open').forEach(el => el.classList.remove('open'));
   if (!e.target.closest('#site-store-search') && !e.target.closest('#site-store-dd')) {
     const dd = document.getElementById('site-store-dd');
     if (dd) dd.style.display = 'none';
@@ -3732,7 +3732,7 @@ document.addEventListener('touchstart', e => {
   if (!e.target.closest('.prod-wrap')) closeProdAll();
   if (!e.target.closest('#store-nav-search')) document.getElementById('store-search-dd')?.classList.remove('open');
   if (!e.target.closest('.admin-menu-wrap')) document.getElementById('admin-menu-dd')?.classList.remove('open');
-  if (!e.target.closest('.doc-menu-wrap')) document.querySelectorAll('.doc-menu-dd.open').forEach(el => el.classList.remove('open'));
+  if (!e.target.closest('.doc-menu-wrap') && !e.target.closest('.manual-menu-btn')) document.querySelectorAll('.doc-menu-dd.open').forEach(el => el.classList.remove('open'));
   if (!e.target.closest('#site-store-search') && !e.target.closest('#site-store-dd')) {
     const dd = document.getElementById('site-store-dd');
     if (dd) dd.style.display = 'none';
