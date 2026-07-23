@@ -3310,8 +3310,24 @@ function renderLeaveRequests() {
     .filter(r => (r.name || '') === activeName && String(r.leave_date || '') >= today)
     .sort((a, b) => String(a.leave_date).localeCompare(String(b.leave_date)));
   wrap.innerHTML = rows.length
-    ? rows.map(r => `<div style="font-size:13px;padding:4px 0;border-bottom:1px solid #eee">${esc(r.leave_date)}</div>`).join('')
+    ? rows.map(r => `<div style="display:flex;align-items:center;justify-content:space-between;font-size:13px;padding:4px 0;border-bottom:1px solid #eee">
+        <span>${esc(r.leave_date)}</span>
+        <button onclick="cancelLeaveRequest('${esc(r.id)}')" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:12px">キャンセル</button>
+      </div>`).join('')
     : '<div style="color:#aaa;font-size:12px;padding:6px 0">申請はありません</div>';
+}
+async function cancelLeaveRequest(id) {
+  const row = LEAVE_REQUESTS_CACHE.find(r => String(r.id) === String(id));
+  if (!row) return;
+  if (!confirm(`${row.leave_date}の休み申請をキャンセルしますか？`)) return;
+  try {
+    const r = await gasPost('deleteLeaveRequest', { id });
+    if (r.error) throw new Error(r.error);
+    await loadLeaveRequests(storeTab);
+    renderLeaveRequests();
+  } catch(e) {
+    alert('キャンセルに失敗しました: ' + e.message);
+  }
 }
 async function submitLeaveRequest() {
   const msg = document.getElementById('leave-request-msg');

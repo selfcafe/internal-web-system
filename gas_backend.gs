@@ -125,6 +125,7 @@ function doPost(e) {
     else if (b.action === 'saveInvoiceReceiptImage') result = saveInvoiceReceiptImage(b.imageBase64, b.imageMime, b.filename);
     else if (b.action === 'saveAttendance')      result = saveAttendance(b.storeId, b.name, b.lat, b.lng);
     else if (b.action === 'saveLeaveRequest')    result = saveLeaveRequest(b.storeId, b.name, b.leaveDate);
+    else if (b.action === 'deleteLeaveRequest')  result = deleteLeaveRequest(b.id);
     else if (b.action === 'saveDeliveryHistory') result = saveDeliveryHistory(b.storeId, b.row);
     else if (b.action === 'clearDeliveryHistory') result = clearDeliveryHistory(b.storeId);
     else result = { error: 'Unknown action: ' + b.action };
@@ -602,6 +603,40 @@ function notifyLeaveRequestTomorrow_(storeId, name, leaveDate) {
     const who = name ? name + 'さん' : '担当者';
     const md = leaveDate.slice(5).replace('-', '/');
     sendLineWorksNotification('【休み申請】' + who + 'が明日(' + md + ')休み申請をしました。（店舗ID: ' + storeId + '）', _attendanceLineWorksChannel_(storeId));
+  } catch(e) {
+    console.error('LINE WORKS通知エラー:', e.message);
+  }
+}
+
+// キャンセル（取り消し）。承認ステップが無いのと同様、取り消しも即時反映（確認ステップ無し）。
+// 取り消し対象が「取り消し時点の翌日」の休みだった場合のみ、既に翌日分として即時通知済み
+// である可能性が高いため、取り消しもLINE WORKSで即時通知する（それ以外は日次まとめ通知止まりのため不要）。
+function deleteLeaveRequest(id) {
+  const sheet = getSheet(SHEET_ATTENDANCE_LEAVE);
+  if (sheet.getLastRow() <= 1) return { ok: true };
+  const data = sheet.getDataRange().getValues();
+  const hdrs = data[0].map(String);
+  const idIdx = hdrs.indexOf('id'), storeIdx = hdrs.indexOf('store_id'),
+        nameIdx = hdrs.indexOf('name'), dateIdx = hdrs.indexOf('leave_date');
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][idIdx]) === String(id)) {
+      const storeId = data[i][storeIdx];
+      const name = data[i][nameIdx];
+      const leaveDate = _dateStr(data[i][dateIdx]);
+      sheet.deleteRow(i + 1);
+      const tomorrow = Utilities.formatDate(new Date(Date.now() + 24*60*60*1000), _sheetTz(), 'yyyy-MM-dd');
+      if (leaveDate === tomorrow) notifyLeaveRequestCancelled_(storeId, name, leaveDate);
+      break;
+    }
+  }
+  return { ok: true };
+}
+
+function notifyLeaveRequestCancelled_(storeId, name, leaveDate) {
+  try {
+    const who = name ? name + 'さん' : '担当者';
+    const md = leaveDate.slice(5).replace('-', '/');
+    sendLineWorksNotification('【休み申請取消】' + who + 'の明日(' + md + ')の休み申請が取り消されました。（店舗ID: ' + storeId + '）', _attendanceLineWorksChannel_(storeId));
   } catch(e) {
     console.error('LINE WORKS通知エラー:', e.message);
   }
