@@ -598,11 +598,22 @@
       <div class="note-box" id="attendance-note">名前を選んで「業務開始する」を押してください。位置情報の許可が必要です。</div>
       <div style="background:white;border-radius:10px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:16px">
         <div id="attendance-name-sel-wrap">
-          <select id="attendance-name-sel" onchange="renderAttendanceHistory();renderAttendanceTally()" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:10px;font-size:15px;font-family:inherit;margin-bottom:10px"></select>
+          <select id="attendance-name-sel" onchange="renderAttendanceHistory();renderAttendanceTally();renderLeaveRequests()" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:10px;font-size:15px;font-family:inherit;margin-bottom:10px"></select>
         </div>
         <button onclick="doAttendanceClockIn()" style="width:100%;background:#22703d;color:white;padding:12px;font-size:16px;font-weight:700;border-radius:8px;border:none;cursor:pointer;font-family:inherit">業務開始する</button>
         <div id="attendance-msg" style="font-size:13px;margin-top:8px;min-height:18px"></div>
       </div>
+
+      <div style="font-weight:700;font-size:14px;color:#22703d;margin-bottom:8px">休み申請</div>
+      <div style="background:white;border-radius:10px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:16px">
+        <div class="note-box">当日休む場合は申請＋該当店舗のグループトークに連絡してください。</div>
+        <input id="leave-date-input" type="date" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:10px;font-size:15px;font-family:inherit;margin:10px 0">
+        <button onclick="submitLeaveRequest()" style="width:100%;background:#22703d;color:white;padding:12px;font-size:16px;font-weight:700;border-radius:8px;border:none;cursor:pointer;font-family:inherit">申請する</button>
+        <div id="leave-request-msg" style="font-size:13px;margin-top:8px;min-height:18px"></div>
+        <div style="font-weight:600;font-size:12px;color:#888;margin-top:6px">申請済みの休み</div>
+        <div id="leave-request-list-wrap"></div>
+      </div>
+
       <div style="font-weight:700;font-size:14px;color:#22703d;margin-bottom:8px">業務開始履歴（自店舗）</div>
       <div id="attendance-history-wrap"></div>
 
@@ -764,6 +775,14 @@
       <button onclick="goToAttendanceFromReminder()" style="flex:1;background:#22703d;color:white;padding:11px;font-size:14px;font-weight:700;border-radius:8px;border:none;cursor:pointer;font-family:inherit">業務開始する</button>
       <button onclick="closeAttendanceReminder()" style="flex:1;background:#e0e0e0;color:#555;padding:11px;font-size:14px;border-radius:8px;border:none;cursor:pointer;font-family:inherit">後で</button>
     </div>
+  </div>
+</div>
+
+<div id="leave-groupchat-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:2000;align-items:center;justify-content:center;padding:16px">
+  <div style="background:white;border-radius:14px;max-width:380px;width:100%;padding:22px 20px">
+    <div style="font-weight:700;font-size:16px;margin-bottom:10px;color:#22703d">休み申請を受け付けました</div>
+    <div style="font-size:14px;color:#444;line-height:1.6;margin-bottom:18px">該当店舗のグループトークに連絡してください。</div>
+    <button onclick="closeLeaveGroupChatModal()" style="width:100%;background:#22703d;color:white;padding:11px;font-size:14px;font-weight:700;border-radius:8px;border:none;cursor:pointer;font-family:inherit">閉じる</button>
   </div>
 </div>
 
@@ -970,6 +989,7 @@ async function initGas() {
       if (r.key === 'attendance_enabled_stores') localStorage.setItem(ATTENDANCE_ENABLED_KEY, clean(r.value));
       if (r.key === 'attendance_staff_list')     localStorage.setItem(ATTENDANCE_STAFF_KEY,   clean(r.value));
       if (r.key === 'attendance_store_coords')   localStorage.setItem(ATTENDANCE_COORDS_KEY,  clean(r.value));
+      if (r.key === 'attendance_staff_schedule') localStorage.setItem(ATTENDANCE_SCHEDULE_KEY, clean(r.value));
     });
     if (gasKeys.has('all_products') || gasKeys.has('vendor_config')) {
       loadVendorConfig();
@@ -992,6 +1012,7 @@ async function initGas() {
     if (!gasKeys.has('attendance_enabled_stores') && localStorage.getItem(ATTENDANCE_ENABLED_KEY)) _gasSaveSetting('attendance_enabled_stores', localStorage.getItem(ATTENDANCE_ENABLED_KEY));
     if (!gasKeys.has('attendance_staff_list')     && localStorage.getItem(ATTENDANCE_STAFF_KEY))   _gasSaveSetting('attendance_staff_list',     localStorage.getItem(ATTENDANCE_STAFF_KEY));
     if (!gasKeys.has('attendance_store_coords')   && localStorage.getItem(ATTENDANCE_COORDS_KEY))  _gasSaveSetting('attendance_store_coords',   localStorage.getItem(ATTENDANCE_COORDS_KEY));
+    if (!gasKeys.has('attendance_staff_schedule') && localStorage.getItem(ATTENDANCE_SCHEDULE_KEY)) _gasSaveSetting('attendance_staff_schedule', localStorage.getItem(ATTENDANCE_SCHEDULE_KEY));
     loadCustomStores();
     loadDeletedStores();
     loadDeletedProducts();
@@ -2717,6 +2738,9 @@ function getAvailableChecksheetItems(storeId) {
 const ATTENDANCE_ENABLED_KEY = 'attendance_enabled_stores'; // JSON配列 ["shibuya", ...]
 const ATTENDANCE_STAFF_KEY   = 'attendance_staff_list';     // JSON {storeId:[name,...]}
 const ATTENDANCE_COORDS_KEY  = 'attendance_store_coords';   // JSON {storeId:{lat,lng}}
+// JSON {storeId:{name:{type:'interval',intervalDays:N} | {type:'weekday',weekdays:[0-6の配列]}}}
+// 未設定時は{type:'interval',intervalDays:1}（毎日出勤）扱い。請求書機能の基準業務日数とは独立・非連携。
+const ATTENDANCE_SCHEDULE_KEY = 'attendance_staff_schedule';
 
 function getAttendanceEnabledStores() {
   try { return JSON.parse(localStorage.getItem(ATTENDANCE_ENABLED_KEY) || '[]'); } catch(_) { return []; }
@@ -2751,6 +2775,20 @@ function setAttendanceStoreCoords(storeId, lat, lng) {
   all[storeId] = { lat, lng };
   localStorage.setItem(ATTENDANCE_COORDS_KEY, JSON.stringify(all));
   _gasSaveSetting('attendance_store_coords', JSON.stringify(all));
+}
+
+function getAttendanceStaffSchedule(storeId, name) {
+  let all = {};
+  try { all = JSON.parse(localStorage.getItem(ATTENDANCE_SCHEDULE_KEY) || '{}'); } catch(_) {}
+  return (all[storeId] && all[storeId][name]) || { type: 'interval', intervalDays: 1 };
+}
+function setAttendanceStaffSchedule(storeId, name, schedule) {
+  let all = {};
+  try { all = JSON.parse(localStorage.getItem(ATTENDANCE_SCHEDULE_KEY) || '{}'); } catch(_) {}
+  if (!all[storeId]) all[storeId] = {};
+  all[storeId][name] = schedule;
+  localStorage.setItem(ATTENDANCE_SCHEDULE_KEY, JSON.stringify(all));
+  _gasSaveSetting('attendance_staff_schedule', JSON.stringify(all));
 }
 
 // 暦月（1日〜月末）で1期間とする
@@ -3058,6 +3096,8 @@ async function switchPartnerTab(tab) {
     await loadAttendanceHistory(storeTab);
     renderAttendanceHistory();
     renderAttendanceTally();
+    await loadLeaveRequests(storeTab);
+    renderLeaveRequests();
   }
 }
 
@@ -3074,20 +3114,28 @@ function updatePartnerAttendanceTabVisibility() {
   }
 }
 
-// 押し忘れ対策（非ブロック版）: ポータルを開いた際、当日まだ業務開始が1件も記録されていなければ
+// 押し忘れ対策（非ブロック版）: ポータルを開いただけでは出さず、ポータル内で何らかの操作
+// （タブ切替・ボタン・トグル等）をした際、当日まだ業務開始が1件も記録されていなければ
 // 一度だけモーダルで促す。閉じても他の操作は通常通り行える。店舗単位の判定のため、
 // 複数名店舗では「その店の誰かが」当日記録済みなら再表示しない（個人単位の判定はしない）。
+let _attendanceReminderChecking = false;
 async function maybeShowAttendanceReminder() {
   if (!isAttendanceEnabled(storeTab)) return;
   const today = new Date().toLocaleDateString('sv');
   const shownKey = `attendance_reminder_shown_${storeTab}_${today}`;
   if (localStorage.getItem(shownKey)) return;
-  await loadAttendanceHistory(storeTab);
-  const clockedToday = ATTENDANCE_HISTORY_CACHE.some(r => String(r.clocked_at || '').slice(0, 10) === today);
-  localStorage.setItem(shownKey, '1'); // 記録済み/表示済みのどちらでも当日はもう確認しない
-  if (clockedToday) return;
-  const overlay = document.getElementById('attendance-reminder-overlay');
-  if (overlay) overlay.style.display = 'flex';
+  if (_attendanceReminderChecking) return; // 判定中の連打でgetAttendanceが二重に飛ばないようにする
+  _attendanceReminderChecking = true;
+  try {
+    await loadAttendanceHistory(storeTab);
+    const clockedToday = ATTENDANCE_HISTORY_CACHE.some(r => String(r.clocked_at || '').slice(0, 10) === today);
+    localStorage.setItem(shownKey, '1'); // 記録済み/表示済みのどちらでも当日はもう確認しない
+    if (clockedToday) return;
+    const overlay = document.getElementById('attendance-reminder-overlay');
+    if (overlay) overlay.style.display = 'flex';
+  } finally {
+    _attendanceReminderChecking = false;
+  }
 }
 function goToAttendanceFromReminder() {
   closeAttendanceReminder();
@@ -3097,6 +3145,9 @@ function closeAttendanceReminder() {
   const overlay = document.getElementById('attendance-reminder-overlay');
   if (overlay) overlay.style.display = 'none';
 }
+// ポータル内でのクリック操作全般（タブ切替・各種ボタン・トグル）を1箇所で拾い、
+// 個々のonclickハンドラを書き換えずに済ませる（clickイベントはチェックボックス等からもバブリングする）
+document.getElementById('page-store')?.addEventListener('click', () => maybeShowAttendanceReminder());
 
 // スタッフが1人以下（未登録含む）の店舗は、名前選択なしでボタンのみの「1名モード」にする
 function isAttendanceSolo(storeId) { return getAttendanceStaffList(storeId).length <= 1; }
@@ -3238,6 +3289,61 @@ function renderAttendanceTally() {
   const numStyle = 'font-size:28px;font-weight:700;color:#22703d;font-variant-numeric:tabular-nums';
   const days = new Set(rows.map(r => String(r.clocked_at).slice(0, 10))).size;
   wrap.innerHTML = `<div style="${cardStyle}"><div style="${numStyle}">${days}<span style="font-size:13px;font-weight:600;color:#888;margin-left:3px">日</span></div></div>`;
+}
+
+/* ===== 休み申請 ===== */
+let LEAVE_REQUESTS_CACHE = [];
+async function loadLeaveRequests(storeId) {
+  try { LEAVE_REQUESTS_CACHE = await gasGet('getLeaveRequests', { storeId }); }
+  catch(e) { console.error('getLeaveRequests error:', e); LEAVE_REQUESTS_CACHE = []; }
+}
+function renderLeaveRequests() {
+  const wrap = document.getElementById('leave-request-list-wrap');
+  if (!wrap) return;
+  if (!_attendanceNameChosen()) {
+    wrap.innerHTML = '<div style="color:#aaa;font-size:12px;padding:6px 0">名前を選択すると表示されます</div>';
+    return;
+  }
+  const activeName = _attendanceActiveName();
+  const today = new Date().toLocaleDateString('sv');
+  const rows = LEAVE_REQUESTS_CACHE
+    .filter(r => (r.name || '') === activeName && String(r.leave_date || '') >= today)
+    .sort((a, b) => String(a.leave_date).localeCompare(String(b.leave_date)));
+  wrap.innerHTML = rows.length
+    ? rows.map(r => `<div style="font-size:13px;padding:4px 0;border-bottom:1px solid #eee">${esc(r.leave_date)}</div>`).join('')
+    : '<div style="color:#aaa;font-size:12px;padding:6px 0">申請はありません</div>';
+}
+async function submitLeaveRequest() {
+  const msg = document.getElementById('leave-request-msg');
+  const dateInput = document.getElementById('leave-date-input');
+  const leaveDate = dateInput.value;
+  if (!leaveDate) { msg.style.color = '#dc2626'; msg.textContent = '日付を選択してください'; return; }
+  const solo = isAttendanceSolo(storeTab);
+  const name = _attendanceActiveName();
+  if (!solo && !name) { msg.style.color = '#dc2626'; msg.textContent = '名前を選択してください'; return; }
+  msg.style.color = '#888';
+  msg.textContent = '送信しています…';
+  try {
+    const r = await gasPost('saveLeaveRequest', { storeId: storeTab, name, leaveDate });
+    if (r.error) throw new Error(r.error);
+    msg.style.color = '#22703d';
+    msg.textContent = '休み申請を受け付けました（' + leaveDate + '）';
+    dateInput.value = '';
+    await loadLeaveRequests(storeTab);
+    renderLeaveRequests();
+    const today = new Date().toLocaleDateString('sv');
+    if (leaveDate === today) {
+      const overlay = document.getElementById('leave-groupchat-overlay');
+      if (overlay) overlay.style.display = 'flex';
+    }
+  } catch(e) {
+    msg.style.color = '#dc2626';
+    msg.textContent = '送信に失敗しました: ' + e.message;
+  }
+}
+function closeLeaveGroupChatModal() {
+  const overlay = document.getElementById('leave-groupchat-overlay');
+  if (overlay) overlay.style.display = 'none';
 }
 
 /* ===== 忘れ物 ===== */
@@ -3685,7 +3791,6 @@ async function showPage(p) {
       const lbl = document.getElementById('active-store-label');
       if (lbl) lbl.textContent = STORES[authedStore] + '店';
       updatePartnerAttendanceTabVisibility();
-      maybeShowAttendanceReminder(); // 非同期・非ブロック: 表示中も他の操作は妨げない
     }
     const navSearch = document.getElementById('store-nav-search');
     if (navSearch) navSearch.style.display = 'none';
@@ -5947,6 +6052,26 @@ function renderSettings() {
       </div>
     </div>
 
+    <!-- 休み申請一覧（全店舗） -->
+    <div class="settings-card">
+      <div class="settings-accordion-hdr" onclick="toggleLeaveRequestAdminGroup()">
+        <span>休み申請一覧（全店舗）</span>
+        <span id="leave-request-admin-group-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
+      </div>
+      <div id="leave-request-admin-group-body" style="display:none;margin-top:10px">
+        <div class="settings-accordion-body">
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+            <select id="leave-request-admin-store-sel" style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit" onchange="renderLeaveRequestAdmin()">
+              <option value="">全店舗</option>
+              ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}
+            </select>
+            <button onclick="renderLeaveRequestAdmin(true)" style="background:#22703d;color:white;padding:7px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">更新</button>
+          </div>
+          <div id="leave-request-admin-wrap"><div style="color:#aaa;font-size:13px;padding:10px 0">「更新」を押して読み込んでください</div></div>
+        </div>
+      </div>
+    </div>
+
     <!-- 店舗別パスワード設定 -->
     <div class="settings-card">
       <div class="settings-accordion-hdr" onclick="toggleStorePwSettings()">
@@ -6292,13 +6417,54 @@ function renderAttendanceCfg() {
     </div>`;
 }
 
+const ATTENDANCE_WEEKDAY_LABELS = ['日','月','火','水','木','金','土'];
 function buildAttendanceStaffRows(storeId, names) {
   if (!names.length) return '<div style="color:#aaa;font-size:12px;padding:6px 0">未登録</div>';
-  return names.map((n, i) => `
-    <div style="display:flex;align-items:center;justify-content:space-between;padding:5px 0;border-bottom:1px solid #eee">
-      <span style="font-size:13px">${esc(n)}</span>
-      <button onclick="removeAttendanceStaff('${esc(storeId)}', ${i})" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:12px">削除</button>
-    </div>`).join('');
+  return names.map((n, i) => {
+    const sched = getAttendanceStaffSchedule(storeId, n);
+    const isWeekday = sched.type === 'weekday';
+    return `
+    <div style="padding:6px 0;border-bottom:1px solid #eee">
+      <div style="display:flex;align-items:center;justify-content:space-between">
+        <span style="font-size:13px">${esc(n)}</span>
+        <button onclick="removeAttendanceStaff('${esc(storeId)}', ${i})" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:12px">削除</button>
+      </div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:12px;color:#666;margin-top:4px">
+        <select id="att-sched-type-${i}" onchange="_toggleAttendanceScheduleInputs(${i})" style="border:1px solid #ddd;border-radius:6px;padding:4px 6px;font-size:12px;font-family:inherit">
+          <option value="interval" ${!isWeekday ? 'selected' : ''}>間隔指定</option>
+          <option value="weekday" ${isWeekday ? 'selected' : ''}>曜日指定</option>
+        </select>
+        <span id="att-sched-interval-${i}" style="display:${isWeekday ? 'none' : 'inline-flex'};align-items:center;gap:4px">
+          <input id="att-sched-days-${i}" type="number" min="1" step="1" value="${isWeekday ? 1 : (sched.intervalDays || 1)}" style="width:50px;border:1px solid #ddd;border-radius:6px;padding:4px 6px;font-size:12px;font-family:inherit">日に1回
+        </span>
+        <span id="att-sched-weekday-${i}" style="display:${isWeekday ? 'inline-flex' : 'none'};gap:6px;flex-wrap:wrap">
+          ${ATTENDANCE_WEEKDAY_LABELS.map((wd, wi) => `<label style="display:flex;align-items:center;gap:2px"><input type="checkbox" id="att-sched-wd-${i}-${wi}" ${(sched.weekdays || []).includes(wi) ? 'checked' : ''}>${wd}</label>`).join('')}
+        </span>
+        <button id="att-sched-save-${i}" onclick="saveAttendanceStaffScheduleRow('${esc(storeId)}','${esc(n)}',${i})" style="background:#22703d;color:white;padding:3px 10px;font-size:11px;border-radius:6px;border:none;cursor:pointer;font-family:inherit">保存</button>
+      </div>
+    </div>`;
+  }).join('');
+}
+function _toggleAttendanceScheduleInputs(i) {
+  const type = document.getElementById('att-sched-type-' + i).value;
+  const intervalEl = document.getElementById('att-sched-interval-' + i);
+  const weekdayEl  = document.getElementById('att-sched-weekday-' + i);
+  if (intervalEl) intervalEl.style.display = type === 'weekday' ? 'none' : 'inline-flex';
+  if (weekdayEl)  weekdayEl.style.display  = type === 'weekday' ? 'inline-flex' : 'none';
+}
+function saveAttendanceStaffScheduleRow(storeId, name, i) {
+  const type = document.getElementById('att-sched-type-' + i).value;
+  let schedule;
+  if (type === 'weekday') {
+    const weekdays = [0,1,2,3,4,5,6].filter(wi => document.getElementById('att-sched-wd-' + i + '-' + wi)?.checked);
+    schedule = { type: 'weekday', weekdays };
+  } else {
+    const n = Math.max(1, parseInt(document.getElementById('att-sched-days-' + i).value, 10) || 1);
+    schedule = { type: 'interval', intervalDays: n };
+  }
+  setAttendanceStaffSchedule(storeId, name, schedule);
+  const btn = document.getElementById('att-sched-save-' + i);
+  if (btn) { const orig = btn.textContent; btn.textContent = '✓ 保存済み'; setTimeout(() => { if (btn) btn.textContent = orig; }, 2000); }
 }
 
 function addAttendanceStaff(storeId) {
@@ -6368,6 +6534,41 @@ async function renderAttendanceAdminHistory() {
         <td style="padding:6px 10px;font-size:13px;text-align:center">${r.within_range === false
           ? `<span style="color:#dc2626">要確認</span>${r.lat != null && r.lng != null ? ` <a href="https://www.google.com/maps?q=${esc(r.lat)},${esc(r.lng)}" target="_blank" rel="noopener" style="font-size:11px">📍地図</a>` : ''}`
           : (r.within_range === true ? '<span style="color:#22703d">✓</span>' : '<span style="color:#aaa">未判定</span>')}</td>
+      </tr>`).join('')}
+    </tbody></table></div>`;
+}
+
+function toggleLeaveRequestAdminGroup() {
+  const body  = document.getElementById('leave-request-admin-group-body');
+  const arrow = document.getElementById('leave-request-admin-group-arrow');
+  const open  = body.style.display === 'none';
+  body.style.display = open ? 'block' : 'none';
+  arrow.textContent  = open ? '▼ 閉じる' : '▶ タップして開く';
+}
+
+async function renderLeaveRequestAdmin() {
+  const sel = document.getElementById('leave-request-admin-store-sel');
+  const wrap = document.getElementById('leave-request-admin-wrap');
+  if (!sel || !wrap) return;
+  wrap.innerHTML = '<div style="color:#aaa;font-size:13px;padding:10px 0">読み込み中…</div>';
+  let rows = [];
+  try { rows = await gasGet('getLeaveRequests', sel.value ? { storeId: sel.value } : {}); }
+  catch(e) { console.error('getLeaveRequests error:', e); }
+  if (!rows.length) {
+    wrap.innerHTML = '<div style="color:#aaa;font-size:13px;padding:10px 0">申請がありません</div>';
+    return;
+  }
+  wrap.innerHTML = `<div class="table-wrap"><table style="width:100%;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+    <thead><tr style="background:#22703d;color:white">
+      <th style="padding:6px 10px;font-size:12px">休む日</th><th style="padding:6px 10px;font-size:12px">店舗</th>
+      <th style="padding:6px 10px;font-size:12px">名前</th><th style="padding:6px 10px;font-size:12px">申請日時</th>
+    </tr></thead>
+    <tbody>${rows.map(r => `
+      <tr style="border-bottom:1px solid #eee">
+        <td style="padding:6px 10px;font-size:13px;white-space:nowrap">${esc(r.leave_date || '')}</td>
+        <td style="padding:6px 10px;font-size:13px;color:#22703d;font-weight:600">${esc(STORES[r.store_id] || r.store_id)}</td>
+        <td style="padding:6px 10px;font-size:13px">${esc(r.name || '')}</td>
+        <td style="padding:6px 10px;font-size:13px;white-space:nowrap">${esc(r.submitted_at || '')}</td>
       </tr>`).join('')}
     </tbody></table></div>`;
 }

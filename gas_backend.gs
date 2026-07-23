@@ -63,6 +63,9 @@ const INVENTORY_COLS = ['period_label','store_id','code','product','label','open
 const ATTENDANCE_COLS = ['id','store_id','name','clocked_at','lat','lng','within_range'];
 // 基準座標からこの距離(m)以内なら出勤OKと判定する（全店舗共通の固定値、2026-07-15確定）
 const ATTENDANCE_THRESHOLD_M = 300;
+// 休み申請ログ。1回の申請で1行追加（append-only、承認ステップなしで即時確定）
+const SHEET_ATTENDANCE_LEAVE = 'attendance_leave';
+const ATTENDANCE_LEAVE_COLS = ['id','store_id','name','leave_date','submitted_at'];
 
 // エリア別店舗ID
 const AREA_STORES = {
@@ -93,6 +96,7 @@ function doGet(e) {
     else if (a === 'setupInventoryDisposedHighlight') result = setupInventoryDisposedHighlight();
     else if (a === 'getSettingHistory')         result = getSettingHistory(e.parameter.key, e.parameter.limit);
     else if (a === 'getAttendance')             result = getAttendance(e.parameter.storeId);
+    else if (a === 'getLeaveRequests')          result = getLeaveRequests(e.parameter.storeId);
     else if (a === 'getDeliveryHistory')        result = getDeliveryHistory(e.parameter.storeId, e.parameter.month);
     else result = { error: 'Unknown action: ' + a };
     return json(result);
@@ -120,6 +124,7 @@ function doPost(e) {
     else if (b.action === 'submitInvoice')       result = submitInvoice(b.payload);
     else if (b.action === 'saveInvoiceReceiptImage') result = saveInvoiceReceiptImage(b.imageBase64, b.imageMime, b.filename);
     else if (b.action === 'saveAttendance')      result = saveAttendance(b.storeId, b.name, b.lat, b.lng);
+    else if (b.action === 'saveLeaveRequest')    result = saveLeaveRequest(b.storeId, b.name, b.leaveDate);
     else if (b.action === 'saveDeliveryHistory') result = saveDeliveryHistory(b.storeId, b.row);
     else if (b.action === 'clearDeliveryHistory') result = clearDeliveryHistory(b.storeId);
     else result = { error: 'Unknown action: ' + b.action };
@@ -551,7 +556,55 @@ function saveAttendance(storeId, name, lat, lng) {
   }
 
   sheet.appendRow([Utilities.getUuid(), storeId, name, new Date(), lat, lng, withinRange]);
+  if (withinRange === false) notifyAttendanceGpsIssue_(storeId, name);
   return { ok: true, withinRange };
+}
+
+// GPS要確認（基準座標から離れた場所での打刻）は翌朝のバッチを待たずその場で通知する
+// ※店舗名マスタ(stores.js)はフロント専用の共有ファイルでバックエンドからは参照できないため、
+//   notifyNewOrder_と同様、店舗IDをそのままメッセージに含める
+function notifyAttendanceGpsIssue_(storeId, name) {
+  try {
+    const who = name ? name + 'さん' : '担当者';
+    sendLineWorksNotification('【GPS要確認】' + who + 'の業務開始打刻が、店舗から離れた場所として記録されました。（店舗ID: ' + storeId + '）');
+  } catch(e) {
+    console.error('LINE WORKS通知エラー:', e.message);
+  }
+}
+
+// ----------------------------------------------------------------
+// attendance_leave（休み申請）
+// ----------------------------------------------------------------
+
+// storeIdを渡すと自店舗分のみ、省略すると全店舗分を返す（パートナー/管理者で共通利用）
+function getLeaveRequests(storeId) {
+  let rows = sheetRows(getSheet(SHEET_ATTENDANCE_LEAVE), ATTENDANCE_LEAVE_COLS);
+  if (storeId) rows = rows.filter(r => String(r.store_id) === String(storeId));
+  return rows.map(r => Object.assign({}, r, { leave_date: _dateStr(r.leave_date), submitted_at: _dateTimeStr(r.submitted_at) }))
+    .sort((a, b) => String(b.submitted_at).localeCompare(String(a.submitted_at)));
+}
+
+// 承認ステップなし、申請した瞬間に即時確定（2026-07-23確定仕様）。
+// 申請日が「申請時点の翌日」の場合のみ、翌朝8:30の日次通知を待たずその場でLINE WORKS通知する
+// （代打調整等の対応余地を残すため）。翌々日以降の申請は日次まとめ通知(sendDailyAttendanceCheck)に含める。
+function saveLeaveRequest(storeId, name, leaveDate) {
+  const sheet = getSheet(SHEET_ATTENDANCE_LEAVE);
+  ensureHeaders(sheet, ATTENDANCE_LEAVE_COLS);
+  sheet.appendRow([Utilities.getUuid(), storeId, name, leaveDate, new Date()]);
+
+  const tomorrow = Utilities.formatDate(new Date(Date.now() + 24*60*60*1000), _sheetTz(), 'yyyy-MM-dd');
+  if (leaveDate === tomorrow) notifyLeaveRequestTomorrow_(storeId, name, leaveDate);
+  return { ok: true };
+}
+
+function notifyLeaveRequestTomorrow_(storeId, name, leaveDate) {
+  try {
+    const who = name ? name + 'さん' : '担当者';
+    const md = leaveDate.slice(5).replace('-', '/');
+    sendLineWorksNotification('【休み申請】' + who + 'が明日(' + md + ')休み申請をしました。（店舗ID: ' + storeId + '）');
+  } catch(e) {
+    console.error('LINE WORKS通知エラー:', e.message);
+  }
 }
 
 // ----------------------------------------------------------------
@@ -1075,6 +1128,96 @@ function sendDailyOrderNotification() {
 }
 
 // ----------------------------------------------------------------
+// 業務開始：未打刻／休み申請の日次まとめ通知（毎朝8:30、前日分をまとめてチェック）
+// ----------------------------------------------------------------
+
+// スタッフ1名分の「今月・当日8:30時点（＝前日まで）の目標打刻日数」を算出する。
+// schedule: {type:'interval', intervalDays:N} または {type:'weekday', weekdays:[0-6]}（未設定時は
+// intervalDays:1＝毎日出勤扱い）。leaveDatesSet: 今月分・前日以前に絞り込み済みの休み申請日('yyyy-MM-dd')Set。
+// 2026-07-23確定の計算式（[[feature_attendance_checkin]]参照、请求書機能とは独立・floor丸め採用）:
+//   interval: 基準業務日数=ceil(当月日数/N) → r=基準業務日数/当月日数 → 有効経過日数=経過日数-休み申請日数 → floor(r×有効経過日数)
+//   weekday: 前日までの指定曜日の日数（休み申請日を除く）をそのままカウント
+function computeAttendanceTargetDays_(schedule, now, leaveDatesSet) {
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  // 通知は当日8:30に「前日分まで」を評価するため、経過日数は前日の日付を使う（月初1日は前日が前月に
+  // なるため経過日数0＝まだ何も評価しない）
+  const yesterday = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  const elapsedDays = (yesterday.getMonth() === now.getMonth()) ? yesterday.getDate() : 0;
+  if (elapsedDays <= 0) return 0;
+
+  if (schedule && schedule.type === 'weekday' && Array.isArray(schedule.weekdays) && schedule.weekdays.length) {
+    let count = 0;
+    for (let d = 1; d <= elapsedDays; d++) {
+      const dt = new Date(now.getFullYear(), now.getMonth(), d);
+      const dateStr = Utilities.formatDate(dt, _sheetTz(), 'yyyy-MM-dd');
+      if (schedule.weekdays.indexOf(dt.getDay()) >= 0 && !leaveDatesSet.has(dateStr)) count++;
+    }
+    return count;
+  }
+
+  const intervalDays = (schedule && Number(schedule.intervalDays)) || 1;
+  const baseDays = Math.ceil(daysInMonth / intervalDays);
+  const r = baseDays / daysInMonth;
+  const effectiveElapsed = Math.max(0, elapsedDays - leaveDatesSet.size);
+  return Math.floor(r * effectiveElapsed);
+}
+
+function sendDailyAttendanceCheck() {
+  const settings = getSettings();
+  const settingVal = key => { const s = settings.find(x => x.key === key); return s ? s.value : null; };
+  const enabledStores = JSON.parse(settingVal('attendance_enabled_stores') || '[]');
+  if (!enabledStores.length) return;
+  const staffMap    = JSON.parse(settingVal('attendance_staff_list') || '{}');
+  const scheduleMap = JSON.parse(settingVal('attendance_staff_schedule') || '{}');
+
+  const now = new Date();
+  const monthLabel = Utilities.formatDate(now, _sheetTz(), 'yyyy-MM');
+  const yesterdayDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
+  const cutoffStr = (yesterdayDate.getMonth() === now.getMonth())
+    ? Utilities.formatDate(yesterdayDate, _sheetTz(), 'yyyy-MM-dd') : null;
+
+  const attendanceRows = getAttendance(); // 全店舗分をまとめて1回だけ取得
+  const leaveRows = getLeaveRequests();
+
+  const underTargetLines = [];
+  enabledStores.forEach(storeId => {
+    const names = staffMap[storeId] || [];
+    const storeScheduleMap = scheduleMap[storeId] || {};
+    names.forEach(name => {
+      const schedule = storeScheduleMap[name] || { type: 'interval', intervalDays: 1 };
+      const leaveDatesSet = new Set(
+        cutoffStr ? leaveRows
+          .filter(r => String(r.store_id) === String(storeId) && (r.name || '') === name
+            && String(r.leave_date).startsWith(monthLabel) && String(r.leave_date) <= cutoffStr)
+          .map(r => String(r.leave_date)) : []
+      );
+      const target = computeAttendanceTargetDays_(schedule, now, leaveDatesSet);
+      if (target <= 0) return;
+      const actualDays = new Set(
+        attendanceRows
+          .filter(r => String(r.store_id) === String(storeId) && (r.name || '') === name
+            && r.within_range === true && String(r.clocked_at).startsWith(monthLabel))
+          .map(r => String(r.clocked_at).slice(0, 10))
+      ).size;
+      if (actualDays < target) {
+        underTargetLines.push('・店舗ID:' + storeId + ' ' + (name || '(未登録名)') + '（実績' + actualDays + '/目標' + target + '日）');
+      }
+    });
+  });
+
+  // 前日中に新規申請された休み申請一覧（休む日自体は問わず、"申請された"タイミングが前日のもの）
+  const newLeaveLines = leaveRows
+    .filter(r => String(r.submitted_at || '').slice(0, 10) === cutoffStr)
+    .map(r => '・店舗ID:' + r.store_id + ' ' + (r.name || '(未登録名)') + '：' + r.leave_date + 'に休み申請');
+
+  if (!underTargetLines.length && !newLeaveLines.length) return;
+  let msg = '';
+  if (underTargetLines.length) msg += '【未打刻確認】ペースを下回っている担当者:\n' + underTargetLines.join('\n');
+  if (newLeaveLines.length) msg += (msg ? '\n\n' : '') + '【休み申請（前日分の新着）】\n' + newLeaveLines.join('\n');
+  sendLineWorksNotification(msg);
+}
+
+// ----------------------------------------------------------------
 // 請求書PDF生成（テンプレート複製方式）
 // ----------------------------------------------------------------
 // セル位置は2026-07-11にINVOICE_TEMPLATE_IDのシート(gid=1628780517)を実測して確定。
@@ -1415,4 +1558,16 @@ function setDailyTrigger() {
     }
   }
   ScriptApp.newTrigger('sendDailyOrderNotification').timeBased().atHour(8).nearMinute(30).everyDays(1).inTimezone('Asia/Tokyo').create();
+}
+
+// デプロイ後、Apps Scriptエディタ（またはclasp run）で一度だけ手動実行すること
+// （コードをpush/deployしただけではトリガーは登録されない。setDailyTrigger()と同じ運用）
+function setDailyAttendanceTrigger() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === 'sendDailyAttendanceCheck') {
+      ScriptApp.deleteTrigger(triggers[i]);
+    }
+  }
+  ScriptApp.newTrigger('sendDailyAttendanceCheck').timeBased().atHour(8).nearMinute(30).everyDays(1).inTimezone('Asia/Tokyo').create();
 }
