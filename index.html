@@ -3321,7 +3321,6 @@ function renderLeaveRequests() {
           : r.leave_date === tomorrow ? '<span style="background:#d97706;color:white;font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;margin-left:8px">明日</span>' : '';
         return `<div style="display:flex;align-items:center;justify-content:space-between;background:#fff8f0;border:1px solid #f0e0c8;border-left:4px solid #d97706;border-radius:8px;padding:10px 14px;margin-bottom:8px">
           <div style="display:flex;align-items:center">
-            <span style="font-size:20px;margin-right:8px">🏖️</span>
             <span style="font-size:15px;font-weight:700;color:#444">${esc(_formatLeaveDateJa(r.leave_date))}</span>
             ${badge}
           </div>
