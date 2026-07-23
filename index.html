@@ -756,6 +756,17 @@
   </div>
 </div>
 
+<div id="attendance-reminder-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:2000;align-items:center;justify-content:center;padding:16px">
+  <div style="background:white;border-radius:14px;max-width:380px;width:100%;padding:22px 20px">
+    <div style="font-weight:700;font-size:16px;margin-bottom:10px;color:#22703d">業務開始の記録がまだです</div>
+    <div style="font-size:14px;color:#444;line-height:1.6;margin-bottom:18px">本日はまだ「業務開始」が記録されていません。お手すきの際に記録をお願いします。</div>
+    <div style="display:flex;gap:8px">
+      <button onclick="goToAttendanceFromReminder()" style="flex:1;background:#22703d;color:white;padding:11px;font-size:14px;font-weight:700;border-radius:8px;border:none;cursor:pointer;font-family:inherit">業務開始する</button>
+      <button onclick="closeAttendanceReminder()" style="flex:1;background:#e0e0e0;color:#555;padding:11px;font-size:14px;border-radius:8px;border:none;cursor:pointer;font-family:inherit">後で</button>
+    </div>
+  </div>
+</div>
+
 <script src="stores.js"></script>
 <script>
 /* ===== Google Apps Script バックエンド ===== */
@@ -3063,6 +3074,30 @@ function updatePartnerAttendanceTabVisibility() {
   }
 }
 
+// 押し忘れ対策（非ブロック版）: ポータルを開いた際、当日まだ業務開始が1件も記録されていなければ
+// 一度だけモーダルで促す。閉じても他の操作は通常通り行える。店舗単位の判定のため、
+// 複数名店舗では「その店の誰かが」当日記録済みなら再表示しない（個人単位の判定はしない）。
+async function maybeShowAttendanceReminder() {
+  if (!isAttendanceEnabled(storeTab)) return;
+  const today = new Date().toLocaleDateString('sv');
+  const shownKey = `attendance_reminder_shown_${storeTab}_${today}`;
+  if (localStorage.getItem(shownKey)) return;
+  await loadAttendanceHistory(storeTab);
+  const clockedToday = ATTENDANCE_HISTORY_CACHE.some(r => String(r.clocked_at || '').slice(0, 10) === today);
+  localStorage.setItem(shownKey, '1'); // 記録済み/表示済みのどちらでも当日はもう確認しない
+  if (clockedToday) return;
+  const overlay = document.getElementById('attendance-reminder-overlay');
+  if (overlay) overlay.style.display = 'flex';
+}
+function goToAttendanceFromReminder() {
+  closeAttendanceReminder();
+  switchPartnerTab('attendance');
+}
+function closeAttendanceReminder() {
+  const overlay = document.getElementById('attendance-reminder-overlay');
+  if (overlay) overlay.style.display = 'none';
+}
+
 // スタッフが1人以下（未登録含む）の店舗は、名前選択なしでボタンのみの「1名モード」にする
 function isAttendanceSolo(storeId) { return getAttendanceStaffList(storeId).length <= 1; }
 
@@ -3650,6 +3685,7 @@ async function showPage(p) {
       const lbl = document.getElementById('active-store-label');
       if (lbl) lbl.textContent = STORES[authedStore] + '店';
       updatePartnerAttendanceTabVisibility();
+      maybeShowAttendanceReminder(); // 非同期・非ブロック: 表示中も他の操作は妨げない
     }
     const navSearch = document.getElementById('store-nav-search');
     if (navSearch) navSearch.style.display = 'none';
