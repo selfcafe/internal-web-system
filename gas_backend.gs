@@ -566,7 +566,7 @@ function saveAttendance(storeId, name, lat, lng) {
 function notifyAttendanceGpsIssue_(storeId, name) {
   try {
     const who = name ? name + 'さん' : '担当者';
-    sendLineWorksNotification('【GPS要確認】' + who + 'の業務開始打刻が、店舗から離れた場所として記録されました。（店舗ID: ' + storeId + '）');
+    sendLineWorksNotification('【GPS要確認】' + who + 'の業務開始打刻が、店舗から離れた場所として記録されました。（店舗ID: ' + storeId + '）', _attendanceLineWorksChannel_(storeId));
   } catch(e) {
     console.error('LINE WORKS通知エラー:', e.message);
   }
@@ -601,7 +601,7 @@ function notifyLeaveRequestTomorrow_(storeId, name, leaveDate) {
   try {
     const who = name ? name + 'さん' : '担当者';
     const md = leaveDate.slice(5).replace('-', '/');
-    sendLineWorksNotification('【休み申請】' + who + 'が明日(' + md + ')休み申請をしました。（店舗ID: ' + storeId + '）');
+    sendLineWorksNotification('【休み申請】' + who + 'が明日(' + md + ')休み申請をしました。（店舗ID: ' + storeId + '）', _attendanceLineWorksChannel_(storeId));
   } catch(e) {
     console.error('LINE WORKS通知エラー:', e.message);
   }
@@ -1083,10 +1083,11 @@ function getLineWorksAccessToken_() {
   return JSON.parse(res.getContentText()).access_token;
 }
 
-function sendLineWorksNotification(message) {
+// channelIdOverrideを渡すとそのチャンネルへ、省略時は従来通りLW_CHANNEL_ID（発注等の既定チャンネル）へ送信する
+function sendLineWorksNotification(message, channelIdOverride) {
   var props = PropertiesService.getScriptProperties();
   var botId     = props.getProperty('LW_BOT_ID');
-  var channelId = props.getProperty('LW_CHANNEL_ID');
+  var channelId = channelIdOverride || props.getProperty('LW_CHANNEL_ID');
   var token = getLineWorksAccessToken_();
   var url = 'https://www.worksapis.com/v1.0/bots/' + botId + '/channels/' + channelId + '/messages';
   var body = JSON.stringify({content: {type: 'text', text: message}});
@@ -1099,6 +1100,32 @@ function sendLineWorksNotification(message) {
 
 function testLineWorksNotification() {
   sendLineWorksNotification('【テスト】LINE WORKS通知の接続テストです。');
+}
+
+// 業務開始（未打刻/GPS要確認/休み申請）の通知は発注とは別のLINE WORKSグループへ送る。
+// さらにnotifyNewOrder_/sendDailyOrderNotificationと同様、東海/関西/関東のエリアごとに
+// 別グループへ振り分ける。スクリプトプロパティに各エリアのチャンネルIDを設定して使う:
+//   LW_CHANNEL_ID_ATTENDANCE_TOKAI / _KANSAI / _KANTO
+// エリア別が未設定の間はLW_CHANNEL_ID_ATTENDANCE（業務開始共通チャンネル）、
+// それも未設定なら従来の発注用チャンネル(LW_CHANNEL_ID)にフォールバックする。
+const ATTENDANCE_AREA_CHANNEL_PROP_ = { '東海': 'LW_CHANNEL_ID_ATTENDANCE_TOKAI', '関西': 'LW_CHANNEL_ID_ATTENDANCE_KANSAI', '関東': 'LW_CHANNEL_ID_ATTENDANCE_KANTO' };
+function _areaForStore_(storeId) {
+  for (var areaName in AREA_STORES) {
+    if (AREA_STORES[areaName].indexOf(String(storeId)) >= 0) return areaName;
+  }
+  return null;
+}
+function _attendanceChannelForArea_(area) {
+  var props = PropertiesService.getScriptProperties();
+  var propKey = area && ATTENDANCE_AREA_CHANNEL_PROP_[area];
+  return (propKey && props.getProperty(propKey)) || props.getProperty('LW_CHANNEL_ID_ATTENDANCE') || props.getProperty('LW_CHANNEL_ID');
+}
+function _attendanceLineWorksChannel_(storeId) {
+  return _attendanceChannelForArea_(_areaForStore_(storeId));
+}
+
+function testAttendanceLineWorksNotification() {
+  sendLineWorksNotification('【テスト】業務開始通知グループの接続テストです。', _attendanceLineWorksChannel_(null));
 }
 
 function testNotify() {
@@ -1179,7 +1206,15 @@ function sendDailyAttendanceCheck() {
   const attendanceRows = getAttendance(); // 全店舗分をまとめて1回だけ取得
   const leaveRows = getLeaveRequests();
 
-  const underTargetLines = [];
+  // notifyNewOrder_/sendDailyOrderNotificationと同様、店舗のエリア（東海/関西/関東）ごとに
+  // 行を振り分け、エリア単位で別々のLINE WORKSグループへ送る（エリア不明の店舗は別枠にまとめる）
+  const linesByArea = {}; // { areaKey: { underTarget: [...], newLeave: [...] } }
+  const bucketFor = storeId => {
+    const area = _areaForStore_(storeId) || '(エリア未設定)';
+    if (!linesByArea[area]) linesByArea[area] = { underTarget: [], newLeave: [] };
+    return linesByArea[area];
+  };
+
   enabledStores.forEach(storeId => {
     const names = staffMap[storeId] || [];
     const storeScheduleMap = scheduleMap[storeId] || {};
@@ -1200,21 +1235,27 @@ function sendDailyAttendanceCheck() {
           .map(r => String(r.clocked_at).slice(0, 10))
       ).size;
       if (actualDays < target) {
-        underTargetLines.push('・店舗ID:' + storeId + ' ' + (name || '(未登録名)') + '（実績' + actualDays + '/目標' + target + '日）');
+        bucketFor(storeId).underTarget.push('・店舗ID:' + storeId + ' ' + (name || '(未登録名)') + '（実績' + actualDays + '/目標' + target + '日）');
       }
     });
   });
 
   // 前日中に新規申請された休み申請一覧（休む日自体は問わず、"申請された"タイミングが前日のもの）
-  const newLeaveLines = leaveRows
+  leaveRows
     .filter(r => String(r.submitted_at || '').slice(0, 10) === cutoffStr)
-    .map(r => '・店舗ID:' + r.store_id + ' ' + (r.name || '(未登録名)') + '：' + r.leave_date + 'に休み申請');
+    .forEach(r => {
+      bucketFor(r.store_id).newLeave.push('・店舗ID:' + r.store_id + ' ' + (r.name || '(未登録名)') + '：' + r.leave_date + 'に休み申請');
+    });
 
-  if (!underTargetLines.length && !newLeaveLines.length) return;
-  let msg = '';
-  if (underTargetLines.length) msg += '【未打刻確認】ペースを下回っている担当者:\n' + underTargetLines.join('\n');
-  if (newLeaveLines.length) msg += (msg ? '\n\n' : '') + '【休み申請（前日分の新着）】\n' + newLeaveLines.join('\n');
-  sendLineWorksNotification(msg);
+  Object.keys(linesByArea).forEach(area => {
+    const b = linesByArea[area];
+    if (!b.underTarget.length && !b.newLeave.length) return;
+    let msg = '【' + area + '】\n';
+    if (b.underTarget.length) msg += '【未打刻確認】ペースを下回っている担当者:\n' + b.underTarget.join('\n');
+    if (b.newLeave.length) msg += (b.underTarget.length ? '\n\n' : '') + '【休み申請（前日分の新着）】\n' + b.newLeave.join('\n');
+    const channel = area === '(エリア未設定)' ? _attendanceChannelForArea_(null) : _attendanceChannelForArea_(area);
+    sendLineWorksNotification(msg, channel);
+  });
 }
 
 // ----------------------------------------------------------------
