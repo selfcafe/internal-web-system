@@ -3297,6 +3297,11 @@ async function loadLeaveRequests(storeId) {
   try { LEAVE_REQUESTS_CACHE = await gasGet('getLeaveRequests', { storeId }); }
   catch(e) { console.error('getLeaveRequests error:', e); LEAVE_REQUESTS_CACHE = []; }
 }
+function _formatLeaveDateJa(dateStr) {
+  const d = new Date(dateStr + 'T00:00:00');
+  const wd = ['日','月','火','水','木','金','土'][d.getDay()];
+  return `${d.getMonth() + 1}月${d.getDate()}日(${wd})`;
+}
 function renderLeaveRequests() {
   const wrap = document.getElementById('leave-request-list-wrap');
   if (!wrap) return;
@@ -3306,14 +3311,23 @@ function renderLeaveRequests() {
   }
   const activeName = _attendanceActiveName();
   const today = new Date().toLocaleDateString('sv');
+  const tomorrow = new Date(Date.now() + 24*60*60*1000).toLocaleDateString('sv');
   const rows = LEAVE_REQUESTS_CACHE
     .filter(r => (r.name || '') === activeName && String(r.leave_date || '') >= today)
     .sort((a, b) => String(a.leave_date).localeCompare(String(b.leave_date)));
   wrap.innerHTML = rows.length
-    ? rows.map(r => `<div style="display:flex;align-items:center;justify-content:space-between;font-size:13px;padding:4px 0;border-bottom:1px solid #eee">
-        <span>${esc(r.leave_date)}</span>
-        <button onclick="cancelLeaveRequest('${esc(r.id)}')" style="background:none;border:none;color:#dc2626;cursor:pointer;font-size:12px">キャンセル</button>
-      </div>`).join('')
+    ? rows.map(r => {
+        const badge = r.leave_date === today ? '<span style="background:#dc2626;color:white;font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;margin-left:8px">本日</span>'
+          : r.leave_date === tomorrow ? '<span style="background:#d97706;color:white;font-size:11px;font-weight:700;padding:2px 8px;border-radius:10px;margin-left:8px">明日</span>' : '';
+        return `<div style="display:flex;align-items:center;justify-content:space-between;background:#fff8f0;border:1px solid #f0e0c8;border-left:4px solid #d97706;border-radius:8px;padding:10px 14px;margin-bottom:8px">
+          <div style="display:flex;align-items:center">
+            <span style="font-size:20px;margin-right:8px">🏖️</span>
+            <span style="font-size:15px;font-weight:700;color:#444">${esc(_formatLeaveDateJa(r.leave_date))}</span>
+            ${badge}
+          </div>
+          <button onclick="cancelLeaveRequest('${esc(r.id)}')" style="background:white;color:#dc2626;border:1px solid #dc2626;padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;font-family:inherit">キャンセル</button>
+        </div>`;
+      }).join('')
     : '<div style="color:#aaa;font-size:12px;padding:6px 0">申請はありません</div>';
 }
 async function cancelLeaveRequest(id) {
