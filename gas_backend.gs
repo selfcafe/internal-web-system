@@ -144,21 +144,6 @@ function doPost(e) {
   lock.waitLock(30000);
   try {
     const b = JSON.parse(e.postData.contents);
-    // LINE WORKSのCallback URLからのイベント受信（channelId調査用、2026-07-24一時的に追加）。
-    // このアプリ自身のPOSTは常に{action:...}形式なので、actionが無ければLINE WORKSコールバックと
-    // みなす。実行ログ表示がWebアプリ実行では確認しづらかったため、スクリプトプロパティに
-    // 直近分を保存し、getRecentLineWorksCallbacks()をエディタから実行して確認する方式にした。
-    // 目的の channelId 確認が終わったら、Callback URL設定を「未設定」に戻してこの分岐も削除してよい
-    if (!b.action) {
-      try {
-        const props = PropertiesService.getScriptProperties();
-        const log = JSON.parse(props.getProperty('LW_CALLBACK_LOG') || '[]');
-        log.push({ at: Utilities.formatDate(new Date(), _sheetTz(), 'yyyy-MM-dd HH:mm:ss'), body: b });
-        while (log.length > 20) log.shift();
-        props.setProperty('LW_CALLBACK_LOG', JSON.stringify(log));
-      } catch (e) {}
-      return json({ ok: true });
-    }
     let result;
     if      (b.action === 'saveOrders')         result = saveOrders(b.storeId, b.rows);
     else if (b.action === 'upsertOrders')       result = upsertOrderRows(b.storeId, b.rows);
@@ -1277,21 +1262,6 @@ function testAttendanceLineWorksNotification() {
 
 function testLeaveLineWorksNotification() {
   sendLineWorksNotification('【テスト】休み申請通知グループの接続テストです。', _leaveLineWorksChannel_(null));
-}
-
-// LW_CHANNEL_ID_LEAVE_TOKAI等を設定する際、そのチャンネルIDが分からない場合の調査用。
-// ⚠️ 廃止: listLineWorksChannels()（GET /v1.0/bots/{botId}/channels）は実在しないAPIだった
-// （実行すると{"code":"NOT_FOUND","description":"Api not exists"}が返る、2026-07-24確認）。
-// 代わりにCallback URL経由で受信したイベントをgetRecentLineWorksCallbacks()で確認する方式にした。
-
-// doPost内でLINE WORKSのCallback URLから受信し、スクリプトプロパティ(LW_CALLBACK_LOG)に貯めておいた
-// 直近分(最大20件)を確認する。Apps Scriptエディタでこの関数を直接実行し、実行ログでchannelId等を
-// 確認する（Webアプリ実行のログ表示より、エディタから直接実行した場合の方がログが確実に見える）。
-// 用が済んだらCallback URL設定を「未設定」に戻し、この関数・doPost内の対応する分岐も削除してよい
-function getRecentLineWorksCallbacks() {
-  const log = PropertiesService.getScriptProperties().getProperty('LW_CALLBACK_LOG');
-  console.log(log);
-  return log ? JSON.parse(log) : [];
 }
 
 // Botの名前変更がLINE WORKS側になかなか反映されない場合の調査用。Developer Console/管理コンソール
