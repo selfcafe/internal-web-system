@@ -145,10 +145,10 @@ function doPost(e) {
   try {
     const b = JSON.parse(e.postData.contents);
     // LINE WORKSのCallback URLからのイベント受信（channelId調査用、2026-07-24一時的に追加）。
-    // このアプリ自身のPOSTは常に{action:...}形式なので、actionが無くLINE WORKSコールバック特有の
-    // source/typeフィールドがある場合はそちらとみなし、ログに出すだけで何もアプリの状態は変更しない。
+    // このアプリ自身のPOSTは常に{action:...}形式なので、actionが無ければLINE WORKSコールバックと
+    // みなし、ペイロードの実際の形が分からなくても確実に見えるよう無条件でログに出す。
     // 目的の channelId 確認が終わったら、Callback URL設定を「未設定」に戻してこの分岐も削除してよい
-    if (!b.action && (b.source || b.type)) {
+    if (!b.action) {
       console.log('LINE WORKS callback: ' + JSON.stringify(b));
       return json({ ok: true });
     }
