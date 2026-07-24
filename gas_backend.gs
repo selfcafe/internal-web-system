@@ -672,7 +672,7 @@ function notifyLeaveRequestTomorrow_(storeId, name, leaveDate) {
   try {
     const who = name ? name + 'さん' : '担当者';
     const md = leaveDate.slice(5).replace('-', '/');
-    sendLineWorksNotification('【休み申請】' + who + 'が明日(' + md + ')休み申請をしました。（店舗ID: ' + _storeIdLabel_(storeId) + '）', _attendanceLineWorksChannel_(storeId));
+    sendLineWorksNotification('【休み申請】' + who + 'が明日(' + md + ')休み申請をしました。（店舗ID: ' + _storeIdLabel_(storeId) + '）', _leaveLineWorksChannel_(storeId));
   } catch(e) {
     console.error('LINE WORKS通知エラー:', e.message);
   }
@@ -706,7 +706,7 @@ function notifyLeaveRequestCancelled_(storeId, name, leaveDate) {
   try {
     const who = name ? name + 'さん' : '担当者';
     const md = leaveDate.slice(5).replace('-', '/');
-    sendLineWorksNotification('【休み申請取消】' + who + 'の明日(' + md + ')の休み申請が取り消されました。（店舗ID: ' + _storeIdLabel_(storeId) + '）', _attendanceLineWorksChannel_(storeId));
+    sendLineWorksNotification('【休み申請取消】' + who + 'の明日(' + md + ')の休み申請が取り消されました。（店舗ID: ' + _storeIdLabel_(storeId) + '）', _leaveLineWorksChannel_(storeId));
   } catch(e) {
     console.error('LINE WORKS通知エラー:', e.message);
   }
@@ -1241,8 +1241,27 @@ function _attendanceLineWorksChannel_(storeId) {
   return _attendanceChannelForArea_(_areaForStore_(storeId));
 }
 
+// 休み申請の通知だけ、未打刻/GPS要確認とは別の送り先に変更できるようにする(2026-07-24)。
+// スクリプトプロパティに LW_CHANNEL_ID_LEAVE_TOKAI / _KANSAI / _KANTO を設定するとそこへ、
+// エリア別が未設定ならLW_CHANNEL_ID_LEAVE（休み申請共通）、それも未設定なら従来通り
+// 業務開始共通(LW_CHANNEL_ID_ATTENDANCE)→発注用(LW_CHANNEL_ID)の順にフォールバックする
+// （何も新しく設定しなければ今まで通りの送り先のまま変わらない）
+const LEAVE_AREA_CHANNEL_PROP_ = { '東海': 'LW_CHANNEL_ID_LEAVE_TOKAI', '関西': 'LW_CHANNEL_ID_LEAVE_KANSAI', '関東': 'LW_CHANNEL_ID_LEAVE_KANTO' };
+function _leaveChannelForArea_(area) {
+  var props = PropertiesService.getScriptProperties();
+  var propKey = area && LEAVE_AREA_CHANNEL_PROP_[area];
+  return (propKey && props.getProperty(propKey)) || props.getProperty('LW_CHANNEL_ID_LEAVE') || props.getProperty('LW_CHANNEL_ID_ATTENDANCE') || props.getProperty('LW_CHANNEL_ID');
+}
+function _leaveLineWorksChannel_(storeId) {
+  return _leaveChannelForArea_(_areaForStore_(storeId));
+}
+
 function testAttendanceLineWorksNotification() {
   sendLineWorksNotification('【テスト】業務開始通知グループの接続テストです。', _attendanceLineWorksChannel_(null));
+}
+
+function testLeaveLineWorksNotification() {
+  sendLineWorksNotification('【テスト】休み申請通知グループの接続テストです。', _leaveLineWorksChannel_(null));
 }
 
 function testNotify() {
@@ -1366,14 +1385,19 @@ function sendDailyAttendanceCheck() {
       bucketFor(r.store_id).newLeave.push('・店舗ID:' + _storeIdLabel_(r.store_id) + ' ' + (r.name || '(未登録名)') + '：' + r.leave_date + 'に休み申請');
     });
 
+  // 未打刻確認と休み申請は送り先が別々になりうる(休み申請だけLEAVE_AREA_CHANNEL_PROP_で
+  // 変更可能、2026-07-24)ため、以前は1通にまとめていたメッセージをエリアごとに分けて送る
   Object.keys(linesByArea).forEach(area => {
     const b = linesByArea[area];
-    if (!b.underTarget.length && !b.newLeave.length) return;
-    let msg = '【' + area + '】\n';
-    if (b.underTarget.length) msg += '【未打刻確認】ペースを下回っている担当者:\n' + b.underTarget.join('\n');
-    if (b.newLeave.length) msg += (b.underTarget.length ? '\n\n' : '') + '【休み申請（前日分の新着）】\n' + b.newLeave.join('\n');
-    const channel = area === '(エリア未設定)' ? _attendanceChannelForArea_(null) : _attendanceChannelForArea_(area);
-    sendLineWorksNotification(msg, channel);
+    const areaKey = area === '(エリア未設定)' ? null : area;
+    if (b.underTarget.length) {
+      const msg = '【' + area + '】\n【未打刻確認】ペースを下回っている担当者:\n' + b.underTarget.join('\n');
+      sendLineWorksNotification(msg, _attendanceChannelForArea_(areaKey));
+    }
+    if (b.newLeave.length) {
+      const msg = '【' + area + '】\n【休み申請（前日分の新着）】\n' + b.newLeave.join('\n');
+      sendLineWorksNotification(msg, _leaveChannelForArea_(areaKey));
+    }
   });
 }
 
