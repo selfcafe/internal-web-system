@@ -97,6 +97,7 @@ function doGet(e) {
     else if (a === 'getSettingHistory')         result = getSettingHistory(e.parameter.key, e.parameter.limit);
     else if (a === 'getAttendance')             result = getAttendance(e.parameter.storeId);
     else if (a === 'getLeaveRequests')          result = getLeaveRequests(e.parameter.storeId);
+    else if (a === 'getAttendanceTabData')      result = getAttendanceTabData(e.parameter.storeId);
     else if (a === 'getDeliveryHistory')        result = getDeliveryHistory(e.parameter.storeId, e.parameter.month);
     else result = { error: 'Unknown action: ' + a };
     return json(result);
@@ -507,8 +508,10 @@ function saveChecksheetData(storeId, periodLabel, data) {
 // ----------------------------------------------------------------
 
 // storeIdを渡すと自店舗分のみ、省略すると全店舗分を返す（パートナー/管理者で共通利用）
+// ※以前はここでpurgeOldAttendance()を毎回実行していたが、全打刻を毎回スキャンする重い処理を
+// パートナー/管理者が画面を開くたびの読み取りパスに乗せるのは無駄なので、日次バッチ
+// （sendDailyAttendanceCheck、1日1回8:30）側でのみ実行するよう移動した
 function getAttendance(storeId) {
-  purgeOldAttendance();
   let rows = sheetRows(getSheet(SHEET_ATTENDANCE), ATTENDANCE_COLS);
   if (storeId) rows = rows.filter(r => String(r.store_id) === String(storeId));
   return rows.map(r => Object.assign({}, r, { clocked_at: _dateTimeStr(r.clocked_at) }))
@@ -583,6 +586,20 @@ function getLeaveRequests(storeId) {
   if (storeId) rows = rows.filter(r => String(r.store_id) === String(storeId));
   return rows.map(r => Object.assign({}, r, { leave_date: _dateStr(r.leave_date), submitted_at: _dateTimeStr(r.submitted_at) }))
     .sort((a, b) => String(b.submitted_at).localeCompare(String(a.submitted_at)));
+}
+
+// 「業務開始」タブを開いた時、getAttendance/getLeaveRequestsを別々に2往復させず1回にまとめる。
+// クライアント側は既にPromise.allで並列取得していたが、Apps Script呼び出し自体の起動
+// オーバーヘッドは並列化しても1回分減らせないため、getInventoryTabDataと同じ狙いで
+// 往復回数を2回→1回に減らすのが目的（各データの中身・絞り込みロジックは変えていない）。
+// 片方が例外を投げても他方を巻き添えにしないよう個別にtry/catchする
+function getAttendanceTabData(storeId) {
+  const result = { history: [], leaveRequests: [] };
+  try { result.history = getAttendance(storeId); }
+  catch (e) { result.historyError = e.message; }
+  try { result.leaveRequests = getLeaveRequests(storeId); }
+  catch (e) { result.leaveRequestsError = e.message; }
+  return result;
 }
 
 // 承認ステップなし、申請した瞬間に即時確定（2026-07-23確定仕様）。
@@ -1238,6 +1255,7 @@ function sendDailyAttendanceCheck() {
   const cutoffStr = (yesterdayDate.getMonth() === now.getMonth())
     ? Utilities.formatDate(yesterdayDate, _sheetTz(), 'yyyy-MM-dd') : null;
 
+  purgeOldAttendance(); // 3ヶ月より古い打刻の削除は読み取りのたびではなく、この日次バッチでのみ行う
   const attendanceRows = getAttendance(); // 全店舗分をまとめて1回だけ取得
   const leaveRows = getLeaveRequests();
 

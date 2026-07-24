@@ -3093,8 +3093,9 @@ async function switchPartnerTab(tab) {
   if (tab === 'attendance') {
     renderAttendanceNameSelect();
     document.getElementById('attendance-history-wrap').innerHTML = '<div style="color:#aaa;font-size:13px;padding:10px 0">読み込み中…</div>';
-    // getAttendance/getLeaveRequestsは互いに依存しないため並列取得（直列だと往復時間が単純に合算されてしまう）
-    await Promise.all([loadAttendanceHistory(storeTab), loadLeaveRequests(storeTab)]);
+    // getAttendance/getLeaveRequestsは互いに依存しないが、並列取得してもApps Script呼び出し自体の
+    // 起動オーバーヘッドは2回分かかるため、棚卸表と同様にGAS側の複合アクション1本にまとめている
+    await loadAttendanceTabData(storeTab);
     renderAttendanceHistory();
     renderAttendanceTally();
     renderLeaveRequests();
@@ -3296,6 +3297,22 @@ let LEAVE_REQUESTS_CACHE = [];
 async function loadLeaveRequests(storeId) {
   try { LEAVE_REQUESTS_CACHE = await gasGet('getLeaveRequests', { storeId }); }
   catch(e) { console.error('getLeaveRequests error:', e); LEAVE_REQUESTS_CACHE = []; }
+}
+
+// 「業務開始」タブを開いた時専用：getAttendance/getLeaveRequestsをGAS側の複合アクション
+// getAttendanceTabData 1本にまとめて取得し、往復回数を2回→1回に減らす（棚卸表の
+// loadInventoryTabDataと同じ狙い）。打刻直後・休み申請の送信/取消後の単独リロードは
+// 従来通りloadAttendanceHistory/loadLeaveRequestsを個別に使う
+async function loadAttendanceTabData(storeId) {
+  try {
+    const data = await gasGet('getAttendanceTabData', { storeId });
+    ATTENDANCE_HISTORY_CACHE = data.history || [];
+    LEAVE_REQUESTS_CACHE = data.leaveRequests || [];
+  } catch(e) {
+    console.error('getAttendanceTabData error:', e);
+    ATTENDANCE_HISTORY_CACHE = [];
+    LEAVE_REQUESTS_CACHE = [];
+  }
 }
 function _formatLeaveDateJa(dateStr) {
   const d = new Date(dateStr + 'T00:00:00');
