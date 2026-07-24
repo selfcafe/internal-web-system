@@ -434,9 +434,28 @@ function _dateTimeStr(v) {
 // lost_items
 // ----------------------------------------------------------------
 
+// 全店舗分の忘れ物データ(整形済み)を短時間(25秒)だけCacheServiceに保持する（2026-07-24、
+// attendance/leave_requestsと同じ狙い——1店舗・1ヶ月分だけの絞り込みでも毎回シート全体を
+// 読み直していたのを緩和）。書き込み側(saveLostItem/deleteLostItem/purgeOldLostItems)が
+// 都度キャッシュを無効化するので、自分自身の直後の再読み込みは必ず最新の状態になる
+const LOST_ITEMS_CACHE_KEY = 'lost_items_rows_v1';
+function _lostItemsRowsCached_() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(LOST_ITEMS_CACHE_KEY);
+  if (cached) return JSON.parse(cached);
+  const rows = sheetRows(getSheet(SHEET_LOST), LOST_COLS).map(r => ({ ...r, found_date: _dateStr(r.found_date) }));
+  try { cache.put(LOST_ITEMS_CACHE_KEY, JSON.stringify(rows), 25); } catch (e) {}
+  return rows;
+}
+function _invalidateLostItemsCache_() {
+  try { CacheService.getScriptCache().remove(LOST_ITEMS_CACHE_KEY); } catch (e) {}
+}
+
+// ※以前はここでpurgeOldLostItems()を毎回実行していたが、attendanceと同じ理由(全件スキャン＋
+// Drive削除を読み取りのたびに行うのは無駄)で、日次バッチ(sendDailyOrderNotification内)側で
+// のみ実行するよう移動した
 function getLostItems(month, storeId) {
-  purgeOldLostItems();
-  let rows = sheetRows(getSheet(SHEET_LOST), LOST_COLS).map(r => ({ ...r, found_date: _dateStr(r.found_date) }));
+  let rows = _lostItemsRowsCached_();
   if (month)   rows = rows.filter(r => r.found_date && String(r.found_date).startsWith(month));
   if (storeId) rows = rows.filter(r => String(r.store_id) === String(storeId));
   return rows;
@@ -459,6 +478,7 @@ function purgeOldLostItems() {
     _trashDriveImages(imgUrl);
     sheet.deleteRow(i + 1);
   }
+  _invalidateLostItemsCache_();
 }
 
 // imagesBase64: 画像0枚以上の配列（複数枚添付対応）。DriveにアップロードしたURLを
@@ -475,6 +495,7 @@ function saveLostItem(item, imagesBase64, imageMime) {
   sheet.appendRow(LOST_COLS.map(c =>
     c === 'image_url' ? (imageUrl || '') : (item[c] === undefined || item[c] === null ? '' : item[c])
   ));
+  _invalidateLostItemsCache_();
   return { ok: true, image_url: imageUrl };
 }
 
@@ -487,6 +508,7 @@ function deleteLostItem(id, imageUrl) {
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][idIdx]) === String(id)) { sheet.deleteRow(i + 1); break; }
   }
+  _invalidateLostItemsCache_();
   _trashDriveImages(imageUrl);
   return { ok: true };
 }
@@ -1377,6 +1399,7 @@ function testNotify() {
 }
 
 function sendDailyOrderNotification() {
+  purgeOldLostItems(); // 忘れ物の30日経過削除は読み取りのたびではなく、この日次バッチでのみ行う
   var ss = SpreadsheetApp.openById(SHEET_ID);
   var sheet = ss.getSheetByName(SHEET_ORDERS);
   if (!sheet || sheet.getLastRow() <= 1) return;
