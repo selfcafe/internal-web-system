@@ -74,34 +74,31 @@ const AREA_STORES = {
   '関東': ['inzai','otsuka','sugamo','umejima','shibuya','shinjuku_fc','kamisato']
 };
 
-// 店舗名マスタ（stores.js側の一覧をLINE WORKS通知メッセージ用にバックエンドへ複製したもの）。
-// stores.jsはフロント専用の共有ファイルでGAS側から直接参照できないため、AREA_STORESと同じ理由で
-// 複製管理している。店舗を追加・改名・削除する場合はstores.js側と合わせてこちらも更新すること
-const STORE_NAMES = {
-  sasashima:'ささしまライブ', chikusa:'千種', gokaiso:'御器所', tsuruma:'鶴舞',
-  kamisawa:'神沢', nakamura_nisseki:'中村日赤', midori_kofubutsu:'緑鴻仏目',
-  sakurayama:'桜山', akatsuka:'赤塚', shin_moriyama:'新守山', tokoname:'常滑',
-  hamamatsu:'浜松新橋', sakae:'栄', rokubanchou:'六番町', nonami:'野並',
-  seto_iwayadou:'瀬戸岩屋堂', nagakute:'長久手', meieki_nishi:'名駅西口',
-  nadia_sakae:'ナディアパーク栄', shinmizuhashi:'新瑞橋', eisei:'栄生',
-  hotei:'布袋駅', kamejima:'亀島', nakamura_torii:'中村日赤鳥居通',
-  taikodori:'太閤通駅', kouta:'幸田', hibino:'日比野', hoshigaoka:'星が丘',
-  ikeshita:'池下', toyota:'T-FACE豊田', hara:'原', fujigaoka:'藤が丘',
-  gifu_kitagata:'イオンタウン岐阜北方', narumi:'鳴海山下',
-  tenma:'天満', higashiosaka:'東大阪小若江', aikawa:'相川駅前',
-  minami_morimachi:'南森町', abeno:'あべの南', tanimachi9:'谷町九丁目',
-  moriguchi:'守口駅前', taishibashi:'太子橋', kyobashi_kita:'京橋北',
-  shinsaibashi:'心斎橋東急ビル', kishi:'喜志', umeda:'梅田センタービル',
-  kami_shinjyo:'上新庄', osaka_hirano:'大阪平野西', hikone:'イオンタウン彦根',
-  aeon_higashiosaka:'イオンタウン東大阪', gamo4:'蒲生四丁目',
-  inzai:'印西牧の原', otsuka:'大塚駅南口', sugamo:'巣鴨駅南口',
-  umejima:'梅島（うめじま）', shibuya:'渋谷神南',
-  shinjuku_fc:'FC 新宿西口Shinjuku Future Gallery', kamisato:'カインズ上里本庄',
-};
+// 店舗名マスタ。手動複製で二重管理にせず、GitHub Pagesで公開されているstores.js(フロントの
+// 共有ファイル)を都度UrlFetchAppで取得・パースして使う——stores.js側を直せば自動的に反映される。
+// 1回の実行(doGet/doPost/トリガー呼び出し)内でのみキャッシュし、同じ実行内で何度呼ばれても
+// 取得は1回だけにする（実行をまたいだキャッシュはしない＝毎回最新を取りに行く）。
+// 取得・パースに失敗した場合（GitHub Pagesの一時的な障害等）は店舗名なし(IDのみ)にフォールバック
+// し、通知自体は従来通り送る（名前解決の失敗で通知が止まらないようにする）
+const STORES_JS_URL = 'https://selfcafe.github.io/internal-web-system/stores.js';
+let _cachedStoreNames = null;
+function _storeNames_() {
+  if (_cachedStoreNames) return _cachedStoreNames;
+  try {
+    const text = UrlFetchApp.fetch(STORES_JS_URL, { muteHttpExceptions: true }).getContentText();
+    // stores.jsは "const STORES = {...};" という単純なJS定義のみのファイル（信頼できる自リポジトリ）
+    // なので、Functionコンストラクタでその場限りの関数スコープとして実行しSTORESだけを取り出す
+    _cachedStoreNames = new Function(text + '; return STORES;')();
+  } catch (e) {
+    console.error('stores.js取得に失敗、店舗名なしで通知します:', e.message);
+    _cachedStoreNames = {};
+  }
+  return _cachedStoreNames;
+}
 // LINE WORKS通知メッセージ用：店舗IDに、分かっていれば店舗名を添えた表示用文字列を返す
-// （未知のID・custom_stores等でSTORE_NAMESに無い店舗はIDのみ返す）
+// （未知のID・custom_stores等でstores.jsに無い店舗、または取得失敗時はIDのみ返す）
 function _storeIdLabel_(storeId) {
-  const nm = STORE_NAMES[storeId];
+  const nm = _storeNames_()[storeId];
   return nm ? storeId + '（' + nm + '）' : String(storeId);
 }
 
