@@ -914,6 +914,9 @@ function _syncCustomStores() {
 function _syncDeletedStores() {
   _gasSaveSetting('deleted_stores', localStorage.getItem(DELETED_STORES_KEY) || '[]');
 }
+function _syncStoreRegions() {
+  _gasSaveSetting('store_regions', localStorage.getItem(STORE_REGION_KEY) || '{}');
+}
 function _syncDeletedProducts() {
   _gasSaveSetting('deleted_products', localStorage.getItem(DELETED_PRODUCTS_KEY) || '[]');
 }
@@ -933,6 +936,7 @@ async function syncAllStoreDataToGas() {
     _gasSaveSetting('store_passwords',  localStorage.getItem(STORE_PW_KEY) || '{}'),
     _gasSaveSetting('custom_stores',    localStorage.getItem(CUSTOM_STORES_KEY) || '{}'),
     _gasSaveSetting('deleted_stores',   localStorage.getItem(DELETED_STORES_KEY) || '[]'),
+    _gasSaveSetting('store_regions',    localStorage.getItem(STORE_REGION_KEY) || '{}'),
     _gasSaveSetting('store_product_cfg',localStorage.getItem(STORE_PRODUCTS_KEY) || '{}'),
     _gasSaveSetting('all_products',     localStorage.getItem(ALL_PRODUCTS_KEY)   || '[]'),
     _gasSaveSetting('vendor_config',    localStorage.getItem(VENDOR_CONFIG_KEY)  || '[]'),
@@ -977,6 +981,7 @@ async function initGas() {
       if (r.key === 'store_passwords')   localStorage.setItem(STORE_PW_KEY,        clean(r.value));
       if (r.key === 'custom_stores')     localStorage.setItem(CUSTOM_STORES_KEY,   clean(r.value));
       if (r.key === 'deleted_stores')    localStorage.setItem(DELETED_STORES_KEY,  clean(r.value));
+      if (r.key === 'store_regions')     localStorage.setItem(STORE_REGION_KEY,    clean(r.value));
       if (r.key === 'store_product_cfg') localStorage.setItem(STORE_PRODUCTS_KEY,  clean(r.value));
       if (r.key === 'all_products')      localStorage.setItem(ALL_PRODUCTS_KEY,    clean(r.value));
       if (r.key === 'deleted_products')  localStorage.setItem(DELETED_PRODUCTS_KEY, clean(r.value));
@@ -1000,6 +1005,7 @@ async function initGas() {
     if (!gasKeys.has('store_passwords')   && localStorage.getItem(STORE_PW_KEY))        _syncStorePw();
     if (!gasKeys.has('custom_stores')     && localStorage.getItem(CUSTOM_STORES_KEY))   _syncCustomStores();
     if (!gasKeys.has('deleted_stores')    && localStorage.getItem(DELETED_STORES_KEY))  _syncDeletedStores();
+    if (!gasKeys.has('store_regions')     && localStorage.getItem(STORE_REGION_KEY))    _syncStoreRegions();
     if (!gasKeys.has('store_product_cfg') && localStorage.getItem(STORE_PRODUCTS_KEY))  _syncStoreProductCfg();
     if (!gasKeys.has('all_products')      && localStorage.getItem(ALL_PRODUCTS_KEY))    _gasSaveSetting('all_products',  localStorage.getItem(ALL_PRODUCTS_KEY));
     if (!gasKeys.has('deleted_products')  && localStorage.getItem(DELETED_PRODUCTS_KEY)) _syncDeletedProducts();
@@ -1015,6 +1021,7 @@ async function initGas() {
     if (!gasKeys.has('attendance_staff_schedule') && localStorage.getItem(ATTENDANCE_SCHEDULE_KEY)) _gasSaveSetting('attendance_staff_schedule', localStorage.getItem(ATTENDANCE_SCHEDULE_KEY));
     loadCustomStores();
     loadDeletedStores();
+    loadStoreRegions();
     loadDeletedProducts();
     // パスワード一覧が開いている場合は再描画
     const pwList = document.getElementById('store-pw-list');
@@ -5206,6 +5213,7 @@ function changeStoreRegion(storeId, newRegion) {
   const saved = JSON.parse(localStorage.getItem(STORE_REGION_KEY) || '{}');
   saved[storeId] = newRegion;
   localStorage.setItem(STORE_REGION_KEY, JSON.stringify(saved));
+  _syncStoreRegions();
   Object.values(REGIONS).forEach(r => { r.stores = r.stores.filter(s => s !== storeId); });
   if (REGIONS[newRegion]) REGIONS[newRegion].stores.push(storeId);
   refreshStoreSettings();

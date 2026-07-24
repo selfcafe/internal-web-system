@@ -67,12 +67,17 @@ const ATTENDANCE_THRESHOLD_M = 300;
 const SHEET_ATTENDANCE_LEAVE = 'attendance_leave';
 const ATTENDANCE_LEAVE_COLS = ['id','store_id','name','leave_date','submitted_at'];
 
-// エリア別店舗ID
+// エリア別店舗ID（デフォルト割り当て。フロントのREGIONS定数と同じ内容。管理者が「店舗管理」画面の
+// 「店舗のエリア変更」で個別に上書きした場合は、app_settingsの'store_regions'キー(_areaForStore_内で
+// 参照)の方が優先される——このデフォルト自体は基本的に変わらないため、_areaForStore_を通さない
+// 単純な用途(通知グループ振り分け以外)ではこのまま直接参照してよい）
 const AREA_STORES = {
   '東海': ['sasashima','chikusa','gokaiso','tsuruma','kamisawa','nakamura_nisseki','midori_kofubutsu','sakurayama','akatsuka','shin_moriyama','tokoname','hamamatsu','sakae','rokubanchou','nonami','seto_iwayadou','nagakute','meieki_nishi','nadia_sakae','shinmizuhashi','eisei','hotei','kamejima','nakamura_torii','taikodori','kouta','hibino','hoshigaoka','ikeshita','toyota','hara','fujigaoka','gifu_kitagata','narumi'],
   '関西': ['tenma','higashiosaka','aikawa','minami_morimachi','abeno','tanimachi9','moriguchi','taishibashi','kyobashi_kita','shinsaibashi','kishi','umeda','kami_shinjyo','osaka_hirano','hikone','aeon_higashiosaka','gamo4'],
   '関東': ['inzai','otsuka','sugamo','umejima','shibuya','shinjuku_fc','kamisato']
 };
+// フロントのREGIONS定数のid('tokai'/'kansai'/'kanto')→日本語ラベルの対応（store_regions設定の値はid形式のため）
+const REGION_ID_LABEL_ = { tokai: '東海', kansai: '関西', kanto: '関東' };
 
 // 店舗名マスタ。手動複製で二重管理にせず、GitHub Pagesで公開されているstores.js(フロントの
 // 共有ファイル)を都度UrlFetchAppで取得・パースして使う——stores.js側を直せば自動的に反映される。
@@ -1128,13 +1133,7 @@ function saveImageToDrive(base64, mimeType, filename) {
 
 function notifyNewOrder_(storeId) {
   try {
-    var area = '';
-    for (var areaName in AREA_STORES) {
-      if (AREA_STORES[areaName].indexOf(String(storeId)) >= 0) {
-        area = areaName;
-        break;
-      }
-    }
+    var area = _areaForStore_(storeId);
     var msg = area
       ? area + 'エリアにて発注依頼があります。'
       : '発注依頼があります。（店舗ID: ' + _storeIdLabel_(storeId) + '）';
@@ -1209,7 +1208,25 @@ function testLineWorksNotification() {
 // エリア別が未設定の間はLW_CHANNEL_ID_ATTENDANCE（業務開始共通チャンネル）、
 // それも未設定なら従来の発注用チャンネル(LW_CHANNEL_ID)にフォールバックする。
 const ATTENDANCE_AREA_CHANNEL_PROP_ = { '東海': 'LW_CHANNEL_ID_ATTENDANCE_TOKAI', '関西': 'LW_CHANNEL_ID_ATTENDANCE_KANSAI', '関東': 'LW_CHANNEL_ID_ATTENDANCE_KANTO' };
+
+// 管理者が「店舗管理」画面の「店舗のエリア変更」で行った上書き(app_settingsの'store_regions'キー、
+// {storeId:'tokai'|'kansai'|'kanto'}のJSON)を1回の実行内でのみキャッシュして取得
+let _cachedStoreRegionOverrides = null;
+function _storeRegionOverrides_() {
+  if (_cachedStoreRegionOverrides) return _cachedStoreRegionOverrides;
+  try {
+    const s = getSettings().find(x => x.key === 'store_regions');
+    _cachedStoreRegionOverrides = s ? JSON.parse(s.value || '{}') : {};
+  } catch (e) {
+    _cachedStoreRegionOverrides = {};
+  }
+  return _cachedStoreRegionOverrides;
+}
+// 店舗のエリアを判定する。管理者が「店舗管理」画面でエリア変更していればその上書きを優先し、
+// 無ければAREA_STORESのデフォルト割り当てにフォールバックする
 function _areaForStore_(storeId) {
+  const override = _storeRegionOverrides_()[String(storeId)];
+  if (override && REGION_ID_LABEL_[override]) return REGION_ID_LABEL_[override];
   for (var areaName in AREA_STORES) {
     if (AREA_STORES[areaName].indexOf(String(storeId)) >= 0) return areaName;
   }
@@ -1245,9 +1262,10 @@ function sendDailyOrderNotification() {
     var isNew = data[i][isNewIdx];
     if (isNew !== true && String(isNew) !== 'TRUE') continue;
     var storeId = String(data[i][storeIdx]);
-    if (AREA_STORES['東海'].indexOf(storeId) >= 0) hasTokai = true;
-    if (AREA_STORES['関西'].indexOf(storeId) >= 0) hasKansai = true;
-    if (AREA_STORES['関東'].indexOf(storeId) >= 0) hasKanto = true;
+    var area = _areaForStore_(storeId);
+    if (area === '東海') hasTokai = true;
+    if (area === '関西') hasKansai = true;
+    if (area === '関東') hasKanto = true;
   }
   if (hasTokai) sendLineWorksNotification('東海エリアにて発注依頼があります。');
   if (hasKansai) sendLineWorksNotification('関西エリアにて発注依頼があります。');
