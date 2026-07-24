@@ -1166,7 +1166,16 @@ function createLineWorksJWT_() {
   return sigInput + '.' + sig;
 }
 
-function getLineWorksAccessToken_() {
+// アクセストークンは短時間で失効するものではないため、CacheServiceに50分キャッシュして使い回す
+// （2026-07-24、発注・出勤・休み申請など全通知でJWT署名＋認証リクエストの往復が毎回発生し
+// 保存操作の応答が遅く感じられるとの指摘を受けて追加）。失効していた場合はsendLineWorksNotification
+// 側で401検知時に自動で取り直すので、キャッシュが古くても実害は無い
+function getLineWorksAccessToken_(forceRefresh) {
+  var cache = CacheService.getScriptCache();
+  if (!forceRefresh) {
+    var cached = cache.get('LW_ACCESS_TOKEN');
+    if (cached) return cached;
+  }
   var props = PropertiesService.getScriptProperties();
   var jwt = createLineWorksJWT_();
   var payload = 'assertion=' + encodeURIComponent(jwt)
@@ -1179,7 +1188,9 @@ function getLineWorksAccessToken_() {
     headers: {'Content-Type': 'application/x-www-form-urlencoded'},
     payload: payload
   });
-  return JSON.parse(res.getContentText()).access_token;
+  var token = JSON.parse(res.getContentText()).access_token;
+  try { cache.put('LW_ACCESS_TOKEN', token, 3000); } catch (e) {} // 50分。CacheServiceの上限21600秒以内
+  return token;
 }
 
 // channelIdOverrideを渡すとそのチャンネルへ、省略時は従来通りLW_CHANNEL_ID（発注等の既定チャンネル）へ送信する
@@ -1187,14 +1198,24 @@ function sendLineWorksNotification(message, channelIdOverride) {
   var props = PropertiesService.getScriptProperties();
   var botId     = props.getProperty('LW_BOT_ID');
   var channelId = channelIdOverride || props.getProperty('LW_CHANNEL_ID');
-  var token = getLineWorksAccessToken_();
   var url = 'https://www.worksapis.com/v1.0/bots/' + botId + '/channels/' + channelId + '/messages';
   var body = JSON.stringify({content: {type: 'text', text: message}});
-  UrlFetchApp.fetch(url, {
+  var token = getLineWorksAccessToken_();
+  var res = UrlFetchApp.fetch(url, {
     method: 'POST',
     headers: {'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'},
-    payload: body
+    payload: body,
+    muteHttpExceptions: true
   });
+  // キャッシュされたトークンが失効していた場合のみ、1回だけ新規取得して再送する
+  if (res.getResponseCode() === 401) {
+    token = getLineWorksAccessToken_(true);
+    UrlFetchApp.fetch(url, {
+      method: 'POST',
+      headers: {'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'},
+      payload: body
+    });
+  }
 }
 
 function testLineWorksNotification() {
