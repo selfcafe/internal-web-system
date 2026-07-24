@@ -1264,6 +1264,18 @@ function testLeaveLineWorksNotification() {
   sendLineWorksNotification('【テスト】休み申請通知グループの接続テストです。', _leaveLineWorksChannel_(null));
 }
 
+// LW_CHANNEL_ID_LEAVE_TOKAI/_KANSAI/_KANTOをエリア別に個別テストしたい時用（2026-07-24追加）。
+// 用が済んだら削除してよい
+function testLeaveLineWorksNotificationTokai() {
+  sendLineWorksNotification('【テスト】休み申請通知(東海)の接続テストです。', _leaveChannelForArea_('東海'));
+}
+function testLeaveLineWorksNotificationKansai() {
+  sendLineWorksNotification('【テスト】休み申請通知(関西)の接続テストです。', _leaveChannelForArea_('関西'));
+}
+function testLeaveLineWorksNotificationKanto() {
+  sendLineWorksNotification('【テスト】休み申請通知(関東)の接続テストです。', _leaveChannelForArea_('関東'));
+}
+
 // Botの名前変更がLINE WORKS側になかなか反映されない場合の調査用。Developer Console/管理コンソール
 // での画面表示に頼らず、APIが実際に返す現在の名前(botName)をここで直接確認できる。
 // これでもまだ旧名称が返る＝保存自体が反映されていない、新名称が返る＝トーク画面側の表示キャッシュの
