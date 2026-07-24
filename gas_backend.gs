@@ -844,12 +844,19 @@ function purgeOldDeliveryHistory() {
     if (t && t > limit) continue;
     sheet.deleteRow(i + 1);
   }
+  _invalidateDeliveryHistoryCache_();
 }
 
-function getDeliveryHistory(storeId, month) {
-  purgeOldDeliveryHistory();
-  const sheet = getDeliveryHistorySheet();
-  let rows = sheetRows(sheet, DELIVERY_HISTORY_COLS).map(r => ({
+// 全店舗分の納品履歴(整形済み)を短時間(25秒)だけCacheServiceに保持する（2026-07-24、
+// attendance/leave_requests/lost_itemsと同じ狙い）。書き込み側
+// (saveDeliveryHistory/clearDeliveryHistory/purgeOldDeliveryHistory)が都度キャッシュを
+// 無効化するので、自分自身の直後の再読み込みは必ず最新の状態になる
+const DELIVERY_HISTORY_CACHE_KEY = 'delivery_history_rows_v1';
+function _deliveryHistoryRowsCached_() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(DELIVERY_HISTORY_CACHE_KEY);
+  if (cached) return JSON.parse(cached);
+  const rows = sheetRows(getDeliveryHistorySheet(), DELIVERY_HISTORY_COLS).map(r => ({
     ...r,
     request_date: _delHistDateStr(r.request_date),
     order_date: _delHistDateStr(r.order_date),
@@ -857,9 +864,20 @@ function getDeliveryHistory(storeId, month) {
     delivered_at_str: _delHistDateTimeStr(r.delivered_at),
     delivered_at: r.delivered_at instanceof Date ? r.delivered_at.getTime() : (Number(r.delivered_at) || null),
   }));
+  try { cache.put(DELIVERY_HISTORY_CACHE_KEY, JSON.stringify(rows), 25); } catch (e) {}
+  return rows;
+}
+function _invalidateDeliveryHistoryCache_() {
+  try { CacheService.getScriptCache().remove(DELIVERY_HISTORY_CACHE_KEY); } catch (e) {}
+}
+
+// ※以前はここでpurgeOldDeliveryHistory()を毎回実行していたが、attendance/lost_itemsと同じ理由で
+// 日次バッチ(sendDailyOrderNotification内)側でのみ実行するよう移動した
+function getDeliveryHistory(storeId, month) {
+  let rows = _deliveryHistoryRowsCached_();
   if (storeId) rows = rows.filter(r => String(r.store_id) === String(storeId));
   if (month) rows = rows.filter(r => String(r.delivered_at_str || '').startsWith(month));
-  return rows.sort((a, b) => (b.delivered_at||0) - (a.delivered_at||0));
+  return rows.slice().sort((a, b) => (b.delivered_at||0) - (a.delivered_at||0));
 }
 
 function saveDeliveryHistory(storeId, row) {
@@ -871,6 +889,7 @@ function saveDeliveryHistory(storeId, row) {
     const v = row ? row[c] : null;
     return (v === undefined || v === null) ? '' : v;
   }));
+  _invalidateDeliveryHistoryCache_();
   return { ok: true };
 }
 
@@ -885,6 +904,7 @@ function clearDeliveryHistory(storeId) {
   for (let i = data.length - 1; i >= 1; i--) {
     if (String(data[i][sidIdx]) === String(storeId)) sheet.deleteRow(i + 1);
   }
+  _invalidateDeliveryHistoryCache_();
   return { ok: true };
 }
 
@@ -1400,6 +1420,10 @@ function testNotify() {
 
 function sendDailyOrderNotification() {
   purgeOldLostItems(); // 忘れ物の30日経過削除は読み取りのたびではなく、この日次バッチでのみ行う
+  // 納品履歴の30日経過削除も同様、読み取りのたびではなくここでのみ行う。DELIVERY_HISTORY_SHEET_IDが
+  // 未設定のうちはSpreadsheetApp.openByIdが例外を投げるため、それで発注の日次通知自体が
+  // 止まってしまわないようtry/catchで囲む
+  try { purgeOldDeliveryHistory(); } catch (e) { console.error('purgeOldDeliveryHistory error:', e.message); }
   var ss = SpreadsheetApp.openById(SHEET_ID);
   var sheet = ss.getSheetByName(SHEET_ORDERS);
   if (!sheet || sheet.getLastRow() <= 1) return;
