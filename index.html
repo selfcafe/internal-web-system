@@ -600,7 +600,7 @@
         <div id="attendance-name-sel-wrap">
           <select id="attendance-name-sel" onchange="renderAttendanceHistory();renderAttendanceTally();renderLeaveRequests()" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:10px;font-size:15px;font-family:inherit;margin-bottom:10px"></select>
         </div>
-        <button onclick="doAttendanceClockIn()" style="width:100%;background:#22703d;color:white;padding:12px;font-size:16px;font-weight:700;border-radius:8px;border:none;cursor:pointer;font-family:inherit">業務開始する</button>
+        <button id="attendance-clockin-btn" onclick="doAttendanceClockIn()" style="width:100%;background:#22703d;color:white;padding:12px;font-size:16px;font-weight:700;border-radius:8px;border:none;cursor:pointer;font-family:inherit">業務開始する</button>
         <div id="attendance-msg" style="font-size:13px;margin-top:8px;min-height:18px"></div>
       </div>
 
@@ -3186,7 +3186,12 @@ function _attendanceNameChosen() {
   return isAttendanceSolo(storeTab) || !!_attendanceActiveName();
 }
 
+// GPS取得中(数秒かかることがある)は視覚的な反応が乏しく連打されやすいため、押している間
+// ボタンを無効化して二重投稿を防ぐ（同一端末内の連打対策。複数端末からのほぼ同時押しは
+// この client 側の対策だけでは防げないため、saveAttendance側の当日1人1行への統一と合わせて対応）
+let _attendanceClockingIn = false;
 function doAttendanceClockIn() {
+  if (_attendanceClockingIn) return;
   const msg = document.getElementById('attendance-msg');
   const solo = isAttendanceSolo(storeTab);
   const name = _attendanceActiveName();
@@ -3196,6 +3201,10 @@ function doAttendanceClockIn() {
     msg.textContent = 'この端末では位置情報が利用できません';
     return;
   }
+  const btn = document.getElementById('attendance-clockin-btn');
+  _attendanceClockingIn = true;
+  if (btn) btn.disabled = true;
+  const done = () => { _attendanceClockingIn = false; if (btn) btn.disabled = false; };
   msg.style.color = '#888';
   msg.textContent = '位置情報を取得しています…';
   // getCurrentPosition()はボタン押下ハンドラの中でだけ呼ぶ（バックグラウンド取得は行わない）
@@ -3218,6 +3227,8 @@ function doAttendanceClockIn() {
     } catch(e) {
       msg.style.color = '#dc2626';
       msg.textContent = '打刻に失敗しました: ' + e.message;
+    } finally {
+      done();
     }
   }, (err) => {
     // B案：位置情報が許可されない限り打刻不可（ブロック）。エラー種別ごとにメッセージを分ける
@@ -3231,6 +3242,7 @@ function doAttendanceClockIn() {
     } else {
       msg.textContent = '位置情報を取得できませんでした。電波の入りやすい場所（窓際・店外など）でもう一度お試しください。';
     }
+    done();
   }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
 }
 

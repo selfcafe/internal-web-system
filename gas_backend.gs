@@ -545,7 +545,12 @@ function _haversineMeters(lat1, lng1, lat2, lng2) {
 }
 
 // 店舗の基準座標（app_settingsの'attendance_store_coords'キー、{storeId:{lat,lng}}のJSON）と
-// 打刻位置の距離を計算し、ATTENDANCE_THRESHOLD_M以内かどうかを判定してから1行追加する
+// 打刻位置の距離を計算し、ATTENDANCE_THRESHOLD_M以内かどうかを判定した上で1行追加/更新する。
+// 記録は「出勤のみ・退勤なし」の1日1回想定の機能なので、同じ店舗・同じ名前で当日既に打刻済みの
+// 行があれば新規追加せず上書き更新する（判定外の場所で押した後、判定内の場所で押し直した場合等に
+// 対応。連打や複数端末からのほぼ同時押しで別々の行が2つできてしまう問題も、この「当日1人1行」への
+// 統一で結果的に解消される——クライアント側の連打防止(doAttendanceClockInのボタン無効化)は
+// あくまで補助で、こちらがデータ上の最終防御）
 function saveAttendance(storeId, name, lat, lng) {
   const sheet = getSheet(SHEET_ATTENDANCE);
   ensureHeaders(sheet, ATTENDANCE_COLS);
@@ -559,9 +564,26 @@ function saveAttendance(storeId, name, lat, lng) {
     withinRange = dist <= ATTENDANCE_THRESHOLD_M;
   }
 
-  sheet.appendRow([Utilities.getUuid(), storeId, name, new Date(), lat, lng, withinRange]);
+  const now = new Date();
+  const todayStr = Utilities.formatDate(now, _sheetTz(), 'yyyy-MM-dd');
+  let updatedExisting = false;
+  if (sheet.getLastRow() > 1) {
+    const data = sheet.getDataRange().getValues();
+    const hdrs = data[0].map(String);
+    const idIdx = hdrs.indexOf('id'), storeIdx = hdrs.indexOf('store_id'), nameIdx = hdrs.indexOf('name'), dateIdx = hdrs.indexOf('clocked_at');
+    for (let i = data.length - 1; i >= 1; i--) {
+      if (String(data[i][storeIdx]) !== String(storeId)) continue;
+      if ((data[i][nameIdx] || '') !== (name || '')) continue;
+      const clocked = _dateTimeStr(data[i][dateIdx]);
+      if (!clocked || clocked.slice(0, 10) !== todayStr) continue;
+      sheet.getRange(i + 1, 1, 1, ATTENDANCE_COLS.length).setValues([[data[i][idIdx], storeId, name, now, lat, lng, withinRange]]);
+      updatedExisting = true;
+      break;
+    }
+  }
+  if (!updatedExisting) sheet.appendRow([Utilities.getUuid(), storeId, name, now, lat, lng, withinRange]);
   if (withinRange === false) notifyAttendanceGpsIssue_(storeId, name);
-  return { ok: true, withinRange };
+  return { ok: true, withinRange, updated: updatedExisting };
 }
 
 // GPS要確認（基準座標から離れた場所での打刻）は翌朝のバッチを待たずその場で通知する
