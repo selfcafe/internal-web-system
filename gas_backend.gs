@@ -670,9 +670,9 @@ function saveLeaveRequest(storeId, name, leaveDate) {
 
 function notifyLeaveRequestTomorrow_(storeId, name, leaveDate) {
   try {
-    const who = name ? name + 'さん' : '担当者';
+    const who = name ? name + 'さん' : 'パートナーさん';
     const md = leaveDate.slice(5).replace('-', '/');
-    sendLineWorksNotification('【休み申請】' + who + 'が明日(' + md + ')休み申請をしました。（店舗ID: ' + _storeIdLabel_(storeId) + '）', _leaveLineWorksChannel_(storeId));
+    sendLineWorksNotification('【休み申請】' + who + 'が明日(' + md + ')休み申請をしました。（店舗ID: ' + _storeIdLabel_(storeId) + '）\n当日の現地対応方針の確定が必要です。', _leaveLineWorksChannel_(storeId));
   } catch(e) {
     console.error('LINE WORKS通知エラー:', e.message);
   }
@@ -704,7 +704,7 @@ function deleteLeaveRequest(id) {
 
 function notifyLeaveRequestCancelled_(storeId, name, leaveDate) {
   try {
-    const who = name ? name + 'さん' : '担当者';
+    const who = name ? name + 'さん' : 'パートナーさん';
     const md = leaveDate.slice(5).replace('-', '/');
     sendLineWorksNotification('【休み申請取消】' + who + 'の明日(' + md + ')の休み申請が取り消されました。（店舗ID: ' + _storeIdLabel_(storeId) + '）', _leaveLineWorksChannel_(storeId));
   } catch(e) {
