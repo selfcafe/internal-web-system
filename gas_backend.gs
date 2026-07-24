@@ -1279,6 +1279,20 @@ function listLineWorksChannels() {
   return JSON.parse(res.getContentText());
 }
 
+// Botの名前変更がLINE WORKS側になかなか反映されない場合の調査用。Developer Console/管理コンソール
+// での画面表示に頼らず、APIが実際に返す現在の名前(botName)をここで直接確認できる。
+// これでもまだ旧名称が返る＝保存自体が反映されていない、新名称が返る＝トーク画面側の表示キャッシュの
+// 問題、と切り分けられる
+function getLineWorksBotInfo() {
+  var props = PropertiesService.getScriptProperties();
+  var botId = props.getProperty('LW_BOT_ID');
+  var token = getLineWorksAccessToken_();
+  var url = 'https://www.worksapis.com/v1.0/bots/' + botId;
+  var res = UrlFetchApp.fetch(url, { headers: { 'Authorization': 'Bearer ' + token }, muteHttpExceptions: true });
+  console.log(res.getContentText());
+  return JSON.parse(res.getContentText());
+}
+
 function testNotify() {
   notifyNewOrder_('shibuya');
 }
