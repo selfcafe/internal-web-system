@@ -3115,10 +3115,11 @@ function updatePartnerAttendanceTabVisibility() {
   }
 }
 
-// 押し忘れ対策（非ブロック版）: ポータルを開いただけでは出さず、ポータル内で何らかの操作
-// （タブ切替・ボタン・トグル等）をした際、当日まだ業務開始が1件も記録されていなければ
-// 一度だけモーダルで促す。閉じても他の操作は通常通り行える。店舗単位の判定のため、
-// 複数名店舗では「その店の誰かが」当日記録済みなら再表示しない（個人単位の判定はしない）。
+// 押し忘れ対策（非ブロック版）: ログイン（セッション復元含む、showPage('store')が呼ばれた時点）で
+// 判定し、当日まだ「登録スタッフ全員」の打刻が揃っていなければ一度だけモーダルで促す。閉じても
+// 他の操作は通常通り行える。誰が今この端末を触っているかは特定できないため、
+// 「その店の誰か1人」ではなく「登録スタッフ全員」が揃うまでは毎回の判定対象のままにする
+// （スタッフ未登録/1名の店舗は、登録の有無に関わらず当日1件でも記録があればOK扱い）。
 let _attendanceReminderChecking = false;
 async function maybeShowAttendanceReminder() {
   if (!isAttendanceEnabled(storeTab)) return;
@@ -3129,9 +3130,14 @@ async function maybeShowAttendanceReminder() {
   _attendanceReminderChecking = true;
   try {
     await loadAttendanceHistory(storeTab);
-    const clockedToday = ATTENDANCE_HISTORY_CACHE.some(r => String(r.clocked_at || '').slice(0, 10) === today);
+    const clockedNamesToday = new Set(
+      ATTENDANCE_HISTORY_CACHE.filter(r => String(r.clocked_at || '').slice(0, 10) === today).map(r => r.name || '')
+    );
+    const staffNames = getAttendanceStaffList(storeTab);
+    // 登録スタッフがいる店舗は全員分の名前が揃っているか、未登録店舗は当日1件でも記録があればOK
+    const allClockedIn = staffNames.length ? staffNames.every(n => clockedNamesToday.has(n)) : clockedNamesToday.size > 0;
     localStorage.setItem(shownKey, '1'); // 記録済み/表示済みのどちらでも当日はもう確認しない
-    if (clockedToday) return;
+    if (allClockedIn) return;
     const overlay = document.getElementById('attendance-reminder-overlay');
     if (overlay) overlay.style.display = 'flex';
   } finally {
@@ -3146,9 +3152,6 @@ function closeAttendanceReminder() {
   const overlay = document.getElementById('attendance-reminder-overlay');
   if (overlay) overlay.style.display = 'none';
 }
-// ポータル内でのクリック操作全般（タブ切替・各種ボタン・トグル）を1箇所で拾い、
-// 個々のonclickハンドラを書き換えずに済ませる（clickイベントはチェックボックス等からもバブリングする）
-document.getElementById('page-store')?.addEventListener('click', () => maybeShowAttendanceReminder());
 
 // スタッフが1人以下（未登録含む）の店舗は、名前選択なしでボタンのみの「1名モード」にする
 function isAttendanceSolo(storeId) { return getAttendanceStaffList(storeId).length <= 1; }
@@ -3843,7 +3846,7 @@ async function showPage(p) {
   }
   document.getElementById('page-store').classList.toggle('active', p==='store');
   document.getElementById('page-admin').classList.toggle('active', p==='admin');
-  if (p==='store') renderStore();
+  if (p==='store') { renderStore(); maybeShowAttendanceReminder(); }
   if (p==='admin') renderAdmin();
   updateBadges();
   applyTimeMsg();
