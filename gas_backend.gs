@@ -146,10 +146,17 @@ function doPost(e) {
     const b = JSON.parse(e.postData.contents);
     // LINE WORKSのCallback URLからのイベント受信（channelId調査用、2026-07-24一時的に追加）。
     // このアプリ自身のPOSTは常に{action:...}形式なので、actionが無ければLINE WORKSコールバックと
-    // みなし、ペイロードの実際の形が分からなくても確実に見えるよう無条件でログに出す。
+    // みなす。実行ログ表示がWebアプリ実行では確認しづらかったため、スクリプトプロパティに
+    // 直近分を保存し、getRecentLineWorksCallbacks()をエディタから実行して確認する方式にした。
     // 目的の channelId 確認が終わったら、Callback URL設定を「未設定」に戻してこの分岐も削除してよい
     if (!b.action) {
-      console.log('LINE WORKS callback: ' + JSON.stringify(b));
+      try {
+        const props = PropertiesService.getScriptProperties();
+        const log = JSON.parse(props.getProperty('LW_CALLBACK_LOG') || '[]');
+        log.push({ at: Utilities.formatDate(new Date(), _sheetTz(), 'yyyy-MM-dd HH:mm:ss'), body: b });
+        while (log.length > 20) log.shift();
+        props.setProperty('LW_CALLBACK_LOG', JSON.stringify(log));
+      } catch (e) {}
       return json({ ok: true });
     }
     let result;
@@ -1273,18 +1280,18 @@ function testLeaveLineWorksNotification() {
 }
 
 // LW_CHANNEL_ID_LEAVE_TOKAI等を設定する際、そのチャンネルIDが分からない場合の調査用。
-// 手順: ①対象のグループトークにBotをメンバー追加する ②この関数をApps Scriptエディタで実行し、
-// 実行ログ(表示→ログ)でchannelId一覧を確認する（LINE WORKS Bot APIはグループ名を返さないため、
-// どれがどのグループかは名前では分からない。新しく参加させた分だけ一覧に増えるので、1つずつ
-// 見当をつけてtestLeaveLineWorksNotification()等で実際に届くか試すのが確実）
-function listLineWorksChannels() {
-  var props = PropertiesService.getScriptProperties();
-  var botId = props.getProperty('LW_BOT_ID');
-  var token = getLineWorksAccessToken_();
-  var url = 'https://www.worksapis.com/v1.0/bots/' + botId + '/channels';
-  var res = UrlFetchApp.fetch(url, { headers: { 'Authorization': 'Bearer ' + token }, muteHttpExceptions: true });
-  console.log(res.getContentText());
-  return JSON.parse(res.getContentText());
+// ⚠️ 廃止: listLineWorksChannels()（GET /v1.0/bots/{botId}/channels）は実在しないAPIだった
+// （実行すると{"code":"NOT_FOUND","description":"Api not exists"}が返る、2026-07-24確認）。
+// 代わりにCallback URL経由で受信したイベントをgetRecentLineWorksCallbacks()で確認する方式にした。
+
+// doPost内でLINE WORKSのCallback URLから受信し、スクリプトプロパティ(LW_CALLBACK_LOG)に貯めておいた
+// 直近分(最大20件)を確認する。Apps Scriptエディタでこの関数を直接実行し、実行ログでchannelId等を
+// 確認する（Webアプリ実行のログ表示より、エディタから直接実行した場合の方がログが確実に見える）。
+// 用が済んだらCallback URL設定を「未設定」に戻し、この関数・doPost内の対応する分岐も削除してよい
+function getRecentLineWorksCallbacks() {
+  const log = PropertiesService.getScriptProperties().getProperty('LW_CALLBACK_LOG');
+  console.log(log);
+  return log ? JSON.parse(log) : [];
 }
 
 // Botの名前変更がLINE WORKS側になかなか反映されない場合の調査用。Developer Console/管理コンソール
