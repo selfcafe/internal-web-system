@@ -220,6 +220,7 @@
     .store-title-txt { font-size:20px; font-weight:700; color:#22703d; overflow-wrap:break-word; min-width:0; }
     .store-name-wrap { flex:1; width:100%; min-width:0; }
     .partner-hdr-btns { display:flex; flex-direction:column; gap:6px; align-items:flex-end; position:absolute; top:0; right:0; }
+    .admin-hdr-btns { display:flex; flex-direction:row; gap:8px; align-items:center; position:absolute; top:0; right:0; }
     .partner-hdr-pinwheel { display:none; }
     .site-lock-box h2 { font-size:20px; color:#22703d; margin-bottom:6px; font-weight:700; }
     .site-lock-box p  { font-size:13px; color:#888; margin-bottom:20px; }
@@ -290,6 +291,8 @@
       #time-msg-bar, #admin-time-msg-bar { font-size:12.5px; padding:9px 14px; border-radius:10px; margin-bottom:8px; }
       .store-name-wrap { flex-basis:100%; width:auto; min-width:0; }
       .partner-hdr-btns { display:none; }
+      .admin-hdr-btns { display:none; }
+      .admin-title-row { padding-right:175px; box-sizing:border-box; }
       .page-header { min-height:134px; justify-content:flex-start; }
       .partner-hdr-pinwheel {
         display:grid; grid-template-columns:repeat(100,1fr); grid-template-rows:repeat(100,1fr);
@@ -682,13 +685,19 @@
 <div id="page-admin" class="page">
   <div class="page-header" style="flex-direction:column;align-items:stretch;gap:4px;position:relative">
     <img src="logo-horizontal.png" class="portal-logo" alt="セルフカフェ">
-    <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;position:absolute;top:0;right:0">
+    <div class="admin-hdr-btns">
       <button onclick="adminLogout()" style="background:#6b7280;color:white;padding:9px 14px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">ログアウト</button>
-      <button class="admin-attendance-btn pc-only" onclick="switchAdminView('attendance')" style="background:#22703d;color:white;padding:9px 14px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">業務管理</button>
-      <button onclick="location.href='invoice.html'" class="pc-only" style="background:#8a8f7e;color:white;padding:9px 14px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">請求</button>
+      <button class="admin-attendance-btn" onclick="switchAdminView('attendance')" style="background:#22703d;color:white;padding:9px 14px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">業務管理</button>
+      <button onclick="location.href='invoice.html'" style="background:#8a8f7e;color:white;padding:9px 14px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">請求</button>
     </div>
     <div class="admin-title-row" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <h1>管理者ポータル</h1>
+      <div class="partner-hdr-pinwheel">
+        <div class="phw-piece phw-tl" id="admin-phw-empty"></div>
+        <button class="phw-piece phw-tr" onclick="adminLogout()"><span>ログ<br>アウト</span></button>
+        <button class="phw-piece phw-bl" onclick="switchAdminView('attendance')"><span>業務<br>管理</span></button>
+        <button class="phw-piece phw-br" onclick="location.href='invoice.html'">請求</button>
+      </div>
       <div class="admin-menu-wrap">
         <button class="admin-menu-btn" onclick="toggleAdminMenu()" title="メニュー">☰<span class="menu-label">メニュー</span></button>
         <div class="admin-menu-dd" id="admin-menu-dd">
@@ -704,8 +713,6 @@
         </div>
       </div>
       <button class="admin-settings-btn" id="admin-settings-btn" onclick="menuSelect('view','settings')" title="設定"><span class="menu-label">設定</span></button>
-      <button class="admin-attendance-btn sp-only" onclick="switchAdminView('attendance')" style="background:#22703d;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;margin-left:auto">業務管理</button>
-      <button onclick="location.href='invoice.html'" class="sp-only" style="background:#8a8f7e;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">請求</button>
     </div>
   </div>
 
