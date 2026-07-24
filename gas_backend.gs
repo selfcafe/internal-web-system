@@ -74,6 +74,37 @@ const AREA_STORES = {
   '関東': ['inzai','otsuka','sugamo','umejima','shibuya','shinjuku_fc','kamisato']
 };
 
+// 店舗名マスタ（stores.js側の一覧をLINE WORKS通知メッセージ用にバックエンドへ複製したもの）。
+// stores.jsはフロント専用の共有ファイルでGAS側から直接参照できないため、AREA_STORESと同じ理由で
+// 複製管理している。店舗を追加・改名・削除する場合はstores.js側と合わせてこちらも更新すること
+const STORE_NAMES = {
+  sasashima:'ささしまライブ', chikusa:'千種', gokaiso:'御器所', tsuruma:'鶴舞',
+  kamisawa:'神沢', nakamura_nisseki:'中村日赤', midori_kofubutsu:'緑鴻仏目',
+  sakurayama:'桜山', akatsuka:'赤塚', shin_moriyama:'新守山', tokoname:'常滑',
+  hamamatsu:'浜松新橋', sakae:'栄', rokubanchou:'六番町', nonami:'野並',
+  seto_iwayadou:'瀬戸岩屋堂', nagakute:'長久手', meieki_nishi:'名駅西口',
+  nadia_sakae:'ナディアパーク栄', shinmizuhashi:'新瑞橋', eisei:'栄生',
+  hotei:'布袋駅', kamejima:'亀島', nakamura_torii:'中村日赤鳥居通',
+  taikodori:'太閤通駅', kouta:'幸田', hibino:'日比野', hoshigaoka:'星が丘',
+  ikeshita:'池下', toyota:'T-FACE豊田', hara:'原', fujigaoka:'藤が丘',
+  gifu_kitagata:'イオンタウン岐阜北方', narumi:'鳴海山下',
+  tenma:'天満', higashiosaka:'東大阪小若江', aikawa:'相川駅前',
+  minami_morimachi:'南森町', abeno:'あべの南', tanimachi9:'谷町九丁目',
+  moriguchi:'守口駅前', taishibashi:'太子橋', kyobashi_kita:'京橋北',
+  shinsaibashi:'心斎橋東急ビル', kishi:'喜志', umeda:'梅田センタービル',
+  kami_shinjyo:'上新庄', osaka_hirano:'大阪平野西', hikone:'イオンタウン彦根',
+  aeon_higashiosaka:'イオンタウン東大阪', gamo4:'蒲生四丁目',
+  inzai:'印西牧の原', otsuka:'大塚駅南口', sugamo:'巣鴨駅南口',
+  umejima:'梅島（うめじま）', shibuya:'渋谷神南',
+  shinjuku_fc:'FC 新宿西口Shinjuku Future Gallery', kamisato:'カインズ上里本庄',
+};
+// LINE WORKS通知メッセージ用：店舗IDに、分かっていれば店舗名を添えた表示用文字列を返す
+// （未知のID・custom_stores等でSTORE_NAMESに無い店舗はIDのみ返す）
+function _storeIdLabel_(storeId) {
+  const nm = STORE_NAMES[storeId];
+  return nm ? storeId + '（' + nm + '）' : String(storeId);
+}
+
 // ----------------------------------------------------------------
 // エントリーポイント
 // ----------------------------------------------------------------
@@ -587,12 +618,10 @@ function saveAttendance(storeId, name, lat, lng) {
 }
 
 // GPS要確認（基準座標から離れた場所での打刻）は翌朝のバッチを待たずその場で通知する
-// ※店舗名マスタ(stores.js)はフロント専用の共有ファイルでバックエンドからは参照できないため、
-//   notifyNewOrder_と同様、店舗IDをそのままメッセージに含める
 function notifyAttendanceGpsIssue_(storeId, name) {
   try {
     const who = name ? name + 'さん' : '担当者';
-    sendLineWorksNotification('【GPS要確認】' + who + 'の業務開始打刻が、店舗から離れた場所として記録されました。（店舗ID: ' + storeId + '）', _attendanceLineWorksChannel_(storeId));
+    sendLineWorksNotification('【GPS要確認】' + who + 'の業務開始打刻が、店舗から離れた場所として記録されました。（店舗ID: ' + _storeIdLabel_(storeId) + '）', _attendanceLineWorksChannel_(storeId));
   } catch(e) {
     console.error('LINE WORKS通知エラー:', e.message);
   }
@@ -641,7 +670,7 @@ function notifyLeaveRequestTomorrow_(storeId, name, leaveDate) {
   try {
     const who = name ? name + 'さん' : '担当者';
     const md = leaveDate.slice(5).replace('-', '/');
-    sendLineWorksNotification('【休み申請】' + who + 'が明日(' + md + ')休み申請をしました。（店舗ID: ' + storeId + '）', _attendanceLineWorksChannel_(storeId));
+    sendLineWorksNotification('【休み申請】' + who + 'が明日(' + md + ')休み申請をしました。（店舗ID: ' + _storeIdLabel_(storeId) + '）', _attendanceLineWorksChannel_(storeId));
   } catch(e) {
     console.error('LINE WORKS通知エラー:', e.message);
   }
@@ -675,7 +704,7 @@ function notifyLeaveRequestCancelled_(storeId, name, leaveDate) {
   try {
     const who = name ? name + 'さん' : '担当者';
     const md = leaveDate.slice(5).replace('-', '/');
-    sendLineWorksNotification('【休み申請取消】' + who + 'の明日(' + md + ')の休み申請が取り消されました。（店舗ID: ' + storeId + '）', _attendanceLineWorksChannel_(storeId));
+    sendLineWorksNotification('【休み申請取消】' + who + 'の明日(' + md + ')の休み申請が取り消されました。（店舗ID: ' + _storeIdLabel_(storeId) + '）', _attendanceLineWorksChannel_(storeId));
   } catch(e) {
     console.error('LINE WORKS通知エラー:', e.message);
   }
@@ -1111,7 +1140,7 @@ function notifyNewOrder_(storeId) {
     }
     var msg = area
       ? area + 'エリアにて発注依頼があります。'
-      : '発注依頼があります。（店舗ID: ' + storeId + '）';
+      : '発注依頼があります。（店舗ID: ' + _storeIdLabel_(storeId) + '）';
     sendLineWorksNotification(msg);
   } catch(e) {
     // 通知失敗は保存結果に影響させない
@@ -1310,7 +1339,7 @@ function sendDailyAttendanceCheck() {
           .map(r => String(r.clocked_at).slice(0, 10))
       ).size;
       if (actualDays < target) {
-        bucketFor(storeId).underTarget.push('・店舗ID:' + storeId + ' ' + (name || '(未登録名)') + '（実績' + actualDays + '/目標' + target + '日）');
+        bucketFor(storeId).underTarget.push('・店舗ID:' + _storeIdLabel_(storeId) + ' ' + (name || '(未登録名)') + '（実績' + actualDays + '/目標' + target + '日）');
       }
     });
   });
@@ -1319,7 +1348,7 @@ function sendDailyAttendanceCheck() {
   leaveRows
     .filter(r => String(r.submitted_at || '').slice(0, 10) === cutoffStr)
     .forEach(r => {
-      bucketFor(r.store_id).newLeave.push('・店舗ID:' + r.store_id + ' ' + (r.name || '(未登録名)') + '：' + r.leave_date + 'に休み申請');
+      bucketFor(r.store_id).newLeave.push('・店舗ID:' + _storeIdLabel_(r.store_id) + ' ' + (r.name || '(未登録名)') + '：' + r.leave_date + 'に休み申請');
     });
 
   Object.keys(linesByArea).forEach(area => {
