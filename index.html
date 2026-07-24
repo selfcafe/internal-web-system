@@ -175,6 +175,7 @@
     .admin-settings-btn:hover { background:#154d27; }
     .admin-settings-btn.active { background:#154d27; outline:2px solid #c2d63a; outline-offset:1px; }
     .admin-settings-btn .menu-label { font-size:12px; font-weight:600; font-family:inherit; letter-spacing:.3px; }
+    .admin-attendance-btn.active { outline:2px solid #c2d63a; outline-offset:1px; }
     .admin-menu-dd { display:none; position:absolute; top:calc(100% + 6px); left:0; background:white; border:1px solid #ddd; border-radius:10px; box-shadow:0 6px 20px rgba(0,0,0,.18); min-width:170px; z-index:400; overflow:hidden; }
     .admin-menu-dd.open { display:block; }
     .admin-menu-section { padding:7px 14px 3px; font-size:11px; font-weight:700; color:#999; letter-spacing:.5px; }
@@ -683,6 +684,7 @@
     <img src="logo-horizontal.png" class="portal-logo" alt="セルフカフェ">
     <div style="display:flex;flex-direction:column;gap:6px;align-items:flex-end;position:absolute;top:0;right:0">
       <button onclick="adminLogout()" style="background:#6b7280;color:white;padding:9px 14px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">ログアウト</button>
+      <button class="admin-attendance-btn pc-only" onclick="switchAdminView('attendance')" style="background:#22703d;color:white;padding:9px 14px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">業務管理</button>
       <button onclick="location.href='invoice.html'" class="pc-only" style="background:#8a8f7e;color:white;padding:9px 14px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">請求</button>
     </div>
     <div class="admin-title-row" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -702,7 +704,8 @@
         </div>
       </div>
       <button class="admin-settings-btn" id="admin-settings-btn" onclick="menuSelect('view','settings')" title="設定"><span class="menu-label">設定</span></button>
-      <button onclick="location.href='invoice.html'" class="sp-only" style="background:#8a8f7e;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;margin-left:auto">請求</button>
+      <button class="admin-attendance-btn sp-only" onclick="switchAdminView('attendance')" style="background:#22703d;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;margin-left:auto">業務管理</button>
+      <button onclick="location.href='invoice.html'" class="sp-only" style="background:#8a8f7e;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">請求</button>
     </div>
   </div>
 
@@ -4498,6 +4501,7 @@ function updateAdminMenuActive() {
   ['kanto','kansai','tokai'].forEach(r => document.getElementById('menu-'+r)?.classList.toggle('active', r===adminRegion));
   ['overview','history','lost','settings'].forEach(v => document.getElementById('menu-'+v)?.classList.toggle('active', v===adminView));
   document.getElementById('admin-settings-btn')?.classList.toggle('active', adminView==='settings');
+  document.querySelectorAll('.admin-attendance-btn').forEach(b => b.classList.toggle('active', adminView==='attendance'));
 }
 
 function menuSelect(type, val) {
@@ -4522,10 +4526,11 @@ function switchAdminView(v) {
 }
 
 function renderAdmin() {
-  if      (adminView==='overview') renderOverview();
-  else if (adminView==='history')  renderHistory();
-  else if (adminView==='lost')     renderLostAdmin();
-  else                             renderSettings();
+  if      (adminView==='overview')   renderOverview();
+  else if (adminView==='history')    renderHistory();
+  else if (adminView==='lost')       renderLostAdmin();
+  else if (adminView==='attendance') renderAttendanceAdmin();
+  else                                renderSettings();
 }
 
 let adminLostStore = '';
@@ -5822,6 +5827,78 @@ function applyProdReorder(srcName, dstName) {
   renderSettings();
 }
 
+// 業務開始関連(打刻設定・履歴・休み申請一覧)を「設定」から独立させ、専用の「業務管理」ボタンから
+// 表示する（2026-07-24。以前は設定画面のアコーディオンの1つだったが、設定項目に置かないよう分離）
+function renderAttendanceAdmin() {
+  document.querySelector('#page-admin .table-wrap').style.display = 'none';
+  document.getElementById('pagination').style.display = 'none';
+  document.getElementById('admin-thead').innerHTML = '';
+  document.getElementById('admin-tbody').innerHTML = '';
+  document.getElementById('admin-summary').innerHTML = '';
+
+  const container = document.getElementById('settings-container');
+  container.style.display = 'block';
+
+  container.innerHTML = `
+    <!-- 業務開始管理（試験導入・店舗ごとON/OFF） -->
+    <div class="settings-card">
+      <div class="settings-accordion-hdr" onclick="toggleAttendanceGroup()">
+        <span>業務開始管理（試験導入）</span>
+        <span id="attendance-group-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
+      </div>
+      <div id="attendance-group-body" style="display:none;margin-top:10px">
+        <div class="settings-accordion-body">
+          <div style="font-size:12px;color:#888;margin-bottom:10px">店舗ごとに業務開始機能のON/OFF・スタッフ一覧・基準座標を設定します。基準座標から300m以内での打刻のみ「OK」判定になります。</div>
+          <select id="attendance-cfg-store-sel" style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:100%;margin-bottom:12px" onchange="renderAttendanceCfg()">
+            ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}
+          </select>
+          <div id="attendance-cfg-body"></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 業務開始履歴（全店舗） -->
+    <div class="settings-card">
+      <div class="settings-accordion-hdr" onclick="toggleAttendanceHistoryGroup()">
+        <span>業務開始履歴（全店舗）</span>
+        <span id="attendance-history-group-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
+      </div>
+      <div id="attendance-history-group-body" style="display:none;margin-top:10px">
+        <div class="settings-accordion-body">
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+            <select id="attendance-admin-store-sel" style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit" onchange="renderAttendanceAdminHistory()">
+              <option value="">全店舗</option>
+              ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}
+            </select>
+            <button onclick="renderAttendanceAdminHistory(true)" style="background:#22703d;color:white;padding:7px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">更新</button>
+          </div>
+          <div id="attendance-admin-history-wrap"><div style="color:#aaa;font-size:13px;padding:10px 0">「更新」を押して読み込んでください</div></div>
+        </div>
+      </div>
+    </div>
+
+    <!-- 休み申請一覧（全店舗） -->
+    <div class="settings-card">
+      <div class="settings-accordion-hdr" onclick="toggleLeaveRequestAdminGroup()">
+        <span>休み申請一覧（全店舗）</span>
+        <span id="leave-request-admin-group-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
+      </div>
+      <div id="leave-request-admin-group-body" style="display:none;margin-top:10px">
+        <div class="settings-accordion-body">
+          <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
+            <select id="leave-request-admin-store-sel" style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit" onchange="renderLeaveRequestAdmin()">
+              <option value="">全店舗</option>
+              ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}
+            </select>
+            <button onclick="renderLeaveRequestAdmin(true)" style="background:#22703d;color:white;padding:7px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">更新</button>
+          </div>
+          <div id="leave-request-admin-wrap"><div style="color:#aaa;font-size:13px;padding:10px 0">「更新」を押して読み込んでください</div></div>
+        </div>
+      </div>
+    </div>
+    `;
+}
+
 function renderSettings() {
   /* テーブルを隠して設定コンテナを表示 */
   document.querySelector('#page-admin .table-wrap').style.display = 'none';
@@ -6081,63 +6158,6 @@ function renderSettings() {
           </div>
         </div>
 
-      </div>
-    </div>
-
-    <!-- 業務開始管理（試験導入・店舗ごとON/OFF） -->
-    <div class="settings-card">
-      <div class="settings-accordion-hdr" onclick="toggleAttendanceGroup()">
-        <span>業務開始管理（試験導入）</span>
-        <span id="attendance-group-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
-      </div>
-      <div id="attendance-group-body" style="display:none;margin-top:10px">
-        <div class="settings-accordion-body">
-          <div style="font-size:12px;color:#888;margin-bottom:10px">店舗ごとに業務開始機能のON/OFF・スタッフ一覧・基準座標を設定します。基準座標から300m以内での打刻のみ「OK」判定になります。</div>
-          <select id="attendance-cfg-store-sel" style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:100%;margin-bottom:12px" onchange="renderAttendanceCfg()">
-            ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}
-          </select>
-          <div id="attendance-cfg-body"></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 業務開始履歴（全店舗） -->
-    <div class="settings-card">
-      <div class="settings-accordion-hdr" onclick="toggleAttendanceHistoryGroup()">
-        <span>業務開始履歴（全店舗）</span>
-        <span id="attendance-history-group-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
-      </div>
-      <div id="attendance-history-group-body" style="display:none;margin-top:10px">
-        <div class="settings-accordion-body">
-          <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
-            <select id="attendance-admin-store-sel" style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit" onchange="renderAttendanceAdminHistory()">
-              <option value="">全店舗</option>
-              ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}
-            </select>
-            <button onclick="renderAttendanceAdminHistory(true)" style="background:#22703d;color:white;padding:7px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">更新</button>
-          </div>
-          <div id="attendance-admin-history-wrap"><div style="color:#aaa;font-size:13px;padding:10px 0">「更新」を押して読み込んでください</div></div>
-        </div>
-      </div>
-    </div>
-
-    <!-- 休み申請一覧（全店舗） -->
-    <div class="settings-card">
-      <div class="settings-accordion-hdr" onclick="toggleLeaveRequestAdminGroup()">
-        <span>休み申請一覧（全店舗）</span>
-        <span id="leave-request-admin-group-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
-      </div>
-      <div id="leave-request-admin-group-body" style="display:none;margin-top:10px">
-        <div class="settings-accordion-body">
-          <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
-            <select id="leave-request-admin-store-sel" style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit" onchange="renderLeaveRequestAdmin()">
-              <option value="">全店舗</option>
-              ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}
-            </select>
-            <button onclick="renderLeaveRequestAdmin(true)" style="background:#22703d;color:white;padding:7px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">更新</button>
-          </div>
-          <div id="leave-request-admin-wrap"><div style="color:#aaa;font-size:13px;padding:10px 0">「更新」を押して読み込んでください</div></div>
-        </div>
       </div>
     </div>
 
