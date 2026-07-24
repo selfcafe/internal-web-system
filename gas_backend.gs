@@ -1264,6 +1264,21 @@ function testLeaveLineWorksNotification() {
   sendLineWorksNotification('【テスト】休み申請通知グループの接続テストです。', _leaveLineWorksChannel_(null));
 }
 
+// LW_CHANNEL_ID_LEAVE_TOKAI等を設定する際、そのチャンネルIDが分からない場合の調査用。
+// 手順: ①対象のグループトークにBotをメンバー追加する ②この関数をApps Scriptエディタで実行し、
+// 実行ログ(表示→ログ)でchannelId一覧を確認する（LINE WORKS Bot APIはグループ名を返さないため、
+// どれがどのグループかは名前では分からない。新しく参加させた分だけ一覧に増えるので、1つずつ
+// 見当をつけてtestLeaveLineWorksNotification()等で実際に届くか試すのが確実）
+function listLineWorksChannels() {
+  var props = PropertiesService.getScriptProperties();
+  var botId = props.getProperty('LW_BOT_ID');
+  var token = getLineWorksAccessToken_();
+  var url = 'https://www.worksapis.com/v1.0/bots/' + botId + '/channels';
+  var res = UrlFetchApp.fetch(url, { headers: { 'Authorization': 'Bearer ' + token }, muteHttpExceptions: true });
+  console.log(res.getContentText());
+  return JSON.parse(res.getContentText());
+}
+
 function testNotify() {
   notifyNewOrder_('shibuya');
 }
