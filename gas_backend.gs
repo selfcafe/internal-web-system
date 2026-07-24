@@ -142,9 +142,9 @@ function doGet(e) {
 function doPost(e) {
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
+  let result;
   try {
     const b = JSON.parse(e.postData.contents);
-    let result;
     if      (b.action === 'saveOrders')         result = saveOrders(b.storeId, b.rows);
     else if (b.action === 'upsertOrders')       result = upsertOrderRows(b.storeId, b.rows);
     else if (b.action === 'deleteOrders')       result = deleteOrderRows(b.ids);
@@ -163,12 +163,26 @@ function doPost(e) {
     else if (b.action === 'saveDeliveryHistory') result = saveDeliveryHistory(b.storeId, b.row);
     else if (b.action === 'clearDeliveryHistory') result = clearDeliveryHistory(b.storeId);
     else result = { error: 'Unknown action: ' + b.action };
-    return json(result);
   } catch(err) {
-    return json({ error: err.message });
+    result = { error: err.message };
   } finally {
     lock.releaseLock();
   }
+  // LINE WORKS通知はシートの読み書きと競合しないため、ロック解放後に送る（2026-07-24、
+  // 打刻・休み申請の保存処理がロックを保持する時間を通知の通信時間分だけ短縮する狙い。
+  // 各保存関数がresult._notifyに要否を積んでおき、ここで種類ごとに振り分けて送信する）
+  if (result && result._notify) {
+    const n = result._notify;
+    delete result._notify;
+    try {
+      if      (n.type === 'attendanceGpsIssue')    notifyAttendanceGpsIssue_(n.storeId, n.name);
+      else if (n.type === 'leaveRequestTomorrow')  notifyLeaveRequestTomorrow_(n.storeId, n.name, n.leaveDate);
+      else if (n.type === 'leaveRequestCancelled') notifyLeaveRequestCancelled_(n.storeId, n.name, n.leaveDate);
+    } catch (e) {
+      console.error('LINE WORKS通知エラー(ロック解放後):', e.message);
+    }
+  }
+  return json(result);
 }
 
 function json(data) {
@@ -615,8 +629,11 @@ function saveAttendance(storeId, name, lat, lng) {
     }
   }
   if (!updatedExisting) sheet.appendRow([Utilities.getUuid(), storeId, name, now, lat, lng, withinRange]);
-  if (withinRange === false) notifyAttendanceGpsIssue_(storeId, name);
-  return { ok: true, withinRange, updated: updatedExisting };
+  // 通知の送信はここでは行わず、_notifyに要否だけ載せてdoPostへ返す（doPostがLockService解放後に送信する。
+  // 通知はシートの読み書きと競合しない独立した処理なので、他店舗の書き込みをブロックする理由が無い）
+  const result = { ok: true, withinRange, updated: updatedExisting };
+  if (withinRange === false) result._notify = { type: 'attendanceGpsIssue', storeId, name };
+  return result;
 }
 
 // GPS要確認（基準座標から離れた場所での打刻）は翌朝のバッチを待たずその場で通知する
@@ -663,9 +680,11 @@ function saveLeaveRequest(storeId, name, leaveDate) {
   ensureHeaders(sheet, ATTENDANCE_LEAVE_COLS);
   sheet.appendRow([Utilities.getUuid(), storeId, name, leaveDate, new Date()]);
 
+  // 通知の送信はここでは行わず、_notifyに要否だけ載せてdoPostへ返す（doPostがLockService解放後に送信する）
+  const result = { ok: true };
   const tomorrow = Utilities.formatDate(new Date(Date.now() + 24*60*60*1000), _sheetTz(), 'yyyy-MM-dd');
-  if (leaveDate === tomorrow) notifyLeaveRequestTomorrow_(storeId, name, leaveDate);
-  return { ok: true };
+  if (leaveDate === tomorrow) result._notify = { type: 'leaveRequestTomorrow', storeId, name, leaveDate };
+  return result;
 }
 
 function notifyLeaveRequestTomorrow_(storeId, name, leaveDate) {
@@ -688,6 +707,8 @@ function deleteLeaveRequest(id) {
   const hdrs = data[0].map(String);
   const idIdx = hdrs.indexOf('id'), storeIdx = hdrs.indexOf('store_id'),
         nameIdx = hdrs.indexOf('name'), dateIdx = hdrs.indexOf('leave_date');
+  // 通知の送信はここでは行わず、_notifyに要否だけ載せてdoPostへ返す（doPostがLockService解放後に送信する）
+  const result = { ok: true };
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][idIdx]) === String(id)) {
       const storeId = data[i][storeIdx];
@@ -695,11 +716,11 @@ function deleteLeaveRequest(id) {
       const leaveDate = _dateStr(data[i][dateIdx]);
       sheet.deleteRow(i + 1);
       const tomorrow = Utilities.formatDate(new Date(Date.now() + 24*60*60*1000), _sheetTz(), 'yyyy-MM-dd');
-      if (leaveDate === tomorrow) notifyLeaveRequestCancelled_(storeId, name, leaveDate);
+      if (leaveDate === tomorrow) result._notify = { type: 'leaveRequestCancelled', storeId, name, leaveDate };
       break;
     }
   }
-  return { ok: true };
+  return result;
 }
 
 function notifyLeaveRequestCancelled_(storeId, name, leaveDate) {
