@@ -554,15 +554,34 @@ function saveChecksheetData(storeId, periodLabel, data) {
 // attendance（出勤打刻）
 // ----------------------------------------------------------------
 
+// 全店舗分の打刻データ(整形済み)を短時間(25秒)だけCacheServiceに保持し、1店舗だけがアクセスする
+// 場合でも毎回シート全体を読み直さずに済むようにする（2026-07-24、1店舗だけの利用でも業務開始履歴の
+// 表示が遅いとの指摘を受けて追加）。書き込み側(saveAttendance/purgeOldAttendance)が保存・削除の
+// たびにこのキャッシュを明示的に無効化するので、自分自身の直後の再読み込みは必ず最新の状態になる。
+// ※Date型のままキャッシュするとJSON化でUTC文字列に化けてしまうため、_dateTimeStrで
+//   タイムゾーン変換した後の文字列としてキャッシュする（Date型を保持したままキャッシュしない）
+const ATTENDANCE_CACHE_KEY = 'attendance_rows_v1';
+function _attendanceRowsCached_() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(ATTENDANCE_CACHE_KEY);
+  if (cached) return JSON.parse(cached);
+  const rows = sheetRows(getSheet(SHEET_ATTENDANCE), ATTENDANCE_COLS)
+    .map(r => Object.assign({}, r, { clocked_at: _dateTimeStr(r.clocked_at) }));
+  try { cache.put(ATTENDANCE_CACHE_KEY, JSON.stringify(rows), 25); } catch (e) {} // 100KB上限超過時は諦めて次回も都度読む
+  return rows;
+}
+function _invalidateAttendanceCache_() {
+  try { CacheService.getScriptCache().remove(ATTENDANCE_CACHE_KEY); } catch (e) {}
+}
+
 // storeIdを渡すと自店舗分のみ、省略すると全店舗分を返す（パートナー/管理者で共通利用）
 // ※以前はここでpurgeOldAttendance()を毎回実行していたが、全打刻を毎回スキャンする重い処理を
 // パートナー/管理者が画面を開くたびの読み取りパスに乗せるのは無駄なので、日次バッチ
 // （sendDailyAttendanceCheck、1日1回8:30）側でのみ実行するよう移動した
 function getAttendance(storeId) {
-  let rows = sheetRows(getSheet(SHEET_ATTENDANCE), ATTENDANCE_COLS);
+  let rows = _attendanceRowsCached_();
   if (storeId) rows = rows.filter(r => String(r.store_id) === String(storeId));
-  return rows.map(r => Object.assign({}, r, { clocked_at: _dateTimeStr(r.clocked_at) }))
-    .sort((a, b) => String(b.clocked_at).localeCompare(String(a.clocked_at)));
+  return rows.slice().sort((a, b) => String(b.clocked_at).localeCompare(String(a.clocked_at)));
 }
 
 // 打刻日時から3ヶ月経過した出勤履歴を自動削除（全店舗運用時のシート肥大化・一覧描画の重さ対策）
@@ -581,6 +600,7 @@ function purgeOldAttendance() {
     if (!clocked || clocked >= limitStr) continue;
     sheet.deleteRow(i + 1);
   }
+  _invalidateAttendanceCache_();
 }
 
 // 2点の緯度経度間の距離をメートルで返す（Haversine formula）
@@ -629,6 +649,7 @@ function saveAttendance(storeId, name, lat, lng) {
     }
   }
   if (!updatedExisting) sheet.appendRow([Utilities.getUuid(), storeId, name, now, lat, lng, withinRange]);
+  _invalidateAttendanceCache_();
   // 通知の送信はここでは行わず、_notifyに要否だけ載せてdoPostへ返す（doPostがLockService解放後に送信する。
   // 通知はシートの読み書きと競合しない独立した処理なので、他店舗の書き込みをブロックする理由が無い）
   const result = { ok: true, withinRange, updated: updatedExisting };
@@ -651,11 +672,28 @@ function notifyAttendanceGpsIssue_(storeId, name) {
 // ----------------------------------------------------------------
 
 // storeIdを渡すと自店舗分のみ、省略すると全店舗分を返す（パートナー/管理者で共通利用）
+// getAttendanceと同じ狙い(2026-07-24)。全店舗分の休み申請(整形済み)を短時間(25秒)だけキャッシュし、
+// 1店舗だけのアクセスでも毎回シート全体を読み直さずに済むようにする。書き込み側
+// (saveLeaveRequest/deleteLeaveRequest)が都度キャッシュを無効化するので、自分自身の直後の
+// 再読み込みは必ず最新の状態になる
+const LEAVE_REQUESTS_CACHE_KEY = 'leave_requests_rows_v1';
+function _leaveRequestsRowsCached_() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(LEAVE_REQUESTS_CACHE_KEY);
+  if (cached) return JSON.parse(cached);
+  const rows = sheetRows(getSheet(SHEET_ATTENDANCE_LEAVE), ATTENDANCE_LEAVE_COLS)
+    .map(r => Object.assign({}, r, { leave_date: _dateStr(r.leave_date), submitted_at: _dateTimeStr(r.submitted_at) }));
+  try { cache.put(LEAVE_REQUESTS_CACHE_KEY, JSON.stringify(rows), 25); } catch (e) {}
+  return rows;
+}
+function _invalidateLeaveRequestsCache_() {
+  try { CacheService.getScriptCache().remove(LEAVE_REQUESTS_CACHE_KEY); } catch (e) {}
+}
+
 function getLeaveRequests(storeId) {
-  let rows = sheetRows(getSheet(SHEET_ATTENDANCE_LEAVE), ATTENDANCE_LEAVE_COLS);
+  let rows = _leaveRequestsRowsCached_();
   if (storeId) rows = rows.filter(r => String(r.store_id) === String(storeId));
-  return rows.map(r => Object.assign({}, r, { leave_date: _dateStr(r.leave_date), submitted_at: _dateTimeStr(r.submitted_at) }))
-    .sort((a, b) => String(b.submitted_at).localeCompare(String(a.submitted_at)));
+  return rows.slice().sort((a, b) => String(b.submitted_at).localeCompare(String(a.submitted_at)));
 }
 
 // 「業務開始」タブを開いた時、getAttendance/getLeaveRequestsを別々に2往復させず1回にまとめる。
@@ -679,6 +717,7 @@ function saveLeaveRequest(storeId, name, leaveDate) {
   const sheet = getSheet(SHEET_ATTENDANCE_LEAVE);
   ensureHeaders(sheet, ATTENDANCE_LEAVE_COLS);
   sheet.appendRow([Utilities.getUuid(), storeId, name, leaveDate, new Date()]);
+  _invalidateLeaveRequestsCache_();
 
   // 通知の送信はここでは行わず、_notifyに要否だけ載せてdoPostへ返す（doPostがLockService解放後に送信する）
   const result = { ok: true };
@@ -715,6 +754,7 @@ function deleteLeaveRequest(id) {
       const name = data[i][nameIdx];
       const leaveDate = _dateStr(data[i][dateIdx]);
       sheet.deleteRow(i + 1);
+      _invalidateLeaveRequestsCache_();
       const tomorrow = Utilities.formatDate(new Date(Date.now() + 24*60*60*1000), _sheetTz(), 'yyyy-MM-dd');
       if (leaveDate === tomorrow) result._notify = { type: 'leaveRequestCancelled', storeId, name, leaveDate };
       break;
