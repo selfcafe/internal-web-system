@@ -1219,6 +1219,10 @@ function setupInventoryDisposedHighlight() {
 const SHEET_INVENTORY_ROLLUP = '全店舗棚卸集計';
 const SHEET_INVENTORY_MISSING = '棚卸未提出店舗';
 const INVENTORY_ROLLUP_COLS = ['period_label','store_type','store_name','store_id','product_code','product','open_stock','delivery','end_stock','consumption','disposed_qty','low_stock'];
+// シート上の見出し表示専用（英語キーのINVENTORY_ROLLUP_COLSとは順序を揃えるだけの対応関係）。
+// 内部の列参照(indexOf等)は引き続き上のCOLSキーで行い、書き込み時の1行目だけこちらに差し替える
+const INVENTORY_ROLLUP_HEADERS_JA = ['期間','店舗区分','店舗名','店舗ID','商品コード','商品名','期首在庫','当月納品','期末在庫','消費量','処分数量','在庫僅少'];
+const INVENTORY_MISSING_HEADERS_JA = ['期間','店舗ID','店舗名'];
 
 // 全店舗ID一覧（stores.js＋custom_stores、deleted_storesを除外）。「棚卸未提出店舗」の
 // 判定に必要——inventory_logは提出があった店舗の行しか持たないため、提出そのものが
@@ -1329,7 +1333,7 @@ function buildInventoryRollup(periodLabel) {
   const sheet = ss.getSheetByName(SHEET_INVENTORY_ROLLUP) || ss.insertSheet(SHEET_INVENTORY_ROLLUP);
   sheet.clearContents();
   sheet.clearConditionalFormatRules();
-  sheet.getRange(1, 1, 1, INVENTORY_ROLLUP_COLS.length).setValues([INVENTORY_ROLLUP_COLS]);
+  sheet.getRange(1, 1, 1, INVENTORY_ROLLUP_COLS.length).setValues([INVENTORY_ROLLUP_HEADERS_JA]);
   if (outRows.length) {
     sheet.getRange(2, 1, outRows.length, INVENTORY_ROLLUP_COLS.length).setValues(outRows);
     const lowColIdx = INVENTORY_ROLLUP_COLS.indexOf('low_stock') + 1;
@@ -1348,7 +1352,7 @@ function buildInventoryRollup(periodLabel) {
   const missing = allIds.filter(id => !submitted[id]);
   const missingSheet = ss.getSheetByName(SHEET_INVENTORY_MISSING) || ss.insertSheet(SHEET_INVENTORY_MISSING);
   missingSheet.clearContents();
-  missingSheet.getRange(1, 1, 1, 3).setValues([['period_label', 'store_id', 'store_name']]);
+  missingSheet.getRange(1, 1, 1, 3).setValues([INVENTORY_MISSING_HEADERS_JA]);
   if (missing.length) {
     missingSheet.getRange(2, 1, missing.length, 3).setValues(missing.map(id => [periodLabel, id, storeNames[id] || id]));
   }
