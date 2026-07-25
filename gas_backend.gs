@@ -136,6 +136,7 @@ function doGet(e) {
     else if (a === 'migrateOrderColumns')       result = migrateOrderColumns();
     else if (a === 'migrateInventoryColumns')   result = migrateInventoryColumns();
     else if (a === 'setupInventoryDisposedHighlight') result = setupInventoryDisposedHighlight();
+    else if (a === 'buildInventoryRollup')      result = buildInventoryRollup(e.parameter.periodLabel);
     else if (a === 'getSettingHistory')         result = getSettingHistory(e.parameter.key, e.parameter.limit);
     else if (a === 'getAttendance')             result = getAttendance(e.parameter.storeId);
     else if (a === 'getLeaveRequests')          result = getLeaveRequests(e.parameter.storeId);
@@ -1204,6 +1205,155 @@ function setupInventoryDisposedHighlight() {
   );
   sheet.setConditionalFormatRules(rules);
   return { ok: true, column: colLetter, rows: numRows };
+}
+
+// ----------------------------------------------------------------
+// 全店舗棚卸集計（ロールアップ）2026-07-25追加。
+// ユーザー要望：各パートナーが棚卸で入力したデータを集計して全店分の棚卸表にしたい
+// （売上ではなく在庫管理の観点）。ロールモデルとして見せられた既存の手動集計シートは
+// 店舗ごとにブロックをコピーする構成で結合セル・空行・不要な列が多く整理されていなかったため、
+// 店舗を列ではなく行として並べる「縦持ち（tidy）」な表にする——Sheets標準のフィルタ/ピボットを
+// 使って自由に絞り込める形にする狙い。migrateInventoryColumns等と同じ「呼ばれる度に作り直す」
+// ワンショット関数（?action=buildInventoryRollup&periodLabel=2026-07で実行）。
+// ----------------------------------------------------------------
+const SHEET_INVENTORY_ROLLUP = '全店舗棚卸集計';
+const SHEET_INVENTORY_MISSING = '棚卸未提出店舗';
+const INVENTORY_ROLLUP_COLS = ['period_label','store_type','store_name','store_id','product_code','product','open_stock','delivery','end_stock','consumption','disposed_qty','low_stock'];
+
+// 全店舗ID一覧（stores.js＋custom_stores、deleted_storesを除外）。「棚卸未提出店舗」の
+// 判定に必要——inventory_logは提出があった店舗の行しか持たないため、提出そのものが
+// 無い店舗を見つけるには別途「本来存在するはずの店舗一覧」が要る
+function _allStoreIds_() {
+  const names = _storeNames_();
+  const ids = Object.keys(names);
+  try {
+    const raw = (getSettings().find(s => s.key === 'custom_stores') || {}).value;
+    const custom = raw ? JSON.parse(raw) : {};
+    Object.keys(custom).forEach(id => { if (ids.indexOf(id) < 0) ids.push(id); });
+  } catch (e) { /* custom_stores未設定・パース失敗時はstores.js分のみで続行 */ }
+  try {
+    const raw = (getSettings().find(s => s.key === 'deleted_stores') || {}).value;
+    const deleted = raw ? JSON.parse(raw) : [];
+    deleted.forEach(id => { const i = ids.indexOf(id); if (i >= 0) ids.splice(i, 1); });
+  } catch (e) { /* deleted_stores未設定・パース失敗時は除外なしで続行 */ }
+  return ids;
+}
+
+// 商品名→{caseOnly, casePieces}のマップ。「ケース単価の物は残り1ケース以下で少ない」判定用に
+// 商品設定(all_products)のcaseUnit文字列（例:"1ケース/25袋"）から個数だけを抜き出す
+// （当月納品(手動)機能のcasePiecesFromUnitと同じ発想、GAS側には無かったので同等ロジックを複製）
+function _productCaseInfo_() {
+  const map = {};
+  const entry = getSettings().find(s => s.key === 'all_products');
+  if (!entry || !entry.value) return map;
+  let products;
+  try { products = JSON.parse(entry.value); } catch (e) { return map; }
+  products.forEach(p => {
+    if (!p.name) return;
+    let casePieces = null;
+    if (p.caseUnit) {
+      const m = String(p.caseUnit).match(/\d+/);
+      if (m) casePieces = Number(m[0]);
+    }
+    map[p.name] = { caseOnly: !!p.caseOnly, casePieces: casePieces };
+  });
+  return map;
+}
+
+// inventory_delivery_auto（納品済みボタン押下のたびrecordInventoryDeliveryが追記するログ）を
+// 指定期間について店舗×商品で合計する。inventory_logのdelivery列は棚卸完了送信時点の
+// スナップショットで古くなりうるため、ロールアップでは常にこちらの生ログから集計し直す
+// （ユーザー要望：「納品済みボタン押されたら自動的にこのシート側で納品カウントもする」に対応）
+function _deliveryAutoTotalsForPeriod_(periodLabel) {
+  const sheet = getDeliveryAutoSheet();
+  const totals = {};
+  if (sheet.getLastRow() <= 1) return totals;
+  const data = sheet.getDataRange().getValues();
+  const hdrs = data[0].map(String);
+  const pIdx = hdrs.indexOf('period_label'), sIdx = hdrs.indexOf('store_id'),
+        prIdx = hdrs.indexOf('product'), qIdx = hdrs.indexOf('qty');
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (_invMonthLabelStr(row[pIdx]) !== String(periodLabel)) continue;
+    const sid = String(row[sIdx]), prod = String(row[prIdx]);
+    if (!totals[sid]) totals[sid] = {};
+    totals[sid][prod] = (totals[sid][prod] || 0) + Number(row[qIdx] || 0);
+  }
+  return totals;
+}
+
+function buildInventoryRollup(periodLabel) {
+  if (!periodLabel) return { error: 'periodLabelは必須です（例: 2026-07）' };
+  const invSheet = getInventorySheet();
+  const hasData = invSheet.getLastRow() > 1;
+  const data = hasData ? invSheet.getDataRange().getValues() : [INVENTORY_COLS];
+  const hdrs = data[0].map(String);
+  const idx = {};
+  INVENTORY_COLS.forEach(c => { idx[c] = hdrs.indexOf(c); });
+
+  const storeNames = _storeNames_();
+  const deliveryTotals = _deliveryAutoTotalsForPeriod_(periodLabel);
+  const caseInfo = _productCaseInfo_();
+
+  const submitted = {};
+  const outRows = [];
+  if (hasData) {
+    for (let i = 1; i < data.length; i++) {
+      const r = data[i];
+      if (_invMonthLabelStr(r[idx.period_label]) !== String(periodLabel)) continue;
+      const storeId = String(r[idx.store_id]);
+      submitted[storeId] = true;
+      const product = r[idx.product];
+      const endStock = r[idx.end_stock];
+      const liveDelivery = (deliveryTotals[storeId] && deliveryTotals[storeId][product]) || 0;
+      const info = caseInfo[product] || {};
+      const low = !!(info.caseOnly && info.casePieces && endStock !== '' && endStock !== null && Number(endStock) <= info.casePieces);
+      outRows.push([
+        periodLabel,
+        _isFcStore_(storeId) ? 'FC' : '直営',
+        storeNames[storeId] || storeId,
+        storeId,
+        r[idx.code],
+        product,
+        r[idx.open_stock],
+        liveDelivery,
+        endStock,
+        r[idx.consumption],
+        r[idx.disposed_qty],
+        low ? '少ない' : ''
+      ]);
+    }
+  }
+
+  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const sheet = ss.getSheetByName(SHEET_INVENTORY_ROLLUP) || ss.insertSheet(SHEET_INVENTORY_ROLLUP);
+  sheet.clearContents();
+  sheet.clearConditionalFormatRules();
+  sheet.getRange(1, 1, 1, INVENTORY_ROLLUP_COLS.length).setValues([INVENTORY_ROLLUP_COLS]);
+  if (outRows.length) {
+    sheet.getRange(2, 1, outRows.length, INVENTORY_ROLLUP_COLS.length).setValues(outRows);
+    const lowColIdx = INVENTORY_ROLLUP_COLS.indexOf('low_stock') + 1;
+    const lowColLetter = String.fromCharCode(64 + lowColIdx);
+    const range = sheet.getRange(2, 1, outRows.length, INVENTORY_ROLLUP_COLS.length);
+    sheet.setConditionalFormatRules([
+      SpreadsheetApp.newConditionalFormatRule()
+        .whenFormulaSatisfied('=$' + lowColLetter + '2="少ない"')
+        .setBackground('#ffcdd2')
+        .setRanges([range])
+        .build()
+    ]);
+  }
+
+  const allIds = _allStoreIds_();
+  const missing = allIds.filter(id => !submitted[id]);
+  const missingSheet = ss.getSheetByName(SHEET_INVENTORY_MISSING) || ss.insertSheet(SHEET_INVENTORY_MISSING);
+  missingSheet.clearContents();
+  missingSheet.getRange(1, 1, 1, 3).setValues([['period_label', 'store_id', 'store_name']]);
+  if (missing.length) {
+    missingSheet.getRange(2, 1, missing.length, 3).setValues(missing.map(id => [periodLabel, id, storeNames[id] || id]));
+  }
+
+  return { ok: true, rows: outRows.length, missingStores: missing.length };
 }
 
 // ----------------------------------------------------------------
