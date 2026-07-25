@@ -58,7 +58,7 @@ const CHECKSHEET_COLS = ['store_id','period_label','data','updated_at'];
 // 2026-07-21に「盗難・カウントミスの早期発見用に本部側の記録としても残したい」との要望で復活。
 // いずれも既存の運用中シートには自動で列が増えないため、migrateInventoryColumns()で末尾に追加する
 // （列の並び順を変えると位置ズレで既存データが壊れるため、新規列は必ずINVENTORY_COLSの末尾に足すこと）
-const INVENTORY_COLS = ['period_label','store_id','code','product','label','open_stock','delivery','end_stock','consumption','disposed_qty','price','amount','remarks','updated_at','anomaly_note','daily_count','matched'];
+const INVENTORY_COLS = ['period_label','store_id','code','product','label','open_stock','delivery','end_stock','consumption','disposed_qty','price','amount','remarks','updated_at','anomaly_note','daily_count','matched','store_type'];
 // 出勤打刻ログ。1回の打刻で1行追加（append-onlyのログシート、ordersのような全件削除→再送信はしない）
 const ATTENDANCE_COLS = ['id','store_id','name','clocked_at','lat','lng','within_range'];
 // 基準座標からこの距離(m)以内なら出勤OKと判定する（全店舗共通の固定値、2026-07-15確定）
@@ -105,6 +105,15 @@ function _storeNames_() {
 function _storeIdLabel_(storeId) {
   const nm = _storeNames_()[storeId];
   return nm ? storeId + '（' + nm + '）' : String(storeId);
+}
+// FC(フランチャイズ)店舗かどうかの判定（2026-07-25、棚卸集計スプレッドシートのstore_type列用）。
+// stores.js上の表示名が「FC 」で始まるという既存の命名規則を正とする。stores.js取得に失敗した場合や
+// custom_storesで追加され表示名が引けない店舗は、store_id自体の末尾"_fc"規則にフォールバックする
+// （現行の唯一のFC店舗shinjuku_fcはid・表示名どちらの規則にも合致する）。該当なしは直営扱い。
+function _isFcStore_(storeId) {
+  const nm = _storeNames_()[storeId];
+  if (nm) return nm.indexOf('FC ') === 0;
+  return /_fc$/.test(String(storeId));
 }
 
 // ----------------------------------------------------------------
@@ -1005,6 +1014,7 @@ function saveInventorySnapshot(storeId, periodLabel, rows, remarks) {
       if (c === 'store_id')     return storeId;
       if (c === 'remarks')      return remarks || '';
       if (c === 'updated_at')   return now;
+      if (c === 'store_type')   return _isFcStore_(storeId) ? 'FC' : '直営';
       const v = r[c];
       return (v === undefined || v === null) ? '' : v;
     }));
