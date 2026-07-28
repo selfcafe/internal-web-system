@@ -2342,6 +2342,13 @@ async function _submitInventoryInner() {
     await gasPost('saveInventorySnapshot', { storeId: storeTab, periodLabel: period.label, rows, remarks: periodData.remarks });
     periodData.lastSentAt = Date.now();
     setInventoryPeriodData(storeTab, period.label, periodData);
+    // 渋谷神南タブへの自動反映(buildStoreInventorySheet)は結果を待たずに別リクエストとして投げる
+    // (テスト運用中は当面この店舗のみ)。ここでawaitすると「棚卸完了」ボタンの応答がその処理時間分
+    // 遅くなり、送信中の表示が長引く原因になったため(2026-07-28)、保存本体とは切り離した
+    if (storeTab === 'shibuya') {
+      gasGet('buildStoreInventorySheet', { storeId: storeTab, periodLabel: period.label })
+        .catch(e => console.error('buildStoreInventorySheet(渋谷神南)自動反映エラー:', e));
+    }
     // 画面の再構築(renderInventory)は呼び出し元(submitInventory)がボタン上の
     // 「✓送信しました」表示を一瞬見せた後に行う
     const toast = document.getElementById('inventory-toast');

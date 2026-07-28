@@ -1037,15 +1037,10 @@ function saveInventorySnapshot(storeId, periodLabel, rows, remarks) {
     // period_labelが"YYYY-MM"のまま日付型に自動変換されないよう、書き込み前にプレーンテキスト形式へ固定する
     sheet.getRange(startRow, INVENTORY_COLS.indexOf('period_label') + 1, newRows.length, 1).setNumberFormat('@');
     sheet.getRange(startRow, 1, newRows.length, INVENTORY_COLS.length).setValues(newRows);
-
-    // 渋谷神南は棚卸表シート(buildStoreInventorySheet)のテスト運用中のため、提出の都度そのタブへも
-    // 自動反映する。「渋谷神南が機能するか見届けてから他店に増やす」方針のため、対象は当面この店舗のみに
-    // 限定している——全店舗に広げる際はこのif文自体を外す想定。反映に失敗しても本来の棚卸データ保存
-    // (inventory_log)自体は既に完了しているため、この段階のエラーで提出全体を失敗扱いにはしない。
-    if (String(storeId) === 'shibuya') {
-      try { buildStoreInventorySheet(storeId, periodLabel); }
-      catch (e) { console.error('buildStoreInventorySheet(渋谷神南)自動反映エラー:', e.message); }
-    }
+    // 渋谷神南タブへの自動反映(buildStoreInventorySheet)はここでは呼ばない——doPostは同期実行のため
+    // ここで呼ぶと「棚卸完了」ボタンの応答がその処理時間分遅くなり、送信中の表示が長引く原因になった
+    // (2026-07-28、ユーザー指摘で発覚)。代わりにindex.html側(_submitInventoryInner)がこの保存の
+    // 成功後に別リクエストとして(結果を待たずに)呼び出す形にした
   }
   return { ok: true };
 }
