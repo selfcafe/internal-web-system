@@ -132,7 +132,8 @@ function doGet(e) {
   try {
     const a = e.parameter.action;
     let result;
-    if      (a === 'getOrders')         result = getOrders();
+    if      (a === '_peekMainSheetTabByGid') result = _peekMainSheetTabByGid_(Number(e.parameter.gid), Number(e.parameter.rows) || 5);
+    else if (a === 'getOrders')         result = getOrders();
     else if (a === 'getSettings')       result = getSettings();
     else if (a === 'getLostItems')      result = getLostItems(e.parameter.month, e.parameter.storeId);
     else if (a === 'getChecksheetData') result = getChecksheetData(e.parameter.storeId);
@@ -221,6 +222,18 @@ function json(data) {
 function getSheet(name) {
   const ss = SpreadsheetApp.openById(SHEET_ID);
   return ss.getSheetByName(name) || ss.insertSheet(name);
+}
+
+// 調査用の一時的な読み取り専用ヘルパー(2026-07-28、「納品済み履歴」の実データがどのタブ・列構成
+// かを確認するため)。書き込みは一切行わない。用が済んだら削除してよい。
+function _peekMainSheetTabByGid_(gid, numRows) {
+  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const sheet = ss.getSheets().find(s => s.getSheetId() === gid);
+  if (!sheet) return { error: `gid ${gid} のタブが見つかりません` };
+  const lastRow = Math.min(sheet.getLastRow(), numRows + 1);
+  const lastCol = sheet.getLastColumn();
+  const values = lastRow > 0 ? sheet.getRange(1, 1, lastRow, lastCol).getValues() : [];
+  return { name: sheet.getName(), totalRows: sheet.getLastRow(), totalCols: lastCol, sample: values };
 }
 
 function ensureHeaders(sheet, cols) {
