@@ -147,6 +147,7 @@ function doGet(e) {
     else if (a === 'buildInventoryRollup')      result = buildInventoryRollup(e.parameter.periodLabel);
     else if (a === 'buildStoreInventorySheet')  result = buildStoreInventorySheet(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'removeInventoryLabelColumn') result = removeInventoryLabelColumn();
+    else if (a === 'pruneBlankStoreInventoryRows') result = pruneBlankStoreInventoryRows(e.parameter.storeId);
     else if (a === 'getSettingHistory')         result = getSettingHistory(e.parameter.key, e.parameter.limit);
     else if (a === 'getAttendance')             result = getAttendance(e.parameter.storeId);
     else if (a === 'getLeaveRequests')          result = getLeaveRequests(e.parameter.storeId);
@@ -1518,6 +1519,27 @@ function buildStoreInventorySheet(storeId, periodLabel) {
   });
 
   return { ok: true, store: sheetName, period: periodLabel, rows: outRows.length };
+}
+
+// 店舗タブに手作業で作った下書き行(期間・数量等が空欄のまま、商品コード/商品名だけ入っている行)を
+// 削除するワンショット掃除用。当月納品(delivery)列は常に0以上の数値が入る(buildStoreInventorySheetが
+// 生成した実データ行なら空欄になり得ない)ため、この列が空欄の行だけを「下書き行」とみなして削除する。
+// ?action=pruneBlankStoreInventoryRows&storeId=shibuya で実行。
+function pruneBlankStoreInventoryRows(storeId) {
+  if (!storeId) return { error: 'storeIdは必須です' };
+  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const sheetName = _storeNames_()[storeId] || storeId;
+  const sheet = ss.getSheetByName(sheetName);
+  if (!sheet) return { error: `${sheetName}シートが見つかりません` };
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return { ok: true, deleted: 0 };
+  const deliveryCol = STORE_INVENTORY_COLS.indexOf('delivery') + 1;
+  const values = sheet.getRange(2, deliveryCol, lastRow - 1, 1).getValues();
+  let deleted = 0;
+  for (let i = values.length - 1; i >= 0; i--) {
+    if (values[i][0] === '') { sheet.deleteRow(i + 2); deleted++; }
+  }
+  return { ok: true, deleted };
 }
 
 // ----------------------------------------------------------------
