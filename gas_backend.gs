@@ -1480,8 +1480,11 @@ function _productMeta_() {
   return map;
 }
 
-const STORE_INVENTORY_COLS = ['period_label','code','product','opening_amount','closing_amount','consumption_amount','cost_rate','open_stock','end_stock','delivery','consumption','disposed_qty','low_stock'];
-const STORE_INVENTORY_HEADERS_JA = ['期間','商品コード','商品名','期首在庫額','期末在庫額','月消費額','原価率','期首在庫','期末在庫','当月納品','消費量','処分数量','在庫僅少'];
+// 2026-07-28、デイリーカウント・差異列を追加(ユーザーが先に手動でデイリーカウント列を渋谷神南タブに
+// 追加していたため、それに揃える形でコードを更新)。ヘッダー行は毎回書き直す(下記参照)ため、
+// 手動で追加された列があっても次の実行でこの並び順に揃い直す
+const STORE_INVENTORY_COLS = ['period_label','code','product','opening_amount','closing_amount','consumption_amount','cost_rate','open_stock','end_stock','delivery','consumption','disposed_qty','daily_count','count_diff','low_stock'];
+const STORE_INVENTORY_HEADERS_JA = ['期間','商品コード','商品名','期首在庫額','期末在庫額','月消費額','原価率','期首在庫','期末在庫','当月納品','消費量','処分数量','デイリーカウント','差異(消費量-デイリーカウント)','在庫僅少'];
 
 // 店舗単体の棚卸表シート（店舗の表示名タブ、例:「渋谷神南」）を1店舗分だけ生成・更新するワンショット関数。
 // ?action=buildStoreInventorySheet&storeId=shibuya&periodLabel=2026-07 で実行。
@@ -1546,10 +1549,18 @@ function buildStoreInventorySheet(storeId, periodLabel) {
       }
     }
 
+    const dailyCount = r[idx.daily_count];
+    const consumption = r[idx.consumption];
+    // 差異=消費量(棚卸ベース)-デイリーカウント(チェックシート補充ベース)。既存の
+    // 「消費量とデイリーカウントが一致しない」という参考表示(mismatch)の数値版
+    const countDiff = (consumption !== '' && consumption !== null && dailyCount !== '' && dailyCount !== null)
+      ? Number(consumption) - Number(dailyCount) : '';
+
     return [
       _periodLabelJa_(periodLabel), r[idx.code], product,
       openingAmount, closingAmount, consumptionAmount, costRate,
-      r[idx.open_stock], endStock, liveDelivery, r[idx.consumption], r[idx.disposed_qty],
+      r[idx.open_stock], endStock, liveDelivery, consumption, r[idx.disposed_qty],
+      dailyCount, countDiff,
       low ? '少ない' : ''
     ];
   });
@@ -1557,7 +1568,10 @@ function buildStoreInventorySheet(storeId, periodLabel) {
   const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
   const sheetName = _storeNames_()[storeId] || storeId;
   const sheet = ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
-  if (sheet.getLastRow() === 0) sheet.getRange(1, 1, 1, STORE_INVENTORY_HEADERS_JA.length).setValues([STORE_INVENTORY_HEADERS_JA]);
+  // 見出し行は毎回書き直す(空シートの時だけでなく)。手動で列を挿入された場合等、コード側の
+  // 正しい並びに毎回揃え直す狙い——データ行は期間ブロック単位でしか書き直さないため、
+  // 見出しだけこの実行のたびに同期しておかないと、コードとシートの列がずれたままになる
+  sheet.getRange(1, 1, 1, STORE_INVENTORY_HEADERS_JA.length).setValues([STORE_INVENTORY_HEADERS_JA]);
 
   // 店舗タブは月をまたいで蓄積していく想定のため、全店舗棚卸集計のような毎回全消し方式ではなく、
   // 対象期間の行(同じ期間で再実行した場合の重複)だけ削除してから最新版を末尾に追記する。
