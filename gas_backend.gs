@@ -133,6 +133,7 @@ function doGet(e) {
     const a = e.parameter.action;
     let result;
     if      (a === '_peekMainSheetTabByGid') result = _peekMainSheetTabByGid_(Number(e.parameter.gid), Number(e.parameter.rows) || 5);
+    else if (a === '_provisionDeliveryHistorySheet') result = _provisionDeliveryHistorySheet_();
     else if (a === 'getOrders')         result = getOrders();
     else if (a === 'getSettings')       result = getSettings();
     else if (a === 'getLostItems')      result = getLostItems(e.parameter.month, e.parameter.storeId);
@@ -222,6 +223,24 @@ function json(data) {
 function getSheet(name) {
   const ss = SpreadsheetApp.openById(SHEET_ID);
   return ss.getSheetByName(name) || ss.insertSheet(name);
+}
+
+// DELIVERY_HISTORY_SHEET_IDが一度も設定されず、「納品済み」操作がdelivery_historyへの保存に
+// 常に失敗してlocalStorageへのフォールバックになっていた問題(2026-07-28発覚)への対応。
+// 実行アカウント自身の所有としてスプレッドシートを新規作成する(この方法なら追加の共有設定が不要)。
+// 一度だけ実行し、返ってきたspreadsheetIdをデプロイ用のDELIVERY_HISTORY_SHEET_IDに設定すること。
+// 既に同名のファイルが無いか一応確認してから作る(何度も誤って複数作成しないための軽い安全策)。
+function _provisionDeliveryHistorySheet_() {
+  const existing = DriveApp.getFilesByName('delivery_history（納品済み履歴・自動作成）');
+  if (existing.hasNext()) {
+    const f = existing.next();
+    return { ok: true, alreadyExisted: true, spreadsheetId: f.getId(), url: f.getUrl() };
+  }
+  const ss = SpreadsheetApp.create('delivery_history（納品済み履歴・自動作成）');
+  const sheet = ss.getSheets()[0];
+  sheet.setName(SHEET_DELIVERY_HISTORY);
+  sheet.appendRow(DELIVERY_HISTORY_COLS);
+  return { ok: true, alreadyExisted: false, spreadsheetId: ss.getId(), url: ss.getUrl() };
 }
 
 // 調査用の一時的な読み取り専用ヘルパー(2026-07-28、「納品済み履歴」の実データがどのタブ・列構成
