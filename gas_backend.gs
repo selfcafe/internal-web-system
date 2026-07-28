@@ -148,6 +148,7 @@ function doGet(e) {
     else if (a === 'buildStoreInventorySheet')  result = buildStoreInventorySheet(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'removeInventoryLabelColumn') result = removeInventoryLabelColumn();
     else if (a === 'pruneBlankStoreInventoryRows') result = pruneBlankStoreInventoryRows(e.parameter.storeId);
+    else if (a === 'buildSalesCategoryCostRatio') result = buildSalesCategoryCostRatio(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'getSettingHistory')         result = getSettingHistory(e.parameter.key, e.parameter.limit);
     else if (a === 'getAttendance')             result = getAttendance(e.parameter.storeId);
     else if (a === 'getLeaveRequests')          result = getLeaveRequests(e.parameter.storeId);
@@ -1557,6 +1558,93 @@ function buildStoreInventorySheet(storeId, periodLabel) {
   ['opening_amount', 'closing_amount', 'consumption_amount'].forEach(c => {
     sheet.getRange(startRow, STORE_INVENTORY_COLS.indexOf(c) + 1, outRows.length, 1).setNumberFormat(INVOICE_YEN_FORMAT);
   });
+
+  return { ok: true, store: sheetName, period: periodLabel, rows: outRows.length };
+}
+
+// ----------------------------------------------------------------
+// 販売品類(vendor:'sales')の原価率(ステラスマートワン実売上ベース) 2026-07-28
+// ----------------------------------------------------------------
+// vendor:'other'向けの在庫消費率(期首在庫額ベースの疑似指標、buildStoreInventorySheet本体)とは
+// 別物の指標——ここは実売上に対する真の原価率なので、意味を混同しないよう別ブロックとして出力する。
+// ステラの商品コード(STE0xx)⇔PRODUCTS配列の名寄せ表(2026-07-28、実CSV2件・67件と3855件から確定、
+// ユーザー確認済み。詳細は[[reference_stera_smart_one_api]]メモ参照)。商品コード列が空の行があるため
+// 商品ID(prd_xxxxxxxx)を主キーにする。レディーボーデン各種・プリングルス各種はステラ側が味を
+// 区別しないため、当方の複数商品(ourProducts)をグループとして合算比較する。
+// 対象外(このマッピングに無いステラ商品コードは想定内・エラーではない): STE003ポコテインアイス
+// (天満店限定、PRODUCTSに存在しない)、STE009 GABAチョコ(取り扱い終了)、tokai_snack(東海限定、
+// そもそもステラ管理外)
+const STERA_SALES_MAPPING = [
+  { prdId: 'prd_223df30ea1f511d1df19c6c', label: '水', ourProducts: ['水'] },
+  { prdId: 'prd_12fd82ee35d41bcef497baa', label: 'レディーボーデン各種', ourProducts: ['アイス　チョコ　レディーボーデン', 'アイス　バニラ　レディーボーデン', 'アイス　プレミアムミルク　レディーボーデン', 'アイス　クッキーアンドクリーム　レディーボーデン'] },
+  { prdId: 'prd_535430d421048c6d58de73e', label: 'プリングルス各種', ourProducts: ['プリングルス', 'プリングルス　チーズ', 'プリングルス　サワークリーム＆オニオン'] },
+  { prdId: 'prd_db5c32edaf3cba6889315ce', label: 'プチシリーズ', ourProducts: ['プチシリーズ'] },
+  { prdId: 'prd_e5beda23225e76774172fe8', label: 'ソイジョイ', ourProducts: ['ソイジョイ'] },
+  { prdId: 'prd_57998f0bdebf586bcd3e51c', label: '大粒ラムネ', ourProducts: ['大粒ラムネ'] },
+  { prdId: 'prd_7603e1635070498fefa4a85', label: '果汁グミ', ourProducts: ['果汁グミ'] },
+  { prdId: 'prd_ea6c0ebc5bf327d051ad172', label: 'クランキーアーモンドチョコレート', ourProducts: ['クランキーアーモンドチョコレートプチパック'] },
+];
+const SHEET_STERA_ORDERS = 'ステラ注文詳細'; // ユーザーが注文詳細CSVを手動インポートするタブ(File>インポート)
+const STERA_ORDER_HEADERS = ['注文番号', '店舗名', '店舗番号', '支払金額', '返金金額', '決済方法', '端末名', 'ステータス', '作成日時', '支払日時', '最終返金日時', '商品ID', '商品コード', '商品名（日本語）', 'カテゴリ名', 'オプション', '商品価格', '原価', '商品価格(割引後)', '商品数量', '商品合計金額', '商品割引合計', 'タイプ', '発生日時'];
+
+// storeId+periodLabelについて、ステラ「ステラ注文詳細」タブの実売上とinventory_logの消費額(原価)を
+// 商品ID単位(グループはourProducts合算)で突き合わせ、販売品類の原価率を計算してstoreシートに書き込む。
+// ?action=buildSalesCategoryCostRatio&storeId=shibuya&periodLabel=2026-07 で実行。
+function buildSalesCategoryCostRatio(storeId, periodLabel) {
+  if (!storeId) return { error: 'storeIdは必須です' };
+  if (!periodLabel) return { error: 'periodLabelは必須です（例: 2026-07）' };
+
+  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const ordersSheet = ss.getSheetByName(SHEET_STERA_ORDERS);
+  if (!ordersSheet) return { error: `「${SHEET_STERA_ORDERS}」タブが見つかりません。ステラの注文詳細CSVを手動インポートしてください` };
+  const ordersData = ordersSheet.getDataRange().getValues();
+  const ordersHdrs = ordersData[0].map(String);
+  const oIdx = {};
+  STERA_ORDER_HEADERS.forEach(h => { oIdx[h] = ordersHdrs.indexOf(h); });
+  if (Object.values(oIdx).some(i => i < 0)) {
+    return { error: `「${SHEET_STERA_ORDERS}」タブの列見出しが想定と異なります(注文詳細CSVそのままの見出しでインポートしてください)` };
+  }
+
+  const storeName = _storeNames_()[storeId] || storeId;
+  const revenueByPrdId = {}; // prd_id -> 商品合計金額の合計(この店舗・この期間)
+  for (let i = 1; i < ordersData.length; i++) {
+    const r = ordersData[i];
+    if (String(r[oIdx['店舗名']]) !== storeName) continue;
+    const occurredAt = String(r[oIdx['発生日時']]);
+    if (!occurredAt.startsWith(periodLabel)) continue;
+    const prdId = r[oIdx['商品ID']];
+    revenueByPrdId[prdId] = (revenueByPrdId[prdId] || 0) + Number(r[oIdx['商品合計金額']] || 0);
+  }
+
+  const invSheet = getInventorySheet();
+  const invData = invSheet.getLastRow() > 1 ? invSheet.getDataRange().getValues() : [];
+  const idx = {};
+  INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
+  const costByProduct = {}; // product名 -> price×consumption(この店舗・この期間の消費額=原価)
+  invData.slice(1).forEach(r => {
+    if (String(r[idx.store_id]) !== String(storeId)) return;
+    if (_invMonthLabelStr(r[idx.period_label]) !== String(periodLabel)) return;
+    const price = Number(r[idx.price]) || 0;
+    const consumption = Number(r[idx.consumption]) || 0;
+    costByProduct[r[idx.product]] = price * consumption;
+  });
+
+  const outRows = STERA_SALES_MAPPING.map(m => {
+    const revenue = revenueByPrdId[m.prdId];
+    const cost = m.ourProducts.reduce((sum, name) => sum + (costByProduct[name] || 0), 0);
+    const hasCost = m.ourProducts.some(name => costByProduct[name] !== undefined);
+    const rate = (revenue && hasCost) ? cost / revenue : '';
+    return [m.label, hasCost ? cost : '', revenue === undefined ? '' : revenue, rate];
+  });
+
+  const sheetName = storeName;
+  const sheet = ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
+  const startCol = 16; // P列(既存のO列=在庫僅少より右に間隔を空ける。vendor:'other'の在庫消費率とは別集計)
+  const headerRow = [`販売品類原価率(ステラ実売上ベース・${periodLabel})`, '消費額(原価)', 'ステラ売上', '原価率'];
+  sheet.getRange(1, startCol, 1, headerRow.length).setValues([headerRow]);
+  sheet.getRange(2, startCol, outRows.length, outRows[0].length).setValues(outRows);
+  sheet.getRange(2, startCol + 1, outRows.length, 2).setNumberFormat(INVOICE_YEN_FORMAT);
+  sheet.getRange(2, startCol + 3, outRows.length, 1).setNumberFormat('0.0%');
 
   return { ok: true, store: sheetName, period: periodLabel, rows: outRows.length };
 }
