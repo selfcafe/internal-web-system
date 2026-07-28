@@ -1523,12 +1523,17 @@ function buildStoreInventorySheet(storeId, periodLabel) {
   const existing = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues() : [];
   const periodLabelJa = _periodLabelJa_(periodLabel);
   for (let i = existing.length - 1; i >= 0; i--) {
-    // 2026-07-28の表記変更(YYYY-MM -> YYYY年M月)より前に書き込まれた行も一致判定できるよう、旧表記も見る
-    const v = String(existing[i][0]);
-    if (v === periodLabelJa || v === String(periodLabel)) sheet.deleteRow(i + 2);
+    const raw = existing[i][0];
+    // 2026-07-28にA列をプレーンテキスト("2026年6月")化する前は、"2026-06"という文字列がSheetsに
+    // 日付型セルへ自動変換されてしまっていた行が残っている可能性がある(_invSheetTzと同じ問題)。
+    // Date型ならyyyy-MM文字列に戻してから比較し、新旧どちらの表記の既存行も確実に一致させる
+    const asMonthLabel = raw instanceof Date ? Utilities.formatDate(raw, _invSheetTz(), 'yyyy-MM') : String(raw);
+    if (asMonthLabel === periodLabelJa || asMonthLabel === String(periodLabel)) sheet.deleteRow(i + 2);
   }
 
   const startRow = sheet.getLastRow() + 1;
+  // 日付型への自動変換を防ぐため、書き込み前に必ずプレーンテキスト形式に固定する
+  sheet.getRange(startRow, 1, outRows.length, 1).setNumberFormat('@');
   sheet.getRange(startRow, 1, outRows.length, STORE_INVENTORY_COLS.length).setValues(outRows);
   // 期間列はこのブロック内で同じ値が続くため、見た目だけ縦結合する（このシートはbuildStoreInventorySheetが
   // 都度作り直すレポート専用タブであり、他の処理がここを期間列で読み返すことは無いため結合して問題ない）
