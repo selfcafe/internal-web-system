@@ -1547,8 +1547,11 @@ function buildStoreInventorySheet(storeId, periodLabel) {
   sheet.getRange(startRow, 1, outRows.length, 1).setNumberFormat('@');
   sheet.getRange(startRow, 1, outRows.length, STORE_INVENTORY_COLS.length).setValues(outRows);
   // 期間列はこのブロック内で同じ値が続くため、見た目だけ縦結合する（このシートはbuildStoreInventorySheetが
-  // 都度作り直すレポート専用タブであり、他の処理がここを期間列で読み返すことは無いため結合して問題ない）
-  if (outRows.length > 1) sheet.getRange(startRow, 1, outRows.length, 1).merge();
+  // 都度作り直すレポート専用タブであり、他の処理がここを期間列で読み返すことは無いため結合して問題ない）。
+  // 結合セルは既定だと下揃えになるため、中央揃え(横・縦とも)にする
+  const periodRange = sheet.getRange(startRow, 1, outRows.length, 1);
+  periodRange.setHorizontalAlignment('center').setVerticalAlignment('middle');
+  if (outRows.length > 1) periodRange.merge();
   const rateCol = STORE_INVENTORY_COLS.indexOf('cost_rate') + 1;
   sheet.getRange(startRow, rateCol, outRows.length, 1).setNumberFormat('0.0%');
   ['opening_amount', 'closing_amount', 'consumption_amount'].forEach(c => {
