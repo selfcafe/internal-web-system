@@ -137,6 +137,7 @@ function doGet(e) {
     else if (a === 'migrateInventoryColumns')   result = migrateInventoryColumns();
     else if (a === 'setupInventoryDisposedHighlight') result = setupInventoryDisposedHighlight();
     else if (a === 'buildInventoryRollup')      result = buildInventoryRollup(e.parameter.periodLabel);
+    else if (a === 'buildStoreInventorySheet')  result = buildStoreInventorySheet(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'getSettingHistory')         result = getSettingHistory(e.parameter.key, e.parameter.limit);
     else if (a === 'getAttendance')             result = getAttendance(e.parameter.storeId);
     else if (a === 'getLeaveRequests')          result = getLeaveRequests(e.parameter.storeId);
@@ -1358,6 +1359,133 @@ function buildInventoryRollup(periodLabel) {
   }
 
   return { ok: true, rows: outRows.length, missingStores: missing.length };
+}
+
+// gas_backend.gs内にJS Date型でのnew Date()等を使う既存の月ラベル計算(index.htmlの_prevPeriodLabel)と
+// 同じロジックのサーバー側版。"2026-07" -> "2026-06"
+function _prevPeriodLabel_(label) {
+  const [y, m] = String(label).split('-').map(Number);
+  const d = new Date(y, m - 2, 1);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
+
+// 商品名 -> {vendor, order, caseOnly, casePieces} のマップ。all_products設定(PRODUCTS配列のJSON)を
+// 1回だけパースし、buildStoreInventorySheetで使う商品分類(vendor)・並び順(order)・ケース単位情報を
+// まとめて引けるようにする（_productCaseInfo_と同じ発想だが、こちらはvendor/orderも持つ拡張版）
+function _productMeta_() {
+  const map = {};
+  const entry = getSettings().find(s => s.key === 'all_products');
+  if (!entry || !entry.value) return map;
+  let products;
+  try { products = JSON.parse(entry.value); } catch (e) { return map; }
+  products.forEach((p, i) => {
+    if (!p.name) return;
+    let casePieces = null;
+    if (p.caseUnit) {
+      const m = String(p.caseUnit).match(/\d+/);
+      if (m) casePieces = Number(m[0]);
+    }
+    map[p.name] = { vendor: p.vendor || '', order: i, caseOnly: !!p.caseOnly, casePieces: casePieces };
+  });
+  return map;
+}
+
+const STORE_INVENTORY_COLS = ['period_label','code','product','opening_amount','closing_amount','consumption_amount','cost_rate','open_stock','end_stock','delivery','consumption','disposed_qty','low_stock'];
+const STORE_INVENTORY_HEADERS_JA = ['期間','商品コード','商品名','期首在庫額','期末在庫額','月消費額','原価率','期首在庫','期末在庫','当月納品','消費量','処分数量','在庫僅少'];
+
+// 店舗単体の棚卸表シート（店舗の表示名タブ、例:「渋谷神南」）を1店舗分だけ生成・更新するワンショット関数。
+// ?action=buildStoreInventorySheet&storeId=shibuya&periodLabel=2026-07 で実行。
+// 全店舗棚卸集計(buildInventoryRollup)と違い、このシートは月をまたいで蓄積していく想定のため、
+// 毎回全消しはせず「対象期間の行だけ削除してから末尾に追記」する。全店舗への展開は
+// 「渋谷神南」タブでの動作確認後に別途行う（2026-07-28時点ではこの1店舗のみ対応）。
+//
+// アメニティ以外(商品設定のvendor:'other'、ストロー/ペーパータオル/トイレットペーパー等。棚卸表対象外の
+// 「その他」商品名は除く)についてのみ、期首在庫額(前月分inventory_logのamountをそのまま流用)/
+// 期末在庫額(今月分amount、送信時にprice×end_stockで自動計算・保存済み)/月消費額(期首−期末)/
+// 原価率(月消費額÷期首在庫額)の金額4列を計算する。期首在庫額が無い(前月未提出・初月等)場合や
+// 期首在庫額が0の場合は月消費額・原価率とも空欄にする(0除算回避)。それ以外のvendorは空欄のまま
+// （アペックス/トーヨーは店舗ごとに単価が違うため一律計算不可、それ以外は将来ステラスマートワンの
+// 実売上データが使えるようになってから真の原価率に置き換える想定）。
+function buildStoreInventorySheet(storeId, periodLabel) {
+  if (!storeId) return { error: 'storeIdは必須です' };
+  if (!periodLabel) return { error: 'periodLabelは必須です（例: 2026-07）' };
+  const prevPeriodLabel = _prevPeriodLabel_(periodLabel);
+
+  const invSheet = getInventorySheet();
+  if (invSheet.getLastRow() <= 1) return { error: '棚卸データがまだありません' };
+  const data = invSheet.getDataRange().getValues();
+  const hdrs = data[0].map(String);
+  const idx = {};
+  INVENTORY_COLS.forEach(c => { idx[c] = hdrs.indexOf(c); });
+
+  const deliveryTotals = (_deliveryAutoTotalsForPeriod_(periodLabel)[storeId]) || {};
+  const meta = _productMeta_();
+
+  const curRows = {};    // product -> この期間の行
+  const prevAmount = {}; // product -> 前月分のamount(期首在庫額用)
+  for (let i = 1; i < data.length; i++) {
+    const r = data[i];
+    if (String(r[idx.store_id]) !== String(storeId)) continue;
+    const label = _invMonthLabelStr(r[idx.period_label]);
+    if (label === String(periodLabel)) curRows[r[idx.product]] = r;
+    else if (label === String(prevPeriodLabel)) prevAmount[r[idx.product]] = r[idx.amount];
+  }
+
+  const products = Object.keys(curRows);
+  if (!products.length) return { error: `${storeId}の${periodLabel}分の棚卸データが見つかりません` };
+  products.sort((a, b) => ((meta[a] && meta[a].order) || 0) - ((meta[b] && meta[b].order) || 0));
+
+  const outRows = products.map(product => {
+    const r = curRows[product];
+    const info = meta[product] || {};
+    const endStock = r[idx.end_stock];
+    const liveDelivery = deliveryTotals[product] || 0;
+    const low = !!(info.caseOnly && info.casePieces && endStock !== '' && endStock !== null && Number(endStock) <= info.casePieces);
+
+    let openingAmount = '', closingAmount = '', consumptionAmount = '', costRate = '';
+    if (info.vendor === 'other' && product !== 'その他') {
+      const prevA = prevAmount[product];
+      const curA = r[idx.amount];
+      openingAmount = (prevA === undefined || prevA === null || prevA === '') ? '' : Number(prevA);
+      closingAmount = (curA === undefined || curA === null || curA === '') ? '' : Number(curA);
+      if (openingAmount !== '' && closingAmount !== '') {
+        consumptionAmount = openingAmount - closingAmount;
+        costRate = openingAmount !== 0 ? consumptionAmount / openingAmount : '';
+      }
+    }
+
+    return [
+      periodLabel, r[idx.code], product,
+      openingAmount, closingAmount, consumptionAmount, costRate,
+      r[idx.open_stock], endStock, liveDelivery, r[idx.consumption], r[idx.disposed_qty],
+      low ? '少ない' : ''
+    ];
+  });
+
+  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const sheetName = _storeNames_()[storeId] || storeId;
+  const sheet = ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
+  if (sheet.getLastRow() === 0) sheet.getRange(1, 1, 1, STORE_INVENTORY_HEADERS_JA.length).setValues([STORE_INVENTORY_HEADERS_JA]);
+
+  // 店舗タブは月をまたいで蓄積していく想定のため、全店舗棚卸集計のような毎回全消し方式ではなく、
+  // 対象期間の行(同じ期間で再実行した場合の重複)だけ削除してから最新版を末尾に追記する
+  const existing = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues() : [];
+  for (let i = existing.length - 1; i >= 0; i--) {
+    if (_invMonthLabelStr(existing[i][0]) === String(periodLabel)) sheet.deleteRow(i + 2);
+  }
+
+  const startRow = sheet.getLastRow() + 1;
+  sheet.getRange(startRow, 1, outRows.length, STORE_INVENTORY_COLS.length).setValues(outRows);
+  // 期間列はこのブロック内で同じ値が続くため、見た目だけ縦結合する（このシートはbuildStoreInventorySheetが
+  // 都度作り直すレポート専用タブであり、他の処理がここを期間列で読み返すことは無いため結合して問題ない）
+  if (outRows.length > 1) sheet.getRange(startRow, 1, outRows.length, 1).merge();
+  const rateCol = STORE_INVENTORY_COLS.indexOf('cost_rate') + 1;
+  sheet.getRange(startRow, rateCol, outRows.length, 1).setNumberFormat('0.0%');
+  ['opening_amount', 'closing_amount', 'consumption_amount'].forEach(c => {
+    sheet.getRange(startRow, STORE_INVENTORY_COLS.indexOf(c) + 1, outRows.length, 1).setNumberFormat(INVOICE_YEN_FORMAT);
+  });
+
+  return { ok: true, store: sheetName, period: periodLabel, rows: outRows.length };
 }
 
 // ----------------------------------------------------------------
