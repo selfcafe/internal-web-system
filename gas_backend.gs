@@ -1619,10 +1619,15 @@ function buildSalesCategoryCostRatio(storeId, periodLabel) {
   }
 
   const storeName = _storeNames_()[storeId] || storeId;
+  // ステラの店舗名は「セルフカフェ」接頭辞・「店」接尾辞の付き方が店舗によって不統一
+  // (例: 当方「渋谷神南」⇔ステラ「渋谷神南店」、当方「ナディアパーク栄」⇔ステラ「ナディアパーク栄店」)。
+  // 厳密な店舗名マッピング表はまだ無いため、両接頭辞・接尾辞を剥がした正規化文字列で比較する
+  const normalizeStoreLabel = s => String(s).replace(/^セルフカフェ/, '').replace(/店$/, '');
+  const storeNameNorm = normalizeStoreLabel(storeName);
   const revenueByPrdId = {}; // prd_id -> 商品合計金額の合計(この店舗・この期間)
   for (let i = 1; i < ordersData.length; i++) {
     const r = ordersData[i];
-    if (String(r[oIdx['店舗名']]) !== storeName) continue;
+    if (normalizeStoreLabel(r[oIdx['店舗名']]) !== storeNameNorm) continue;
     const occurredAt = String(r[oIdx['発生日時']]);
     if (!occurredAt.startsWith(periodLabel)) continue;
     const prdId = r[oIdx['商品ID']];
