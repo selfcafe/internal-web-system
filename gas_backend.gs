@@ -1412,6 +1412,14 @@ function _prevPeriodLabel_(label) {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
 }
 
+// 店舗タブ(buildStoreInventorySheet)の期間列は表示専用のプレーンテキストとして「2026年6月」のような
+// 日本語表記で持つ（日付型セルにはしない——inventory_log等で繰り返し問題になってきた自動日付変換・
+// タイムゾームずれを避けるため）。"2026-06" -> "2026年6月"
+function _periodLabelJa_(periodLabel) {
+  const [y, m] = String(periodLabel).split('-').map(Number);
+  return `${y}年${m}月`;
+}
+
 // 商品名 -> {vendor, order, caseOnly, casePieces} のマップ。all_products設定(PRODUCTS配列のJSON)を
 // 1回だけパースし、buildStoreInventorySheetで使う商品分類(vendor)・並び順(order)・ケース単位情報を
 // まとめて引けるようにする（_productCaseInfo_と同じ発想だが、こちらはvendor/orderも持つ拡張版）
@@ -1498,7 +1506,7 @@ function buildStoreInventorySheet(storeId, periodLabel) {
     }
 
     return [
-      periodLabel, r[idx.code], product,
+      _periodLabelJa_(periodLabel), r[idx.code], product,
       openingAmount, closingAmount, consumptionAmount, costRate,
       r[idx.open_stock], endStock, liveDelivery, r[idx.consumption], r[idx.disposed_qty],
       low ? '少ない' : ''
@@ -1513,8 +1521,11 @@ function buildStoreInventorySheet(storeId, periodLabel) {
   // 店舗タブは月をまたいで蓄積していく想定のため、全店舗棚卸集計のような毎回全消し方式ではなく、
   // 対象期間の行(同じ期間で再実行した場合の重複)だけ削除してから最新版を末尾に追記する
   const existing = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues() : [];
+  const periodLabelJa = _periodLabelJa_(periodLabel);
   for (let i = existing.length - 1; i >= 0; i--) {
-    if (_invMonthLabelStr(existing[i][0]) === String(periodLabel)) sheet.deleteRow(i + 2);
+    // 2026-07-28の表記変更(YYYY-MM -> YYYY年M月)より前に書き込まれた行も一致判定できるよう、旧表記も見る
+    const v = String(existing[i][0]);
+    if (v === periodLabelJa || v === String(periodLabel)) sheet.deleteRow(i + 2);
   }
 
   const startRow = sheet.getLastRow() + 1;
