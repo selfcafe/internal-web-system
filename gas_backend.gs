@@ -1519,17 +1519,28 @@ function buildStoreInventorySheet(storeId, periodLabel) {
   if (sheet.getLastRow() === 0) sheet.getRange(1, 1, 1, STORE_INVENTORY_HEADERS_JA.length).setValues([STORE_INVENTORY_HEADERS_JA]);
 
   // 店舗タブは月をまたいで蓄積していく想定のため、全店舗棚卸集計のような毎回全消し方式ではなく、
-  // 対象期間の行(同じ期間で再実行した場合の重複)だけ削除してから最新版を末尾に追記する
+  // 対象期間の行(同じ期間で再実行した場合の重複)だけ削除してから最新版を末尾に追記する。
+  // 期間列は同一期間ブロック内でmerge()して見た目だけ結合しているため、ブロック2行目以降は
+  // 列A自体が空になる——非空行を新しいブロックの開始とみなし、続く空欄行を同じブロックとして束ねる
   const existing = sheet.getLastRow() > 1 ? sheet.getRange(2, 1, sheet.getLastRow() - 1, 1).getValues() : [];
   const periodLabelJa = _periodLabelJa_(periodLabel);
-  for (let i = existing.length - 1; i >= 0; i--) {
-    const raw = existing[i][0];
-    // 2026-07-28にA列をプレーンテキスト("2026年6月")化する前は、"2026-06"という文字列がSheetsに
-    // 日付型セルへ自動変換されてしまっていた行が残っている可能性がある(_invSheetTzと同じ問題)。
-    // Date型ならyyyy-MM文字列に戻してから比較し、新旧どちらの表記の既存行も確実に一致させる
-    const asMonthLabel = raw instanceof Date ? Utilities.formatDate(raw, _invSheetTz(), 'yyyy-MM') : String(raw);
-    if (asMonthLabel === periodLabelJa || asMonthLabel === String(periodLabel)) sheet.deleteRow(i + 2);
-  }
+  const blocks = []; // { periodText, startIdx, endIdx }(existing配列上の0-based index、両端含む)
+  existing.forEach((row, i) => {
+    const raw = row[0];
+    if (raw !== '' && raw !== null) {
+      // 2026-07-28にA列をプレーンテキスト("2026年6月")化する前は、"2026-06"という文字列がSheetsに
+      // 日付型セルへ自動変換されてしまっていた行が残っている可能性がある(_invSheetTzと同じ問題)。
+      // Date型ならyyyy-MM文字列に戻してから比較し、新旧どちらの表記のブロックも確実に一致させる
+      const periodText = raw instanceof Date ? Utilities.formatDate(raw, _invSheetTz(), 'yyyy-MM') : String(raw);
+      blocks.push({ periodText, startIdx: i, endIdx: i });
+    } else if (blocks.length) {
+      blocks[blocks.length - 1].endIdx = i;
+    }
+  });
+  blocks
+    .filter(b => b.periodText === periodLabelJa || b.periodText === String(periodLabel))
+    .sort((a, b) => b.startIdx - a.startIdx) // 末尾側から消して行番号ズレを避ける
+    .forEach(b => sheet.deleteRows(b.startIdx + 2, b.endIdx - b.startIdx + 1));
 
   const startRow = sheet.getLastRow() + 1;
   // 日付型への自動変換を防ぐため、書き込み前に必ずプレーンテキスト形式に固定する
