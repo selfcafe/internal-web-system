@@ -177,6 +177,7 @@ function doPost(e) {
     else if (b.action === 'saveChecksheetData') result = saveChecksheetData(b.storeId, b.periodLabel, b.data);
     else if (b.action === 'saveInventorySnapshot') result = saveInventorySnapshot(b.storeId, b.periodLabel, b.rows, b.remarks);
     else if (b.action === 'recordInventoryDelivery') result = recordInventoryDelivery(b.storeId, b.periodLabel, b.product, b.qty);
+    else if (b.action === 'importSteraOrdersCsv') result = importSteraOrdersCsv(b.csvText);
     else if (b.action === 'submitInvoice')       result = submitInvoice(b.payload);
     else if (b.action === 'saveInvoiceReceiptImage') result = saveInvoiceReceiptImage(b.imageBase64, b.imageMime, b.filename);
     else if (b.action === 'saveAttendance')      result = saveAttendance(b.storeId, b.name, b.lat, b.lng);
@@ -1586,6 +1587,18 @@ const STERA_SALES_MAPPING = [
 ];
 const SHEET_STERA_ORDERS = 'ステラ注文詳細'; // ユーザーが注文詳細CSVを手動インポートするタブ(File>インポート)
 const STERA_ORDER_HEADERS = ['注文番号', '店舗名', '店舗番号', '支払金額', '返金金額', '決済方法', '端末名', 'ステータス', '作成日時', '支払日時', '最終返金日時', '商品ID', '商品コード', '商品名（日本語）', 'カテゴリ名', 'オプション', '商品価格', '原価', '商品価格(割引後)', '商品数量', '商品合計金額', '商品割引合計', 'タイプ', '発生日時'];
+
+// 動作確認用: 手動でのFile>インポートの代わりに、注文詳細CSVのテキストをそのままPOSTして
+// 「ステラ注文詳細」タブへ書き込む(将来Playwright自動化に置き換える前提の暫定手段)。
+// 既存内容は毎回全消し→書き直し(このタブは生データの置き場でしかないため)。
+function importSteraOrdersCsv(csvText) {
+  const rows = Utilities.parseCsv(csvText);
+  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const sheet = ss.getSheetByName(SHEET_STERA_ORDERS) || ss.insertSheet(SHEET_STERA_ORDERS);
+  sheet.clearContents();
+  sheet.getRange(1, 1, rows.length, rows[0].length).setValues(rows);
+  return { ok: true, rows: rows.length - 1 };
+}
 
 // storeId+periodLabelについて、ステラ「ステラ注文詳細」タブの実売上とinventory_logの消費額(原価)を
 // 商品ID単位(グループはourProducts合算)で突き合わせ、販売品類の原価率を計算してstoreシートに書き込む。
