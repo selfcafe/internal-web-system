@@ -2257,15 +2257,52 @@ function renderInventoryConfirmScreen(wrap, allProducts, period, periodData) {
       <button type="button" onclick="goToInventoryInput()"
         style="background:#f3f4f6;color:#374151;border:1.5px solid #d1d5db;border-radius:9px;padding:11px 20px;font-size:13.5px;font-weight:700;font-family:inherit;cursor:pointer">← 戻る</button>
       ${lastSent}
-      <button type="button" onclick="submitInventory()"
-        style="background:#22703d;color:white;border:none;border-radius:9px;padding:11px 20px;font-size:13.5px;font-weight:700;font-family:inherit;cursor:pointer">棚卸完了</button>
+      <button type="button" id="inventory-submit-btn" onclick="submitInventory()"
+        style="background:#22703d;color:white;border:none;border-radius:9px;padding:11px 20px;font-size:13.5px;font-weight:700;font-family:inherit;cursor:pointer;transition:background-color .15s,opacity .15s">棚卸完了</button>
     </div>
-    <div id="inventory-toast" style="display:none;margin-top:10px;background:#eef6ee;border:1px solid #bfe0c4;color:#1a5c30;border-radius:8px;padding:9px 12px;font-size:12px"></div>
+    <div id="inventory-toast" style="display:none;margin-top:10px;background:#eef6ee;border:1px solid #bfe0c4;color:#1a5c30;border-radius:8px;padding:9px 12px;font-size:12px;font-weight:700"></div>
   `;
   syncInventoryStickyColumns();
 }
 
+// 押した瞬間に反応が薄い(押せたか分かりづらい)という指摘(2026-07-28)への対応。
+// クリック直後に即ボタン自体を「送信中…」表示に切り替え、成功時は一瞬「✓送信しました」を
+// ボタン上に出してからrenderInventory()で通常表示に戻す(最終送信日時はその時点で更新済み)。
+// トースト(inventory-toast)は従来通り残しつつ、ボタン自体の見た目変化を主な合図にする。
 async function submitInventory() {
+  const btn = document.getElementById('inventory-submit-btn');
+  const btnOriginalText = btn ? btn.textContent : '棚卸完了';
+  if (btn) {
+    if (btn.disabled) return; // 二重送信防止
+    btn.disabled = true;
+    btn.textContent = '送信中…';
+    btn.style.opacity = '.6';
+    btn.style.cursor = 'default';
+  }
+  let sent = false;
+  try {
+    sent = await _submitInventoryInner();
+    if (sent && btn) {
+      btn.textContent = '✓ 送信しました';
+      btn.style.background = '#1a5c30';
+      btn.style.opacity = '1';
+      await new Promise(r => setTimeout(r, 900)); // ボタン上の成功表示を一瞬見せてから通常表示に戻す
+    }
+  } finally {
+    if (sent) {
+      renderInventory(); // 最終送信日時の更新・ボタンの再構築はここで行う(成功時のみ)
+    } else if (btn && document.body.contains(btn)) {
+      // 期限切れ確認でキャンセル・異常未入力での送信ブロック・通信エラー等、実際には送信しなかった場合は
+      // 画面を作り直さず、ボタンだけ元の状態に戻す
+      btn.disabled = false;
+      btn.textContent = btnOriginalText;
+      btn.style.opacity = '1';
+      btn.style.cursor = 'pointer';
+    }
+  }
+}
+
+async function _submitInventoryInner() {
   const period = getInventoryPeriod();
   const periodData = getInventoryPeriodData(storeTab, period.label);
   const data = getInventoryData(storeTab);
@@ -2275,14 +2312,14 @@ async function submitInventory() {
     .map(p => p.label || p.name);
   if (expiredProducts.length) {
     const ok = confirm(`${expiredProducts.join('／')} の消費期限が切れています。${INVENTORY_EXPIRED_NOTICE}\n\nこのまま送信しますか？`);
-    if (!ok) return;
+    if (!ok) return false;
   }
   const unexplainedAnomalies = allProducts
     .filter(p => computeInventoryAnomaly(p, period, periodData).flag && !(periodData.anomalyNote[p.name] || '').trim())
     .map(p => p.label || p.name);
   if (unexplainedAnomalies.length) {
     alert(`${unexplainedAnomalies.join('／')} の消費量に異常があります。確認画面で理由を入力してから送信してください。`);
-    return;
+    return false;
   }
   const rows = allProducts.map(p => {
     const { openStock, delivery, endStock, consumption, disposedQty, tracked, dailyCount, mismatch } = computeInventoryConfirmInfo(p, period, periodData);
@@ -2305,12 +2342,15 @@ async function submitInventory() {
     await gasPost('saveInventorySnapshot', { storeId: storeTab, periodLabel: period.label, rows, remarks: periodData.remarks });
     periodData.lastSentAt = Date.now();
     setInventoryPeriodData(storeTab, period.label, periodData);
-    renderInventory();
+    // 画面の再構築(renderInventory)は呼び出し元(submitInventory)がボタン上の
+    // 「✓送信しました」表示を一瞬見せた後に行う
     const toast = document.getElementById('inventory-toast');
     if (toast) { toast.style.display=''; toast.textContent = `✓ ${period.month}月分の棚卸をスプレッドシートに送信しました`; }
+    return true;
   } catch(e) {
     console.error('saveInventorySnapshot error:', e);
     alert('送信に失敗しました。通信環境をご確認のうえ、もう一度お試しください。');
+    return false;
   }
 }
 
