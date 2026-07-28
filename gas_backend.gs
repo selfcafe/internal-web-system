@@ -1596,6 +1596,10 @@ function importSteraOrdersCsv(csvText) {
   const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
   const sheet = ss.getSheetByName(SHEET_STERA_ORDERS) || ss.insertSheet(SHEET_STERA_ORDERS);
   sheet.clearContents();
+  // 日付・日時に見える列("2026-07-01 12:44:56"等)をSheetsが自動で日付型セルに変換してしまうため、
+  // 書き込み前にプレーンテキスト形式へ固定する(inventory_log等で繰り返し起きてきたのと同じ問題)
+  const dateLikeCols = ['作成日時', '支払日時', '最終返金日時', '発生日時'].map(h => rows[0].indexOf(h) + 1).filter(c => c > 0);
+  dateLikeCols.forEach(c => sheet.getRange(1, c, rows.length, 1).setNumberFormat('@'));
   sheet.getRange(1, 1, rows.length, rows[0].length).setValues(rows);
   return { ok: true, rows: rows.length - 1 };
 }
@@ -1628,7 +1632,11 @@ function buildSalesCategoryCostRatio(storeId, periodLabel) {
   for (let i = 1; i < ordersData.length; i++) {
     const r = ordersData[i];
     if (normalizeStoreLabel(r[oIdx['店舗名']]) !== storeNameNorm) continue;
-    const occurredAt = String(r[oIdx['発生日時']]);
+    const occurredAtRaw = r[oIdx['発生日時']];
+    // CSVインポート時にSheetsが「発生日時」列を日付型セルへ自動変換することがある
+    // (setValuesで書き込んだ直後は文字列でも、日付らしい文字列は自動的に日付型になる。
+    // inventory_log等で繰り返し起きてきたのと同じ問題)。Date型ならyyyy-MM文字列に戻して比較する
+    const occurredAt = occurredAtRaw instanceof Date ? Utilities.formatDate(occurredAtRaw, _invSheetTz(), 'yyyy-MM') : String(occurredAtRaw);
     if (!occurredAt.startsWith(periodLabel)) continue;
     const prdId = r[oIdx['商品ID']];
     revenueByPrdId[prdId] = (revenueByPrdId[prdId] || 0) + Number(r[oIdx['商品合計金額']] || 0);
