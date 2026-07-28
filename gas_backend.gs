@@ -1447,13 +1447,15 @@ const STORE_INVENTORY_HEADERS_JA = ['期間','商品コード','商品名','期�
 // 毎回全消しはせず「対象期間の行だけ削除してから末尾に追記」する。全店舗への展開は
 // 「渋谷神南」タブでの動作確認後に別途行う（2026-07-28時点ではこの1店舗のみ対応）。
 //
-// アメニティ以外(商品設定のvendor:'other'、ストロー/ペーパータオル/トイレットペーパー等。棚卸表対象外の
-// 「その他」商品名は除く)についてのみ、期首在庫額(前月分inventory_logのamountをそのまま流用)/
-// 期末在庫額(今月分amount、送信時にprice×end_stockで自動計算・保存済み)/月消費額(期首−期末)/
-// 原価率(月消費額÷期首在庫額)の金額4列を計算する。期首在庫額が無い(前月未提出・初月等)場合や
-// 期首在庫額が0の場合は月消費額・原価率とも空欄にする(0除算回避)。それ以外のvendorは空欄のまま
-// （アペックス/トーヨーは店舗ごとに単価が違うため一律計算不可、それ以外は将来ステラスマートワンの
-// 実売上データが使えるようになってから真の原価率に置き換える想定）。
+// 棚卸表対象外の「その他」商品名を除く全商品について、期首在庫額(前月分inventory_logのamountを
+// そのまま流用)/期末在庫額(今月分amount、送信時にprice×end_stockで自動計算・保存済み)/月消費額
+// (期首−期末)/原価率(月消費額÷期首在庫額、実質は在庫消費率であって売上ベースの真の原価率では
+// ない点に注意)の金額4列を計算する。期首在庫額が無い(前月未提出・初月等)場合や期首在庫額が0の
+// 場合は月消費額・原価率とも空欄にする(0除算回避)。
+// 2026-07-28、対象をvendor:'other'限定から全vendorに拡大した——単価(仕入原価)×在庫数量という
+// 計算自体はエリア別販売価格と無関係で、アペックス/トーヨーでも問題なく出せるとユーザー指摘で判明
+// (エリア別価格が問題になるのは売上ベースの真の原価率(buildSalesCategoryCostRatio側)の話であり、
+// この在庫消費率とは無関係)。
 function buildStoreInventorySheet(storeId, periodLabel) {
   if (!storeId) return { error: 'storeIdは必須です' };
   if (!periodLabel) return { error: 'periodLabelは必須です（例: 2026-07）' };
@@ -1491,7 +1493,7 @@ function buildStoreInventorySheet(storeId, periodLabel) {
     const low = !!(info.caseOnly && info.casePieces && endStock !== '' && endStock !== null && Number(endStock) <= info.casePieces);
 
     let openingAmount = '', closingAmount = '', consumptionAmount = '', costRate = '';
-    if (info.vendor === 'other' && product !== 'その他') {
+    if (product !== 'その他') {
       const prevA = prevAmount[product];
       const curA = r[idx.amount];
       openingAmount = (prevA === undefined || prevA === null || prevA === '') ? '' : Number(prevA);
