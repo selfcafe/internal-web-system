@@ -59,6 +59,11 @@ const CHECKSHEET_COLS = ['store_id','period_label','data','updated_at'];
 // いずれも既存の運用中シートには自動で列が増えないため、migrateInventoryColumns()で末尾に追加する
 // （列の並び順を変えると位置ズレで既存データが壊れるため、新規列は必ずINVENTORY_COLSの末尾に足すこと）
 const INVENTORY_COLS = ['period_label','store_id','code','product','label','open_stock','delivery','end_stock','consumption','disposed_qty','price','amount','remarks','updated_at','anomaly_note','daily_count','matched','store_type'];
+// シート上の見出し表示専用（INVENTORY_ROLLUP_HEADERS_JAと同じパターン）。INVENTORY_COLSと同じ順序・
+// 同じ長さを保つこと——列の読み書きはヘッダーのテキストではなく、この配列の「位置」を正として行う
+// （新規列は必ずINVENTORY_COLSの末尾に足す運用のため、物理的な列位置と宣言順は常に一致する前提）。
+// 2026-07-28、見出しを日本語表示に変更（inventory_log本体もこの前提で書き換えたため対象に含めた）
+const INVENTORY_HEADERS_JA = ['期間','店舗ID','商品コード','商品名','表示名','期首在庫','当月納品','期末在庫','消費量','処分数量','単価','期末在庫額','備考','更新日時','異常メモ','デイリーカウント','一致','店舗区分'];
 // 出勤打刻ログ。1回の打刻で1行追加（append-onlyのログシート、ordersのような全件削除→再送信はしない）
 const ATTENDANCE_COLS = ['id','store_id','name','clocked_at','lat','lng','within_range'];
 // 基準座標からこの距離(m)以内なら出勤OKと判定する（全店舗共通の固定値、2026-07-15確定）
@@ -979,10 +984,10 @@ function getInventoryHistory(storeId, periodLabel) {
   const sheet = getInventorySheet();
   if (sheet.getLastRow() <= 1) return [];
   const data = sheet.getDataRange().getValues();
-  const hdrs = data[0].map(String);
   const rows = data.slice(1).map(row => {
     const obj = {};
-    INVENTORY_COLS.forEach(c => { const i = hdrs.indexOf(c); obj[c] = i >= 0 ? row[i] : null; });
+    // ヘッダーの表示テキスト(日本語)ではなく、INVENTORY_COLSの宣言順=物理列位置として読む
+    INVENTORY_COLS.forEach((c, i) => { obj[c] = i < row.length ? row[i] : null; });
     obj.period_label = _invMonthLabelStr(obj.period_label);
     return obj;
   });
@@ -995,7 +1000,7 @@ function getInventoryHistory(storeId, periodLabel) {
 // 同じ店舗×年月の既存行を全て削除してから送信内容を書き直す（当月分は何度でも上書き修正できる）
 function saveInventorySnapshot(storeId, periodLabel, rows, remarks) {
   const sheet = getInventorySheet();
-  ensureHeaders(sheet, INVENTORY_COLS);
+  ensureHeaders(sheet, INVENTORY_HEADERS_JA);
   const now = new Date().toISOString();
 
   if (sheet.getLastRow() > 1) {
@@ -1164,16 +1169,22 @@ function getInventoryTabData(storeId, periodLabel, prevPeriodLabel) {
 
 // INVENTORY_COLSに新規列（anomaly_note、daily_count/matchedなど）を追加した際のワンショット移行用。
 // ensureHeadersは空シートにしか列を作らないため、既存の運用中「棚卸集計」シートには手動で一度叩く必要がある
-// （migrateOrderColumnsと同じパターン。既存列・データには一切触れない、何度実行しても安全。
-// INVENTORY_COLSとの差分を見て不足分だけ末尾に足すので、今後列を追加してもこの関数自体は変更不要）
+// （migrateOrderColumnsと同じパターン。既存データには一切触れない、何度実行しても安全。
+// INVENTORY_COLSとの差分(末尾に足りない列)を見て不足分だけ足すので、今後列を追加してもこの関数自体は
+// 変更不要。列位置はINVENTORY_COLSの宣言順を正としているため、不足分は必ず末尾に追加する。
+// 2026-07-28、見出しテキストを日本語(INVENTORY_HEADERS_JA)に統一する処理も兼ねる——既存の英語見出しの
+// シートに対して実行すると、既存列の見出しも含めて全て日本語に上書きされる（データ行には触れない））
 function migrateInventoryColumns() {
   const sheet = getInventorySheet();
-  if (sheet.getLastRow() === 0) { ensureHeaders(sheet, INVENTORY_COLS); return { ok: true, added: INVENTORY_COLS }; }
+  if (sheet.getLastRow() === 0) { ensureHeaders(sheet, INVENTORY_HEADERS_JA); return { ok: true, added: INVENTORY_COLS }; }
   const hdrs = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
-  const missing = INVENTORY_COLS.filter(c => hdrs.indexOf(c) < 0);
+  const missing = INVENTORY_COLS.slice(hdrs.length);
   if (missing.length) {
-    sheet.getRange(1, sheet.getLastColumn() + 1, 1, missing.length).setValues([missing]);
+    const missingHeadersJa = INVENTORY_HEADERS_JA.slice(hdrs.length);
+    sheet.getRange(1, hdrs.length + 1, 1, missingHeadersJa.length).setValues([missingHeadersJa]);
   }
+  // 既存分の見出しテキストも(英語のままなら)日本語に揃える
+  sheet.getRange(1, 1, 1, hdrs.length).setValues([INVENTORY_HEADERS_JA.slice(0, hdrs.length)]);
   return { ok: true, added: missing };
 }
 
@@ -1184,12 +1195,12 @@ function migrateInventoryColumns() {
 // disposed_qty列を追加済みであること（列が無ければエラーを返す）。
 function setupInventoryDisposedHighlight() {
   const sheet = getInventorySheet();
-  const hdrs = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
-  const colIdx = hdrs.indexOf('disposed_qty');
+  const colCount = Math.max(sheet.getLastColumn(), INVENTORY_COLS.length);
+  const colIdx = INVENTORY_COLS.indexOf('disposed_qty'); // 列位置はINVENTORY_COLSの宣言順が正(見出しテキストには依存しない)
   if (colIdx < 0) return { error: 'disposed_qty列が見つかりません。先にmigrateInventoryColumnsを実行してください' };
   const colLetter = String.fromCharCode(65 + colIdx);
   const numRows = 5000; // 想定データ行数に余裕を持たせた固定値（将来これを超える見込みなら数値を増やして再実行）
-  const range = sheet.getRange(2, 1, numRows, hdrs.length);
+  const range = sheet.getRange(2, 1, numRows, colCount);
   const formula = '=$' + colLetter + '2>0';
 
   // 同じ条件のルールが既にあれば入れ替え、無関係な既存ルールはそのまま残す
@@ -1292,9 +1303,9 @@ function buildInventoryRollup(periodLabel) {
   const invSheet = getInventorySheet();
   const hasData = invSheet.getLastRow() > 1;
   const data = hasData ? invSheet.getDataRange().getValues() : [INVENTORY_COLS];
-  const hdrs = data[0].map(String);
   const idx = {};
-  INVENTORY_COLS.forEach(c => { idx[c] = hdrs.indexOf(c); });
+  // 列位置はヘッダーの表示テキスト(日本語)ではなく、INVENTORY_COLSの宣言順を正として読む
+  INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
 
   const storeNames = _storeNames_();
   const deliveryTotals = _deliveryAutoTotalsForPeriod_(periodLabel);
@@ -1414,9 +1425,9 @@ function buildStoreInventorySheet(storeId, periodLabel) {
   const invSheet = getInventorySheet();
   if (invSheet.getLastRow() <= 1) return { error: '棚卸データがまだありません' };
   const data = invSheet.getDataRange().getValues();
-  const hdrs = data[0].map(String);
   const idx = {};
-  INVENTORY_COLS.forEach(c => { idx[c] = hdrs.indexOf(c); });
+  // 列位置はヘッダーの表示テキスト(日本語)ではなく、INVENTORY_COLSの宣言順を正として読む
+  INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
 
   const deliveryTotals = (_deliveryAutoTotalsForPeriod_(periodLabel)[storeId]) || {};
   const meta = _productMeta_();
