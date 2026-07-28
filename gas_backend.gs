@@ -1010,7 +1010,8 @@ function saveInventorySnapshot(storeId, periodLabel, rows, remarks) {
 
   if (sheet.getLastRow() > 1) {
     const values = sheet.getDataRange().getValues();
-    const sidIdx = values[0].indexOf('store_id'), pidIdx = values[0].indexOf('period_label');
+    // 見出しテキスト(日本語)ではなく、INVENTORY_COLSの宣言順=物理列位置として読む
+    const sidIdx = INVENTORY_COLS.indexOf('store_id'), pidIdx = INVENTORY_COLS.indexOf('period_label');
     const toDel = [];
     for (let i = 1; i < values.length; i++) {
       if (String(values[i][sidIdx]) === String(storeId) && _invMonthLabelStr(values[i][pidIdx]) === String(periodLabel)) {
@@ -1034,6 +1035,15 @@ function saveInventorySnapshot(storeId, periodLabel, rows, remarks) {
     // period_labelが"YYYY-MM"のまま日付型に自動変換されないよう、書き込み前にプレーンテキスト形式へ固定する
     sheet.getRange(startRow, INVENTORY_COLS.indexOf('period_label') + 1, newRows.length, 1).setNumberFormat('@');
     sheet.getRange(startRow, 1, newRows.length, INVENTORY_COLS.length).setValues(newRows);
+
+    // 渋谷神南は棚卸表シート(buildStoreInventorySheet)のテスト運用中のため、提出の都度そのタブへも
+    // 自動反映する。「渋谷神南が機能するか見届けてから他店に増やす」方針のため、対象は当面この店舗のみに
+    // 限定している——全店舗に広げる際はこのif文自体を外す想定。反映に失敗しても本来の棚卸データ保存
+    // (inventory_log)自体は既に完了しているため、この段階のエラーで提出全体を失敗扱いにはしない。
+    if (String(storeId) === 'shibuya') {
+      try { buildStoreInventorySheet(storeId, periodLabel); }
+      catch (e) { console.error('buildStoreInventorySheet(渋谷神南)自動反映エラー:', e.message); }
+    }
   }
   return { ok: true };
 }
