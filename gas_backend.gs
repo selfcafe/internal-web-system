@@ -58,12 +58,15 @@ const CHECKSHEET_COLS = ['store_id','period_label','data','updated_at'];
 // 2026-07-21に「盗難・カウントミスの早期発見用に本部側の記録としても残したい」との要望で復活。
 // いずれも既存の運用中シートには自動で列が増えないため、migrateInventoryColumns()で末尾に追加する
 // （列の並び順を変えると位置ズレで既存データが壊れるため、新規列は必ずINVENTORY_COLSの末尾に足すこと）
-const INVENTORY_COLS = ['period_label','store_id','code','product','label','open_stock','delivery','end_stock','consumption','disposed_qty','price','amount','remarks','updated_at','anomaly_note','daily_count','matched','store_type'];
+// label列は2026-07-28に削除（product列との重複——PRODUCTS配列は全商品でlabel:nameと同値を入れて
+// いるだけで実質常に同じ値だったため、product側だけ残した。既存シートのE列(label)は
+// removeInventoryLabelColumn()のワンショット移行で物理削除済み・削除する必要がある）
+const INVENTORY_COLS = ['period_label','store_id','code','product','open_stock','delivery','end_stock','consumption','disposed_qty','price','amount','remarks','updated_at','anomaly_note','daily_count','matched','store_type'];
 // シート上の見出し表示専用（INVENTORY_ROLLUP_HEADERS_JAと同じパターン）。INVENTORY_COLSと同じ順序・
 // 同じ長さを保つこと——列の読み書きはヘッダーのテキストではなく、この配列の「位置」を正として行う
 // （新規列は必ずINVENTORY_COLSの末尾に足す運用のため、物理的な列位置と宣言順は常に一致する前提）。
 // 2026-07-28、見出しを日本語表示に変更（inventory_log本体もこの前提で書き換えたため対象に含めた）
-const INVENTORY_HEADERS_JA = ['期間','店舗ID','商品コード','商品名','表示名','期首在庫','当月納品','期末在庫','消費量','処分数量','単価','期末在庫額','備考','更新日時','異常メモ','デイリーカウント','一致','店舗区分'];
+const INVENTORY_HEADERS_JA = ['期間','店舗ID','商品コード','商品名','期首在庫','当月納品','期末在庫','消費量','処分数量','単価','期末在庫額','備考','更新日時','異常メモ','デイリーカウント','一致','店舗区分'];
 // 出勤打刻ログ。1回の打刻で1行追加（append-onlyのログシート、ordersのような全件削除→再送信はしない）
 const ATTENDANCE_COLS = ['id','store_id','name','clocked_at','lat','lng','within_range'];
 // 基準座標からこの距離(m)以内なら出勤OKと判定する（全店舗共通の固定値、2026-07-15確定）
@@ -143,6 +146,7 @@ function doGet(e) {
     else if (a === 'setupInventoryDisposedHighlight') result = setupInventoryDisposedHighlight();
     else if (a === 'buildInventoryRollup')      result = buildInventoryRollup(e.parameter.periodLabel);
     else if (a === 'buildStoreInventorySheet')  result = buildStoreInventorySheet(e.parameter.storeId, e.parameter.periodLabel);
+    else if (a === 'removeInventoryLabelColumn') result = removeInventoryLabelColumn();
     else if (a === 'getSettingHistory')         result = getSettingHistory(e.parameter.key, e.parameter.limit);
     else if (a === 'getAttendance')             result = getAttendance(e.parameter.storeId);
     else if (a === 'getLeaveRequests')          result = getLeaveRequests(e.parameter.storeId);
@@ -1165,6 +1169,23 @@ function getInventoryTabData(storeId, periodLabel, prevPeriodLabel) {
   try { result.checksheet = getChecksheetData(storeId); }
   catch (e) { result.checksheetError = e.message; }
   return result;
+}
+
+// label列(E列)の削除ワンショット移行。2026-07-28、product列(D列)と常に同値で重複していたため統合した。
+// migrateInventoryColumns(見出しの日本語化・末尾列追加)より必ず先に実行すること——先に見出しだけ日本語化
+// すると列数の食い違いで整合性が崩れる。何度実行しても5列目が既にlabel/表示名でなければ何もしない安全設計。
+// ?action=removeInventoryLabelColumn で実行。
+function removeInventoryLabelColumn() {
+  const sheet = getInventorySheet();
+  if (sheet.getLastRow() === 0) return { ok: true, removed: false, reason: 'シートが空です' };
+  const hdrs = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
+  const labelColIdx1based = 5; // period_label,store_id,code,product,label の5列目
+  const headerAtCol5 = hdrs[labelColIdx1based - 1];
+  if (headerAtCol5 !== 'label' && headerAtCol5 !== '表示名') {
+    return { ok: true, removed: false, reason: `5列目のヘッダーが${JSON.stringify(headerAtCol5)}でlabel列ではないため、既に削除済みか想定外の状態です` };
+  }
+  sheet.deleteColumn(labelColIdx1based);
+  return { ok: true, removed: true };
 }
 
 // INVENTORY_COLSに新規列（anomaly_note、daily_count/matchedなど）を追加した際のワンショット移行用。

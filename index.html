@@ -2289,7 +2289,7 @@ async function submitInventory() {
     const anomaly = computeInventoryAnomaly(p, period, periodData);
     const price = Number(p.price) || 0;
     return {
-      code: p.code || '', product: p.name, label: p.label || p.name,
+      code: p.code || '', product: p.name,
       open_stock: openStock === '' ? null : openStock,
       delivery: delivery || null,
       end_stock: endStock === '' ? null : endStock,
