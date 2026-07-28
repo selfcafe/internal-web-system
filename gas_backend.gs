@@ -1443,14 +1443,6 @@ function buildInventoryRollup(periodLabel) {
   return { ok: true, rows: outRows.length, missingStores: missing.length };
 }
 
-// gas_backend.gs内にJS Date型でのnew Date()等を使う既存の月ラベル計算(index.htmlの_prevPeriodLabel)と
-// 同じロジックのサーバー側版。"2026-07" -> "2026-06"
-function _prevPeriodLabel_(label) {
-  const [y, m] = String(label).split('-').map(Number);
-  const d = new Date(y, m - 2, 1);
-  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
-}
-
 // 店舗タブ(buildStoreInventorySheet)の期間列は表示専用のプレーンテキストとして「2026年6月」のような
 // 日本語表記で持つ（日付型セルにはしない——inventory_log等で繰り返し問題になってきた自動日付変換・
 // タイムゾームずれを避けるため）。"2026-06" -> "2026年6月"
@@ -1492,11 +1484,14 @@ const STORE_INVENTORY_HEADERS_JA = ['期間','商品コード','商品名','期�
 // 毎回全消しはせず「対象期間の行だけ削除してから末尾に追記」する。全店舗への展開は
 // 「渋谷神南」タブでの動作確認後に別途行う（2026-07-28時点ではこの1店舗のみ対応）。
 //
-// 棚卸表対象外の「その他」商品名を除く全商品について、期首在庫額(前月分inventory_logのamountを
-// そのまま流用)/期末在庫額(今月分amount、送信時にprice×end_stockで自動計算・保存済み)/月消費額
-// (期首−期末)/原価率(月消費額÷期首在庫額、実質は在庫消費率であって売上ベースの真の原価率では
-// ない点に注意)の金額4列を計算する。期首在庫額が無い(前月未提出・初月等)場合や期首在庫額が0の
-// 場合は月消費額・原価率とも空欄にする(0除算回避)。
+// 棚卸表対象外の「その他」商品名を除く全商品について、期首在庫額(今期の期首在庫×今期の単価)/
+// 期末在庫額(今期の期末在庫×今期の単価)/月消費額(期首−期末)/原価率(月消費額÷期首在庫額、実質は
+// 在庫消費率であって売上ベースの真の原価率ではない点に注意)の金額4列を計算する。期首在庫・期末在庫の
+// いずれかが未入力(初月・記入漏れ等)の場合や期首在庫額が0の場合は該当列を空欄にする(0除算回避)。
+// 2026-07-28、前期のinventory_log保存済みamountに依存する方式から変更——前期が単価0円等の不完全な
+// データだと今期の期首在庫額まで計算不能になる問題があったため、この行(今期分)だけで自己完結して
+// 計算する方式にした。前期と単価が変わっていた場合の historical accuracy は失うが、常に計算できる
+// ことを優先する。
 // 2026-07-28、対象をvendor:'other'限定から全vendorに拡大した——単価(仕入原価)×在庫数量という
 // 計算自体はエリア別販売価格と無関係で、アペックス/トーヨーでも問題なく出せるとユーザー指摘で判明
 // (エリア別価格が問題になるのは売上ベースの真の原価率(buildSalesCategoryCostRatio側)の話であり、
@@ -1504,7 +1499,6 @@ const STORE_INVENTORY_HEADERS_JA = ['期間','商品コード','商品名','期�
 function buildStoreInventorySheet(storeId, periodLabel) {
   if (!storeId) return { error: 'storeIdは必須です' };
   if (!periodLabel) return { error: 'periodLabelは必須です（例: 2026-07）' };
-  const prevPeriodLabel = _prevPeriodLabel_(periodLabel);
 
   const invSheet = getInventorySheet();
   if (invSheet.getLastRow() <= 1) return { error: '棚卸データがまだありません' };
@@ -1516,14 +1510,11 @@ function buildStoreInventorySheet(storeId, periodLabel) {
   const deliveryTotals = (_deliveryAutoTotalsForPeriod_(periodLabel)[storeId]) || {};
   const meta = _productMeta_();
 
-  const curRows = {};    // product -> この期間の行
-  const prevAmount = {}; // product -> 前月分のamount(期首在庫額用)
+  const curRows = {}; // product -> この期間の行
   for (let i = 1; i < data.length; i++) {
     const r = data[i];
     if (String(r[idx.store_id]) !== String(storeId)) continue;
-    const label = _invMonthLabelStr(r[idx.period_label]);
-    if (label === String(periodLabel)) curRows[r[idx.product]] = r;
-    else if (label === String(prevPeriodLabel)) prevAmount[r[idx.product]] = r[idx.amount];
+    if (_invMonthLabelStr(r[idx.period_label]) === String(periodLabel)) curRows[r[idx.product]] = r;
   }
 
   const products = Object.keys(curRows);
@@ -1537,12 +1528,16 @@ function buildStoreInventorySheet(storeId, periodLabel) {
     const liveDelivery = deliveryTotals[product] || 0;
     const low = !!(info.caseOnly && info.casePieces && endStock !== '' && endStock !== null && Number(endStock) <= info.casePieces);
 
+    // 期首在庫額・期末在庫額は「今期の期首在庫/期末在庫(数量)×今期の単価」で、この行だけから自己完結
+    // で計算する(前期の保存済みamountには依存しない)。2026-07-28、前期のamountに依存する方式では
+    // 前月が単価0円のテストデータだった渋谷神南で期首在庫額・月消費額が計算できなかったため変更。
+    // 前期の実際の単価が違っていた場合の historical accuracy は失うが、常に計算できる方を優先する
     let openingAmount = '', closingAmount = '', consumptionAmount = '', costRate = '';
     if (product !== 'その他') {
-      const prevA = prevAmount[product];
-      const curA = r[idx.amount];
-      openingAmount = (prevA === undefined || prevA === null || prevA === '') ? '' : Number(prevA);
-      closingAmount = (curA === undefined || curA === null || curA === '') ? '' : Number(curA);
+      const price = Number(r[idx.price]) || 0;
+      const openStockRaw = r[idx.open_stock];
+      openingAmount = (openStockRaw === '' || openStockRaw === null) ? '' : price * Number(openStockRaw);
+      closingAmount = (endStock === '' || endStock === null) ? '' : price * Number(endStock);
       if (openingAmount !== '' && closingAmount !== '') {
         consumptionAmount = openingAmount - closingAmount;
         costRate = openingAmount !== 0 ? consumptionAmount / openingAmount : '';
