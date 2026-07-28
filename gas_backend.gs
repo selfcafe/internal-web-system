@@ -149,6 +149,7 @@ function doGet(e) {
     else if (a === 'removeInventoryLabelColumn') result = removeInventoryLabelColumn();
     else if (a === 'pruneBlankStoreInventoryRows') result = pruneBlankStoreInventoryRows(e.parameter.storeId);
     else if (a === 'buildSalesCategoryCostRatio') result = buildSalesCategoryCostRatio(e.parameter.storeId, e.parameter.periodLabel);
+    else if (a === 'mergeInventoryLogRemarksBlocks') result = mergeInventoryLogRemarksBlocks();
     else if (a === 'getSettingHistory')         result = getSettingHistory(e.parameter.key, e.parameter.limit);
     else if (a === 'getAttendance')             result = getAttendance(e.parameter.storeId);
     else if (a === 'getLeaveRequests')          result = getLeaveRequests(e.parameter.storeId);
@@ -1037,12 +1038,53 @@ function saveInventorySnapshot(storeId, periodLabel, rows, remarks) {
     // period_labelが"YYYY-MM"のまま日付型に自動変換されないよう、書き込み前にプレーンテキスト形式へ固定する
     sheet.getRange(startRow, INVENTORY_COLS.indexOf('period_label') + 1, newRows.length, 1).setNumberFormat('@');
     sheet.getRange(startRow, 1, newRows.length, INVENTORY_COLS.length).setValues(newRows);
+    // 備考(remarks)は店舗×期間で1つの「棚卸備考」を全商品行に同じ値として複製しているだけなので、
+    // 同一値が並ぶ見た目の重複感を減らすため月ブロック内で縦結合する(2026-07-28、ユーザー指摘)。
+    // 結合すると先頭行以外は空になる(Sheetsの結合セル仕様)——remarksはgetInventoryHistory経由で
+    // 「先月実績参考」表示にも使われているが、いずれかの商品行に値があれば拾う実装なので実害は
+    // 小さいと判断した上で結合する
+    if (newRows.length > 1) {
+      const remarksCol = INVENTORY_COLS.indexOf('remarks') + 1;
+      sheet.getRange(startRow, remarksCol, newRows.length, 1).setVerticalAlignment('middle').merge();
+    }
     // 渋谷神南タブへの自動反映(buildStoreInventorySheet)はここでは呼ばない——doPostは同期実行のため
     // ここで呼ぶと「棚卸完了」ボタンの応答がその処理時間分遅くなり、送信中の表示が長引く原因になった
     // (2026-07-28、ユーザー指摘で発覚)。代わりにindex.html側(_submitInventoryInner)がこの保存の
     // 成功後に別リクエストとして(結果を待たずに)呼び出す形にした
   }
   return { ok: true };
+}
+
+// inventory_logの既存データ(saveInventorySnapshotのL列結合対応より前に書かれた行)に遡って
+// 備考(remarks)列の結合を適用するワンショット移行用。店舗ID+期間が連続する行をひとまとまりの
+// ブロックとみなして結合する(inventory_logは店舗×期間ごとに連続して書き込まれる運用のため、
+// 通常は連続しているはずだが、手動並び替え等で連続性が崩れている場合はブロックが分断されうる)。
+// ?action=mergeInventoryLogRemarksBlocks で実行、何度でも安全に再実行可(既存の結合はunmerge
+// してから組み直す)。
+function mergeInventoryLogRemarksBlocks() {
+  const sheet = getInventorySheet();
+  if (sheet.getLastRow() <= 1) return { ok: true, merged: 0 };
+  const remarksCol = INVENTORY_COLS.indexOf('remarks') + 1;
+  const sidIdx = INVENTORY_COLS.indexOf('store_id'), pidIdx = INVENTORY_COLS.indexOf('period_label');
+  const lastRow = sheet.getLastRow();
+  const values = sheet.getRange(2, 1, lastRow - 1, INVENTORY_COLS.length).getValues();
+
+  sheet.getRange(2, remarksCol, lastRow - 1, 1).breakApart(); // 既存の結合を一旦解除してから組み直す
+
+  let merged = 0;
+  let blockStart = 0;
+  const keyOf = i => `${values[i][sidIdx]} ${_invMonthLabelStr(values[i][pidIdx])}`;
+  for (let i = 1; i <= values.length; i++) {
+    if (i === values.length || keyOf(i) !== keyOf(blockStart)) {
+      const blockLen = i - blockStart;
+      if (blockLen > 1) {
+        sheet.getRange(2 + blockStart, remarksCol, blockLen, 1).setVerticalAlignment('middle').merge();
+        merged++;
+      }
+      blockStart = i;
+    }
+  }
+  return { ok: true, merged };
 }
 
 // ----------------------------------------------------------------
