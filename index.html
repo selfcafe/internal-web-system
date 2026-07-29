@@ -108,6 +108,11 @@
     tr:last-child td { border-bottom:none; }
 
     tr.new-req td { background:#fff; }
+    /* 管理者側の発注テーブル: 依頼日/発注日/発注(操作)はグループ内の2件目以降にも
+       data-label付きで複製しているが(モバイルのcard-modeで各カードを自己完結させるため)、
+       通常のテーブル表示(PC・card-mode未適用時)では非表示にする。画面幅を問わず常に効かせる
+       必要があるため、card-mode自体のCSS(@media(max-width:639px)内)とは別に無条件で定義する。 */
+    table:not(.card-mode) .grp-repeat { visibility:hidden; }
     tr.hist-row td { color:#888; background:#fff; }
     tr.locked-row td { background:#fff; }
     tr.locked-row.group-first td { border-top:2px solid #22703d; }
@@ -4958,25 +4963,32 @@ function buildStoreOrderDetail(sid, groups) {
       const cls     = groupIsNew ? 'new-req' : '';
       const topBorder = gi > 0 && i === 0 ? 'border-top:2px solid #d1d5db;' : '';
       const groupPhoto = first.imageUrl;
+      // 依頼日/発注日/発注(操作)の3列は同一グループ内で共通のため、テーブル表示ではrowspanで
+      // 先頭行にのみ描画してきたが、card-mode(モバイルの縦積みカード表示)では各<tr>が
+      // 独立したカードになりrowspanが機能しないため、2件目以降の行にも同じ内容を複製して
+      // data-labelで持たせ、テーブル表示時のみCSS(.grp-repeat)で非表示にする。
       if (i === 0) {
         const photoCell = groupPhoto
           ? `<br><img src="${esc(groupPhoto)}" style="height:40px;border-radius:4px;cursor:pointer;margin-top:4px;border:1px solid #e5e7eb" onclick="showLostImage(this.src)" title="写真を拡大">`
           : '';
         rows += `<tr class="${cls}">
-          <td rowspan="${N}" style="vertical-align:middle;padding:8px 10px;white-space:nowrap;${topBorder}">${esc(reqDate)||'—'}${photoCell}</td>
-          <td rowspan="${N}" style="vertical-align:middle;padding:8px 10px;${topBorder}"><input type="date" value="${esc(first.orderDate)}" style="font-size:13px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-family:inherit" onchange="adminUpdGroup('${sid}','${esc(reqDate)}','orderDate',this.value)"></td>
-          <td style="padding:6px 8px;${topBorder}"><input type="date" value="${esc(row.deliveryDate)}" style="font-size:13px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-family:inherit" onchange="adminUpd('${sid}','${row.id}','deliveryDate',this.value)"></td>
-          <td style="padding:8px 10px;${topBorder}">${esc(pLabel)}</td>
-          <td style="padding:8px 10px;white-space:nowrap;${topBorder}">${actualQtyCell(sid, row)}</td>
-          <td style="padding:6px 8px;${topBorder}"><textarea style="width:100%;min-width:100px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-size:12px;font-family:inherit;resize:vertical" placeholder="備考" onchange="adminUpd('${sid}','${row.id}','note',this.value)">${esc(row.note)}</textarea></td>
-          <td rowspan="${N}" style="vertical-align:middle;padding:8px 10px;white-space:nowrap;${topBorder}">${btn}</td>
+          <td data-label="依頼日" style="vertical-align:middle;padding:8px 10px;white-space:nowrap;${topBorder}">${esc(reqDate)||'—'}${photoCell}</td>
+          <td data-label="発注日" style="vertical-align:middle;padding:8px 10px;${topBorder}"><input type="date" value="${esc(first.orderDate)}" style="font-size:13px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-family:inherit" onchange="adminUpdGroup('${sid}','${esc(reqDate)}','orderDate',this.value)"></td>
+          <td data-label="納品予定日" style="padding:6px 8px;${topBorder}"><input type="date" value="${esc(row.deliveryDate)}" style="font-size:13px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-family:inherit" onchange="adminUpd('${sid}','${row.id}','deliveryDate',this.value)"></td>
+          <td data-label="商品名" style="padding:8px 10px;${topBorder}">${esc(pLabel)}</td>
+          <td data-label="数量" style="padding:8px 10px;white-space:nowrap;${topBorder}">${actualQtyCell(sid, row)}</td>
+          <td data-label="備考" style="padding:6px 8px;${topBorder}"><textarea style="width:100%;min-width:100px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-size:12px;font-family:inherit;resize:vertical" placeholder="備考" onchange="adminUpd('${sid}','${row.id}','note',this.value)">${esc(row.note)}</textarea></td>
+          <td data-label="発注" style="vertical-align:middle;padding:8px 10px;white-space:nowrap;${topBorder}">${btn}</td>
         </tr>`;
       } else {
         rows += `<tr class="${cls}">
-          <td style="padding:6px 8px"><input type="date" value="${esc(row.deliveryDate)}" style="font-size:13px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-family:inherit" onchange="adminUpd('${sid}','${row.id}','deliveryDate',this.value)"></td>
-          <td style="padding:8px 10px">${esc(pLabel)}</td>
-          <td style="padding:8px 10px;white-space:nowrap">${actualQtyCell(sid, row)}</td>
-          <td style="padding:6px 8px"><textarea style="width:100%;min-width:100px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-size:12px;font-family:inherit;resize:vertical" placeholder="備考" onchange="adminUpd('${sid}','${row.id}','note',this.value)">${esc(row.note)}</textarea></td>
+          <td data-label="依頼日" class="grp-repeat" style="vertical-align:middle;padding:8px 10px;white-space:nowrap">${esc(reqDate)||'—'}</td>
+          <td data-label="発注日" class="grp-repeat" style="vertical-align:middle;padding:8px 10px"><input type="date" value="${esc(first.orderDate)}" disabled style="font-size:13px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-family:inherit"></td>
+          <td data-label="納品予定日" style="padding:6px 8px"><input type="date" value="${esc(row.deliveryDate)}" style="font-size:13px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-family:inherit" onchange="adminUpd('${sid}','${row.id}','deliveryDate',this.value)"></td>
+          <td data-label="商品名" style="padding:8px 10px">${esc(pLabel)}</td>
+          <td data-label="数量" style="padding:8px 10px;white-space:nowrap">${actualQtyCell(sid, row)}</td>
+          <td data-label="備考" style="padding:6px 8px"><textarea style="width:100%;min-width:100px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-size:12px;font-family:inherit;resize:vertical" placeholder="備考" onchange="adminUpd('${sid}','${row.id}','note',this.value)">${esc(row.note)}</textarea></td>
+          <td data-label="発注" class="grp-repeat" style="vertical-align:middle;padding:8px 10px;white-space:nowrap">${btn}</td>
         </tr>`;
       }
       if (gi < groups.length - 1 && i === N - 1) {
@@ -4985,9 +4997,10 @@ function buildStoreOrderDetail(sid, groups) {
     });
   });
 
+  const isMobileDetail = window.innerWidth < 640;
   return `<div style="padding:0 12px 12px;overflow-x:auto">
-    <table style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
-      <thead><tr style="background:#c2d63a;color:#1a2a05">
+    <table class="${isMobileDetail ? 'card-mode' : ''}" style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+      <thead><tr style="background:#22703d;color:#f8f4e7">
         <th style="padding:9px 10px;font-size:13px;white-space:nowrap">依頼日</th>
         <th style="padding:9px 10px;font-size:13px;white-space:nowrap">発注日</th>
         <th style="padding:9px 10px;font-size:13px;white-space:nowrap">納品予定日</th>
