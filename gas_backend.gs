@@ -2074,6 +2074,8 @@ function sendDailyAttendanceCheck() {
   const yesterdayDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() - 1);
   const cutoffStr = (yesterdayDate.getMonth() === now.getMonth())
     ? Utilities.formatDate(yesterdayDate, _sheetTz(), 'yyyy-MM-dd') : null;
+  const tomorrowDate = new Date(now.getFullYear(), now.getMonth(), now.getDate() + 1);
+  const tomorrowStr = Utilities.formatDate(tomorrowDate, _sheetTz(), 'yyyy-MM-dd');
 
   purgeOldAttendance(); // 3ヶ月より古い打刻の削除は読み取りのたびではなく、この日次バッチでのみ行う
   const attendanceRows = getAttendance(); // 全店舗分をまとめて1回だけ取得
@@ -2081,10 +2083,10 @@ function sendDailyAttendanceCheck() {
 
   // notifyNewOrder_/sendDailyOrderNotificationと同様、店舗のエリア（東海/関西/関東）ごとに
   // 行を振り分け、エリア単位で別々のLINE WORKSグループへ送る（エリア不明の店舗は別枠にまとめる）
-  const linesByArea = {}; // { areaKey: { underTarget: [...], newLeave: [...] } }
+  const linesByArea = {}; // { areaKey: { underTarget: [...], newLeave: [...], tomorrowLeave: [...] } }
   const bucketFor = storeId => {
     const area = _areaForStore_(storeId) || '(エリア未設定)';
-    if (!linesByArea[area]) linesByArea[area] = { underTarget: [], newLeave: [] };
+    if (!linesByArea[area]) linesByArea[area] = { underTarget: [], newLeave: [], tomorrowLeave: [] };
     return linesByArea[area];
   };
 
@@ -2120,6 +2122,16 @@ function sendDailyAttendanceCheck() {
       bucketFor(r.store_id).newLeave.push('・店舗ID:' + _storeIdLabel_(r.store_id) + ' ' + (r.name || '(未登録名)') + '：' + r.leave_date + 'に休み申請');
     });
 
+  // 休む日が明日の休み申請一覧（"申請された"タイミングは問わず、休む日自体が明日のもの）。
+  // 上の「前日分の新着」とは独立した別枠のリマインド — 人間が見落とすリスクを減らすため、
+  // 申請時点で既に通知済みかどうかに関わらず前日朝にもう一度必ず知らせる意図的な二重通知
+  // （2026-07-29ユーザー指示）。
+  leaveRows
+    .filter(r => String(r.leave_date) === tomorrowStr)
+    .forEach(r => {
+      bucketFor(r.store_id).tomorrowLeave.push('・店舗ID:' + _storeIdLabel_(r.store_id) + ' ' + (r.name || '(未登録名)') + '：明日(' + tomorrowStr.slice(5).replace('-', '/') + ')休み');
+    });
+
   // 未打刻確認と休み申請は送り先が別々になりうる(休み申請だけLEAVE_AREA_CHANNEL_PROP_で
   // 変更可能、2026-07-24)ため、以前は1通にまとめていたメッセージをエリアごとに分けて送る
   Object.keys(linesByArea).forEach(area => {
@@ -2131,6 +2143,10 @@ function sendDailyAttendanceCheck() {
     }
     if (b.newLeave.length) {
       const msg = '【' + area + '】\n【休み申請（前日分の新着）】\n' + b.newLeave.join('\n');
+      sendLineWorksNotification(msg, _leaveChannelForArea_(areaKey));
+    }
+    if (b.tomorrowLeave.length) {
+      const msg = '【' + area + '】\n【休み申請リマインド（明日分）】\n' + b.tomorrowLeave.join('\n');
       sendLineWorksNotification(msg, _leaveChannelForArea_(areaKey));
     }
   });
