@@ -103,10 +103,10 @@
     tr:last-child td { border-bottom:none; }
 
     tr.new-req td { background:#fffde0; }
-    tr.hist-row td { color:#888; background:#f5fdf8; }
-    tr.locked-row td { background:#f5fdf8; }
+    tr.hist-row td { color:#888; background:#fff; }
+    tr.locked-row td { background:#fff; }
     tr.locked-row.group-first td { border-top:2px solid #22703d; }
-    td.c-req, td.c-order, td.c-delivery, td.c-product, td.c-qty, td.c-note { background:#f5fdf8; }
+    td.c-req, td.c-order, td.c-delivery, td.c-product, td.c-qty, td.c-note { background:#fff; }
 
     .btn-request { background:#22703d; color:white; padding:9px 18px; font-size:14px; font-weight:600; border-radius:6px; }
     .btn-request:hover { background:#22703d; }
@@ -293,7 +293,7 @@
 
     /* ===== 時間帯メッセージ ===== */
     #time-msg-bar { display:none; background:linear-gradient(135deg,#fffde0 0%,#f0f7e8 100%); border-radius:14px; padding:14px 24px; text-align:center; font-size:15px; color:#333; font-weight:500; box-shadow:0 3px 12px rgba(0,0,0,.09); letter-spacing:.3px; margin-bottom:12px; border:1.5px solid #e8e4c0; }
-    #admin-time-msg-bar { display:none; background:linear-gradient(135deg,#fffde0 0%,#f0f7e8 100%); border-radius:14px; padding:14px 24px; text-align:center; font-size:15px; color:#333; font-weight:500; box-shadow:0 3px 12px rgba(0,0,0,.09); letter-spacing:.3px; margin-bottom:12px; border:1.5px solid #e8e4c0; }
+    #admin-time-msg-bar { display:none; background:linear-gradient(135deg,#fff 0%,#f0f7e8 100%); border-radius:14px; padding:14px 24px; text-align:center; font-size:15px; color:#333; font-weight:500; box-shadow:0 3px 12px rgba(0,0,0,.09); letter-spacing:.3px; margin-bottom:12px; border:1.5px solid #e8e4c0; }
 
     .sp-only { display:none; }
     .pc-only { display:inline; }
@@ -334,7 +334,7 @@
       table.card-mode thead { display:none; }
       table.card-mode tbody { display:flex; flex-direction:column; gap:10px; }
       table.card-mode tr { display:block; background:white; border-radius:10px; box-shadow:0 1px 5px rgba(0,0,0,.1); padding:12px 14px; border-bottom:none !important; border-top:none !important; }
-      table.card-mode tr.locked-row { background:#f5fdf8; border:2px solid #ffe44c; }
+      table.card-mode tr.locked-row { background:#fff; border:2px solid #ffe44c; }
       table.card-mode tr.group-sep { display:block; height:12px; background:transparent; padding:0; box-shadow:none; border:none; }
       table.card-mode td { display:block; padding:5px 0; border:none; font-size:14px; }
       table.card-mode td::before { content:attr(data-label); display:block; font-size:11px; color:#888; font-weight:600; letter-spacing:.4px; margin-bottom:3px; }
@@ -3395,7 +3395,7 @@ function renderAttendanceTally() {
     : _attendanceMonthLabel(now);
   const activeName = _attendanceActiveName();
   const rows = ATTENDANCE_HISTORY_CACHE.filter(r => r.within_range === true && (r.name || '') === activeName && String(r.clocked_at || '').startsWith(label));
-  const cardStyle = 'background:#f5fdf8;border:1px solid #e0ede5;border-radius:10px;padding:14px 16px;margin-bottom:10px';
+  const cardStyle = 'background:#fff;border:1px solid #e0ede5;border-radius:10px;padding:14px 16px;margin-bottom:10px';
   const numStyle = 'font-size:28px;font-weight:700;color:#22703d;font-variant-numeric:tabular-nums';
   const days = new Set(rows.map(r => String(r.clocked_at).slice(0, 10))).size;
   wrap.innerHTML = `<div style="${cardStyle}"><div style="${numStyle}">${days}<span style="font-size:13px;font-weight:600;color:#888;margin-left:3px">日</span></div></div>`;
@@ -4842,7 +4842,7 @@ function renderOverview() {
     return `
       <div class="settings-card" style="margin-bottom:10px;padding:0;overflow:hidden">
         <button type="button" onclick="toggleOverviewStore('${esc(sid)}')"
-          style="width:100%;display:flex;justify-content:space-between;align-items:center;padding:14px 16px;background:#fffde0;cursor:pointer;user-select:none;min-height:48px;gap:8px;border:none;font-family:inherit;text-align:left">
+          style="width:100%;display:flex;justify-content:space-between;align-items:center;padding:14px 16px;background:#fff;cursor:pointer;user-select:none;min-height:48px;gap:8px;border:none;font-family:inherit;text-align:left">
           <span style="display:flex;align-items:center;flex-wrap:wrap;gap:4px;font-weight:700;font-size:14px">${esc(sname)}${badge}</span>
           <span id="ovhdr-${esc(sid)}" style="font-size:13px;color:#888;white-space:nowrap;flex-shrink:0">${isOpen ? '▼ 閉じる' : '▶ 開く'}</span>
         </button>
