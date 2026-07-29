@@ -63,12 +63,10 @@
     .sub-tab { position:relative; flex:1; padding:9px 8px; border:2px solid transparent; background:rgba(255,255,255,.1); color:rgba(255,255,255,.8); font-size:13px; font-family:inherit; cursor:pointer; border-radius:6px 6px 0 0; font-weight:600; text-align:center; }
     .sub-tab:hover { background:rgba(255,255,255,.22); color:#fff; }
     .sub-tab.active { background:#ffffff; color:#22703d; border:2px solid #dfc35a; border-bottom:2px solid #ffffff; }
-    /* エリアタブ(#admin-region-nav)だけ金色背景にする。業務タブ(level2)は緑のまま。
-       派手な金色(#dfc35a等)は下の緑の帯と並ぶと浮いて見えたため、落ち着いた
-       アンティークゴールドに変更し、緑帯との境目にも影で軽い区切りを入れた。 */
-    #admin-region-nav { background:linear-gradient(180deg,#c9a750,#a8842a); box-shadow:0 2px 3px rgba(0,0,0,.15); position:relative; z-index:1; }
-    #admin-region-nav .sub-tab { color:#3a2f10; background:rgba(255,255,255,.18); }
-    #admin-region-nav .sub-tab:hover { background:rgba(255,255,255,.35); color:#2a2108; }
+    /* エリアタブ(#admin-region-nav)だけ金色背景にする。業務タブ(level2)は緑のまま */
+    #admin-region-nav { background:linear-gradient(180deg,#dfc35a,#b6952f); }
+    #admin-region-nav .sub-tab { color:#241a12; background:rgba(255,255,255,.2); }
+    #admin-region-nav .sub-tab:hover { background:rgba(255,255,255,.4); color:#241a12; }
     #admin-region-nav .sub-tab.active { background:#ffffff; color:#22703d; border:2px solid #22703d; border-bottom:2px solid #ffffff; }
     .tab-badge { position:absolute; top:3px; right:5px; background:#ef4444; color:white; font-size:10px; font-weight:bold; border-radius:99px; padding:1px 5px; min-width:16px; text-align:center; line-height:15px; }
 
@@ -220,7 +218,7 @@
     .page-info { font-size:13px; color:#666; padding:0 4px; }
 
     /* サイトログイン画面 */
-    .site-lock { position:fixed; inset:0; background-image:linear-gradient(135deg, #f8f7f0 0%, #f8f7f0 45%, #e7f0e4 55%, #cfe3cd 70%, #22703d 130%); z-index:2000; display:flex; flex-direction:column; align-items:center; justify-content:flex-start; padding-top:10vh; }
+    .site-lock { position:fixed; inset:0; background-image:linear-gradient(135deg, #f8f4e7 0%, #f8f4e7 45%, #e3e0c4 62%, #22703d 130%); z-index:2000; display:flex; flex-direction:column; align-items:center; justify-content:flex-start; padding-top:10vh; }
     .site-lock.hidden { display:none; }
     .site-lock-box { position:relative; background:#f8f4e7; border-radius:6px; padding:44px 38px 38px; width:min(380px,90vw); text-align:center; box-shadow:0 8px 32px rgba(34,112,61,.12); border:1px solid #d8d6be; }
     .site-lock-box::before { content:""; position:absolute; inset:10px; border-radius:3px; border:1.5px solid #b6952f; pointer-events:none; }
