@@ -34,13 +34,13 @@
   <link rel="apple-touch-startup-image" href="/splash-1290x2796.png">
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: 'Segoe UI','Meiryo',sans-serif; background:#fafaf5; color:#333; min-height:100vh; }
+    body { font-family: 'Segoe UI','Meiryo',sans-serif; background:#f8f4e7; color:#333; min-height:100vh; }
 
     .page { display:none; padding:16px; min-height:100vh; }
     .page.active { display:block; }
 
     .page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; flex-wrap:wrap; gap:8px; }
-    .page-header h1 { font-size:28px; color:#22703d; font-weight:700; }
+    .page-header h1 { font-size:28px; color:#22703d; font-weight:700; font-family:"Shippori Mincho","Hiragino Mincho ProN","YuMincho","Yu Mincho","Noto Serif JP",serif; letter-spacing:.03em; }
 
     .link-btn { display:inline-flex; align-items:center; gap:6px; background:#22703d; color:white; border:none; border-radius:8px; padding:9px 16px; font-size:14px; font-weight:600; cursor:pointer; text-decoration:none; font-family:inherit; white-space:nowrap; }
     .link-btn:hover { background:#1a5c30; }
@@ -92,7 +92,7 @@
     .table-wrap { overflow-x:auto; -webkit-overflow-scrolling:touch; }
     table { width:100%; border-collapse:collapse; background:white; border-radius:10px; overflow:hidden; box-shadow:0 2px 8px rgba(34,112,61,.1); }
     thead tr { background:#c2d63a; color:#1a2a05; }
-    th { padding:11px 10px; text-align:left; font-size:13px; font-weight:600; white-space:nowrap; }
+    th { padding:11px 10px; text-align:left; font-size:13px; font-weight:600; white-space:nowrap; background:#22703d; color:#f8f4e7; }
     td { padding:9px 10px; border-bottom:1px solid #eee; font-size:13px; vertical-align:middle; }
     tr:last-child td { border-bottom:none; }
 
@@ -164,7 +164,7 @@
     .prod-group-header { padding:5px 12px 4px; font-size:11px; font-weight:700; color:#22703d; background:#edf2d4; letter-spacing:.5px; border-top:1px solid #aabf28; }
     .prod-group-header:first-child { border-top:none; }
 
-    .note-box { background:#fffde0; border-left:4px solid #ffe44c; border-radius:0 6px 6px 0; padding:10px 14px; font-size:13px; color:#5a4200; margin-bottom:14px; line-height:1.6; }
+    .note-box { background:#fffde0; border-left:4px solid #c9a227; border-radius:0 6px 6px 0; padding:10px 14px; font-size:13px; color:#5a4200; margin-bottom:14px; line-height:1.6; }
 
     /* 全体管理ハンバーガーメニュー */
     .admin-menu-wrap { position:relative; }
@@ -204,7 +204,16 @@
     /* サイトログイン画面 */
     .site-lock { position:fixed; inset:0; background-image:linear-gradient(135deg, #f8f7f0 0%, #f8f7f0 45%, #e7f0e4 55%, #cfe3cd 70%, #22703d 130%); z-index:2000; display:flex; flex-direction:column; align-items:center; justify-content:flex-start; padding-top:10vh; }
     .site-lock.hidden { display:none; }
-    .site-lock-box { background:rgba(255,255,255,.92); border-radius:20px; padding:40px 36px; width:min(380px,90vw); text-align:center; box-shadow:0 8px 32px rgba(34,112,61,.12); border:1px solid #d8d6be; }
+    .site-lock-box { position:relative; background:#f8f4e7; border-radius:6px; padding:44px 38px 38px; width:min(380px,90vw); text-align:center; box-shadow:0 8px 32px rgba(34,112,61,.12); border:1px solid #d8d6be; }
+    .site-lock-box::before { content:""; position:absolute; inset:10px; border-radius:3px; border:1.5px solid #b6952f; pointer-events:none; }
+    .site-lock-corner { position:absolute; width:24px; height:24px; pointer-events:none; opacity:.85; }
+    .site-lock-corner svg { width:100%; height:100%; display:block; }
+    .slc-tl { top:8px; left:8px; }
+    .slc-tr { top:8px; right:8px; transform:scaleX(-1); }
+    .slc-bl { bottom:8px; left:8px; transform:scaleY(-1); }
+    .slc-br { bottom:8px; right:8px; transform:scale(-1,-1); }
+    .site-lock-rule { width:110px; height:1px; margin:14px auto 18px; background:linear-gradient(90deg, transparent, #b6952f 20%, #b6952f 80%, transparent); }
+    .site-lock-field-label { display:block; text-align:left; font-size:11px; letter-spacing:.12em; color:#b6952f; margin:0 0 6px 2px; font-weight:700; }
     .site-lock-logo {
       display:block; width:140px; height:140px; margin:0 auto 32px; border-radius:50%;
       box-shadow:0 6px 12px rgba(34,112,61,.35);
@@ -222,9 +231,11 @@
     .partner-hdr-btns { display:flex; flex-direction:column; gap:6px; align-items:flex-end; position:absolute; top:0; right:0; }
     .admin-hdr-btns { display:flex; flex-direction:row; gap:8px; align-items:center; position:absolute; top:0; right:0; }
     .partner-hdr-pinwheel { display:none; }
-    .site-lock-box h2 { font-size:20px; color:#22703d; margin-bottom:6px; font-weight:700; }
+    .site-lock-box h2 { font-size:22px; color:#22703d; margin-bottom:0; font-weight:700; font-family:"Shippori Mincho","Hiragino Mincho ProN","YuMincho","Yu Mincho","Noto Serif JP",serif; letter-spacing:.05em; }
     .site-lock-box p  { font-size:13px; color:#888; margin-bottom:20px; }
-    .site-lock-box .pin-input { font-size:16px; letter-spacing:2px; }
+    .site-lock-box .pin-input { font-size:16px; letter-spacing:2px; border-color:#b6952f; background:rgba(34,112,61,.045); }
+    .site-lock-box .btn-pin-submit { background:linear-gradient(180deg,#22703d,#163f22); letter-spacing:.06em; box-shadow:0 3px 0 rgba(0,0,0,.15); }
+    .site-lock-box .btn-pin-submit:hover { background:linear-gradient(180deg,#2a8248,#163f22); }
 
     /* 設定画面カード */
     .settings-card { background:#fffffe; border-radius:10px; padding:20px 16px; box-shadow:0 2px 8px rgba(34,112,61,.08); margin-bottom:14px; border:1px solid #e0ede5; }
@@ -261,7 +272,7 @@
     .site-login-gauge { margin-top:10px; background:#eef1e9; border-radius:999px; height:7px; overflow:hidden; }
     .site-login-gauge-fill {
       position:relative; height:100%; width:0%; border-radius:999px; overflow:hidden;
-      background:linear-gradient(90deg,#bfe3cd,#7fcda0);
+      background:linear-gradient(90deg,#b6952f,#dfc35a);
       transition:width .05s linear;
     }
     .site-login-gauge-fill::after {
@@ -398,7 +409,7 @@
     .partner-tab-bar { display:flex; gap:4px; margin-bottom:16px; background:#f0f7e8; border-radius:10px; padding:6px; }
     .partner-tab { position:relative; flex:1; padding:10px 6px; background:transparent; color:#555; font-size:13px; font-weight:600; border-radius:8px; cursor:pointer; font-family:inherit; transition:background .2s,color .2s; border:none; text-align:center; }
     .partner-tab:hover { background:rgba(34,112,61,.12); color:#22703d; }
-    .partner-tab.active { background:#22703d; color:white; }
+    .partner-tab.active { background:#22703d; color:white; box-shadow:inset 0 -3px 0 0 #dfc35a; }
     .partner-tab.tab-blink { animation:tabGlow 2.6s ease-in-out infinite; }
     @keyframes tabGlow {
       0%, 100% { box-shadow:inset 0 0 0 0 rgba(255,244,214,0); filter:brightness(1); }
@@ -466,11 +477,17 @@
 <div class="site-lock" id="site-lock">
   <img src="logo-round.png" class="site-lock-logo" alt="セルフカフェ">
   <div class="site-lock-box">
+    <span class="site-lock-corner slc-tl"><svg viewBox="0 0 40 40"><ellipse cx="20" cy="20" rx="15" ry="10" transform="rotate(-25 20 20)" fill="none" stroke="#b6952f" stroke-width="2.5"/><path d="M20 11 Q17 20 20 29" fill="none" stroke="#b6952f" stroke-width="2"/></svg></span>
+    <span class="site-lock-corner slc-tr"><svg viewBox="0 0 40 40"><ellipse cx="20" cy="20" rx="15" ry="10" transform="rotate(-25 20 20)" fill="none" stroke="#b6952f" stroke-width="2.5"/><path d="M20 11 Q17 20 20 29" fill="none" stroke="#b6952f" stroke-width="2"/></svg></span>
+    <span class="site-lock-corner slc-bl"><svg viewBox="0 0 40 40"><ellipse cx="20" cy="20" rx="15" ry="10" transform="rotate(-25 20 20)" fill="none" stroke="#b6952f" stroke-width="2.5"/><path d="M20 11 Q17 20 20 29" fill="none" stroke="#b6952f" stroke-width="2"/></svg></span>
+    <span class="site-lock-corner slc-br"><svg viewBox="0 0 40 40"><ellipse cx="20" cy="20" rx="15" ry="10" transform="rotate(-25 20 20)" fill="none" stroke="#b6952f" stroke-width="2.5"/><path d="M20 11 Q17 20 20 29" fill="none" stroke="#b6952f" stroke-width="2"/></svg></span>
     <h2>セルフカフェ社内ポータル</h2>
+    <div class="site-lock-rule"></div>
     <p>パスワードを入力してください</p>
     <div id="site-sync-warning" style="display:none;background:#fef2f2;border:1px solid #fca5a5;color:#b91c1c;font-size:12.5px;border-radius:8px;padding:10px 12px;margin-bottom:12px;text-align:left;line-height:1.5"></div>
     <form id="site-login-form" onsubmit="submitSiteLogin(); return false;" autocomplete="on">
       <input type="text" name="username" autocomplete="username" style="display:none" aria-hidden="true">
+      <label class="site-lock-field-label" for="site-pw-input">パスワード</label>
       <div>
         <input class="pin-input" id="site-pw-input" type="text" name="password"
           autocomplete="current-password" placeholder="パスワード">
