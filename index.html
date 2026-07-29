@@ -63,6 +63,11 @@
     .sub-tab { position:relative; flex:1; padding:9px 8px; border:2px solid transparent; background:rgba(255,255,255,.1); color:rgba(255,255,255,.8); font-size:13px; font-family:inherit; cursor:pointer; border-radius:6px 6px 0 0; font-weight:600; text-align:center; }
     .sub-tab:hover { background:rgba(255,255,255,.22); color:#fff; }
     .sub-tab.active { background:#ffffff; color:#22703d; border:2px solid #dfc35a; border-bottom:2px solid #ffffff; }
+    /* エリアタブ(#admin-region-nav)だけ金色背景にする。業務タブ(level2)は緑のまま */
+    #admin-region-nav { background:linear-gradient(180deg,#dfc35a,#b6952f); }
+    #admin-region-nav .sub-tab { color:#241a12; background:rgba(255,255,255,.2); }
+    #admin-region-nav .sub-tab:hover { background:rgba(255,255,255,.4); color:#241a12; }
+    #admin-region-nav .sub-tab.active { background:#ffffff; color:#22703d; border:2px solid #22703d; border-bottom:2px solid #ffffff; }
     .tab-badge { position:absolute; top:3px; right:5px; background:#ef4444; color:white; font-size:10px; font-weight:bold; border-radius:99px; padding:1px 5px; min-width:16px; text-align:center; line-height:15px; }
 
     .store-nav-search { position:relative; display:flex; align-items:center; background:rgba(255,255,255,.88); border-radius:6px 6px 0 0; padding:0 10px; min-width:150px; box-shadow:inset 0 0 0 1px rgba(255,255,255,.6); }
