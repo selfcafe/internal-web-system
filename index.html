@@ -16,6 +16,12 @@
   <meta name="color-scheme" content="light">
   <title>セルフカフェスタッフ</title>
   <link rel="manifest" href="manifest.json">
+  <!-- 見出し用の明朝体(Shippori Mincho)。システムフォールバックだけだと端末によって
+       明朝体で表示されない(游明朝/ヒラギノ明朝が無い環境で太いゴシック代替になる)ため、
+       Webフォントとして読み込み、どの端末でも同じ見た目になるようにする -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@700;800&display=swap" rel="stylesheet">
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -39,10 +45,10 @@
     .page { display:none; padding:16px; min-height:100vh; }
     .page.active { display:block; }
 
-    .page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; flex-wrap:wrap; gap:8px; }
-    .page-header h1 { font-size:28px; color:#22703d; font-weight:700; font-family:"Shippori Mincho","Hiragino Mincho ProN","YuMincho","Yu Mincho","Noto Serif JP",serif; letter-spacing:.03em; }
+    .page-header { display:flex; align-items:center; justify-content:space-between; margin-bottom:16px; flex-wrap:wrap; gap:8px; box-shadow:0 2px 0 0 #dfc35a; }
+    .page-header h1 { font-size:28px; color:#22703d; font-weight:900; font-family:"Shippori Mincho","Hiragino Mincho ProN","YuMincho","Yu Mincho","Noto Serif JP",serif; letter-spacing:.03em; }
 
-    .link-btn { display:inline-flex; align-items:center; gap:6px; background:#22703d; color:white; border:none; border-radius:8px; padding:9px 16px; font-size:14px; font-weight:600; cursor:pointer; text-decoration:none; font-family:inherit; white-space:nowrap; }
+    .link-btn { display:inline-flex; align-items:center; gap:6px; background:#22703d; color:white; border:none; border-radius:8px; padding:9px 16px; font-size:14px; font-weight:600; cursor:pointer; text-decoration:none; font-family:inherit; white-space:nowrap; box-shadow:0 2px 0 0 rgba(182,149,47,.7); }
     .link-btn:hover { background:#1a5c30; }
     .link-btn .badge-inline { background:#ef4444; color:white; font-size:10px; font-weight:bold; border-radius:99px; padding:1px 6px; min-width:16px; text-align:center; }
 
@@ -80,7 +86,7 @@
     .btn-withdraw  { background:#dc2626; color:white; padding:6px 14px; font-size:13px; font-weight:700; border-radius:6px; border:none; cursor:pointer; font-family:inherit; }
     .action-wrap   { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
     .btn-history   { background:#f3f4f6; color:#374151; padding:10px 16px; font-size:14px; font-weight:600; border:1.5px solid #d1d5db; }
-    .btn-history.active { background:#22703d; color:white; border-color:#22703d; }
+    .btn-history.active { background:#22703d; color:white; border-color:#22703d; box-shadow:inset 0 -3px 0 0 #dfc35a; }
     .history-badge { display:inline-block; background:#22703d; color:white; border-radius:10px; font-size:11px; padding:1px 7px; margin-left:5px; }
     .btn-history.active .history-badge { background:rgba(255,255,255,0.3); }
     #order-history-panel { margin-top:16px; }
@@ -212,7 +218,7 @@
     .slc-tr { top:8px; right:8px; transform:scaleX(-1); }
     .slc-bl { bottom:8px; left:8px; transform:scaleY(-1); }
     .slc-br { bottom:8px; right:8px; transform:scale(-1,-1); }
-    .site-lock-rule { width:110px; height:1px; margin:14px auto 18px; background:linear-gradient(90deg, transparent, #b6952f 20%, #b6952f 80%, transparent); }
+    .site-lock-rule { width:120px; height:2px; margin:14px auto 18px; border-radius:2px; background:linear-gradient(90deg, rgba(182,149,47,.25), #b6952f 25%, #b6952f 75%, rgba(182,149,47,.25)); }
     .site-lock-field-label { display:block; text-align:left; font-size:11px; letter-spacing:.12em; color:#b6952f; margin:0 0 6px 2px; font-weight:700; }
     .site-lock-logo {
       display:block; width:140px; height:140px; margin:0 auto 32px; border-radius:50%;
@@ -231,7 +237,7 @@
     .partner-hdr-btns { display:flex; flex-direction:column; gap:6px; align-items:flex-end; position:absolute; top:0; right:0; }
     .admin-hdr-btns { display:flex; flex-direction:row; gap:8px; align-items:center; position:absolute; top:0; right:0; }
     .partner-hdr-pinwheel { display:none; }
-    .site-lock-box h2 { font-size:22px; color:#22703d; margin-bottom:0; font-weight:700; font-family:"Shippori Mincho","Hiragino Mincho ProN","YuMincho","Yu Mincho","Noto Serif JP",serif; letter-spacing:.05em; }
+    .site-lock-box h2 { font-size:22px; color:#22703d; margin-bottom:0; font-weight:900; font-family:"Shippori Mincho","Hiragino Mincho ProN","YuMincho","Yu Mincho","Noto Serif JP",serif; letter-spacing:.05em; }
     .site-lock-box p  { font-size:13px; color:#888; margin-bottom:20px; }
     .site-lock-box .pin-input { font-size:16px; letter-spacing:2px; border-color:#b6952f; background:rgba(34,112,61,.045); }
     .site-lock-box .btn-pin-submit { background:linear-gradient(180deg,#22703d,#163f22); letter-spacing:.06em; box-shadow:0 3px 0 rgba(0,0,0,.15); }
@@ -239,7 +245,7 @@
 
     /* 設定画面カード */
     .settings-card { background:#fffffe; border-radius:10px; padding:20px 16px; box-shadow:0 2px 8px rgba(34,112,61,.08); margin-bottom:14px; border:1px solid #e0ede5; }
-    .settings-card-title { font-weight:700; font-size:14px; color:#22703d; margin-bottom:14px; }
+    .settings-card-title { font-weight:700; font-size:14px; color:#22703d; margin-bottom:14px; font-family:"Shippori Mincho","Hiragino Mincho ProN","YuMincho","Yu Mincho","Noto Serif JP",serif; letter-spacing:.03em; }
     .settings-accordion-hdr { display:flex; justify-content:space-between; align-items:center; cursor:pointer; font-weight:700; font-size:14px; color:#22703d; user-select:none; }
     .settings-accordion-hdr:hover { color:#22703d; }
     .settings-accordion-body { margin-top:14px; overflow-x:auto; }
@@ -435,7 +441,7 @@
     .checksheet-view-btn:hover { background:#b07816; }
     .checksheet-lastmonth-btn { padding:6px 12px; background:transparent; color:#555; font-size:12px; font-weight:600; border-radius:6px; cursor:pointer; font-family:inherit; border:1px solid #ccc; white-space:nowrap; flex-shrink:0; }
     .checksheet-lastmonth-btn:hover { background:rgba(34,112,61,.08); color:#22703d; }
-    .checksheet-lastmonth-btn.active { background:#22703d; color:white; border-color:#22703d; }
+    .checksheet-lastmonth-btn.active { background:#22703d; color:white; border-color:#22703d; box-shadow:inset 0 -3px 0 0 #dfc35a; }
 
     /* チェックシート 当日入力フォーム（タップしやすいよう行を大きめに） */
     .checksheet-today-group-hdr { font-size:12px; font-weight:700; color:white; background:#1a5730; padding:8px 12px; margin-top:12px; border-radius:4px; }
