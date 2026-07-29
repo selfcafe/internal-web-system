@@ -16,12 +16,6 @@
   <meta name="color-scheme" content="light">
   <title>セルフカフェスタッフ</title>
   <link rel="manifest" href="manifest.json">
-  <!-- 見出し用の明朝体(Shippori Mincho)。システムフォールバックだけだと端末によって
-       明朝体で表示されない(游明朝/ヒラギノ明朝が無い環境で太いゴシック代替になる)ため、
-       Webフォントとして読み込み、どの端末でも同じ見た目になるようにする -->
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Shippori+Mincho:wght@700;800&display=swap" rel="stylesheet">
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
@@ -247,7 +241,7 @@
     .partner-hdr-btns { display:flex; flex-direction:column; gap:6px; align-items:flex-end; position:absolute; top:0; right:0; }
     .admin-hdr-btns { display:flex; flex-direction:row; gap:8px; align-items:center; position:absolute; top:0; right:0; }
     .partner-hdr-pinwheel { display:none; }
-    .site-lock-box h2 { font-size:22px; color:#22703d; margin-bottom:0; font-weight:900; font-family:"Shippori Mincho","Hiragino Mincho ProN","YuMincho","Yu Mincho","Noto Serif JP",serif; letter-spacing:.05em; }
+    .site-lock-box h2 { font-size:22px; color:#22703d; margin-bottom:0; font-weight:700; }
     .site-lock-box p  { font-size:13px; color:#888; margin-bottom:20px; }
     .site-lock-box .pin-input { font-size:16px; letter-spacing:2px; border-color:#b6952f; background:rgba(34,112,61,.045); }
     .site-lock-box .btn-pin-submit { background:linear-gradient(180deg,#22703d,#163f22); letter-spacing:.06em; box-shadow:0 3px 0 rgba(0,0,0,.15); }
@@ -255,7 +249,7 @@
 
     /* 設定画面カード */
     .settings-card { background:#fffffe; border-radius:10px; padding:20px 16px; box-shadow:0 2px 8px rgba(34,112,61,.08); margin-bottom:14px; border:1px solid #e0ede5; }
-    .settings-card-title { font-weight:700; font-size:14px; color:#22703d; margin-bottom:14px; font-family:"Shippori Mincho","Hiragino Mincho ProN","YuMincho","Yu Mincho","Noto Serif JP",serif; letter-spacing:.03em; }
+    .settings-card-title { font-weight:700; font-size:14px; color:#22703d; margin-bottom:14px; }
     .settings-accordion-hdr { display:flex; justify-content:space-between; align-items:center; cursor:pointer; font-weight:700; font-size:14px; color:#22703d; user-select:none; }
     .settings-accordion-hdr:hover { color:#22703d; }
     .settings-accordion-body { margin-top:14px; overflow-x:auto; }
