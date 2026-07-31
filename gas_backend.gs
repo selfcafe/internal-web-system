@@ -1041,19 +1041,34 @@ function getInventoryHistory(storeId, periodLabel) {
   );
 }
 
-// 同じ店舗×年月の既存行を全て削除してから送信内容を書き直す（当月分は何度でも上書き修正できる）
+// 同じ店舗×年月の既存行を全て削除してから送信内容を書き直す（当月分は何度でも上書き修正できる）。
+// ⚠️2026-07-31、マージ方式に変更(ユーザー指摘で発覚した事故を受けての修正)：
+// パートナーがPCとスマホ等、複数端末で棚卸を入力する場合(例: PCでドリンク類、スマホでお菓子類を
+// それぞれ入力)、期末在庫などの入力状態はブラウザのlocalStorageに端末ごとに保持されるため、
+// 片方の端末では他方の端末で入力した商品の値を知らない。そのまま従来の「全削除→丸ごと書き直し」
+// をすると、後から送信した端末が「未入力(空欄)」で送ってきた商品を、既に別端末で入力・保存済み
+// だった値までまとめて空欄に上書きしてしまう事故が起きていた(渋谷神南店・2026年7月で発生)。
+// 対策：今回送信された値が空欄(未入力)の項目は、既存のシート上の値をそのまま残す。値が明示的に
+// 入っている項目(0や実際の数値・文字列)は今回の送信内容で正しく上書きする。「rowsを空配列で送って
+// 削除する」という既存の使い方([[feature_inventory_phase1]]参照)は、削除自体は送信内容に関わらず
+// 常に行われる(そのままの挙動)ため影響しない。
 function saveInventorySnapshot(storeId, periodLabel, rows, remarks) {
   const sheet = getInventorySheet();
   ensureHeaders(sheet, INVENTORY_HEADERS_JA);
   const now = new Date().toISOString();
 
+  // 削除前に、この店舗×期間の既存行を商品名(product)をキーに保持しておく(マージに使う)
+  const existingByProduct = {};
+  const remarksIdx = INVENTORY_COLS.indexOf('remarks');
   if (sheet.getLastRow() > 1) {
     const values = sheet.getDataRange().getValues();
     // 見出しテキスト(日本語)ではなく、INVENTORY_COLSの宣言順=物理列位置として読む
     const sidIdx = INVENTORY_COLS.indexOf('store_id'), pidIdx = INVENTORY_COLS.indexOf('period_label');
+    const prodIdx = INVENTORY_COLS.indexOf('product');
     const toDel = [];
     for (let i = 1; i < values.length; i++) {
       if (String(values[i][sidIdx]) === String(storeId) && _invMonthLabelStr(values[i][pidIdx]) === String(periodLabel)) {
+        existingByProduct[values[i][prodIdx]] = values[i];
         toDel.push(i + 1);
       }
     }
@@ -1061,15 +1076,26 @@ function saveInventorySnapshot(storeId, periodLabel, rows, remarks) {
   }
 
   if (rows && rows.length) {
-    const newRows = rows.map(r => INVENTORY_COLS.map(c => {
-      if (c === 'period_label') return periodLabel;
-      if (c === 'store_id')     return storeId;
-      if (c === 'remarks')      return remarks || '';
-      if (c === 'updated_at')   return now;
-      if (c === 'store_type')   return _isFcStore_(storeId) ? 'FC' : '直営';
-      const v = r[c];
-      return (v === undefined || v === null) ? '' : v;
-    }));
+    // remarksは店舗×期間で1つだけの値(全商品行に同じ値を複製する仕様)。今回の送信が空欄なら、
+    // 既存行のうちどれか1つに残っている値を引き継ぐ(remarksを消した端末の送信で他端末の備考を消さない)
+    const anyExisting = Object.values(existingByProduct)[0];
+    const effectiveRemarks = remarks || (anyExisting ? anyExisting[remarksIdx] : '');
+    const newRows = rows.map(r => {
+      const existing = existingByProduct[r.product];
+      return INVENTORY_COLS.map((c, i) => {
+        if (c === 'period_label') return periodLabel;
+        if (c === 'store_id')     return storeId;
+        if (c === 'remarks')      return effectiveRemarks;
+        if (c === 'updated_at')   return now;
+        if (c === 'store_type')   return _isFcStore_(storeId) ? 'FC' : '直営';
+        const v = r[c];
+        if (v === undefined || v === null || v === '') {
+          // 今回未入力(空欄)の項目は、既存のシート上の値をそのまま残す(他端末の入力を消さない)
+          return existing ? existing[i] : '';
+        }
+        return v;
+      });
+    });
     const startRow = sheet.getLastRow() + 1;
     // period_labelが"YYYY-MM"のまま日付型に自動変換されないよう、書き込み前にプレーンテキスト形式へ固定する
     sheet.getRange(startRow, INVENTORY_COLS.indexOf('period_label') + 1, newRows.length, 1).setNumberFormat('@');
