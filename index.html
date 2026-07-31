@@ -3441,8 +3441,14 @@ function renderLeaveTally() {
   const rows = LEAVE_REQUESTS_CACHE.filter(r => (r.name || '') === activeName && String(r.leave_date || '').startsWith(label));
   const cardStyle = 'background:#fff;border:1px solid #f0e0c8;border-radius:10px;padding:14px 16px';
   const numStyle = 'font-size:28px;font-weight:700;color:#d97706;font-variant-numeric:tabular-nums';
-  const days = new Set(rows.map(r => r.leave_date)).size;
-  wrap.innerHTML = `<div style="${cardStyle}"><div style="${numStyle}">${days}<span style="font-size:13px;font-weight:600;color:#888;margin-left:3px">日</span></div></div>`;
+  const dateList = Array.from(new Set(rows.map(r => r.leave_date))).sort();
+  const days = dateList.length;
+  const datesHtml = dateList.length
+    ? `<div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px">${dateList.map(d =>
+        `<span style="background:#fff8f0;border:1px solid #f0e0c8;color:#92601a;font-size:12px;font-weight:600;padding:3px 9px;border-radius:12px">${esc(_formatLeaveDateJa(d))}</span>`
+      ).join('')}</div>`
+    : '';
+  wrap.innerHTML = `<div style="${cardStyle}"><div style="${numStyle}">${days}<span style="font-size:13px;font-weight:600;color:#888;margin-left:3px">日</span></div>${datesHtml}</div>`;
 }
 
 /* ===== 休み申請 ===== */
