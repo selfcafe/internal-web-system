@@ -2384,6 +2384,10 @@ async function _submitInventoryInner() {
     if (storeTab === 'shibuya') {
       gasGet('buildStoreInventorySheet', { storeId: storeTab, periodLabel: period.label })
         .catch(e => console.error('buildStoreInventorySheet(渋谷神南)自動反映エラー:', e));
+      // 盗難検知②(月次バックストップ)も同じタイミングで反映する(2026-07-31追加、上と同じ理由で
+      // 結果を待たない別リクエストとして投げる。まずは渋谷限定、buildStoreInventorySheetと同じ条件)
+      gasGet('buildStockCheckMonthly', { storeId: storeTab, periodLabel: period.label })
+        .catch(e => console.error('buildStockCheckMonthly(渋谷神南)自動反映エラー:', e));
     }
     // 画面の再構築(renderInventory)は呼び出し元(submitInventory)がボタン上の
     // 「✓送信しました」表示を一瞬見せた後に行う
@@ -2962,6 +2966,32 @@ async function loadChecksheetDataFromDb(storeId) {
     localStorage.setItem(CHECKSHEET_DATA_KEY, JSON.stringify(all));
   } catch(e) { console.error('getChecksheetData error:', e); }
 }
+// 盗難検知①(表示専用)：「前回入力からの実売上」。チェックシートタブを開くたびに1回だけ取得する
+// (表示内容は前回チェックポイント基準で今回の入力値には依存しないため、タップごとの再取得は不要)。
+// キーは商品名(prod:接頭辞なし)、値は{label, sinceDate, qty}またはnull(まだ前回入力が無い商品)
+let _checksheetStockChecks = {};
+async function loadChecksheetStockChecks(storeId) {
+  try { _checksheetStockChecks = await gasGet('getChecksheetStockChecks', { storeId }) || {}; }
+  catch (e) { console.error('getChecksheetStockChecks error:', e); _checksheetStockChecks = {}; }
+}
+// 盗難検知①(通知)：saveChecksheetDataの保存フロー(_checksheetSyncChain)とは完全に独立した
+// 別のデバウンス用タイマーマップ。既存の保存の直列化には一切触らない——連続タップのたびに
+// 通知が連投されるのを防ぐためだけの目的で、データの保存タイミング・信頼性には影響を与えない
+const _stockMismatchDebounceTimers = {};
+const STOCK_MISMATCH_DEBOUNCE_MS = 3000;
+function _scheduleStockMismatchCheck(storeId, itemKey) {
+  if (!itemKey.startsWith('prod:')) return; // 商品(数量)以外(清掃・点検項目等)は対象外
+  const product = itemKey.slice(5);
+  const key = storeId + '|' + product;
+  clearTimeout(_stockMismatchDebounceTimers[key]);
+  // 対象商品かどうか(STERA_SALES_MAPPINGに載っているか)はGAS側で判定する(クライアントには
+  // マッピング表を持たせない方針)。対象外ならGAS側が{skipped:'not_tracked'}を返すだけで無害
+  _stockMismatchDebounceTimers[key] = setTimeout(() => {
+    delete _stockMismatchDebounceTimers[key];
+    gasPost('checkChecksheetStockMismatch', { storeId, product })
+      .catch(e => console.error('checkChecksheetStockMismatch error:', e));
+  }, STOCK_MISMATCH_DEBOUNCE_MS);
+}
 function updateChecksheetField(dayKey, itemKey, rawValue, type) {
   // dayKeyの属する暦月を使う（当月1〜5日に前月分の履歴を編集するケースがあるため、常に「今日」の期間とは限らない）
   const [y, m, d] = dayKey.split('-').map(Number);
@@ -2970,6 +3000,7 @@ function updateChecksheetField(dayKey, itemKey, rawValue, type) {
   setChecksheetField(storeTab, period.label, dayKey, itemKey, value);
   _syncChecksheetToDb(storeTab, period.label);
   updateChecksheetTotals();
+  if (type === 'qty') _scheduleStockMismatchCheck(storeTab, itemKey);
 }
 // タップで数量をカウント（直接入力も併用可）
 function stepChecksheetQty(dayKey, itemId, delta) {
@@ -3074,7 +3105,14 @@ function renderChecksheetTodayForm(wrap, subgroups) {
                 onchange="updateChecksheetField('${dKey}','${col.id}',this.value,'qty')">
               <button class="qty-btn" onclick="stepChecksheetQty('${dKey}','${col.id}',1)">＋</button>
             </div>`;
-        return `<div class="checksheet-today-row"><span>${esc(col.name)}</span>${input}</div>`;
+        // 盗難検知①(表示専用、通知は行わない): STERA_SALES_MAPPING対象商品のみ「前回入力からの実売上」を
+        // 商品名の下にサブテキストとして添える。既存のflexレイアウト(span+input の2要素)を保つため、
+        // 新しい要素を追加せずspan内に<br>で収める(他の行のレイアウトに一切影響を与えないための工夫)
+        const check = _checksheetStockChecks[col.id.replace(/^prod:/, '')];
+        const checkNote = check
+          ? `<br><small style="color:#888;font-weight:400">前回(${esc(check.sinceDate.slice(5))})比 実売上:${esc(check.qty)}個</small>`
+          : '';
+        return `<div class="checksheet-today-row"><span>${esc(col.name)}${checkNote}</span>${input}</div>`;
       }).join('')}
     </div>`).join('');
 
@@ -3193,7 +3231,7 @@ async function switchPartnerTab(tab) {
   }
   if (tab === 'checklist') {
     renderChecksheet();
-    await loadChecksheetDataFromDb(storeTab);
+    await Promise.all([loadChecksheetDataFromDb(storeTab), loadChecksheetStockChecks(storeTab)]);
     renderChecksheet();
   }
   if (tab === 'attendance') {

@@ -138,6 +138,7 @@ function doGet(e) {
     else if (a === 'getSettings')       result = getSettings();
     else if (a === 'getLostItems')      result = getLostItems(e.parameter.month, e.parameter.storeId);
     else if (a === 'getChecksheetData') result = getChecksheetData(e.parameter.storeId);
+    else if (a === 'getChecksheetStockChecks') result = getChecksheetStockChecks(e.parameter.storeId);
     else if (a === 'getInventoryHistory') result = getInventoryHistory(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'getInventoryDeliveryAuto') result = getInventoryDeliveryAuto(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'getInventoryDeliveryManual') result = getInventoryDeliveryManual(e.parameter.storeId, e.parameter.periodLabel);
@@ -151,6 +152,7 @@ function doGet(e) {
     else if (a === 'removeInventoryLabelColumn') result = removeInventoryLabelColumn();
     else if (a === 'pruneBlankStoreInventoryRows') result = pruneBlankStoreInventoryRows(e.parameter.storeId);
     else if (a === 'buildSalesCategoryCostRatio') result = buildSalesCategoryCostRatio(e.parameter.storeId, e.parameter.periodLabel);
+    else if (a === 'buildStockCheckMonthly')    result = buildStockCheckMonthly(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'mergeInventoryLogRemarksBlocks') result = mergeInventoryLogRemarksBlocks();
     else if (a === 'getSettingHistory')         result = getSettingHistory(e.parameter.key, e.parameter.limit);
     else if (a === 'getAttendance')             result = getAttendance(e.parameter.storeId);
@@ -181,6 +183,8 @@ function doPost(e) {
     else if (b.action === 'saveInventorySnapshot') result = saveInventorySnapshot(b.storeId, b.periodLabel, b.rows, b.remarks);
     else if (b.action === 'recordInventoryDelivery') result = recordInventoryDelivery(b.storeId, b.periodLabel, b.product, b.qty);
     else if (b.action === 'importSteraOrdersCsv') result = importSteraOrdersCsv(b.csvText);
+    else if (b.action === 'importSteraDailySales') result = importSteraDailySales(b.dateStr, b.csvText);
+    else if (b.action === 'checkChecksheetStockMismatch') result = checkChecksheetStockMismatch(b.storeId, b.product);
     else if (b.action === 'submitInvoice')       result = submitInvoice(b.payload);
     else if (b.action === 'saveInvoiceReceiptImage') result = saveInvoiceReceiptImage(b.imageBase64, b.imageMime, b.filename);
     else if (b.action === 'saveAttendance')      result = saveAttendance(b.storeId, b.name, b.lat, b.lng);
@@ -1753,6 +1757,262 @@ function buildSalesCategoryCostRatio(storeId, periodLabel) {
   sheet.getRange(2, startCol + 3, outRows.length, 1).setNumberFormat('0.0%');
 
   return { ok: true, store: sheetName, period: periodLabel, rows: outRows.length };
+}
+
+// ----------------------------------------------------------------
+// ステラ日次売上の蓄積(盗難検知機能の基盤) 2026-07-31
+// ----------------------------------------------------------------
+// 「ステラ注文詳細」タブ(SHEET_STERA_ORDERS)は原価率計算のため毎回まるごと上書きする使い捨て設計
+// (importSteraOrdersCsv参照、ユーザー確認済み「見たい期間をカバーするCSVを都度まるごとインポート」)。
+// 盗難検知機能ではチェックシートへの入力タイミングごとに「前回入力からの累積売上」を求める必要があり、
+// そのためには日々の売上数量を上書きせずに蓄積し続けるシートが別途必要。混同を避けるため
+// 明確に別タブ・別関数として持つ(ステラ注文詳細とは一切連動しない)。
+const SHEET_STERA_DAILY = 'stera_daily_sales';
+const STERA_DAILY_COLS = ['date', 'store_id', 'prd_id', 'qty'];
+
+function getSteraDailySheet_() {
+  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const sheet = ss.getSheetByName(SHEET_STERA_DAILY) || ss.insertSheet(SHEET_STERA_DAILY);
+  ensureHeaders(sheet, STERA_DAILY_COLS);
+  return sheet;
+}
+
+// ステラCSVの「店舗名」(セルフカフェ接頭辞・店接尾辞の表記ゆれあり)→store_idの逆引き表。
+// buildSalesCategoryCostRatioのnormalizeStoreLabelと同じ正規化ロジック(表記ゆれの対処自体は
+// 1関数に共通化していないが、正規化のルール文字列は完全に同じものを複製している——どちらか
+// を変更したら他方も変えること)
+function _steraStoreNameToId_() {
+  const normalize = s => String(s).replace(/^セルフカフェ/, '').replace(/店$/, '');
+  const names = _storeNames_();
+  const map = {};
+  Object.keys(names).forEach(id => { map[normalize(names[id])] = id; });
+  return map;
+}
+
+// Playwrightが取得した「注文詳細CSV」のテキストを、指定日(dateStr、"YYYY-MM-DD")分としてそのまま渡すと、
+// 店舗×商品ID別の売上数量を集計してstera_daily_salesへ書き込む。CSVは全店舗分をまとめて含む前提
+// (店舗名列で店舗を判定するだけなので、日付範囲は呼び出し側でその日1日分に絞ってダウンロードしてから渡すこと)。
+// 同じdateStrの既存行があれば削除してから書き直す(取り直し・再送信に対応、他日の行には一切触れない)。
+// ?action=importSteraDailySales(POST、{dateStr, csvText})で実行。
+function importSteraDailySales(dateStr, csvText) {
+  if (!dateStr) return { error: 'dateStrは必須です(例: 2026-07-30)' };
+  const rows = Utilities.parseCsv(csvText);
+  if (!rows.length) return { error: 'CSVが空です' };
+  const hdrs = rows[0].map(String);
+  const idx = {};
+  STERA_ORDER_HEADERS.forEach(h => { idx[h] = hdrs.indexOf(h); });
+  if (Object.values(idx).some(i => i < 0)) {
+    return { error: '注文詳細CSVの列見出しが想定と異なります(そのままの見出しでインポートしてください)' };
+  }
+  const nameToId = _steraStoreNameToId_();
+  const normalize = s => String(s).replace(/^セルフカフェ/, '').replace(/店$/, '');
+
+  const totals = {}; // `${storeId}|${prdId}` -> qty合計
+  const unmatchedStores = {};
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    if (!r[idx['商品ID']]) continue; // 商品コード/商品IDどちらも空の行(明細以外の空行等)は無視
+    const storeNameRaw = r[idx['店舗名']];
+    const storeId = nameToId[normalize(storeNameRaw)];
+    if (!storeId) { unmatchedStores[storeNameRaw] = true; continue; }
+    const prdId = r[idx['商品ID']];
+    const qty = Number(r[idx['商品数量']] || 0);
+    const key = storeId + '|' + prdId;
+    totals[key] = (totals[key] || 0) + qty;
+  }
+
+  const sheet = getSteraDailySheet_();
+  // 同じdateStrの既存行を全削除してから書き直す(取り直し対応、他日には一切触れない)
+  if (sheet.getLastRow() > 1) {
+    const values = sheet.getDataRange().getValues();
+    const dIdx = STERA_DAILY_COLS.indexOf('date');
+    const toDel = [];
+    for (let i = 1; i < values.length; i++) {
+      if (String(values[i][dIdx]) === String(dateStr)) toDel.push(i + 1);
+    }
+    for (let i = toDel.length - 1; i >= 0; i--) sheet.deleteRow(toDel[i]);
+  }
+
+  const newRows = Object.keys(totals).map(key => {
+    const parts = key.split('|');
+    return [dateStr, parts[0], parts[1], totals[key]];
+  });
+  if (newRows.length) {
+    const startRow = sheet.getLastRow() + 1;
+    sheet.getRange(startRow, STERA_DAILY_COLS.indexOf('date') + 1, newRows.length, 1).setNumberFormat('@');
+    sheet.getRange(startRow, 1, newRows.length, STERA_DAILY_COLS.length).setValues(newRows);
+  }
+  return { ok: true, date: dateStr, rows: newRows.length, unmatchedStores: Object.keys(unmatchedStores) };
+}
+
+// storeId×prdId(単一)について、(fromDateExclusive, toDateInclusive]の範囲でstera_daily_salesの
+// qtyを合計する。日付はどちらも"YYYY-MM-DD"文字列(fromDateExclusiveはnull可=下限無し)。①②共通で使う。
+// グループ(STERA_SALES_MAPPINGのourProducts)単位で合算したい場合は、そのグループのprdIdでこの関数を
+// 呼ぶだけでよい(1グループ=1prdIdのマッピングのため、呼び出し側でのグループ内合算は不要)
+function getSteraDailyTotal_(storeId, prdId, fromDateExclusive, toDateInclusive) {
+  const rows = sheetRows(getSteraDailySheet_(), STERA_DAILY_COLS);
+  let total = 0;
+  rows.forEach(r => {
+    if (String(r.store_id) !== String(storeId) || String(r.prd_id) !== String(prdId)) return;
+    if (fromDateExclusive && String(r.date) <= fromDateExclusive) return;
+    if (toDateInclusive && String(r.date) > toDateInclusive) return;
+    total += Number(r.qty) || 0;
+  });
+  return total;
+}
+
+// ----------------------------------------------------------------
+// 盗難検知①: チェックシート入力欄の「前回入力からの実売上」表示(読み取り専用) 2026-07-31
+// ----------------------------------------------------------------
+// STERA_SALES_MAPPINGに載っている商品(販売品類の一部)について、グループ(ourProducts)内のどれかの
+// 商品に最後に入力があった日を基準に、その翌日から今日までの実売上数量を返す。表示専用で通知は
+// 一切行わない(通知はcheckChecksheetStockMismatch側で別途行う)。チェックシートタブを開くたびに
+// 1回まとめて呼ぶ想定(タップごとに毎回呼ばない)。?action=getChecksheetStockChecks&storeId=... で実行。
+// 戻り値は{商品名: {label, sinceDate, qty} または null(まだ前回入力が無い商品)}
+function getChecksheetStockChecks(storeId) {
+  if (!storeId) return { error: 'storeIdは必須です' };
+  const periods = getChecksheetData(storeId);
+  // 全期間の{dayKey:{itemKey:value}}を1つにまとめる(月をまたいだ「前回入力日」検索に対応するため。
+  // 通常は同じdayKeyが複数期間に重複することは無いが、念のためObject.assignで安全側に扱う)
+  const allDays = {};
+  periods.forEach(p => Object.keys(p.data || {}).forEach(dayKey => {
+    allDays[dayKey] = Object.assign(allDays[dayKey] || {}, p.data[dayKey]);
+  }));
+  const today = Utilities.formatDate(new Date(), _invSheetTz(), 'yyyy-MM-dd');
+  const priorDays = Object.keys(allDays).filter(d => d < today).sort().reverse();
+
+  const result = {};
+  STERA_SALES_MAPPING.forEach(m => {
+    const itemKeys = m.ourProducts.map(name => 'prod:' + name);
+    let sinceDate = null;
+    for (let i = 0; i < priorDays.length; i++) {
+      const dayData = allDays[priorDays[i]];
+      if (itemKeys.some(k => dayData[k] !== undefined && dayData[k] !== '' && dayData[k] !== null)) {
+        sinceDate = priorDays[i];
+        break;
+      }
+    }
+    const entry = sinceDate
+      ? { label: m.label, sinceDate, qty: getSteraDailyTotal_(storeId, m.prdId, sinceDate, today) }
+      : null;
+    m.ourProducts.forEach(name => { result[name] = entry; });
+  });
+  return result;
+}
+
+// ----------------------------------------------------------------
+// 盗難検知①: 補充数量入力時の自動突き合わせ通知 2026-07-31
+// ----------------------------------------------------------------
+// saveChecksheetDataとは完全に独立した読み取り専用アクション(書き込みロックを取らないため、既存の
+// チェックシート保存フロー・データには一切触れない・影響しない)。クライアント側はデバウンス(既定3秒)
+// してから呼ぶことで、連続タップのたびに通知が連投されることを防ぐ(index.html側で対応)。
+// ?action=checkChecksheetStockMismatch(POST、{storeId, product})で実行。
+// 差異(グループ合算の補充量-ステラ売上数量)が閾値以上ならLINE WORKSへ通知する(既存Bot
+// 「社内ポータル通知」の既定チャンネル、2026-07-31時点でテスト運用としてこの形。
+// channelIdOverride省略で既定チャンネルへ送る)。通知文言は断定しない中立表現にする
+// (パートナーの数え間違い・処分・店舗間移動等でも同じ差異が出るため、盗難と決めつけない)
+const CHECKSHEET_STOCK_MISMATCH_THRESHOLD = 2;
+function checkChecksheetStockMismatch(storeId, product) {
+  if (!storeId || !product) return { error: 'storeId/productは必須です' };
+  const group = STERA_SALES_MAPPING.find(m => m.ourProducts.indexOf(product) >= 0);
+  if (!group) return { ok: true, skipped: 'not_tracked' }; // 盗難検知の対象商品ではない
+
+  const periods = getChecksheetData(storeId);
+  const allDays = {};
+  periods.forEach(p => Object.keys(p.data || {}).forEach(dayKey => {
+    allDays[dayKey] = Object.assign(allDays[dayKey] || {}, p.data[dayKey]);
+  }));
+  const today = Utilities.formatDate(new Date(), _invSheetTz(), 'yyyy-MM-dd');
+  const itemKeys = group.ourProducts.map(name => 'prod:' + name);
+
+  const priorDays = Object.keys(allDays).filter(d => d < today).sort().reverse();
+  let sinceDate = null;
+  for (let i = 0; i < priorDays.length; i++) {
+    const dayData = allDays[priorDays[i]];
+    if (itemKeys.some(k => dayData[k] !== undefined && dayData[k] !== '' && dayData[k] !== null)) {
+      sinceDate = priorDays[i];
+      break;
+    }
+  }
+  if (!sinceDate) return { ok: true, skipped: 'no_prior_entry' }; // 今回が初回入力、比較対象が無い
+
+  // (sinceDate, today]の範囲でグループ内の補充量を合算する(今回保存済みの分も含めてgetChecksheetDataを
+  // その都度読み直すため、クライアントから今回の入力値を別途渡す必要は無い)
+  let inputQty = 0;
+  Object.keys(allDays).forEach(dayKey => {
+    if (!(dayKey > sinceDate && dayKey <= today)) return;
+    itemKeys.forEach(k => { inputQty += Number(allDays[dayKey][k]) || 0; });
+  });
+
+  const steraQty = getSteraDailyTotal_(storeId, group.prdId, sinceDate, today);
+  const diff = inputQty - steraQty;
+  if (diff >= CHECKSHEET_STOCK_MISMATCH_THRESHOLD) {
+    try {
+      sendLineWorksNotification(
+        '【在庫差異検知】' + _storeIdLabel_(storeId) + '・' + group.label +
+        'で在庫差異(補充' + inputQty + '個／ステラ実売上' + steraQty + '個、差' + diff + '個)を検知しました。ご確認ください。' +
+        '(' + sinceDate + '〜' + today + '分)'
+      );
+    } catch (e) { console.error('LINE WORKS通知エラー(在庫差異検知):', e.message); }
+  }
+  return { ok: true, sinceDate, inputQty, steraQty, diff };
+}
+
+// ----------------------------------------------------------------
+// 盗難検知②: 月次バックストップ(消費量とステラ月間売上数量の突き合わせ) 2026-07-31
+// ----------------------------------------------------------------
+// パートナーがチェックシートに触れない期間があっても、棚卸完了のたびに必ず全対象商品分をカバーする
+// 最後の安全網。パートナー向けindex.htmlには一切表示しない(この店舗タブはバックエンド側のみ)。
+// buildSalesCategoryCostRatioと同じ店舗タブ・同じSTERA_SALES_MAPPINGを使うが、売上データの取得元が
+// 違う点に注意——buildSalesCategoryCostRatioは使い捨てタブ「ステラ注文詳細」(都度まるごとインポート)
+// を読むが、こちらは蓄積型のstera_daily_salesを月間分合計する(①の日次照会と同じ関数を再利用)。
+// ?action=buildStockCheckMonthly&storeId=shibuya&periodLabel=2026-07 で実行。
+const STOCK_CHECK_START_COL = 21; // U列(P〜S列=販売品類原価率ブロックの右に間隔を空ける、別ブロックとして分離)
+const STOCK_CHECK_HEADERS = ['ステラ数量(月間)', '差異(消費量-処分数量-ステラ数量)', '確認状況(手入力可)'];
+function buildStockCheckMonthly(storeId, periodLabel) {
+  if (!storeId) return { error: 'storeIdは必須です' };
+  if (!periodLabel) return { error: 'periodLabelは必須です（例: 2026-07）' };
+
+  const invSheet = getInventorySheet();
+  const invData = invSheet.getLastRow() > 1 ? invSheet.getDataRange().getValues() : [];
+  const idx = {};
+  INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
+  const consumptionByProduct = {}, disposedByProduct = {};
+  invData.slice(1).forEach(r => {
+    if (String(r[idx.store_id]) !== String(storeId)) return;
+    if (_invMonthLabelStr(r[idx.period_label]) !== String(periodLabel)) return;
+    consumptionByProduct[r[idx.product]] = Number(r[idx.consumption]) || 0;
+    disposedByProduct[r[idx.product]] = Number(r[idx.disposed_qty]) || 0;
+  });
+
+  // "YYYY-MM-00"/"YYYY-MM-32"は実在しない日付だが、文字列比較上は必ずその月の1日より前/末日より後に
+  // なるため、月初・月末を求めるための日付計算をせずに範囲指定できる(getSteraDailyTotal_は文字列比較のみ)
+  const fromDateExclusive = periodLabel + '-00';
+  const toDateInclusive = periodLabel + '-32';
+
+  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const storeName = _storeNames_()[storeId] || storeId;
+  const sheet = ss.getSheetByName(storeName) || ss.insertSheet(storeName);
+  const statusCol = STOCK_CHECK_START_COL + STOCK_CHECK_HEADERS.length - 1;
+  // 確認状況は管理者が手入力するメモなので、再実行のたびに消してしまわないよう既存値を読んでおき、
+  // 新しい行にもそのまま引き継ぐ(他の2列=ステラ数量・差異は毎回の再計算値で上書きしてよい)
+  const existingStatus = sheet.getLastRow() >= 2
+    ? sheet.getRange(2, statusCol, STERA_SALES_MAPPING.length, 1).getValues().map(r => r[0])
+    : [];
+
+  const outRows = STERA_SALES_MAPPING.map((m, i) => {
+    const hasConsumption = m.ourProducts.some(name => consumptionByProduct[name] !== undefined);
+    const netConsumption = m.ourProducts.reduce((sum, name) =>
+      sum + (consumptionByProduct[name] || 0) - (disposedByProduct[name] || 0), 0);
+    const steraQty = getSteraDailyTotal_(storeId, m.prdId, fromDateExclusive, toDateInclusive);
+    const diff = hasConsumption ? netConsumption - steraQty : '';
+    return [steraQty, diff, existingStatus[i] || ''];
+  });
+
+  sheet.getRange(1, STOCK_CHECK_START_COL, 1, STOCK_CHECK_HEADERS.length).setValues([STOCK_CHECK_HEADERS]);
+  sheet.getRange(2, STOCK_CHECK_START_COL, outRows.length, outRows[0].length).setValues(outRows);
+
+  return { ok: true, store: storeName, period: periodLabel, rows: outRows.length };
 }
 
 // 店舗タブに手作業で作った下書き行(期間・数量等が空欄のまま、商品コード/商品名だけ入っている行)を
