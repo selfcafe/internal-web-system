@@ -87,6 +87,55 @@ const AREA_STORES = {
 // フロントのREGIONS定数のid('tokai'/'kansai'/'kanto')→日本語ラベルの対応（store_regions設定の値はid形式のため）
 const REGION_ID_LABEL_ = { tokai: '東海', kansai: '関西', kanto: '関東' };
 
+// 棚卸集計スプレッドシート内の店舗タブ(例:「渋谷神南」)を、エリアごとに色分け・グループ化して
+// 並べるための設定(2026-08-01、ユーザーから「エリアごとに分けたい、新しい店舗ほど後ろに来て
+// ほしい」と依頼を受け追加)。AREA_STORESの並び順(東海→関西→関東、各エリア内は追加された順)を
+// そのままタブの正準な並び順として使う——stores.js自体が新規店舗をエリアごとの末尾に追記していく
+// 運用のため、この並び順が自然と「新しい店舗ほど後ろ」になる。
+const AREA_TAB_COLORS = { '東海': '#93c47d', '関西': '#6fa8dc', '関東': '#f6b26b' }; // 緑/青/オレンジ
+function _storeTabCanonicalOrder_() {
+  return [].concat(AREA_STORES['東海'], AREA_STORES['関西'], AREA_STORES['関東']);
+}
+// 棚卸集計スプレッドシート内の「店舗タブ」だけを対象に、エリア別の色を付け、正準な並び順に揃える。
+// 全店舗棚卸集計・棚卸未提出店舗・inventory_log等の非店舗タブは対象外(現在の並びのまま触らない)。
+// 既に正しい位置にあるタブはmoveActiveSheetを呼ばない(不要なAPI呼び出しを避ける、
+// [[feedback_proactive_perf_flagging]]参照)。buildStoreInventorySheetから毎回呼ばれる想定に加え、
+// 既存の店舗タブへ一括で反映するための?action=reorderStoreTabsとしても呼べる
+function _applyStoreTabOrderAndColors_(ss) {
+  const canonicalOrder = _storeTabCanonicalOrder_();
+  const names = _storeNames_();
+  const nameToId = {};
+  Object.keys(names).forEach(id => { nameToId[names[id]] = id; });
+
+  const utilityCount = ss.getSheets().filter(sh => !nameToId[sh.getName()]).length;
+  const storeEntries = ss.getSheets()
+    .filter(sh => nameToId[sh.getName()])
+    .map(sh => ({ sheet: sh, id: nameToId[sh.getName()] }));
+
+  storeEntries.sort((a, b) => {
+    const ia = canonicalOrder.indexOf(a.id); const ib = canonicalOrder.indexOf(b.id);
+    return (ia === -1 ? Infinity : ia) - (ib === -1 ? Infinity : ib);
+  });
+
+  storeEntries.forEach((entry, i) => {
+    const area = _areaForStore_(entry.id);
+    if (area && AREA_TAB_COLORS[area]) entry.sheet.setTabColor(AREA_TAB_COLORS[area]);
+    const targetPos = utilityCount + i + 1; // 1-based
+    if (entry.sheet.getIndex() !== targetPos) {
+      ss.setActiveSheet(entry.sheet);
+      ss.moveActiveSheet(targetPos);
+    }
+  });
+}
+// 既存の店舗タブすべてに一括反映するためのワンショット関数。?action=reorderStoreTabsで実行。
+// 新規店舗が今後buildStoreInventorySheetで作られる際は自動的にこの処理が走るため、これは
+// 「今すでにあるタブ」に遡って反映するための一度きりの手動実行用
+function reorderStoreTabs() {
+  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  _applyStoreTabOrderAndColors_(ss);
+  return { ok: true };
+}
+
 // 店舗名マスタ。手動複製で二重管理にせず、GitHub Pagesで公開されているstores.js(フロントの
 // 共有ファイル)を都度UrlFetchAppで取得・パースして使う——stores.js側を直せば自動的に反映される。
 // 1回の実行(doGet/doPost/トリガー呼び出し)内でのみキャッシュし、同じ実行内で何度呼ばれても
@@ -149,6 +198,7 @@ function doGet(e) {
     else if (a === 'setupInventoryDisposedHighlight') result = setupInventoryDisposedHighlight();
     else if (a === 'buildInventoryRollup')      result = buildInventoryRollup(e.parameter.periodLabel);
     else if (a === 'buildStoreInventorySheet')  result = buildStoreInventorySheet(e.parameter.storeId, e.parameter.periodLabel);
+    else if (a === 'reorderStoreTabs')          result = reorderStoreTabs();
     else if (a === 'removeInventoryLabelColumn') result = removeInventoryLabelColumn();
     else if (a === 'pruneBlankStoreInventoryRows') result = pruneBlankStoreInventoryRows(e.parameter.storeId);
     else if (a === 'buildSalesCategoryCostRatio') result = buildSalesCategoryCostRatio(e.parameter.storeId, e.parameter.periodLabel);
@@ -1594,6 +1644,9 @@ function buildStoreInventorySheet(storeId, periodLabel) {
   const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
   const sheetName = _storeNames_()[storeId] || storeId;
   const sheet = ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
+  // エリア別の色分け・正準な並び順(新しい店舗ほど後ろ)への反映(2026-08-01追加)。
+  // このシートが今回新規作成された場合も含め、毎回のbuildStoreInventorySheet実行時に揃え直す
+  _applyStoreTabOrderAndColors_(ss);
   // 見出し行は毎回書き直す(空シートの時だけでなく)。手動で列を挿入された場合等、コード側の
   // 正しい並びに毎回揃え直す狙い——データ行は期間ブロック単位でしか書き直さないため、
   // 見出しだけこの実行のたびに同期しておかないと、コードとシートの列がずれたままになる
