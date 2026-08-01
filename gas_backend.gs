@@ -781,15 +781,20 @@ function saveAttendance(storeId, name, lat, lng) {
   const todayStr = Utilities.formatDate(now, _sheetTz(), 'yyyy-MM-dd');
   let updatedExisting = false;
   if (sheet.getLastRow() > 1) {
-    const data = sheet.getDataRange().getValues();
-    const hdrs = data[0].map(String);
+    const hdrs = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
     const idIdx = hdrs.indexOf('id'), storeIdx = hdrs.indexOf('store_id'), nameIdx = hdrs.indexOf('name'), dateIdx = hdrs.indexOf('clocked_at');
-    for (let i = data.length - 1; i >= 1; i--) {
+    // 該当行の絞り込みに使う列(id/store_id/name/clocked_at)までだけを読む(2026-08-01追加)。
+    // lat/lng/within_range列は判定に不要なので読まない——inventory_logと同じ理由で列を絞った
+    // (出勤履歴は3ヶ月パージがあるため無限には増えないが、店舗数が増えるほど直近3ヶ月分の
+    // 行数も比例して増えるため、同じ最適化を適用する)
+    const narrowCols = Math.max(idIdx, storeIdx, nameIdx, dateIdx) + 1;
+    const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, narrowCols).getValues();
+    for (let i = data.length - 1; i >= 0; i--) {
       if (String(data[i][storeIdx]) !== String(storeId)) continue;
       if ((data[i][nameIdx] || '') !== (name || '')) continue;
       const clocked = _dateTimeStr(data[i][dateIdx]);
       if (!clocked || clocked.slice(0, 10) !== todayStr) continue;
-      sheet.getRange(i + 1, 1, 1, ATTENDANCE_COLS.length).setValues([[data[i][idIdx], storeId, name, now, lat, lng, withinRange]]);
+      sheet.getRange(i + 2, 1, 1, ATTENDANCE_COLS.length).setValues([[data[i][idIdx], storeId, name, now, lat, lng, withinRange]]);
       updatedExisting = true;
       break;
     }
@@ -888,23 +893,27 @@ function notifyLeaveRequestTomorrow_(storeId, name, leaveDate) {
 function deleteLeaveRequest(id) {
   const sheet = getSheet(SHEET_ATTENDANCE_LEAVE);
   if (sheet.getLastRow() <= 1) return { ok: true };
-  const data = sheet.getDataRange().getValues();
-  const hdrs = data[0].map(String);
+  const hdrs = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
   const idIdx = hdrs.indexOf('id'), storeIdx = hdrs.indexOf('store_id'),
         nameIdx = hdrs.indexOf('name'), dateIdx = hdrs.indexOf('leave_date');
-  // 通知の送信はここでは行わず、_notifyに要否だけ載せてdoPostへ返す（doPostがLockService解放後に送信する）
   const result = { ok: true };
-  for (let i = 1; i < data.length; i++) {
-    if (String(data[i][idIdx]) === String(id)) {
-      const storeId = data[i][storeIdx];
-      const name = data[i][nameIdx];
-      const leaveDate = _dateStr(data[i][dateIdx]);
-      sheet.deleteRow(i + 1);
-      _invalidateLeaveRequestsCache_();
-      const tomorrow = Utilities.formatDate(new Date(Date.now() + 24*60*60*1000), _sheetTz(), 'yyyy-MM-dd');
-      if (leaveDate === tomorrow) result._notify = { type: 'leaveRequestCancelled', storeId, name, leaveDate };
-      break;
-    }
+  // id列だけを先に読んで該当行を絞り込む(2026-08-01追加)。休み申請は出勤履歴と違い
+  // 定期パージが無く無期限に蓄積するシートのため、inventory_logと同じ理由で列を絞った——
+  // 該当行が見つかってから、その行だけ残りの列(store_id/name/leave_date)を読む
+  const idVals = sheet.getRange(2, idIdx + 1, sheet.getLastRow() - 1, 1).getValues();
+  let matchRow = -1;
+  for (let i = 0; i < idVals.length; i++) {
+    if (String(idVals[i][0]) === String(id)) { matchRow = i + 2; break; }
+  }
+  if (matchRow > 0) {
+    const rowVals = sheet.getRange(matchRow, 1, 1, hdrs.length).getValues()[0];
+    const storeId = rowVals[storeIdx];
+    const name = rowVals[nameIdx];
+    const leaveDate = _dateStr(rowVals[dateIdx]);
+    sheet.deleteRow(matchRow);
+    _invalidateLeaveRequestsCache_();
+    const tomorrow = Utilities.formatDate(new Date(Date.now() + 24*60*60*1000), _sheetTz(), 'yyyy-MM-dd');
+    if (leaveDate === tomorrow) result._notify = { type: 'leaveRequestCancelled', storeId, name, leaveDate };
   }
   return result;
 }
