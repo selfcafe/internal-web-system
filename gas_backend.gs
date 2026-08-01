@@ -217,6 +217,7 @@ function doGet(e) {
     else if (a === 'pruneBlankStoreInventoryRows') result = pruneBlankStoreInventoryRows(e.parameter.storeId);
     else if (a === 'buildSalesCategoryCostRatio') result = buildSalesCategoryCostRatio(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'buildStockCheckMonthly')    result = buildStockCheckMonthly(e.parameter.storeId, e.parameter.periodLabel);
+    else if (a === 'purgeOldLeaveRequests')      { purgeOldLeaveRequests(); result = { ok: true }; }
     else if (a === 'mergeInventoryLogRemarksBlocks') result = mergeInventoryLogRemarksBlocks();
     else if (a === 'getSettingHistory')         result = getSettingHistory(e.parameter.key, e.parameter.limit);
     else if (a === 'getAttendance')             result = getAttendance(e.parameter.storeId);
@@ -839,6 +840,30 @@ function _leaveRequestsRowsCached_() {
 }
 function _invalidateLeaveRequestsCache_() {
   try { CacheService.getScriptCache().remove(LEAVE_REQUESTS_CACHE_KEY); } catch (e) {}
+}
+
+// 休み申請の日時(leave_date)から3ヶ月経過した行を自動削除する(2026-08-01追加、purgeOldAttendanceと
+// 同じパターン)。休み申請はinventory_logと違い「過去分の恒久保存が必要な記録」ではなく、出勤履歴と
+// 同じ運用ログという位置付けでよいとユーザーが明言したため、無期限蓄積をやめて3ヶ月でパージする。
+// 読み取りのたびではなく日次バッチ(sendDailyAttendanceCheck)側でのみ呼ぶ(attendanceと同じ理由)
+function purgeOldLeaveRequests() {
+  const sheet = getSheet(SHEET_ATTENDANCE_LEAVE);
+  if (sheet.getLastRow() <= 1) return;
+  const cutoff = new Date();
+  cutoff.setMonth(cutoff.getMonth() - 3);
+  const limitStr = Utilities.formatDate(cutoff, _sheetTz(), 'yyyy-MM-dd');
+  const data = sheet.getDataRange().getValues();
+  const hdrs = data[0].map(String);
+  const dateIdx = hdrs.indexOf('leave_date');
+  if (dateIdx < 0) return;
+  let deleted = false;
+  for (let i = data.length - 1; i >= 1; i--) {
+    const d = _dateStr(data[i][dateIdx]);
+    if (!d || d >= limitStr) continue;
+    sheet.deleteRow(i + 1);
+    deleted = true;
+  }
+  if (deleted) _invalidateLeaveRequestsCache_();
 }
 
 function getLeaveRequests(storeId) {
@@ -2521,6 +2546,7 @@ function sendDailyAttendanceCheck() {
   const tomorrowStr = Utilities.formatDate(tomorrowDate, _sheetTz(), 'yyyy-MM-dd');
 
   purgeOldAttendance(); // 3ヶ月より古い打刻の削除は読み取りのたびではなく、この日次バッチでのみ行う
+  purgeOldLeaveRequests(); // 休み申請も同様に3ヶ月より古い分をここで削除する(2026-08-01追加)
   const attendanceRows = getAttendance(); // 全店舗分をまとめて1回だけ取得
   const leaveRows = getLeaveRequests();
 
