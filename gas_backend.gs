@@ -1088,10 +1088,38 @@ function _invMonthLabelStr(v) {
   return v || null;
 }
 
-function getInventoryHistory(storeId, periodLabel) {
+// inventory_log全体(生の2次元配列)を短時間(25秒)だけCacheServiceに保持する
+// （2026-08-01、getInventoryHistory/buildStoreInventorySheet/buildStockCheckMonthly等、
+// 棚卸完了1回につき複数の関数がそれぞれ独立にinventory_log全体を読み直しており、店舗数・
+// 蓄積期間が増えるほど遅くなる設計だった——ユーザーから「店舗数が増えると遅くなるなら困る」と
+// 指摘を受けて追加。attendance/leave_requests/lost_itemsで既に実績のある同じキャッシュパターン
+// （[[project_internal_web_system]]の2026-07-24対応）をinventory_logにも適用した）。
+// ⚠️ inventory_logは出勤ログ等と違い定期パージが無く際限なく蓄積するシートのため、
+// CacheServiceの1キー100KB上限を超える規模になった時点でキャッシュが効かなくなり
+// 都度読み直しに自然劣化する(エラーにはならない、その場合は今まで通りの動作に戻るだけ)。
+// 将来的にデータ量がその規模に達したら、店舗×期間で読む範囲を絞り込む設計(別途検討)が必要になる。
+const INVENTORY_LOG_CACHE_KEY = 'inventory_log_rows_v1';
+function _inventoryLogRowsCached_() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(INVENTORY_LOG_CACHE_KEY);
+  if (cached) return JSON.parse(cached);
   const sheet = getInventorySheet();
-  if (sheet.getLastRow() <= 1) return [];
-  const data = sheet.getDataRange().getValues();
+  const data = sheet.getLastRow() > 1 ? sheet.getDataRange().getValues() : [];
+  // Date型セルはJSON化でUTC文字列に化けてしまうため、キャッシュに入れる前に文字列化しておく
+  // （_invMonthLabelStr等が期待する形に later 変換できるよう、素朴なISO風文字列に揃える）
+  const safe = data.map(row => row.map(v =>
+    v instanceof Date ? Utilities.formatDate(v, _invSheetTz(), "yyyy-MM-dd'T'HH:mm:ss") : v
+  ));
+  try { cache.put(INVENTORY_LOG_CACHE_KEY, JSON.stringify(safe), 25); } catch (e) {} // 100KB超過時は諦めて次回も都度読む
+  return safe;
+}
+function _invalidateInventoryLogCache_() {
+  try { CacheService.getScriptCache().remove(INVENTORY_LOG_CACHE_KEY); } catch (e) {}
+}
+
+function getInventoryHistory(storeId, periodLabel) {
+  const data = _inventoryLogRowsCached_();
+  if (data.length <= 1) return [];
   const rows = data.slice(1).map(row => {
     const obj = {};
     // ヘッダーの表示テキスト(日本語)ではなく、INVENTORY_COLSの宣言順=物理列位置として読む
@@ -1178,6 +1206,10 @@ function saveInventorySnapshot(storeId, periodLabel, rows, remarks) {
     // (2026-07-28、ユーザー指摘で発覚)。代わりにindex.html側(_submitInventoryInner)がこの保存の
     // 成功後に別リクエストとして(結果を待たずに)呼び出す形にした
   }
+  // inventory_logの内容が変わったため、getInventoryHistory/buildStoreInventorySheet等が使う
+  // キャッシュを無効化する(2026-08-01追加)。これを忘れると、直後にbuildStoreInventorySheetが
+  // 別リクエストとして走った際に25秒以内は古いデータのままになってしまう
+  _invalidateInventoryLogCache_();
   return { ok: true };
 }
 
@@ -1361,6 +1393,7 @@ function removeInventoryLabelColumn() {
     return { ok: true, removed: false, reason: `5列目のヘッダーが${JSON.stringify(headerAtCol5)}でlabel列ではないため、既に削除済みか想定外の状態です` };
   }
   sheet.deleteColumn(labelColIdx1based);
+  _invalidateInventoryLogCache_();
   return { ok: true, removed: true };
 }
 
@@ -1382,6 +1415,7 @@ function migrateInventoryColumns() {
   }
   // 既存分の見出しテキストも(英語のままなら)日本語に揃える
   sheet.getRange(1, 1, 1, hdrs.length).setValues([INVENTORY_HEADERS_JA.slice(0, hdrs.length)]);
+  _invalidateInventoryLogCache_();
   return { ok: true, added: missing };
 }
 
@@ -1497,9 +1531,8 @@ function _deliveryAutoTotalsForPeriod_(periodLabel) {
 
 function buildInventoryRollup(periodLabel) {
   if (!periodLabel) return { error: 'periodLabelは必須です（例: 2026-07）' };
-  const invSheet = getInventorySheet();
-  const hasData = invSheet.getLastRow() > 1;
-  const data = hasData ? invSheet.getDataRange().getValues() : [INVENTORY_COLS];
+  const data = _inventoryLogRowsCached_();
+  const hasData = data.length > 1;
   const idx = {};
   // 列位置はヘッダーの表示テキスト(日本語)ではなく、INVENTORY_COLSの宣言順を正として読む
   INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
@@ -1604,8 +1637,11 @@ function _productMeta_() {
 // 単価(price)は末尾に追加(2026-08-01、ユーザーから「関数が無いと計算根拠が分からない」と指摘を受け、
 // 期首在庫額等をこの単価セルを参照する実際のスプレッドシート数式に変更した際に追加)。
 // 新規列は必ず末尾に追加する既存ルールに従う(途中に挿入すると過去期間の既存データ行が列ズレする)。
-const STORE_INVENTORY_COLS = ['period_label','code','product','opening_amount','closing_amount','consumption_amount','cost_rate','open_stock','end_stock','delivery','consumption','disposed_qty','daily_count','count_diff','low_stock','price'];
-const STORE_INVENTORY_HEADERS_JA = ['期間','商品コード','商品名','期首在庫額','期末在庫額','月消費額','原価率','期首在庫','期末在庫','当月納品','消費量','処分数量','デイリーカウント','差異(消費量-デイリーカウント)','在庫僅少','単価'];
+// 2026-08-01、ユーザーがシート上で単価をD列付近へ手動移動 → 最終的に「単価はD列に固定してほしい」と
+// 指示を受け、コード側の並び順もD列(4番目)に変更した。列数は変わらず16列のまま(A〜P)なので、
+// この後ろに続くステラ関連ブロック(STOCK_CHECK_START_COL等)の列位置には影響しない。
+const STORE_INVENTORY_COLS = ['period_label','code','product','price','opening_amount','closing_amount','consumption_amount','cost_rate','open_stock','end_stock','delivery','consumption','disposed_qty','daily_count','count_diff','low_stock'];
+const STORE_INVENTORY_HEADERS_JA = ['期間','商品コード','商品名','単価','期首在庫額','期末在庫額','月消費額','原価率','期首在庫','期末在庫','当月納品','消費量','処分数量','デイリーカウント','差異(消費量-デイリーカウント)','在庫僅少'];
 // 列名→列文字(A,B,C...)の変換ヘルパー。STORE_INVENTORY_COLSの並び順を単一の情報源として、
 // 数式内のセル参照(例:$P2)を組み立てる際に使う——列順を変える場合はSTORE_INVENTORY_COLSを直すだけでよい
 function _storeInvColLetter_(name) {
@@ -1634,9 +1670,8 @@ function buildStoreInventorySheet(storeId, periodLabel) {
   if (!storeId) return { error: 'storeIdは必須です' };
   if (!periodLabel) return { error: 'periodLabelは必須です（例: 2026-07）' };
 
-  const invSheet = getInventorySheet();
-  if (invSheet.getLastRow() <= 1) return { error: '棚卸データがまだありません' };
-  const data = invSheet.getDataRange().getValues();
+  const data = _inventoryLogRowsCached_();
+  if (data.length <= 1) return { error: '棚卸データがまだありません' };
   const idx = {};
   // 列位置はヘッダーの表示テキスト(日本語)ではなく、INVENTORY_COLSの宣言順を正として読む
   INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
@@ -1731,11 +1766,11 @@ function buildStoreInventorySheet(storeId, periodLabel) {
 
     return [
       _periodLabelJa_(periodLabel), r[idx.code], product,
+      price,
       openingAmount, closingAmount, consumptionAmount, costRate,
       r[idx.open_stock], endStock, liveDelivery, consumption, r[idx.disposed_qty],
       dailyCount, countDiff,
-      low ? '要確認' : '',
-      price
+      low ? '要確認' : ''
     ];
   });
 
@@ -1836,8 +1871,7 @@ function buildSalesCategoryCostRatio(storeId, periodLabel) {
     revenueByPrdId[prdId] = (revenueByPrdId[prdId] || 0) + Number(r[oIdx['商品合計金額']] || 0);
   }
 
-  const invSheet = getInventorySheet();
-  const invData = invSheet.getLastRow() > 1 ? invSheet.getDataRange().getValues() : [];
+  const invData = _inventoryLogRowsCached_();
   const idx = {};
   INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
   const costByProduct = {}; // product名 -> price×consumption(この店舗・この期間の消費額=原価)
@@ -2083,8 +2117,7 @@ function buildStockCheckMonthly(storeId, periodLabel) {
   if (!storeId) return { error: 'storeIdは必須です' };
   if (!periodLabel) return { error: 'periodLabelは必須です（例: 2026-07）' };
 
-  const invSheet = getInventorySheet();
-  const invData = invSheet.getLastRow() > 1 ? invSheet.getDataRange().getValues() : [];
+  const invData = _inventoryLogRowsCached_();
   const idx = {};
   INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
   const consumptionByProduct = {}, disposedByProduct = {};
