@@ -2378,17 +2378,18 @@ async function _submitInventoryInner() {
     await gasPost('saveInventorySnapshot', { storeId: storeTab, periodLabel: period.label, rows, remarks: periodData.remarks });
     periodData.lastSentAt = Date.now();
     setInventoryPeriodData(storeTab, period.label, periodData);
-    // 渋谷神南タブへの自動反映(buildStoreInventorySheet)は結果を待たずに別リクエストとして投げる
-    // (テスト運用中は当面この店舗のみ)。ここでawaitすると「棚卸完了」ボタンの応答がその処理時間分
-    // 遅くなり、送信中の表示が長引く原因になったため(2026-07-28)、保存本体とは切り離した
-    if (storeTab === 'shibuya') {
-      gasGet('buildStoreInventorySheet', { storeId: storeTab, periodLabel: period.label })
-        .catch(e => console.error('buildStoreInventorySheet(渋谷神南)自動反映エラー:', e));
-      // 盗難検知②(月次バックストップ)も同じタイミングで反映する(2026-07-31追加、上と同じ理由で
-      // 結果を待たない別リクエストとして投げる。まずは渋谷限定、buildStoreInventorySheetと同じ条件)
-      gasGet('buildStockCheckMonthly', { storeId: storeTab, periodLabel: period.label })
-        .catch(e => console.error('buildStockCheckMonthly(渋谷神南)自動反映エラー:', e));
-    }
+    // 店舗タブへの自動反映(buildStoreInventorySheet)は結果を待たずに別リクエストとして投げる。
+    // 2026-08-01、渋谷限定のテスト運用から全店舗へ展開(storeTabは棚卸完了を押した店舗のIDが
+    // そのまま入るため、ポータルが扱う店舗であれば自動的に対象になる——店舗一覧を別途参照する
+    // 必要はない)。ここでawaitすると「棚卸完了」ボタンの応答がその処理時間分遅くなり、送信中の
+    // 表示が長引く原因になったため(2026-07-28)、保存本体とは切り離した
+    gasGet('buildStoreInventorySheet', { storeId: storeTab, periodLabel: period.label })
+      .catch(e => console.error('buildStoreInventorySheet自動反映エラー:', e));
+    // 盗難検知②(月次バックストップ)も同じタイミングで反映する(2026-07-31追加、上と同じ理由で
+    // 結果を待たない別リクエストとして投げる。2026-08-01、buildStoreInventorySheetと同じ条件で
+    // 渋谷限定を解除し全店舗へ展開)
+    gasGet('buildStockCheckMonthly', { storeId: storeTab, periodLabel: period.label })
+      .catch(e => console.error('buildStockCheckMonthly自動反映エラー:', e));
     // 画面の再構築(renderInventory)は呼び出し元(submitInventory)がボタン上の
     // 「✓送信しました」表示を一瞬見せた後に行う
     const toast = document.getElementById('inventory-toast');
