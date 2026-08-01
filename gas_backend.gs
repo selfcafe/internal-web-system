@@ -1144,6 +1144,29 @@ function getInventoryHistory(storeId, periodLabel) {
 // 入っている項目(0や実際の数値・文字列)は今回の送信内容で正しく上書きする。「rowsを空配列で送って
 // 削除する」という既存の使い方([[feature_inventory_phase1]]参照)は、削除自体は送信内容に関わらず
 // 常に行われる(そのままの挙動)ため影響しない。
+// この店舗×期間に該当する行番号(1-based、データ行のみ)だけをまず特定する。store_id・period_labelの
+// 2列だけを読んで絞り込み、該当しない大多数の行は他の列も含めて一切読まない(2026-08-01追加)。
+// ユーザーから「inventory_log全体を毎回読む設計は店舗数・年数が増えると重くなるのでは」と指摘を受け、
+// saveInventorySnapshot(棚卸完了ボタンが実際に待つ処理)のこの部分だけ読み込み範囲を絞った。
+// ※getInventoryHistory等の参照系はCacheServiceでの25秒キャッシュ(_inventoryLogRowsCached_)で対応済み
+// だが、ここは複数端末での同時送信の正しいマージに直結するため、キャッシュ(最大25秒古い可能性)は
+// 使わず常に最新のシートを直接読む——正確性を優先し、代わりに読む「列数」を絞ることで高速化する。
+function _matchingInventoryLogRowNumbers_(sheet, storeId, periodLabel) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow <= 1) return [];
+  const sidCol = INVENTORY_COLS.indexOf('store_id') + 1;
+  const pidCol = INVENTORY_COLS.indexOf('period_label') + 1;
+  const sidVals = sheet.getRange(2, sidCol, lastRow - 1, 1).getValues();
+  const pidVals = sheet.getRange(2, pidCol, lastRow - 1, 1).getValues();
+  const matchRows = [];
+  for (let i = 0; i < sidVals.length; i++) {
+    if (String(sidVals[i][0]) === String(storeId) && _invMonthLabelStr(pidVals[i][0]) === String(periodLabel)) {
+      matchRows.push(i + 2); // 1-based行番号(見出し行の分+1)
+    }
+  }
+  return matchRows;
+}
+
 function saveInventorySnapshot(storeId, periodLabel, rows, remarks) {
   const sheet = getInventorySheet();
   ensureHeaders(sheet, INVENTORY_HEADERS_JA);
@@ -1152,19 +1175,27 @@ function saveInventorySnapshot(storeId, periodLabel, rows, remarks) {
   // 削除前に、この店舗×期間の既存行を商品名(product)をキーに保持しておく(マージに使う)
   const existingByProduct = {};
   const remarksIdx = INVENTORY_COLS.indexOf('remarks');
-  if (sheet.getLastRow() > 1) {
-    const values = sheet.getDataRange().getValues();
-    // 見出しテキスト(日本語)ではなく、INVENTORY_COLSの宣言順=物理列位置として読む
-    const sidIdx = INVENTORY_COLS.indexOf('store_id'), pidIdx = INVENTORY_COLS.indexOf('period_label');
-    const prodIdx = INVENTORY_COLS.indexOf('product');
-    const toDel = [];
-    for (let i = 1; i < values.length; i++) {
-      if (String(values[i][sidIdx]) === String(storeId) && _invMonthLabelStr(values[i][pidIdx]) === String(periodLabel)) {
-        existingByProduct[values[i][prodIdx]] = values[i];
-        toDel.push(i + 1);
+  const prodIdx = INVENTORY_COLS.indexOf('product');
+  const matchRows = _matchingInventoryLogRowNumbers_(sheet, storeId, periodLabel);
+  if (matchRows.length) {
+    // 該当行は同じ送信でまとめて追記された連続ブロックであることが多いため、連続区間ごとに
+    // まとめて1回のgetRangeで読む(該当行がバラバラでも正しく動くが、連続していれば読み込み回数が減る)
+    const runs = [];
+    let runStart = matchRows[0], runPrev = matchRows[0];
+    for (let i = 1; i <= matchRows.length; i++) {
+      const cur = matchRows[i];
+      if (cur !== runPrev + 1) {
+        runs.push([runStart, runPrev]);
+        runStart = cur;
       }
+      runPrev = cur;
     }
-    for (let i = toDel.length - 1; i >= 0; i--) sheet.deleteRow(toDel[i]);
+    runs.forEach(([start, end]) => {
+      const vals = sheet.getRange(start, 1, end - start + 1, INVENTORY_COLS.length).getValues();
+      vals.forEach(v => { existingByProduct[v[prodIdx]] = v; });
+    });
+    // 末尾側から削除して行番号ズレを避ける(既存の削除順ルールを踏襲)
+    matchRows.slice().sort((a, b) => b - a).forEach(r => sheet.deleteRow(r));
   }
 
   if (rows && rows.length) {
