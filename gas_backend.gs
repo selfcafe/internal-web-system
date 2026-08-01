@@ -1537,8 +1537,16 @@ function _productMeta_() {
 // 2026-07-28、デイリーカウント・差異列を追加(ユーザーが先に手動でデイリーカウント列を渋谷神南タブに
 // 追加していたため、それに揃える形でコードを更新)。ヘッダー行は毎回書き直す(下記参照)ため、
 // 手動で追加された列があっても次の実行でこの並び順に揃い直す
-const STORE_INVENTORY_COLS = ['period_label','code','product','opening_amount','closing_amount','consumption_amount','cost_rate','open_stock','end_stock','delivery','consumption','disposed_qty','daily_count','count_diff','low_stock'];
-const STORE_INVENTORY_HEADERS_JA = ['期間','商品コード','商品名','期首在庫額','期末在庫額','月消費額','原価率','期首在庫','期末在庫','当月納品','消費量','処分数量','デイリーカウント','差異(消費量-デイリーカウント)','在庫僅少'];
+// 単価(price)は末尾に追加(2026-08-01、ユーザーから「関数が無いと計算根拠が分からない」と指摘を受け、
+// 期首在庫額等をこの単価セルを参照する実際のスプレッドシート数式に変更した際に追加)。
+// 新規列は必ず末尾に追加する既存ルールに従う(途中に挿入すると過去期間の既存データ行が列ズレする)。
+const STORE_INVENTORY_COLS = ['period_label','code','product','opening_amount','closing_amount','consumption_amount','cost_rate','open_stock','end_stock','delivery','consumption','disposed_qty','daily_count','count_diff','low_stock','price'];
+const STORE_INVENTORY_HEADERS_JA = ['期間','商品コード','商品名','期首在庫額','期末在庫額','月消費額','原価率','期首在庫','期末在庫','当月納品','消費量','処分数量','デイリーカウント','差異(消費量-デイリーカウント)','在庫僅少','単価'];
+// 列名→列文字(A,B,C...)の変換ヘルパー。STORE_INVENTORY_COLSの並び順を単一の情報源として、
+// 数式内のセル参照(例:$P2)を組み立てる際に使う——列順を変える場合はSTORE_INVENTORY_COLSを直すだけでよい
+function _storeInvColLetter_(name) {
+  return String.fromCharCode(64 + STORE_INVENTORY_COLS.indexOf(name) + 1);
+}
 
 // 店舗単体の棚卸表シート（店舗の表示名タブ、例:「渋谷神南」）を1店舗分だけ生成・更新するワンショット関数。
 // ?action=buildStoreInventorySheet&storeId=shibuya&periodLabel=2026-07 で実行。
@@ -1583,45 +1591,6 @@ function buildStoreInventorySheet(storeId, periodLabel) {
   if (!products.length) return { error: `${storeId}の${periodLabel}分の棚卸データが見つかりません` };
   products.sort((a, b) => ((meta[a] && meta[a].order) || 0) - ((meta[b] && meta[b].order) || 0));
 
-  const outRows = products.map(product => {
-    const r = curRows[product];
-    const info = meta[product] || {};
-    const endStock = r[idx.end_stock];
-    const liveDelivery = deliveryTotals[product] || 0;
-    const low = !!(info.caseOnly && info.casePieces && endStock !== '' && endStock !== null && Number(endStock) <= info.casePieces);
-
-    // 期首在庫額・期末在庫額は「今期の期首在庫/期末在庫(数量)×今期の単価」で、この行だけから自己完結
-    // で計算する(前期の保存済みamountには依存しない)。2026-07-28、前期のamountに依存する方式では
-    // 前月が単価0円のテストデータだった渋谷神南で期首在庫額・月消費額が計算できなかったため変更。
-    // 前期の実際の単価が違っていた場合の historical accuracy は失うが、常に計算できる方を優先する
-    let openingAmount = '', closingAmount = '', consumptionAmount = '', costRate = '';
-    if (product !== 'その他') {
-      const price = Number(r[idx.price]) || 0;
-      const openStockRaw = r[idx.open_stock];
-      openingAmount = (openStockRaw === '' || openStockRaw === null) ? '' : price * Number(openStockRaw);
-      closingAmount = (endStock === '' || endStock === null) ? '' : price * Number(endStock);
-      if (openingAmount !== '' && closingAmount !== '') {
-        consumptionAmount = openingAmount - closingAmount;
-        costRate = openingAmount !== 0 ? consumptionAmount / openingAmount : '';
-      }
-    }
-
-    const dailyCount = r[idx.daily_count];
-    const consumption = r[idx.consumption];
-    // 差異=消費量(棚卸ベース)-デイリーカウント(チェックシート補充ベース)。既存の
-    // 「消費量とデイリーカウントが一致しない」という参考表示(mismatch)の数値版
-    const countDiff = (consumption !== '' && consumption !== null && dailyCount !== '' && dailyCount !== null)
-      ? Number(consumption) - Number(dailyCount) : '';
-
-    return [
-      _periodLabelJa_(periodLabel), r[idx.code], product,
-      openingAmount, closingAmount, consumptionAmount, costRate,
-      r[idx.open_stock], endStock, liveDelivery, consumption, r[idx.disposed_qty],
-      dailyCount, countDiff,
-      low ? '要確認' : ''
-    ];
-  });
-
   const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
   const sheetName = _storeNames_()[storeId] || storeId;
   const sheet = ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
@@ -1654,7 +1623,55 @@ function buildStoreInventorySheet(storeId, periodLabel) {
     .sort((a, b) => b.startIdx - a.startIdx) // 末尾側から消して行番号ズレを避ける
     .forEach(b => sheet.deleteRows(b.startIdx + 2, b.endIdx - b.startIdx + 1));
 
+  // 期首在庫額等を実セル参照の数式にするため、書き込み先の絶対行番号を先に確定させる
+  // (削除処理より後で確定させないと、数式が指す行番号が実際の書き込み位置とズレる)
   const startRow = sheet.getLastRow() + 1;
+  const colOpening = _storeInvColLetter_('opening_amount');
+  const colClosing = _storeInvColLetter_('closing_amount');
+  const colConsumption = _storeInvColLetter_('consumption_amount');
+  const colOpenStock = _storeInvColLetter_('open_stock');
+  const colEndStock = _storeInvColLetter_('end_stock');
+  const colPrice = _storeInvColLetter_('price');
+
+  const outRows = products.map((product, i) => {
+    const r = curRows[product];
+    const info = meta[product] || {};
+    const endStock = r[idx.end_stock];
+    const liveDelivery = deliveryTotals[product] || 0;
+    const low = !!(info.caseOnly && info.casePieces && endStock !== '' && endStock !== null && Number(endStock) <= info.casePieces);
+    const price = Number(r[idx.price]) || 0;
+    const rowNum = startRow + i;
+
+    // 期首在庫額・期末在庫額・月消費額・原価率は、単価列($P列)と期首在庫/期末在庫列を参照する
+    // 実際のスプレッドシート数式として書き込む(2026-08-01、ユーザーから「関数が無いと計算根拠が
+    // セルを見ても分からない」と指摘を受け、単価をこのシートにも列として出した上で数式化した)。
+    // 「その他」商品は元々単価の概念が無いため、これまで通り空欄のまま(数式にしない)。
+    // 期首在庫/期末在庫セル自体が空欄(初月・記入漏れ等)の場合はIF()で空文字を返し、0除算も回避する。
+    let openingAmount = '', closingAmount = '', consumptionAmount = '', costRate = '';
+    if (product !== 'その他') {
+      openingAmount = `=IF($${colOpenStock}${rowNum}="","",$${colPrice}${rowNum}*$${colOpenStock}${rowNum})`;
+      closingAmount = `=IF($${colEndStock}${rowNum}="","",$${colPrice}${rowNum}*$${colEndStock}${rowNum})`;
+      consumptionAmount = `=IF(OR($${colOpening}${rowNum}="",$${colClosing}${rowNum}=""),"",$${colOpening}${rowNum}-$${colClosing}${rowNum})`;
+      costRate = `=IF(OR($${colOpening}${rowNum}="",$${colOpening}${rowNum}=0),"",$${colConsumption}${rowNum}/$${colOpening}${rowNum})`;
+    }
+
+    const dailyCount = r[idx.daily_count];
+    const consumption = r[idx.consumption];
+    // 差異=消費量(棚卸ベース)-デイリーカウント(チェックシート補充ベース)。既存の
+    // 「消費量とデイリーカウントが一致しない」という参考表示(mismatch)の数値版
+    const countDiff = (consumption !== '' && consumption !== null && dailyCount !== '' && dailyCount !== null)
+      ? Number(consumption) - Number(dailyCount) : '';
+
+    return [
+      _periodLabelJa_(periodLabel), r[idx.code], product,
+      openingAmount, closingAmount, consumptionAmount, costRate,
+      r[idx.open_stock], endStock, liveDelivery, consumption, r[idx.disposed_qty],
+      dailyCount, countDiff,
+      low ? '要確認' : '',
+      price
+    ];
+  });
+
   // 日付型への自動変換を防ぐため、書き込み前に必ずプレーンテキスト形式に固定する
   sheet.getRange(startRow, 1, outRows.length, 1).setNumberFormat('@');
   sheet.getRange(startRow, 1, outRows.length, STORE_INVENTORY_COLS.length).setValues(outRows);
@@ -1666,7 +1683,7 @@ function buildStoreInventorySheet(storeId, periodLabel) {
   if (outRows.length > 1) periodRange.merge();
   const rateCol = STORE_INVENTORY_COLS.indexOf('cost_rate') + 1;
   sheet.getRange(startRow, rateCol, outRows.length, 1).setNumberFormat('0.0%');
-  ['opening_amount', 'closing_amount', 'consumption_amount'].forEach(c => {
+  ['opening_amount', 'closing_amount', 'consumption_amount', 'price'].forEach(c => {
     sheet.getRange(startRow, STORE_INVENTORY_COLS.indexOf(c) + 1, outRows.length, 1).setNumberFormat(INVOICE_YEN_FORMAT);
   });
 
