@@ -1469,7 +1469,7 @@ function buildInventoryRollup(periodLabel) {
         endStock,
         r[idx.consumption],
         r[idx.disposed_qty],
-        low ? '少ない' : ''
+        low ? '要確認' : ''
       ]);
     }
   }
@@ -1486,7 +1486,7 @@ function buildInventoryRollup(periodLabel) {
     const range = sheet.getRange(2, 1, outRows.length, INVENTORY_ROLLUP_COLS.length);
     sheet.setConditionalFormatRules([
       SpreadsheetApp.newConditionalFormatRule()
-        .whenFormulaSatisfied('=$' + lowColLetter + '2="少ない"')
+        .whenFormulaSatisfied('=$' + lowColLetter + '2="要確認"')
         .setBackground('#ffcdd2')
         .setRanges([range])
         .build()
@@ -1618,7 +1618,7 @@ function buildStoreInventorySheet(storeId, periodLabel) {
       openingAmount, closingAmount, consumptionAmount, costRate,
       r[idx.open_stock], endStock, liveDelivery, consumption, r[idx.disposed_qty],
       dailyCount, countDiff,
-      low ? '少ない' : ''
+      low ? '要確認' : ''
     ];
   });
 
