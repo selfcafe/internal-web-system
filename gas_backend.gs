@@ -96,6 +96,19 @@ const AREA_TAB_COLORS = { '東海': '#93c47d', '関西': '#6fa8dc', '関東': '#
 function _storeTabCanonicalOrder_() {
   return [].concat(AREA_STORES['東海'], AREA_STORES['関西'], AREA_STORES['関東']);
 }
+// タブの色分け専用の軽量エリア判定。_areaForStore_()とは意図的に別実装——_areaForStore_()は
+// 店舗管理画面でのエリア上書き(_storeRegionOverrides_→getSettings())を反映するため、無関係な
+// メインスプレッドシート(SHEET_ID、棚卸集計とは別ファイル)を毎回丸ごと開いてapp_settingsを
+// 読みに行ってしまう。2026-08-01、これが原因で棚卸完了の応答が数秒遅くなっていたことが判明
+// (buildStoreInventorySheet全体で4〜6秒、うちこの部分だけで約1〜2秒)。タブの色は見た目の
+// 整理用途でしかなく、店舗管理画面でのエリア変更に厳密に追従する必要は薄いと判断し、
+// AREA_STORESの静的な既定値だけを見る軽量版に切り替えた(コスト高いgetSettings()呼び出しを回避)。
+function _defaultAreaForStore_(storeId) {
+  for (var areaName in AREA_STORES) {
+    if (AREA_STORES[areaName].indexOf(String(storeId)) >= 0) return areaName;
+  }
+  return null;
+}
 // 棚卸集計スプレッドシート内の「店舗タブ」だけを対象に、エリア別の色を付け、正準な並び順に揃える。
 // 全店舗棚卸集計・棚卸未提出店舗・inventory_log等の非店舗タブは対象外(現在の並びのまま触らない)。
 // 既に正しい位置にあるタブはmoveActiveSheetを呼ばない(不要なAPI呼び出しを避ける、
@@ -107,8 +120,9 @@ function _applyStoreTabOrderAndColors_(ss) {
   const nameToId = {};
   Object.keys(names).forEach(id => { nameToId[names[id]] = id; });
 
-  const utilityCount = ss.getSheets().filter(sh => !nameToId[sh.getName()]).length;
-  const storeEntries = ss.getSheets()
+  const sheets = ss.getSheets(); // 1回だけ取得(以前は2回呼んでいた無駄を削減)
+  const utilityCount = sheets.filter(sh => !nameToId[sh.getName()]).length;
+  const storeEntries = sheets
     .filter(sh => nameToId[sh.getName()])
     .map(sh => ({ sheet: sh, id: nameToId[sh.getName()] }));
 
@@ -118,7 +132,7 @@ function _applyStoreTabOrderAndColors_(ss) {
   });
 
   storeEntries.forEach((entry, i) => {
-    const area = _areaForStore_(entry.id);
+    const area = _defaultAreaForStore_(entry.id);
     if (area && AREA_TAB_COLORS[area]) entry.sheet.setTabColor(AREA_TAB_COLORS[area]);
     const targetPos = utilityCount + i + 1; // 1-based
     if (entry.sheet.getIndex() !== targetPos) {
