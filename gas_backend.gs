@@ -2426,7 +2426,13 @@ function createStockBotJWT_() {
   var clientId = props.getProperty('LW_CLIENT_ID_STOCK');
   var serviceAccount = props.getProperty('LW_SERVICE_ACCT_STOCK');
   var rawKey = props.getProperty('LW_PRIVATE_KEY_STOCK');
-  var base64Body = rawKey.replace('-----BEGIN PRIVATE KEY-----', '').replace('-----END PRIVATE KEY-----', '').replace(/\s/g, '');
+  // Script Propertiesへの貼り付け時に改行が消えたり余分な文字が混入するケースがあるため
+  // (2026-08-03に実際発生: 1行に潰れた上に末尾に余分な"--"が付着していた)、まずヘッダー/フッター文字列
+  // を(前後のダッシュの数に関わらず)正規表現で除去し、そのうえでbase64として有効な文字だけを残す
+  var base64Body = rawKey
+    .replace(/-*BEGIN PRIVATE KEY-*/gi, '')
+    .replace(/-*END PRIVATE KEY-*/gi, '')
+    .replace(/[^A-Za-z0-9+/=]/g, '');
   var lines = [];
   var i = 0;
   while (i < base64Body.length) {
