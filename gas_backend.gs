@@ -224,6 +224,7 @@ function doGet(e) {
     else if (a === 'getLeaveRequests')          result = getLeaveRequests(e.parameter.storeId);
     else if (a === 'getAttendanceTabData')      result = getAttendanceTabData(e.parameter.storeId);
     else if (a === 'getDeliveryHistory')        result = getDeliveryHistory(e.parameter.storeId, e.parameter.month);
+    else if (a === 'getRecentLineWorksCallbacks') result = getRecentLineWorksCallbacks();
     else result = { error: 'Unknown action: ' + a };
     return json(result);
   } catch(err) {
@@ -232,6 +233,18 @@ function doGet(e) {
 }
 
 function doPost(e) {
+  // 一時的な調査用(2026-08-03): 新しいLINE WORKSグループのchannelIdを特定するため、
+  // Developer ConsoleのCallback URLを本Web AppのURLに一時設定した際に届くMessage Eventを
+  // 検知してScript Propertiesに記録するだけの使い捨て分岐。既存のaction経由の保存処理とは
+  // 完全に独立していて、ロックも取得しないため通常の処理には一切影響しない。
+  // 目的(channelId特定)が済んだら、この分岐と_captureLineWorksCallback_/
+  // getRecentLineWorksCallbacksごと削除し、Developer Console側のCallback URL設定も戻すこと。
+  const bPeek = JSON.parse(e.postData.contents);
+  if (bPeek.source && bPeek.source.channelId && !bPeek.action) {
+    _captureLineWorksCallback_(bPeek);
+    return json({ ok: true });
+  }
+
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   let result;
@@ -283,6 +296,29 @@ function doPost(e) {
 function json(data) {
   return ContentService.createTextOutput(JSON.stringify(data))
     .setMimeType(ContentService.MimeType.JSON);
+}
+
+// ----------------------------------------------------------------
+// 一時的な調査用(2026-08-03、用済み後にこの2関数ごと削除すること): 新規LINE WORKSグループの
+// channelId特定。既存の「社内ポータル通知」Botの既定チャンネル設定・スクリプトプロパティには
+// 一切触れない、完全に独立・新規のScript Propertyだけを使う。
+// ----------------------------------------------------------------
+function _captureLineWorksCallback_(b) {
+  const props = PropertiesService.getScriptProperties();
+  const list = JSON.parse(props.getProperty('TMP_LW_CALLBACKS') || '[]');
+  list.unshift({
+    when: Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss'),
+    channelId: b.source.channelId,
+    userId: b.source.userId || null,
+    text: (b.content && b.content.text) || null,
+  });
+  props.setProperty('TMP_LW_CALLBACKS', JSON.stringify(list.slice(0, 5)));
+}
+
+// ?action=getRecentLineWorksCallbacks で直近の受信内容(channelId等)を確認する
+function getRecentLineWorksCallbacks() {
+  const props = PropertiesService.getScriptProperties();
+  return JSON.parse(props.getProperty('TMP_LW_CALLBACKS') || '[]');
 }
 
 // ----------------------------------------------------------------
