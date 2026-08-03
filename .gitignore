@@ -1,3 +1,5 @@
 export_*.json
 .env
 scripts/_downloads/
+.chrome_stera_profile/
+_stera_*.png
