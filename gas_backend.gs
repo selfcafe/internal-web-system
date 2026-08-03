@@ -2462,7 +2462,7 @@ function getStockBotAccessToken_(forceRefresh) {
     + '&grant_type=' + encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer')
     + '&client_id=' + encodeURIComponent(props.getProperty('LW_CLIENT_ID_STOCK'))
     + '&client_secret=' + encodeURIComponent(props.getProperty('LW_CLIENT_SECRET_STOCK'))
-    + '&scope=bot.message';
+    + '&scope=bot'; // このBot用Appには「bot」スコープのみ許可しているため、既存の'bot.message'とは異なる
   var res = UrlFetchApp.fetch('https://auth.worksmobile.com/oauth2/v2.0/token', {
     method: 'POST',
     headers: {'Content-Type': 'application/x-www-form-urlencoded'},
