@@ -17,10 +17,10 @@ const STORES = {
   minami_morimachi:'南森町', abeno:'あべの南', tanimachi9:'谷町九丁目',
   moriguchi:'守口駅前', taishibashi:'太子橋', kyobashi_kita:'京橋北',
   shinsaibashi:'心斎橋東急ビル', kishi:'喜志', umeda:'梅田センタービル',
-  kami_shinjyo:'上新庄', osaka_hirano:'大阪平野西', hikone:'イオンタウン彦根',
+  kami_shinjyo:'上新庄', osaka_hirano:'平野西', hikone:'イオンタウン彦根',
   aeon_higashiosaka:'イオンタウン東大阪', gamo4:'蒲生四丁目',
   /* 関東 */
   inzai:'印西牧の原', otsuka:'大塚駅南口', sugamo:'巣鴨駅南口',
-  umejima:'梅島（うめじま）', shibuya:'渋谷神南',
+  umejima:'梅島', shibuya:'渋谷神南',
   shinjuku_fc:'FC 新宿西口Shinjuku Future Gallery', kamisato:'カインズ上里本庄',
 };
