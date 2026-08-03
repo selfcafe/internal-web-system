@@ -2631,6 +2631,7 @@ function sendDailyAttendanceCheck() {
   if (!enabledStores.length) return;
   const staffMap    = JSON.parse(settingVal('attendance_staff_list') || '{}');
   const scheduleMap = JSON.parse(settingVal('attendance_staff_schedule') || '{}');
+  const storeDefaultScheduleMap = JSON.parse(settingVal('attendance_store_default_schedule') || '{}');
 
   const now = new Date();
   const monthLabel = Utilities.formatDate(now, _sheetTz(), 'yyyy-MM');
@@ -2657,8 +2658,15 @@ function sendDailyAttendanceCheck() {
   enabledStores.forEach(storeId => {
     const names = staffMap[storeId] || [];
     const storeScheduleMap = scheduleMap[storeId] || {};
-    names.forEach(name => {
-      const schedule = storeScheduleMap[name] || { type: 'interval', intervalDays: 1 };
+    // スタッフが1人も登録されていない店舗は、店舗単位のデフォルトスケジュール(設定されていれば)を
+    // name=''の仮想スタッフとしてチェックする(2026-08-03新設)。スタッフが1人でも登録されている
+    // 店舗ではこのフォールバックは一切見ない(既存の個人別スケジュールを優先、挙動は変えない)。
+    // [[feature_attendance_checkin]]参照。
+    const effectiveNames = names.length ? names : (storeDefaultScheduleMap[storeId] ? [''] : []);
+    effectiveNames.forEach(name => {
+      const schedule = names.length
+        ? (storeScheduleMap[name] || { type: 'interval', intervalDays: 1 })
+        : storeDefaultScheduleMap[storeId];
       // 2026-08-03: interval型は月末一括チェック(sendMonthlyAttendanceCheck)に統一したため、
       // 日次のペース確認はweekday型のみを対象にする（interval型はここでスキップ）
       if (schedule.type !== 'weekday') return;
@@ -2744,6 +2752,7 @@ function sendMonthlyAttendanceCheck() {
   if (!enabledStores.length) return;
   const staffMap    = JSON.parse(settingVal('attendance_staff_list') || '{}');
   const scheduleMap = JSON.parse(settingVal('attendance_staff_schedule') || '{}');
+  const storeDefaultScheduleMap = JSON.parse(settingVal('attendance_store_default_schedule') || '{}');
 
   const now = new Date();
   // 月初1日の朝に実行される想定 → チェック対象は前月
@@ -2765,8 +2774,12 @@ function sendMonthlyAttendanceCheck() {
   enabledStores.forEach(storeId => {
     const names = staffMap[storeId] || [];
     const storeScheduleMap = scheduleMap[storeId] || {};
-    names.forEach(name => {
-      const schedule = storeScheduleMap[name] || { type: 'interval', intervalDays: 1 };
+    // 日次チェックと同じフォールバック(2026-08-03新設)。[[feature_attendance_checkin]]参照。
+    const effectiveNames = names.length ? names : (storeDefaultScheduleMap[storeId] ? [''] : []);
+    effectiveNames.forEach(name => {
+      const schedule = names.length
+        ? (storeScheduleMap[name] || { type: 'interval', intervalDays: 1 })
+        : storeDefaultScheduleMap[storeId];
       if (schedule.type === 'weekday') return; // weekday型は日次チェックのみ対象
 
       const leaveDatesSet = new Set(
