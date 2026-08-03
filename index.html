@@ -6032,6 +6032,8 @@ function renderAttendanceAdmin() {
       <div id="attendance-group-body" style="display:none;margin-top:10px">
         <div class="settings-accordion-body">
           <div style="font-size:12px;color:#888;margin-bottom:10px">店舗ごとに業務開始機能のON/OFF・スタッフ一覧・基準座標を設定します。基準座標から300m以内での打刻のみ「OK」判定になります。</div>
+          <input type="text" placeholder="店舗名で検索..." oninput="filterStoreOptions('attendance-cfg-store-sel', this.value)"
+            style="border:1px solid #ddd;border-radius:6px;padding:7px 12px;font-size:13px;font-family:inherit;width:100%;margin-bottom:8px;box-sizing:border-box">
           <select id="attendance-cfg-store-sel" style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:100%;margin-bottom:12px" onchange="renderAttendanceCfg()">
             ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}
           </select>

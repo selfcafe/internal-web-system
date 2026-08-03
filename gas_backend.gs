@@ -2594,6 +2594,11 @@ function sendDailyOrderNotification() {
 // 2026-07-23確定の計算式（[[feature_attendance_checkin]]参照、请求書機能とは独立・floor丸め採用）:
 //   interval: 基準業務日数=ceil(当月日数/N) → r=基準業務日数/当月日数 → 有効経過日数=経過日数-休み申請日数 → floor(r×有効経過日数)
 //   weekday: 前日までの指定曜日の日数（休み申請日を除く）をそのままカウント
+// 2026-08-03: interval型はrが非整数のため日次では「休み申請1日が必ず目標を1減らす」とは
+// ならず分かりにくいと判断、日次チェック(sendDailyAttendanceCheck)ではinterval型を対象外にし
+// 月末一括チェック(sendMonthlyAttendanceCheck→computeAttendanceMonthEndTarget_)に統一した。
+// この関数自体はweekday型の日次チェック用としてそのまま残っている（interval分岐も関数としては
+// 温存、他から呼ばれる可能性を考慮し削除はしない）。
 function computeAttendanceTargetDays_(schedule, now, leaveDatesSet) {
   const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
   // 通知は当日8:30に「前日分まで」を評価するため、経過日数は前日の日付を使う（月初1日は前日が前月に
@@ -2654,6 +2659,9 @@ function sendDailyAttendanceCheck() {
     const storeScheduleMap = scheduleMap[storeId] || {};
     names.forEach(name => {
       const schedule = storeScheduleMap[name] || { type: 'interval', intervalDays: 1 };
+      // 2026-08-03: interval型は月末一括チェック(sendMonthlyAttendanceCheck)に統一したため、
+      // 日次のペース確認はweekday型のみを対象にする（interval型はここでスキップ）
+      if (schedule.type !== 'weekday') return;
       const leaveDatesSet = new Set(
         cutoffStr ? leaveRows
           .filter(r => String(r.store_id) === String(storeId) && (r.name || '') === name
@@ -2708,6 +2716,85 @@ function sendDailyAttendanceCheck() {
       const msg = '【' + area + '】\n【休み申請リマインド（明日分）】\n' + b.tomorrowLeave.join('\n');
       sendLineWorksNotification(msg, _leaveChannelForArea_(areaKey));
     }
+  });
+}
+
+// interval型スタッフ1名分の「月末時点の目標打刻日数」を算出する（2026-08-03新設）。
+// computeAttendanceTargetDays_のinterval分岐と同じ式だが、経過日数を「当月日数」固定で評価する
+// （＝月が終わった状態を想定した1回きりの判定。日次のfloor丸めのブレが気にならない代わりに
+// 月末まで結果が分からない）。leaveDatesSet: 対象月全体分の休み申請日('yyyy-MM-dd')Set。
+// weekday型はそもそも端数の問題が無く従来通り日次チェック(computeAttendanceTargetDays_)の
+// ままなので、この関数はinterval型専用（呼び出し側でtype==='weekday'を除外する前提）。
+function computeAttendanceMonthEndTarget_(schedule, year, month, leaveDatesSet) {
+  const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const intervalDays = (schedule && Number(schedule.intervalDays)) || 1;
+  const baseDays = Math.ceil(daysInMonth / intervalDays);
+  const r = baseDays / daysInMonth;
+  const effectiveDays = Math.max(0, daysInMonth - leaveDatesSet.size);
+  return Math.floor(r * effectiveDays);
+}
+
+// 毎月1日の朝、前月分のinterval型スタッフについて「基準業務日数(休み申請日を除く)」に
+// 実出勤日数が届いていたかを月末時点でまとめてチェックする（2026-08-03、ユーザー指示）。
+// weekday型は対象外（sendDailyAttendanceCheckの日次チェックのまま）。
+function sendMonthlyAttendanceCheck() {
+  const settings = getSettings();
+  const settingVal = key => { const s = settings.find(x => x.key === key); return s ? s.value : null; };
+  const enabledStores = JSON.parse(settingVal('attendance_enabled_stores') || '[]');
+  if (!enabledStores.length) return;
+  const staffMap    = JSON.parse(settingVal('attendance_staff_list') || '{}');
+  const scheduleMap = JSON.parse(settingVal('attendance_staff_schedule') || '{}');
+
+  const now = new Date();
+  // 月初1日の朝に実行される想定 → チェック対象は前月
+  const prevMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const year = prevMonthDate.getFullYear();
+  const month = prevMonthDate.getMonth(); // 0-indexed
+  const monthLabel = Utilities.formatDate(prevMonthDate, _sheetTz(), 'yyyy-MM');
+
+  const attendanceRows = getAttendance();
+  const leaveRows = getLeaveRequests();
+
+  const linesByArea = {}; // { areaKey: [...] }
+  const bucketFor = storeId => {
+    const area = _areaForStore_(storeId) || '(エリア未設定)';
+    if (!linesByArea[area]) linesByArea[area] = [];
+    return linesByArea[area];
+  };
+
+  enabledStores.forEach(storeId => {
+    const names = staffMap[storeId] || [];
+    const storeScheduleMap = scheduleMap[storeId] || {};
+    names.forEach(name => {
+      const schedule = storeScheduleMap[name] || { type: 'interval', intervalDays: 1 };
+      if (schedule.type === 'weekday') return; // weekday型は日次チェックのみ対象
+
+      const leaveDatesSet = new Set(
+        leaveRows
+          .filter(r => String(r.store_id) === String(storeId) && (r.name || '') === name
+            && String(r.leave_date).startsWith(monthLabel))
+          .map(r => String(r.leave_date))
+      );
+      const target = computeAttendanceMonthEndTarget_(schedule, year, month, leaveDatesSet);
+      if (target <= 0) return;
+      const actualDays = new Set(
+        attendanceRows
+          .filter(r => String(r.store_id) === String(storeId) && (r.name || '') === name
+            && r.within_range === true && String(r.clocked_at).startsWith(monthLabel))
+          .map(r => String(r.clocked_at).slice(0, 10))
+      ).size;
+      if (actualDays < target) {
+        bucketFor(storeId).push('・店舗ID:' + _storeIdLabel_(storeId) + ' ' + (name || '(未登録名)') + '（' + monthLabel + '実績' + actualDays + '/目標' + target + '日）');
+      }
+    });
+  });
+
+  Object.keys(linesByArea).forEach(area => {
+    const lines = linesByArea[area];
+    if (!lines.length) return;
+    const areaKey = area === '(エリア未設定)' ? null : area;
+    const msg = '【' + area + '】\n【月末出勤チェック】' + monthLabel + 'の基準業務日数に届かなかった担当者:\n' + lines.join('\n');
+    sendLineWorksNotification(msg, _attendanceChannelForArea_(areaKey));
   });
 }
 
@@ -3064,4 +3151,16 @@ function setDailyAttendanceTrigger() {
     }
   }
   ScriptApp.newTrigger('sendDailyAttendanceCheck').timeBased().atHour(8).nearMinute(30).everyDays(1).inTimezone('Asia/Tokyo').create();
+}
+
+// デプロイ後、Apps Scriptエディタ（またはclasp run）で一度だけ手動実行すること
+// （setDailyAttendanceTrigger等と同じ運用）。interval型スタッフの月末出勤チェック用トリガー。
+function setMonthlyAttendanceTrigger() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === 'sendMonthlyAttendanceCheck') {
+      ScriptApp.deleteTrigger(triggers[i]);
+    }
+  }
+  ScriptApp.newTrigger('sendMonthlyAttendanceCheck').timeBased().onMonthDay(1).atHour(9).inTimezone('Asia/Tokyo').create();
 }
