@@ -226,6 +226,7 @@ function doGet(e) {
     else if (a === 'getDeliveryHistory')        result = getDeliveryHistory(e.parameter.storeId, e.parameter.month);
     else if (a === 'getRecentLineWorksCallbacks') result = getRecentLineWorksCallbacks();
     else if (a === '_diagStockPrivateKey') result = _diagStockPrivateKey_();
+    else if (a === '_testStockBotSend') { testStockBotNotification(); result = { ok: true }; }
     else result = { error: 'Unknown action: ' + a };
     return json(result);
   } catch(err) {
