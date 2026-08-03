@@ -2193,7 +2193,8 @@ function checkChecksheetStockMismatch(storeId, product) {
   const diff = inputQty - steraQty;
   if (diff >= CHECKSHEET_STOCK_MISMATCH_THRESHOLD) {
     try {
-      sendLineWorksNotification(
+      // 2026-08-03: 既存の「社内ポータル通知」Botから分離し、専用Bot経由(1:1トーク)で送る
+      sendStockBotNotification_(
         '【在庫差異検知】' + _storeIdLabel_(storeId) + '・' + group.label +
         'で在庫差異(補充' + inputQty + '個／ステラ実売上' + steraQty + '個、差' + diff + '個)を検知しました。ご確認ください。' +
         '(' + sinceDate + '〜' + today + '分)'
@@ -2407,6 +2408,89 @@ function sendLineWorksNotification(message, channelIdOverride) {
 
 function testLineWorksNotification() {
   sendLineWorksNotification('【テスト】LINE WORKS通知の接続テストです。');
+}
+
+// ----------------------------------------------------------------
+// 在庫差異検知専用Bot（2026-08-03、既存の「社内ポータル通知」Botとは完全に独立）
+// ----------------------------------------------------------------
+// 既存のcreateLineWorksJWT_/getLineWorksAccessToken_/sendLineWorksNotificationと同じ仕組みだが、
+// 認証情報一式(LW_CLIENT_ID_STOCK/LW_CLIENT_SECRET_STOCK/LW_SERVICE_ACCT_STOCK/
+// LW_PRIVATE_KEY_STOCK/LW_BOT_ID_STOCK)を別のScript Propertiesキーで持つ専用Bot
+// （名称「佐藤テスト」、[[project_stock_mismatch_notification_bot]]参照）。
+// 送信先は1:1トーク(userId宛)——グループのchannelIdではない点に注意。
+// ユーザーから「今後グループにも送れるようにしておいて」と要望済みのため、将来channelId宛の
+// 分岐を足す場合はここに追加すること（現時点ではuserId宛のみ実装）。
+function createStockBotJWT_() {
+  var props = PropertiesService.getScriptProperties();
+  var clientId = props.getProperty('LW_CLIENT_ID_STOCK');
+  var serviceAccount = props.getProperty('LW_SERVICE_ACCT_STOCK');
+  var rawKey = props.getProperty('LW_PRIVATE_KEY_STOCK');
+  var base64Body = rawKey.replace('-----BEGIN PRIVATE KEY-----', '').replace('-----END PRIVATE KEY-----', '').replace(/\s/g, '');
+  var lines = [];
+  var i = 0;
+  while (i < base64Body.length) {
+    lines.push(base64Body.substring(i, i + 64));
+    i += 64;
+  }
+  var privateKey = '-----BEGIN PRIVATE KEY-----\n' + lines.join('\n') + '\n-----END PRIVATE KEY-----';
+  var header = Utilities.base64EncodeWebSafe(JSON.stringify({alg:'RS256',typ:'JWT'})).replace(/=+$/, '');
+  var now = Math.floor(new Date().getTime() / 1000);
+  var payload = JSON.stringify({iss:clientId, sub:serviceAccount, iat:now, exp:now+3600});
+  var claim = Utilities.base64EncodeWebSafe(payload).replace(/=+$/, '');
+  var sigInput = header + '.' + claim;
+  var sig = Utilities.base64EncodeWebSafe(Utilities.computeRsaSha256Signature(sigInput, privateKey)).replace(/=+$/, '');
+  return sigInput + '.' + sig;
+}
+
+function getStockBotAccessToken_(forceRefresh) {
+  var cache = CacheService.getScriptCache();
+  if (!forceRefresh) {
+    var cached = cache.get('LW_STOCK_ACCESS_TOKEN');
+    if (cached) return cached;
+  }
+  var props = PropertiesService.getScriptProperties();
+  var jwt = createStockBotJWT_();
+  var payload = 'assertion=' + encodeURIComponent(jwt)
+    + '&grant_type=' + encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer')
+    + '&client_id=' + encodeURIComponent(props.getProperty('LW_CLIENT_ID_STOCK'))
+    + '&client_secret=' + encodeURIComponent(props.getProperty('LW_CLIENT_SECRET_STOCK'))
+    + '&scope=bot.message';
+  var res = UrlFetchApp.fetch('https://auth.worksmobile.com/oauth2/v2.0/token', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    payload: payload
+  });
+  var token = JSON.parse(res.getContentText()).access_token;
+  try { cache.put('LW_STOCK_ACCESS_TOKEN', token, 3000); } catch (e) {}
+  return token;
+}
+
+// userIdOverride省略時はLW_USER_ID_STOCK(既定の通知先、Bot作成者本人)宛に送る
+function sendStockBotNotification_(message, userIdOverride) {
+  var props = PropertiesService.getScriptProperties();
+  var botId  = props.getProperty('LW_BOT_ID_STOCK');
+  var userId = userIdOverride || props.getProperty('LW_USER_ID_STOCK');
+  var url = 'https://www.worksapis.com/v1.0/bots/' + botId + '/users/' + userId + '/messages';
+  var body = JSON.stringify({content: {type: 'text', text: message}});
+  var token = getStockBotAccessToken_();
+  var res = UrlFetchApp.fetch(url, {
+    method: 'POST',
+    headers: {'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'},
+    payload: body,
+    muteHttpExceptions: true
+  });
+  if (res.getResponseCode() === 401) {
+    token = getStockBotAccessToken_(true);
+    UrlFetchApp.fetch(url, {
+      method: 'POST',
+      headers: {'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'},
+      payload: body
+    });
+  }
+}
+
+function testStockBotNotification() {
+  sendStockBotNotification_('【テスト】在庫差異検知Botの接続テストです。');
 }
 
 // 業務開始（未打刻/GPS要確認/休み申請）の通知は発注とは別のLINE WORKSグループへ送る。
