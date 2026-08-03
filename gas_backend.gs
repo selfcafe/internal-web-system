@@ -2493,6 +2493,25 @@ function testStockBotNotification() {
   sendStockBotNotification_('【テスト】在庫差異検知Botの接続テストです。');
 }
 
+// 一時的な診断用(2026-08-03、用済み後に削除してよい): LW_PRIVATE_KEY_STOCKが正しく保存されて
+// いるか、実際の中身を見せずに形式だけ確認する。実行結果をログ(表示)で確認すること。
+function _diagStockPrivateKey_() {
+  var raw = PropertiesService.getScriptProperties().getProperty('LW_PRIVATE_KEY_STOCK');
+  if (!raw) return 'LW_PRIVATE_KEY_STOCKが未設定(null)です。プロパティ名のタイプミスが無いか確認してください。';
+  var lines = raw.split(/\r\n|\r|\n/);
+  var info = {
+    totalLength: raw.length,
+    lineCount: lines.length,
+    startsWithHeader: raw.trim().indexOf('-----BEGIN PRIVATE KEY-----') === 0,
+    endsWithFooter: raw.trim().slice(-25) === '-----END PRIVATE KEY-----',
+    first30: raw.substring(0, 30),
+    last30: raw.substring(raw.length - 30),
+    hasCR: raw.indexOf('\r') >= 0,
+  };
+  Logger.log(JSON.stringify(info, null, 2));
+  return JSON.stringify(info, null, 2);
+}
+
 // 業務開始（未打刻/GPS要確認/休み申請）の通知は発注とは別のLINE WORKSグループへ送る。
 // さらにnotifyNewOrder_/sendDailyOrderNotificationと同様、東海/関西/関東のエリアごとに
 // 別グループへ振り分ける。スクリプトプロパティに各エリアのチャンネルIDを設定して使う:
