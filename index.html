@@ -3336,6 +3336,20 @@ function _attendanceNameChosen() {
 // ボタンを無効化して二重投稿を防ぐ（同一端末内の連打対策。複数端末からのほぼ同時押しは
 // この client 側の対策だけでは防げないため、saveAttendance側の当日1人1行への統一と合わせて対応）
 let _attendanceClockingIn = false;
+
+// 2026-08-03: 「業務開始する」を押した直後(GPS取得〜サーバー保存が完了する前)にページを
+// 離れる(タブを閉じる/リロード/ブラウザバック等の実際のナビゲーション)と、保存が完了しない
+// まま処理が中断されてしまう。ポータル内タブの切替(switchPartnerTab等)は同一ページ内のDOM
+// 操作でしかなくこのイベントは発火しないため、警告は「本当にページを離れる」場合にのみ出る。
+// ただしiOS Safari/PWA(ホーム画面追加)ではbeforeunloadの確認ダイアログ自体がブラウザ側の
+// 仕様で表示されないことがあり、その場合はこの警告は効かない(既知の制約、デスクトップ/
+// Android系ブラウザでは機能する)。
+window.addEventListener('beforeunload', (e) => {
+  if (!_attendanceClockingIn) return;
+  e.preventDefault();
+  e.returnValue = '';
+});
+
 function doAttendanceClockIn() {
   if (_attendanceClockingIn) return;
   const msg = document.getElementById('attendance-msg');
@@ -3389,7 +3403,7 @@ function doAttendanceClockIn() {
       msg.textContent = '位置情報を取得できませんでした。電波の入りやすい場所（窓際・店外など）でもう一度お試しください。';
     }
     done();
-  }, { enableHighAccuracy: true, timeout: 15000, maximumAge: 0 });
+  }, { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }); // 2026-08-03: 15000→8000。押してから離脱するまでの危険な待ち時間を短縮する目的（タイムアウト時のエラーメッセージは既存通り再試行を促す）
 }
 
 let ATTENDANCE_HISTORY_CACHE = [];
