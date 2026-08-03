@@ -4863,12 +4863,26 @@ async function renderLostAdmin() {
     </div>`;
 }
 
-/* 店舗選択セレクトの候補を店舗名で絞り込み */
+/* 店舗選択セレクトの候補を店舗名で絞り込み。選択中の店舗が絞り込みで隠れてしまった場合は
+   最初に表示されている候補へ自動で切り替え、change イベントも発火させる(2026-08-03修正:
+   これをしないと検索欄の見た目だけ変わり、実際の選択値・下部の設定パネルは古い店舗の
+   ままになる、という紛らわしい状態になっていた——業務開始管理で発覚) */
 function filterStoreOptions(selId, query) {
-  const q = query.trim();
+  const q = query.trim().toLowerCase();
+  const sel = document.getElementById(selId);
+  if (!sel) return;
+  let selectedHidden = false;
+  let firstVisible = null;
   document.querySelectorAll(`#${selId} option`).forEach(opt => {
-    opt.hidden = !!(opt.value && q && !opt.textContent.includes(q));
+    const hide = !!(opt.value && q && !opt.textContent.toLowerCase().includes(q));
+    opt.hidden = hide;
+    if (!hide && !firstVisible) firstVisible = opt;
+    if (opt.selected && hide) selectedHidden = true;
   });
+  if (selectedHidden && firstVisible) {
+    sel.value = firstVisible.value;
+    sel.dispatchEvent(new Event('change'));
+  }
 }
 
 function toggleLostAccordion(bodyId, arrowId) {
