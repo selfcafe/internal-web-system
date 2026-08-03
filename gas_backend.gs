@@ -224,9 +224,6 @@ function doGet(e) {
     else if (a === 'getLeaveRequests')          result = getLeaveRequests(e.parameter.storeId);
     else if (a === 'getAttendanceTabData')      result = getAttendanceTabData(e.parameter.storeId);
     else if (a === 'getDeliveryHistory')        result = getDeliveryHistory(e.parameter.storeId, e.parameter.month);
-    else if (a === 'getRecentLineWorksCallbacks') result = getRecentLineWorksCallbacks();
-    else if (a === '_diagStockPrivateKey') result = _diagStockPrivateKey_();
-    else if (a === '_testStockBotSend') { testStockBotNotification(); result = { ok: true }; }
     else result = { error: 'Unknown action: ' + a };
     return json(result);
   } catch(err) {
@@ -235,18 +232,6 @@ function doGet(e) {
 }
 
 function doPost(e) {
-  // 一時的な調査用(2026-08-03): 新しいLINE WORKSグループのchannelIdを特定するため、
-  // Developer ConsoleのCallback URLを本Web AppのURLに一時設定した際に届くMessage Eventを
-  // 検知してScript Propertiesに記録するだけの使い捨て分岐。既存のaction経由の保存処理とは
-  // 完全に独立していて、ロックも取得しないため通常の処理には一切影響しない。
-  // 目的(channelId特定)が済んだら、この分岐と_captureLineWorksCallback_/
-  // getRecentLineWorksCallbacksごと削除し、Developer Console側のCallback URL設定も戻すこと。
-  const bPeek = JSON.parse(e.postData.contents);
-  if (bPeek.source && (bPeek.source.channelId || bPeek.source.userId) && !bPeek.action) {
-    _captureLineWorksCallback_(bPeek);
-    return json({ ok: true });
-  }
-
   const lock = LockService.getScriptLock();
   lock.waitLock(30000);
   let result;
@@ -298,29 +283,6 @@ function doPost(e) {
 function json(data) {
   return ContentService.createTextOutput(JSON.stringify(data))
     .setMimeType(ContentService.MimeType.JSON);
-}
-
-// ----------------------------------------------------------------
-// 一時的な調査用(2026-08-03、用済み後にこの2関数ごと削除すること): 新規LINE WORKSグループの
-// channelId特定。既存の「社内ポータル通知」Botの既定チャンネル設定・スクリプトプロパティには
-// 一切触れない、完全に独立・新規のScript Propertyだけを使う。
-// ----------------------------------------------------------------
-function _captureLineWorksCallback_(b) {
-  const props = PropertiesService.getScriptProperties();
-  const list = JSON.parse(props.getProperty('TMP_LW_CALLBACKS') || '[]');
-  list.unshift({
-    when: Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd HH:mm:ss'),
-    channelId: b.source.channelId,
-    userId: b.source.userId || null,
-    text: (b.content && b.content.text) || null,
-  });
-  props.setProperty('TMP_LW_CALLBACKS', JSON.stringify(list.slice(0, 5)));
-}
-
-// ?action=getRecentLineWorksCallbacks で直近の受信内容(channelId等)を確認する
-function getRecentLineWorksCallbacks() {
-  const props = PropertiesService.getScriptProperties();
-  return JSON.parse(props.getProperty('TMP_LW_CALLBACKS') || '[]');
 }
 
 // ----------------------------------------------------------------
@@ -2499,25 +2461,6 @@ function sendStockBotNotification_(message, userIdOverride) {
 
 function testStockBotNotification() {
   sendStockBotNotification_('【テスト】在庫差異検知Botの接続テストです。');
-}
-
-// 一時的な診断用(2026-08-03、用済み後に削除してよい): LW_PRIVATE_KEY_STOCKが正しく保存されて
-// いるか、実際の中身を見せずに形式だけ確認する。実行結果をログ(表示)で確認すること。
-function _diagStockPrivateKey_() {
-  var raw = PropertiesService.getScriptProperties().getProperty('LW_PRIVATE_KEY_STOCK');
-  if (!raw) return 'LW_PRIVATE_KEY_STOCKが未設定(null)です。プロパティ名のタイプミスが無いか確認してください。';
-  var lines = raw.split(/\r\n|\r|\n/);
-  var info = {
-    totalLength: raw.length,
-    lineCount: lines.length,
-    startsWithHeader: raw.trim().indexOf('-----BEGIN PRIVATE KEY-----') === 0,
-    endsWithFooter: raw.trim().slice(-25) === '-----END PRIVATE KEY-----',
-    first30: raw.substring(0, 30),
-    last30: raw.substring(raw.length - 30),
-    hasCR: raw.indexOf('\r') >= 0,
-  };
-  Logger.log(JSON.stringify(info, null, 2));
-  return JSON.stringify(info, null, 2);
 }
 
 // 業務開始（未打刻/GPS要確認/休み申請）の通知は発注とは別のLINE WORKSグループへ送る。
