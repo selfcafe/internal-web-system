@@ -530,7 +530,7 @@
     <img src="logo-horizontal.png" class="portal-logo" alt="セルフカフェ">
     <div class="partner-hdr-btns">
       <div class="partner-hdr-cell" style="display:flex;gap:8px;align-items:center">
-        <button id="ptab-attendance-pc" class="pc-only" onclick="switchPartnerTab('attendance')" style="display:none;background:linear-gradient(180deg,#dfc35a,#b6952f);color:#241a12;padding:10px 16px;font-size:14px;font-weight:700;border-radius:6px;border:1px solid #b6952f;cursor:pointer;font-family:inherit;flex-shrink:0">業務開始</button>
+        <button id="ptab-attendance-pc" class="pc-only" onclick="switchPartnerTab('attendance')" style="display:none;background:linear-gradient(180deg,#dfc35a,#b6952f);color:#241a12;padding:10px 16px;font-size:14px;font-weight:700;border-radius:6px;border:1px solid #b6952f;cursor:pointer;font-family:inherit;flex-shrink:0">業務管理</button>
         <button onclick="siteLogout()" class="portal-logout-btn" style="background:#6b7280;color:white;padding:10px 18px;font-size:15px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">ログアウト</button>
       </div>
       <div class="partner-hdr-cell" style="display:flex;gap:6px">
@@ -545,7 +545,7 @@
       <div class="partner-hdr-pinwheel">
         <div class="phw-piece phw-tl" id="phw-empty"></div>
         <button class="phw-piece phw-tr" onclick="siteLogout()"><span>ログ<br>アウト</span></button>
-        <button id="ptab-attendance-sp" class="phw-piece phw-bl" onclick="if(isAttendanceEnabled(storeTab))switchPartnerTab('attendance')"><span>業務<br>開始</span></button>
+        <button id="ptab-attendance-sp" class="phw-piece phw-bl" onclick="if(isAttendanceEnabled(storeTab))switchPartnerTab('attendance')"><span>業務<br>管理</span></button>
         <button class="phw-piece phw-br manual-menu-btn" onclick="toggleManualMenu('sp')"><span>マニュアル</span></button>
       </div>
       <div class="doc-menu-dd" id="manual-dd-sp" style="position:absolute;top:134px;right:0"></div>
@@ -627,12 +627,12 @@
   <!-- 業務開始タブ（試験導入・店舗ごとON/OFF） -->
   <div id="partner-tab-attendance" class="partner-tab-content">
     <div style="max-width:500px">
-      <div class="note-box" id="attendance-note">名前を選んで「業務開始する」を押してください。位置情報の許可が必要です。</div>
+      <div class="note-box" id="attendance-note">名前を選んで「業務開始」を押してください。位置情報の許可が必要です。</div>
       <div style="background:white;border-radius:10px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:16px">
         <div id="attendance-name-sel-wrap">
           <select id="attendance-name-sel" onchange="renderAttendanceHistory();renderAttendanceTally();renderLeaveRequests();renderLeaveTally()" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:10px;font-size:15px;font-family:inherit;margin-bottom:10px"></select>
         </div>
-        <button id="attendance-clockin-btn" onclick="doAttendanceClockIn()" style="width:100%;background:#22703d;color:white;padding:12px;font-size:16px;font-weight:700;border-radius:8px;border:none;cursor:pointer;font-family:inherit">業務開始する</button>
+        <button id="attendance-clockin-btn" onclick="doAttendanceClockIn()" style="width:100%;background:#22703d;color:white;padding:12px;font-size:16px;font-weight:700;border-radius:8px;border:none;cursor:pointer;font-family:inherit">業務開始</button>
         <div id="attendance-msg" style="font-size:13px;margin-top:8px;min-height:18px"></div>
       </div>
 
@@ -818,7 +818,7 @@
     <div style="font-weight:700;font-size:16px;margin-bottom:10px;color:#22703d">業務開始の記録がまだです</div>
     <div style="font-size:14px;color:#444;line-height:1.6;margin-bottom:18px">本日はまだ「業務開始」が記録されていません。お手すきの際に記録をお願いします。</div>
     <div style="display:flex;gap:8px">
-      <button onclick="goToAttendanceFromReminder()" style="flex:1;background:#22703d;color:white;padding:11px;font-size:14px;font-weight:700;border-radius:8px;border:none;cursor:pointer;font-family:inherit">業務開始する</button>
+      <button onclick="goToAttendanceFromReminder()" style="flex:1;background:#22703d;color:white;padding:11px;font-size:14px;font-weight:700;border-radius:8px;border:none;cursor:pointer;font-family:inherit">業務開始</button>
       <button onclick="closeAttendanceReminder()" style="flex:1;background:#e0e0e0;color:#555;padding:11px;font-size:14px;border-radius:8px;border:none;cursor:pointer;font-family:inherit">後で</button>
     </div>
   </div>
@@ -1041,6 +1041,7 @@ async function initGas() {
       if (r.key === 'attendance_staff_list')     localStorage.setItem(ATTENDANCE_STAFF_KEY,   clean(r.value));
       if (r.key === 'attendance_store_coords')   localStorage.setItem(ATTENDANCE_COORDS_KEY,  clean(r.value));
       if (r.key === 'attendance_staff_schedule') localStorage.setItem(ATTENDANCE_SCHEDULE_KEY, clean(r.value));
+      if (r.key === 'attendance_store_default_schedule') localStorage.setItem(ATTENDANCE_STORE_DEFAULT_SCHEDULE_KEY, clean(r.value));
     });
     if (gasKeys.has('all_products') || gasKeys.has('vendor_config')) {
       loadVendorConfig();
@@ -1065,6 +1066,7 @@ async function initGas() {
     if (!gasKeys.has('attendance_staff_list')     && localStorage.getItem(ATTENDANCE_STAFF_KEY))   _gasSaveSetting('attendance_staff_list',     localStorage.getItem(ATTENDANCE_STAFF_KEY));
     if (!gasKeys.has('attendance_store_coords')   && localStorage.getItem(ATTENDANCE_COORDS_KEY))  _gasSaveSetting('attendance_store_coords',   localStorage.getItem(ATTENDANCE_COORDS_KEY));
     if (!gasKeys.has('attendance_staff_schedule') && localStorage.getItem(ATTENDANCE_SCHEDULE_KEY)) _gasSaveSetting('attendance_staff_schedule', localStorage.getItem(ATTENDANCE_SCHEDULE_KEY));
+    if (!gasKeys.has('attendance_store_default_schedule') && localStorage.getItem(ATTENDANCE_STORE_DEFAULT_SCHEDULE_KEY)) _gasSaveSetting('attendance_store_default_schedule', localStorage.getItem(ATTENDANCE_STORE_DEFAULT_SCHEDULE_KEY));
     loadCustomStores();
     loadDeletedStores();
     loadStoreRegions();
@@ -2852,6 +2854,9 @@ const ATTENDANCE_COORDS_KEY  = 'attendance_store_coords';   // JSON {storeId:{la
 // JSON {storeId:{name:{type:'interval',intervalDays:N} | {type:'weekday',weekdays:[0-6の配列]}}}
 // 未設定時は{type:'interval',intervalDays:1}（毎日出勤）扱い。請求書機能の基準業務日数とは独立・非連携。
 const ATTENDANCE_SCHEDULE_KEY = 'attendance_staff_schedule';
+// JSON {storeId:{type:'interval',intervalDays:N} | {type:'weekday',weekdays:[0-6の配列]}}
+// スタッフが1人も登録されていない店舗専用のフォールバック(2026-08-03新設)
+const ATTENDANCE_STORE_DEFAULT_SCHEDULE_KEY = 'attendance_store_default_schedule';
 
 function getAttendanceEnabledStores() {
   try { return JSON.parse(localStorage.getItem(ATTENDANCE_ENABLED_KEY) || '[]'); } catch(_) { return []; }
@@ -2900,6 +2905,23 @@ function setAttendanceStaffSchedule(storeId, name, schedule) {
   all[storeId][name] = schedule;
   localStorage.setItem(ATTENDANCE_SCHEDULE_KEY, JSON.stringify(all));
   _gasSaveSetting('attendance_staff_schedule', JSON.stringify(all));
+}
+
+// スタッフが1人も登録されていない店舗向けの、店舗単位のデフォルト勤務スケジュール
+// (2026-08-03、合意済みの方針を実装。[[feature_attendance_checkin]]参照)。
+// スタッフが1人でも登録されている店舗では一切参照されない(個人別スケジュールが優先、
+// GAS側sendDailyAttendanceCheck/sendMonthlyAttendanceCheckも同様のフォールバック条件)。
+function getAttendanceStoreDefaultSchedule(storeId) {
+  let all = {};
+  try { all = JSON.parse(localStorage.getItem(ATTENDANCE_STORE_DEFAULT_SCHEDULE_KEY) || '{}'); } catch(_) {}
+  return all[storeId] || { type: 'interval', intervalDays: 1 };
+}
+function setAttendanceStoreDefaultSchedule(storeId, schedule) {
+  let all = {};
+  try { all = JSON.parse(localStorage.getItem(ATTENDANCE_STORE_DEFAULT_SCHEDULE_KEY) || '{}'); } catch(_) {}
+  all[storeId] = schedule;
+  localStorage.setItem(ATTENDANCE_STORE_DEFAULT_SCHEDULE_KEY, JSON.stringify(all));
+  _gasSaveSetting('attendance_store_default_schedule', JSON.stringify(all));
 }
 
 // 暦月（1日〜月末）で1期間とする
@@ -3311,8 +3333,8 @@ function renderAttendanceNameSelect() {
   const solo = isAttendanceSolo(storeTab);
   if (selWrap) selWrap.style.display = solo ? 'none' : '';
   if (note) note.textContent = solo
-    ? '「業務開始する」を押してください。位置情報の許可が必要です。'
-    : '名前を選んで「業務開始する」を押してください。位置情報の許可が必要です。';
+    ? '「業務開始」を押してください。位置情報の許可が必要です。'
+    : '名前を選んで「業務開始」を押してください。位置情報の許可が必要です。';
   sel.innerHTML = solo
     ? `<option value="${esc(names[0] || '')}">${esc(names[0] || '')}</option>`
     : (names.length
@@ -6716,7 +6738,54 @@ function renderAttendanceCfg() {
           style="border:1px solid #ddd;border-radius:6px;padding:6px 10px;font-size:13px;font-family:inherit;flex:1">
         <button onclick="addAttendanceStaff('${esc(sid)}')" style="background:#22703d;color:white;padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap">追加</button>
       </div>
+    </div>
+    ${names.length ? '' : buildAttendanceStoreDefaultScheduleBlock(sid)}`;
+}
+
+// スタッフが1人も登録されていない店舗向け。個人別のスケジュール行(buildAttendanceStaffRows)と
+// 見た目・操作感を揃えつつ、対象がstoreId自体(name無し)である点だけが異なる(2026-08-03新設)
+function buildAttendanceStoreDefaultScheduleBlock(storeId) {
+  const sched = getAttendanceStoreDefaultSchedule(storeId);
+  const isWeekday = sched.type === 'weekday';
+  return `
+    <div style="background:#fff4f0;border-radius:8px;padding:12px 14px;margin-top:10px">
+      <div style="font-weight:600;font-size:12px;color:#888;margin-bottom:4px">スタッフ未登録時の店舗共通スケジュール</div>
+      <div style="font-size:11px;color:#aaa;margin-bottom:8px">スタッフを1人も登録しない運用の店舗向けです。未打刻チェックはここで設定したスケジュールで行われます。スタッフを1人でも登録すると、この設定は使われなくなり各スタッフのスケジュールが優先されます。</div>
+      <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:12px;color:#666">
+        <select id="att-store-default-type" onchange="_toggleAttendanceStoreDefaultInputs()" style="border:1px solid #ddd;border-radius:6px;padding:4px 6px;font-size:12px;font-family:inherit">
+          <option value="interval" ${!isWeekday ? 'selected' : ''}>間隔指定</option>
+          <option value="weekday" ${isWeekday ? 'selected' : ''}>曜日指定</option>
+        </select>
+        <span id="att-store-default-interval" style="display:${isWeekday ? 'none' : 'inline-flex'};align-items:center;gap:4px">
+          <input id="att-store-default-days" type="number" min="1" step="1" value="${isWeekday ? 1 : (sched.intervalDays || 1)}" style="width:50px;border:1px solid #ddd;border-radius:6px;padding:4px 6px;font-size:12px;font-family:inherit">日に1回
+        </span>
+        <span id="att-store-default-weekday" style="display:${isWeekday ? 'inline-flex' : 'none'};gap:6px;flex-wrap:wrap">
+          ${ATTENDANCE_WEEKDAY_LABELS.map((wd, wi) => `<label style="display:flex;align-items:center;gap:2px"><input type="checkbox" id="att-store-default-wd-${wi}" ${(sched.weekdays || []).includes(wi) ? 'checked' : ''}>${wd}</label>`).join('')}
+        </span>
+        <button id="att-store-default-save" onclick="saveAttendanceStoreDefaultSchedule('${esc(storeId)}')" style="background:#22703d;color:white;padding:3px 10px;font-size:11px;border-radius:6px;border:none;cursor:pointer;font-family:inherit">保存</button>
+      </div>
     </div>`;
+}
+function _toggleAttendanceStoreDefaultInputs() {
+  const type = document.getElementById('att-store-default-type').value;
+  const intervalEl = document.getElementById('att-store-default-interval');
+  const weekdayEl  = document.getElementById('att-store-default-weekday');
+  if (intervalEl) intervalEl.style.display = type === 'weekday' ? 'none' : 'inline-flex';
+  if (weekdayEl)  weekdayEl.style.display  = type === 'weekday' ? 'inline-flex' : 'none';
+}
+function saveAttendanceStoreDefaultSchedule(storeId) {
+  const type = document.getElementById('att-store-default-type').value;
+  let schedule;
+  if (type === 'weekday') {
+    const weekdays = [0,1,2,3,4,5,6].filter(wi => document.getElementById('att-store-default-wd-' + wi)?.checked);
+    schedule = { type: 'weekday', weekdays };
+  } else {
+    const n = Math.max(1, parseInt(document.getElementById('att-store-default-days').value, 10) || 1);
+    schedule = { type: 'interval', intervalDays: n };
+  }
+  setAttendanceStoreDefaultSchedule(storeId, schedule);
+  const btn = document.getElementById('att-store-default-save');
+  if (btn) { const orig = btn.textContent; btn.textContent = '✓ 保存済み'; setTimeout(() => { if (btn) btn.textContent = orig; }, 2000); }
 }
 
 const ATTENDANCE_WEEKDAY_LABELS = ['日','月','火','水','木','金','土'];

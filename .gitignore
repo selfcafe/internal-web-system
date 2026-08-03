@@ -3,3 +3,4 @@ export_*.json
 scripts/_downloads/
 .chrome_stera_profile/
 _stera_*.png
+scripts/__pycache__/

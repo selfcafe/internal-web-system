@@ -46,10 +46,12 @@ from datetime import date, timedelta
 from pathlib import Path
 
 import requests
+from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
 
 STERA_BASE_URL = "https://dashboard.sterasmartone.com"
 SCRIPT_DIR = Path(__file__).parent
+load_dotenv(SCRIPT_DIR.parent / ".env")  # スケジュール実行時も.envを自動で読み込む
 DOWNLOAD_DIR = SCRIPT_DIR / "_downloads"
 PROFILE_DIR = SCRIPT_DIR.parent / ".chrome_stera_profile"
 CDP_PORT = 9444
