@@ -240,7 +240,7 @@ function doPost(e) {
   // 目的(channelId特定)が済んだら、この分岐と_captureLineWorksCallback_/
   // getRecentLineWorksCallbacksごと削除し、Developer Console側のCallback URL設定も戻すこと。
   const bPeek = JSON.parse(e.postData.contents);
-  if (bPeek.source && bPeek.source.channelId && !bPeek.action) {
+  if (bPeek.source && (bPeek.source.channelId || bPeek.source.userId) && !bPeek.action) {
     _captureLineWorksCallback_(bPeek);
     return json({ ok: true });
   }
