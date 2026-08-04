@@ -247,7 +247,8 @@ function doPost(e) {
   let result;
   try {
     const b = JSON.parse(e.postData.contents);
-    if      (b.action === 'saveOrders')         result = saveOrders(b.storeId, b.rows);
+    if      (isLineWorksCallback_(b))           result = handleLineWorksStockInquiry_(b);
+    else if (b.action === 'saveOrders')         result = saveOrders(b.storeId, b.rows);
     else if (b.action === 'upsertOrders')       result = upsertOrderRows(b.storeId, b.rows);
     else if (b.action === 'deleteOrders')       result = deleteOrderRows(b.ids);
     else if (b.action === 'saveSetting')        result = saveSetting(b.key, b.value);
@@ -283,6 +284,7 @@ function doPost(e) {
       if      (n.type === 'attendanceGpsIssue')    notifyAttendanceGpsIssue_(n.storeId, n.name);
       else if (n.type === 'leaveRequestTomorrow')  notifyLeaveRequestTomorrow_(n.storeId, n.name, n.leaveDate);
       else if (n.type === 'leaveRequestCancelled') notifyLeaveRequestCancelled_(n.storeId, n.name, n.leaveDate);
+      else if (n.type === 'stockInquiryReply')     sendStockBotNotification_(n.message, n.userId);
     } catch (e) {
       console.error('LINE WORKS通知エラー(ロック解放後):', e.message);
     }
@@ -2475,6 +2477,91 @@ function sendStockBotNotification_(message, userIdOverride) {
 
 function testStockBotNotification() {
   sendStockBotNotification_('【テスト】在庫差異検知Botの接続テストです。');
+}
+
+// ----------------------------------------------------------------
+// 在庫差異検知Bot: LINE WORKSからの返信を受けて任意の期間を再調査する機能（2026-08-04、シンプル版）
+// ----------------------------------------------------------------
+// LINE WORKS Developer ConsoleでこのBotのCallback URLをこのWebアプリのURLに設定すると、
+// スタッフが在庫差異通知に対して1:1トークで返信した際、doPostへLINE WORKSからのメッセージが
+// 届くようになる。シンプル版のため会話の文脈保持はせず、1メッセージに店舗名・商品名・日付範囲を
+// 全て含めてもらう想定（例:「御器所 水 8/1〜8/4で調べて」）。
+// 注意: Google Apps ScriptのdoPost(e)はカスタムHTTPヘッダーを取得できないため、
+// LINE WORKSのX-WORKS-Signatureによる署名検証は実装できない(GASの既知の制約)。
+// このアプリの他のdoPostアクションも同様に認証なしで動いており、既存のリスク水準と同等。
+function isLineWorksCallback_(body) {
+  return !!(body && body.source && body.content && body.content.type === 'text' && !body.action);
+}
+
+function handleLineWorksStockInquiry_(body) {
+  const userId = body.source && body.source.userId;
+  const text = body.content && body.content.text || '';
+  if (!userId || !text) return { ok: true, skipped: 'no_text_or_user' };
+
+  const parsed = _parseStockInquiryText_(text);
+  if (!parsed) {
+    return { ok: true, parsed: false, _notify: { type: 'stockInquiryReply', userId,
+      message: '店舗名・商品名・日付範囲が読み取れませんでした。「店舗名 商品名 M/D〜M/Dで調べて」の形式で送ってください。' } };
+  }
+
+  const { storeId, storeName, group, fromDate, toDate } = parsed;
+  const periods = getChecksheetData(storeId);
+  const allDays = {};
+  periods.forEach(p => Object.keys(p.data || {}).forEach(dayKey => {
+    allDays[dayKey] = Object.assign(allDays[dayKey] || {}, p.data[dayKey]);
+  }));
+  const itemKeys = group.ourProducts.map(name => 'prod:' + name);
+  let inputQty = 0;
+  Object.keys(allDays).forEach(dayKey => {
+    if (!(dayKey > fromDate && dayKey <= toDate)) return; // fromDateは前日扱い(exclusive)、toDateはinclusive。getSteraDailyTotal_と同じ規約
+    itemKeys.forEach(k => { inputQty += Number(allDays[dayKey][k]) || 0; });
+  });
+  const steraQty = getSteraDailyTotal_(storeId, group.prdId, fromDate, toDate);
+  const diff = inputQty - steraQty;
+
+  return {
+    ok: true, storeId, group: group.label, fromDate, toDate, inputQty, steraQty, diff,
+    _notify: { type: 'stockInquiryReply', userId,
+      message: storeName + '・' + group.label + '(' + fromDate + '〜' + toDate + ')\n'
+        + '補充: ' + inputQty + '個\nステラ実売上: ' + steraQty + '個\n差異: ' + diff + '個' }
+  };
+}
+
+// 「御器所 水 8/1〜8/4で調べて」のようなテキストから店舗名・商品ラベル・日付範囲を抜き出す。
+// 店舗名・商品名は日付範囲より前の部分文字列から検索する(stores.js表示名・STERA_SALES_MAPPINGの
+// labelそのままの表記を要求——表記ゆれの吸収はシンプル版では行わない)。
+function _parseStockInquiryText_(text) {
+  const dateRe = /(\d{4}[-/])?(\d{1,2})[-/](\d{1,2})\s*[〜~\-−ー]\s*(\d{4}[-/])?(\d{1,2})[-/](\d{1,2})/;
+  const m = text.match(dateRe);
+  if (!m) return null;
+  const tz = _invSheetTz();
+  const currentYear = Number(Utilities.formatDate(new Date(), tz, 'yyyy'));
+  const yearFrom = m[1] ? Number(m[1].replace(/[-/]/, '')) : currentYear;
+  const yearTo   = m[4] ? Number(m[4].replace(/[-/]/, '')) : currentYear;
+  const pad = n => (n < 10 ? '0' + n : '' + n);
+  const toDate = yearTo + '-' + pad(Number(m[5])) + '-' + pad(Number(m[6]));
+  // fromDateはexclusive比較のため前日にする(getSteraDailyTotal_・checkChecksheetStockMismatchと同じ規約)
+  const fromDateInclusive = new Date(yearFrom, Number(m[2]) - 1, Number(m[3]));
+  fromDateInclusive.setDate(fromDateInclusive.getDate() - 1);
+  const fromDate = Utilities.formatDate(fromDateInclusive, tz, 'yyyy-MM-dd');
+
+  const beforeDate = text.slice(0, m.index);
+  const names = _storeNames_();
+  let storeId = null, storeName = null;
+  Object.keys(names).forEach(id => {
+    if (storeId) return;
+    if (beforeDate.indexOf(names[id]) >= 0) { storeId = id; storeName = names[id]; }
+  });
+  if (!storeId) return null;
+
+  let group = null;
+  STERA_SALES_MAPPING.forEach(g => {
+    if (group) return;
+    if (beforeDate.indexOf(g.label) >= 0) group = g;
+  });
+  if (!group) return null;
+
+  return { storeId, storeName, group, fromDate, toDate };
 }
 
 // 業務開始（未打刻/GPS要確認/休み申請）の通知は発注とは別のLINE WORKSグループへ送る。
