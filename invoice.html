@@ -94,7 +94,7 @@ function genInvoicePassword() {
 // 2026-07-11に「パートナーさん○月分」一覧（既存の運用資料）から抽出した店舗番号の初期値。
 // 店名の表記ゆれ（ヶ/が、省略表記）があるため一部は確度が低い。新規店舗・未掲載店舗は空のまま。
 const INVOICE_STORE_CODE_SEED = {
-  sasashima:31, chikusa:33, gokaiso:34, kamisawa:35, nakamura_nisseki:36, tsuruma:37, sakurayama:38,
+  sasashima:31, chikusa:33, gokiso:34, kamisawa:35, nakamura_nisseki:36, tsuruma:37, sakurayama:38,
   midori_kofubutsu:39, akatsuka:40, seto_iwayadou:41, shin_moriyama:42, tokoname:43, hamamatsu:44,
   tenma:45, sakae:46, inzai:47, nonami:48, rokubanchou:49, nagakute:50, meieki_nishi:51, nadia_sakae:52,
   higashiosaka:53, aikawa:55, eisei:57, shinmizuhashi:58, hotei:59, abeno:60, minami_morimachi:61,
@@ -132,7 +132,7 @@ function seedInvoiceStoreCodesOnce() {
 // 空欄・判読不能だった店舗、複数パートナー店舗（幸田=koutaは西村文乃/有澤奈穂の2名）は含めていない。
 const INVOICE_BIZCODE_SEED = {
   sasashima: '50039600', meieki_nishi: '50039600',
-  hibino: '50065087', gokaiso: '50065087', sakurayama: '50065087', hara: '50065087', tsuruma: '50065087', chikusa: '50065087',
+  hibino: '50065087', gokiso: '50065087', sakurayama: '50065087', hara: '50065087', tsuruma: '50065087', chikusa: '50065087',
   kamisawa: '50038400', nakamura_nisseki: '50038500', akatsuka: '50040800', hamamatsu: '50058900', tenma: '50065645',
   nonami: '50059000', rokubanchou: '50065049', nagakute: '50059200', nadia_sakae: '50065052',
   aikawa: '50055300', eisei: '50059400', shinmizuhashi: '50065058', hotei: '50059500', abeno: '50065660',

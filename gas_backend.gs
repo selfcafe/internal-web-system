@@ -80,12 +80,22 @@ const ATTENDANCE_LEAVE_COLS = ['id','store_id','name','leave_date','submitted_at
 // 参照)の方が優先される——このデフォルト自体は基本的に変わらないため、_areaForStore_を通さない
 // 単純な用途(通知グループ振り分け以外)ではこのまま直接参照してよい）
 const AREA_STORES = {
-  '東海': ['sasashima','chikusa','gokaiso','tsuruma','kamisawa','nakamura_nisseki','midori_kofubutsu','sakurayama','akatsuka','shin_moriyama','tokoname','hamamatsu','sakae','rokubanchou','nonami','seto_iwayadou','nagakute','meieki_nishi','nadia_sakae','shinmizuhashi','eisei','hotei','kamejima','nakamura_torii','taikodori','kouta','hibino','hoshigaoka','ikeshita','toyota','hara','fujigaoka','gifu_kitagata','narumi'],
+  '東海': ['sasashima','chikusa','gokiso','tsuruma','kamisawa','nakamura_nisseki','midori_kofubutsu','sakurayama','akatsuka','shin_moriyama','tokoname','hamamatsu','sakae','rokubanchou','nonami','seto_iwayadou','nagakute','meieki_nishi','nadia_sakae','shinmizuhashi','eisei','hotei','kamejima','nakamura_torii','taikodori','kouta','hibino','hoshigaoka','ikeshita','toyota','hara','fujigaoka','gifu_kitagata','narumi'],
   '関西': ['tenma','higashiosaka','aikawa','minami_morimachi','abeno','tanimachi9','moriguchi','taishibashi','kyobashi_kita','shinsaibashi','kishi','umeda','kami_shinjyo','osaka_hirano','hikone','aeon_higashiosaka','gamo4'],
   '関東': ['inzai','otsuka','sugamo','umejima','shibuya','shinjuku_fc','kamisato']
 };
 // フロントのREGIONS定数のid('tokai'/'kansai'/'kanto')→日本語ラベルの対応（store_regions設定の値はid形式のため）
 const REGION_ID_LABEL_ = { tokai: '東海', kansai: '関西', kanto: '関東' };
+
+// 店舗ID改名の後方互換エイリアス(旧ID→新ID)。2026-08-04、御器所の店舗IDを
+// 誤読み"gokaiso"から正しい"gokiso"へ改名した際に追加。各シートに既に書き込み済みの
+// 過去データ(store_id列)は書き換えていないため、旧IDのまま残っている行を新IDと
+// 同一店舗として扱えるよう、sheetRows()で読み込む際にstore_id列をここで正規化する。
+const STORE_ID_ALIASES = { gokaiso: 'gokiso' };
+function _normalizeStoreId_(id) {
+  const key = String(id);
+  return Object.prototype.hasOwnProperty.call(STORE_ID_ALIASES, key) ? STORE_ID_ALIASES[key] : id;
+}
 
 // 棚卸集計スプレッドシート内の店舗タブ(例:「渋谷神南」)を、エリアごとに色分け・グループ化して
 // 並べるための設定(2026-08-01、ユーザーから「エリアごとに分けたい、新しい店舗ほど後ろに来て
@@ -372,6 +382,10 @@ function sheetRows(sheet, cols) {
   return data.slice(1).map(row => {
     const obj = {};
     cols.forEach(c => { const i = hdrs.indexOf(c); obj[c] = i >= 0 ? row[i] : null; });
+    // 店舗ID改名の後方互換: 過去データに残る旧IDを新IDへ正規化(STORE_ID_ALIASES参照)
+    if (obj.store_id !== undefined && obj.store_id !== null && obj.store_id !== '') {
+      obj.store_id = _normalizeStoreId_(obj.store_id);
+    }
     return obj;
   });
 }

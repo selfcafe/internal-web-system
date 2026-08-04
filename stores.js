@@ -2,7 +2,7 @@
 // 店舗を追加・削除・改名する場合はここを編集すれば両画面に反映される（custom_stores/deleted_storesによる動的な追加・削除は別途GAS経由で反映される）。
 const STORES = {
   /* 東海 */
-  sasashima:'ささしまライブ', chikusa:'千種', gokaiso:'御器所', tsuruma:'鶴舞',
+  sasashima:'ささしまライブ', chikusa:'千種', gokiso:'御器所', tsuruma:'鶴舞',
   kamisawa:'神沢', nakamura_nisseki:'中村日赤', midori_kofubutsu:'緑鴻仏目',
   sakurayama:'桜山', akatsuka:'赤塚', shin_moriyama:'新守山', tokoname:'常滑',
   hamamatsu:'浜松新橋', sakae:'栄', rokubanchou:'六番町', nonami:'野並',
