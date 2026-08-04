@@ -689,10 +689,33 @@ function _monthLabelStr(v) {
   return v || null;
 }
 
+// dayDataの中身が変わったかどうかを、パートナーポータルには一切表示されない予約キー
+// `_enteredAt`を除いて比較する(このキー自体を比較に含めると常に「変化あり」になってしまうため)。
+function _checksheetDayChanged_(oldDay, newDay) {
+  const strip = d => { const c = Object.assign({}, d); delete c._enteredAt; return c; };
+  return JSON.stringify(strip(oldDay || {})) !== JSON.stringify(strip(newDay || {}));
+}
+
+// 日付ごとの入力時刻(_enteredAt)をdataに埋め込む。パートナーポータル側はprod:接頭辞以外の
+// キーを表示に使わないため画面には一切出ない(2026-08-05、実地カウントとの時刻突き合わせ用)。
+// クライアントは毎回その月の全日データを丸ごと送ってくる(自分のlocalStorageに_enteredAtの
+// 存在を知らない)ため、値が変わっていない日は旧タイムスタンプをこちらでマージして保持する。
+function _stampChecksheetEntryTimes_(oldData, newData) {
+  const oldD = oldData || {};
+  Object.keys(newData || {}).forEach(dayKey => {
+    const oldDay = oldD[dayKey];
+    if (_checksheetDayChanged_(oldDay, newData[dayKey])) {
+      newData[dayKey]._enteredAt = new Date().toISOString();
+    } else if (oldDay && oldDay._enteredAt) {
+      newData[dayKey]._enteredAt = oldDay._enteredAt;
+    }
+  });
+  return newData;
+}
+
 function saveChecksheetData(storeId, periodLabel, data) {
   const sheet = getSheet(SHEET_CHECKSHEET);
   ensureHeaders(sheet, CHECKSHEET_COLS);
-  const json = JSON.stringify(data || {});
   const now  = new Date().toISOString();
   if (sheet.getLastRow() > 1) {
     const values = sheet.getDataRange().getValues();
@@ -700,7 +723,9 @@ function saveChecksheetData(storeId, periodLabel, data) {
     const dataIdx = values[0].indexOf('data'), updIdx = values[0].indexOf('updated_at');
     for (let i = 1; i < values.length; i++) {
       if (String(values[i][sidIdx]) === String(storeId) && _monthLabelStr(values[i][pidIdx]) === String(periodLabel)) {
-        sheet.getRange(i + 1, dataIdx + 1).setValue(json);
+        const oldData = values[i][dataIdx] ? JSON.parse(values[i][dataIdx]) : {};
+        const merged = _stampChecksheetEntryTimes_(oldData, data || {});
+        sheet.getRange(i + 1, dataIdx + 1).setValue(JSON.stringify(merged));
         sheet.getRange(i + 1, updIdx + 1).setValue(now);
         return { ok: true };
       }
@@ -709,7 +734,8 @@ function saveChecksheetData(storeId, periodLabel, data) {
   // period_labelが"YYYY-MM"のまま日付型に自動変換されないよう、書き込み前にプレーンテキスト形式へ固定する
   const startRow = sheet.getLastRow() + 1;
   sheet.getRange(startRow, CHECKSHEET_COLS.indexOf('period_label') + 1).setNumberFormat('@');
-  sheet.appendRow([storeId, periodLabel, json, now]);
+  const merged = _stampChecksheetEntryTimes_({}, data || {});
+  sheet.appendRow([storeId, periodLabel, JSON.stringify(merged), now]);
   return { ok: true };
 }
 
