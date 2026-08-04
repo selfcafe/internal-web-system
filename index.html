@@ -11,6 +11,18 @@
   <script>
     window.__earlySettings = fetch('https://script.google.com/macros/s/AKfycbzoqu607sj-rpYulIiDwnuyGSCTzoblzSqaq37cb5k5KiGsK7sisZew9sSRSBoYBSwo_A/exec?action=getSettings')
       .then(r => r.json()).catch(() => null);
+    // 業務開始の押し忘れリマインダーが出るまでの待ち時間を縮めるため、セッション復元(前回ログイン
+    // 済みで再度開いた)の場合は店舗が既にわかっているので、getAttendanceもここで先行発火しておく
+    // (loadAttendanceHistoryが使う。ログイン処理完了を待ってから発火する従来の流れだと、その分
+    // だけ表示が遅れていた)。
+    try {
+      const _earlyStore = sessionStorage.getItem('site_authed_store');
+      if (_earlyStore) {
+        window.__earlyAttendanceStore = _earlyStore;
+        window.__earlyAttendance = fetch('https://script.google.com/macros/s/AKfycbzoqu607sj-rpYulIiDwnuyGSCTzoblzSqaq37cb5k5KiGsK7sisZew9sSRSBoYBSwo_A/exec?action=getAttendance&storeId=' + encodeURIComponent(_earlyStore))
+          .then(r => r.json()).catch(() => null);
+      }
+    } catch(_) {}
   </script>
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <meta name="color-scheme" content="light">
@@ -3434,6 +3446,14 @@ function doAttendanceClockIn() {
 let ATTENDANCE_HISTORY_CACHE = [];
 async function loadAttendanceHistory(storeId) {
   try {
+    // 先行発火済み(ページ最上部でのgetAttendance)があり、対象店舗が一致するなら使い回す。
+    // 一度使ったら破棄し、以降(打刻直後の再読み込み等)は必ず通信し直して最新化する。
+    if (window.__earlyAttendance && window.__earlyAttendanceStore === storeId) {
+      const early = window.__earlyAttendance;
+      window.__earlyAttendance = null;
+      const data = await early;
+      if (data) { ATTENDANCE_HISTORY_CACHE = data; return; }
+    }
     ATTENDANCE_HISTORY_CACHE = await gasGet('getAttendance', { storeId });
   } catch(e) { console.error('getAttendance error:', e); ATTENDANCE_HISTORY_CACHE = []; }
 }
