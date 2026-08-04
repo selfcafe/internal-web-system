@@ -2104,6 +2104,7 @@ function getChecksheetStockChecks(storeId) {
     allDays[dayKey] = Object.assign(allDays[dayKey] || {}, p.data[dayKey]);
   }));
   const today = Utilities.formatDate(new Date(), _invSheetTz(), 'yyyy-MM-dd');
+  const yesterday = Utilities.formatDate(new Date(Date.now() - 86400000), _invSheetTz(), 'yyyy-MM-dd');
   const priorDays = Object.keys(allDays).filter(d => d < today).sort().reverse();
 
   const result = {};
@@ -2117,8 +2118,10 @@ function getChecksheetStockChecks(storeId) {
         break;
       }
     }
+    // steraQtyはstera_daily_salesに取り込み済みの前日分までで揃える(当日分はまだ取込み前で
+    // 必ず0のため、todayを上限にすると「前日まで確定」の補充量比較が崩れる。2026-08-04発覚)
     const entry = sinceDate
-      ? { label: m.label, sinceDate, qty: getSteraDailyTotal_(storeId, m.prdId, sinceDate, today) }
+      ? { label: m.label, sinceDate, qty: getSteraDailyTotal_(storeId, m.prdId, sinceDate, yesterday) }
       : null;
     m.ourProducts.forEach(name => { result[name] = entry; });
   });
@@ -2148,6 +2151,7 @@ function checkChecksheetStockMismatch(storeId, product) {
     allDays[dayKey] = Object.assign(allDays[dayKey] || {}, p.data[dayKey]);
   }));
   const today = Utilities.formatDate(new Date(), _invSheetTz(), 'yyyy-MM-dd');
+  const yesterday = Utilities.formatDate(new Date(Date.now() - 86400000), _invSheetTz(), 'yyyy-MM-dd');
   const itemKeys = group.ourProducts.map(name => 'prod:' + name);
 
   const priorDays = Object.keys(allDays).filter(d => d < today).sort().reverse();
@@ -2161,15 +2165,17 @@ function checkChecksheetStockMismatch(storeId, product) {
   }
   if (!sinceDate) return { ok: true, skipped: 'no_prior_entry' }; // 今回が初回入力、比較対象が無い
 
-  // (sinceDate, today]の範囲でグループ内の補充量を合算する(今回保存済みの分も含めてgetChecksheetDataを
-  // その都度読み直すため、クライアントから今回の入力値を別途渡す必要は無い)
+  // 補充量(inputQty)とステラ実売上(steraQty)を同じ「sinceDate(除く)〜前日(含む)」の期間で揃える。
+  // stera_daily_salesは前日分までしか取り込まれていない(SteraDailySalesImportが毎日06:00に
+  // 前日分を取込む設計)ため、上限をtodayにすると当日分の補充だけが一方的に加算され、ラグ由来の
+  // 見せかけの差異が出てしまう(2026-08-04発覚)。当日分の補充入力は次回の比較サイクルへ自然に繰り越す。
   let inputQty = 0;
   Object.keys(allDays).forEach(dayKey => {
-    if (!(dayKey > sinceDate && dayKey <= today)) return;
+    if (!(dayKey > sinceDate && dayKey <= yesterday)) return;
     itemKeys.forEach(k => { inputQty += Number(allDays[dayKey][k]) || 0; });
   });
 
-  const steraQty = getSteraDailyTotal_(storeId, group.prdId, sinceDate, today);
+  const steraQty = getSteraDailyTotal_(storeId, group.prdId, sinceDate, yesterday);
   const diff = inputQty - steraQty;
   if (diff >= CHECKSHEET_STOCK_MISMATCH_THRESHOLD) {
     try {
@@ -2177,11 +2183,11 @@ function checkChecksheetStockMismatch(storeId, product) {
       sendStockBotNotification_(
         '【在庫差異検知】' + _storeIdLabel_(storeId) + '・' + group.label +
         'で在庫差異(補充' + inputQty + '個／ステラ実売上' + steraQty + '個、差' + diff + '個)を検知しました。ご確認ください。' +
-        '(' + sinceDate + '〜' + today + '分)'
+        '(' + sinceDate + '〜' + yesterday + '分)'
       );
     } catch (e) { console.error('LINE WORKS通知エラー(在庫差異検知):', e.message); }
   }
-  return { ok: true, sinceDate, inputQty, steraQty, diff };
+  return { ok: true, sinceDate, throughDate: yesterday, inputQty, steraQty, diff };
 }
 
 // ----------------------------------------------------------------
