@@ -2581,6 +2581,8 @@ function _findPendingKaihipayApprovalRequestId_() {
   return latestId;
 }
 
+// デバッグ用に最後の送信結果(ステータスコード・レスポンス本文)を保持する(2026-08-05、
+// 「届いていない」原因調査用の一時的な措置。原因判明後は消してよい)
 function _postKaihipayBotMessage_(contentObj, userIdOverride) {
   var props = PropertiesService.getScriptProperties();
   var botId  = props.getProperty('LW_BOT_ID_KAIHIPAY');
@@ -2594,19 +2596,24 @@ function _postKaihipayBotMessage_(contentObj, userIdOverride) {
     payload: body,
     muteHttpExceptions: true
   });
+  var debugInfo = { botId: botId, userId: userId, code: res.getResponseCode(), responseText: res.getContentText() };
   if (res.getResponseCode() === 401) {
     token = getStockBotAccessToken_(true);
-    UrlFetchApp.fetch(url, {
+    var res2 = UrlFetchApp.fetch(url, {
       method: 'POST',
       headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-      payload: body
+      payload: body,
+      muteHttpExceptions: true
     });
+    debugInfo.retryCode = res2.getResponseCode();
+    debugInfo.retryResponseText = res2.getContentText();
   }
+  return debugInfo;
 }
 
 function sendKaihipayApprovalRequest_(requestId, message, userIdOverride) {
   _setKaihipayApprovalState_(requestId, 'pending', message);
-  _postKaihipayBotMessage_({
+  return _postKaihipayBotMessage_({
     type: 'button_template',
     contentText: message,
     actions: [
@@ -2659,8 +2666,8 @@ function handleKaihipayApprovalTextReply_(body) {
 // Python側(kaihipayパイプライン)からこのWeb Appへ {action:'kaihipayRequestApproval', requestId, message}
 // をPOSTすると承認依頼が送信される。ポーリングは {action:'kaihipayCheckApproval', requestId} で行う。
 function kaihipayRequestApproval(requestId, message) {
-  sendKaihipayApprovalRequest_(requestId, message);
-  return { ok: true, requestId: requestId, status: 'pending' };
+  var debugInfo = sendKaihipayApprovalRequest_(requestId, message);
+  return { ok: true, requestId: requestId, status: 'pending', debug: debugInfo };
 }
 
 function kaihipayCheckApproval(requestId) {
