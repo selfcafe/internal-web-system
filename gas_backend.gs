@@ -248,8 +248,7 @@ function doPost(e) {
   try {
     const b = JSON.parse(e.postData.contents);
     const isKaihipayBotCallback_ = !!(e.parameter && e.parameter.bot === 'kaihipay');
-    if      (isKaihipayBotCallback_ && isLineWorksPostback_(b)) result = handleKaihipayApprovalPostback_(b);
-    else if (isKaihipayBotCallback_ && isLineWorksCallback_(b)) result = handleKaihipayApprovalTextReply_(b);
+    if      (isKaihipayBotCallback_ && isLineWorksCallback_(b)) result = handleKaihipayApprovalTextReply_(b);
     else if (isLineWorksCallback_(b))           result = handleLineWorksStockInquiry_(b);
     else if (b.action === 'kaihipayRequestApproval') result = kaihipayRequestApproval(b.requestId, b.message);
     else if (b.action === 'kaihipayCheckApproval')   result = kaihipayCheckApproval(b.requestId);
@@ -2529,16 +2528,15 @@ function testStockBotNotification() {
 // X-WORKS-Signatureでの署名検証ができず、Bot Secretを使う場面が無い。将来の拡張用に保存だけしておく）。
 //
 // 承認フローは「ボタン(承認/拒否)=最速の確定判定」「自由テキスト返信=例外の余地」のハイブリッド。
-// ボタンはpostback型アクションにし、data文字列に requestId を埋め込んで返してもらう
-// (postback eventにはBot識別フィールドが無いため、Callback URL自体を ?bot=kaihipay 付きで
-// Developer Consoleに登録して doPost 側で判別する——同じ理由でテキスト返信の判別にも必要)。
+// ボタンはtype:'message'アクション(button_templateはtype:'postback'未対応——2026-08-05実機で
+// "content.actions[0].postback is not supported"と判明)にし、タップ時にlabelと同じテキストが
+// 通常のメッセージとして送られてくるため、テキスト返信(handleKaihipayApprovalTextReply_)と
+// 全く同じ経路で処理される(専用のpostbackハンドラは無し)。
+// Callback URL自体を ?bot=kaihipay 付きでDeveloper Consoleに登録し、doPost側でこのBotからの
+// 返信だと判別する(メッセージ受信イベントにBot識別フィールドが無いため)。
 // テキスト返信は「承認/はい/OK」「拒否/いいえ/NG」の決まった語のみ実行トリガーとして扱い、
 // それ以外の自由文は「未承認のまま保留」として記録するだけで、自由文の意味解釈は行わない
 // ([[project_kaihipay_remote_approval_design]]の合意方針そのまま)。
-
-function isLineWorksPostback_(body) {
-  return !!(body && body.type === 'postback' && typeof body.data === 'string');
-}
 
 function _kaihipayApprovalPropKey_(requestId) {
   return 'KAIHIPAY_APPROVAL_' + requestId;
@@ -2611,35 +2609,25 @@ function _postKaihipayBotMessage_(contentObj, userIdOverride) {
   return debugInfo;
 }
 
+// button_templateのactionsはtype:'postback'に対応していない(2026-08-05、実機で
+// "content.actions[0].postback is not supported"と判明——ドキュメント上は存在するtypeだが
+// このcontent typeでは使えない)。type:'message'にするとタップ時にlabelと同じ内容が
+// 通常のテキストメッセージとして送られてくるため、テキスト返信(handleKaihipayApprovalTextReply_)
+// と全く同じ経路で処理できる——postback用の別ハンドラは不要。
 function sendKaihipayApprovalRequest_(requestId, message, userIdOverride) {
   _setKaihipayApprovalState_(requestId, 'pending', message);
   return _postKaihipayBotMessage_({
     type: 'button_template',
     contentText: message,
     actions: [
-      { type: 'postback', label: '承認', data: 'kaihipay_approve:' + requestId },
-      { type: 'postback', label: '拒否', data: 'kaihipay_reject:' + requestId }
+      { type: 'message', label: '承認', text: '承認' },
+      { type: 'message', label: '拒否', text: '拒否' }
     ]
   }, userIdOverride);
 }
 
 function sendKaihipayApprovalNotification_(message, userIdOverride) {
   _postKaihipayBotMessage_({ type: 'text', text: message }, userIdOverride);
-}
-
-function handleKaihipayApprovalPostback_(body) {
-  const userId = body.source && body.source.userId;
-  const data = body.data || '';
-  const m = data.match(/^kaihipay_(approve|reject):(.+)$/);
-  if (!m) return { ok: true, skipped: 'unrecognized_postback' };
-  const decision = m[1] === 'approve' ? 'approved' : 'rejected';
-  const requestId = m[2];
-  _setKaihipayApprovalState_(requestId, decision);
-  return {
-    ok: true, requestId, decision,
-    _notify: { type: 'kaihipayApprovalAck', userId,
-      message: (decision === 'approved' ? '承認しました。' : '拒否しました。') + '(ID: ' + requestId + ')' }
-  };
 }
 
 function handleKaihipayApprovalTextReply_(body) {
