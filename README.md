@@ -29,6 +29,7 @@
 
 ## デプロイ
 
+- **Apps Scriptプロジェクト**: https://script.google.com/u/1/home/projects/1J5qtNKPyXt3L7wmX6MMmAD33t1LQF5hBaDfjG2mghCinlc4h4xwagxP2/edit （selfcafe001@gmail.comアカウントでログインすると閲覧可能。実行数ログもここから確認する）
 - **`index.html`など静的ファイル**: `main`ブランチへのpushでGitHub Pagesが自動反映（数分以内）。
 - **`gas_backend.gs`**: 自動デプロイされない。変更後は必ず、Google Apps Scriptエディタにコードを貼り付けて「デプロイ→デプロイを管理→新しいバージョン」で手動デプロイする必要がある。
   - リポジトリ内の`SHEET_ID`・`IMAGE_FOLDER_ID`等はダミー値（伏せ字）になっているため、Apps Scriptエディタに貼り付けた後は本番の実値に戻すこと。
