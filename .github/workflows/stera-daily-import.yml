@@ -1,4 +1,4 @@
-name: stera daily sales import (test)
+name: stera daily sales import
 
 on:
   workflow_dispatch:
@@ -6,10 +6,13 @@ on:
       date:
         description: "対象日(YYYY-MM-DD)。省略時は前日"
         required: false
+  schedule:
+    # 毎日06:00 JST(旧PCのタスクスケジューラと同じ時刻) = 21:00 UTC(前日)
+    - cron: "0 21 * * *"
 
 jobs:
   import:
-    runs-on: windows-latest
+    runs-on: self-hosted
     steps:
       - uses: actions/checkout@v4
 
