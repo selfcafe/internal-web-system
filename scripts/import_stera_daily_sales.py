@@ -112,18 +112,24 @@ def kill_cdp_chrome():
 
 
 def login_if_needed(page, email, password):
+    # トップページ(/)は未ログインでもuser/loginへリダイレクトされず表示されるため、
+    # URLではなくログインフォーム(メールアドレス入力欄)の有無で判定する
+    # (2026-08-08、GitHub Actionsの初回セッション=Chromeプロファイルが空の環境で
+    # URL判定だと常に「既にログイン済み」と誤判定することが判明。ローカルPCでは
+    # プロファイルに既存セッションが残っていたため表面化していなかった)。
     page.goto(STERA_BASE_URL + "/")
     page.wait_for_load_state("domcontentloaded")
     time.sleep(1)
-    if "user/login" not in page.url:
+    email_input = page.get_by_placeholder("メールアドレス")
+    if email_input.count() == 0:
         print("既にログイン済み:", page.url)
         return
-    page.get_by_placeholder("メールアドレス").fill(email)
+    email_input.fill(email)
     page.get_by_placeholder("パスワード").fill(password)
     page.get_by_role("button", name="ログイン").click()
     page.wait_for_load_state("domcontentloaded")
     time.sleep(2)
-    if "user/login" in page.url:
+    if page.get_by_placeholder("メールアドレス").count() > 0:
         raise RuntimeError(
             "ログインに失敗しました(CAPTCHA等の可能性)。--keep-openで起動し、"
             ".chrome_stera_profileのブラウザ画面を直接確認してください。"
