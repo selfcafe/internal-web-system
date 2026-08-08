@@ -25,6 +25,7 @@ jobs:
           STERA_EMAIL: ${{ secrets.STERA_EMAIL }}
           STERA_PASSWORD: ${{ secrets.STERA_PASSWORD }}
           GAS_URL: ${{ secrets.GAS_URL }}
+          PYTHONUTF8: "1"
         run: |
           if ("${{ github.event.inputs.date }}" -ne "") {
             python scripts/import_stera_daily_sales.py --date "${{ github.event.inputs.date }}"
