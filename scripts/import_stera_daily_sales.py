@@ -47,7 +47,7 @@ from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 STERA_BASE_URL = "https://dashboard.sterasmartone.com"
 SCRIPT_DIR = Path(__file__).parent
@@ -119,9 +119,13 @@ def login_if_needed(page, email, password):
     # プロファイルに既存セッションが残っていたため表面化していなかった)。
     page.goto(STERA_BASE_URL + "/")
     page.wait_for_load_state("domcontentloaded")
-    time.sleep(1)
+    # SPAのため即座には描画されない。入力欄が出現するまで待ち、出現しなければ
+    # (タイムアウトしたら)本当にログイン済みとみなす(2026-08-08、固定sleep(1)では
+    # GitHub Actions実行環境でレンダリングに間に合わず誤判定するケースがあったため)
     email_input = page.get_by_placeholder("メールアドレス")
-    if email_input.count() == 0:
+    try:
+        email_input.wait_for(state="visible", timeout=8000)
+    except PlaywrightTimeoutError:
         print("既にログイン済み:", page.url)
         return
     email_input.fill(email)
