@@ -1,0 +1,33 @@
+name: stera daily sales import (test)
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "対象日(YYYY-MM-DD)。省略時は前日"
+        required: false
+
+jobs:
+  import:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install playwright requests python-dotenv
+
+      - name: Run stera import script
+        env:
+          STERA_EMAIL: ${{ secrets.STERA_EMAIL }}
+          STERA_PASSWORD: ${{ secrets.STERA_PASSWORD }}
+          GAS_URL: ${{ secrets.GAS_URL }}
+        run: |
+          if ("${{ github.event.inputs.date }}" -ne "") {
+            python scripts/import_stera_daily_sales.py --date "${{ github.event.inputs.date }}"
+          } else {
+            python scripts/import_stera_daily_sales.py
+          }
