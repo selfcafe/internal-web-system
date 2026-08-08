@@ -32,3 +32,11 @@ jobs:
           } else {
             python scripts/import_stera_daily_sales.py
           }
+
+      - name: Upload failure screenshot
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: login-failure-screenshot
+          path: scripts/_downloads/login_failure.png
+          if-no-files-found: ignore
