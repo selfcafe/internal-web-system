@@ -16,12 +16,11 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v5
-        with:
-          python-version: "3.11"
-
+      # このランナー(セルフホスト)には既にPythonがインストール済みのため、
+      # actions/setup-pythonは使わない(PowerShellのスクリプト実行ポリシーで
+      # インストーラーがブロックされるため、2026-08-08判明)
       - name: Install dependencies
-        run: pip install playwright requests python-dotenv
+        run: python -m pip install --quiet playwright requests python-dotenv
 
       - name: Run stera import script
         env:
