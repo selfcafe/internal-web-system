@@ -137,6 +137,13 @@ def login_if_needed(page, email, password):
     try:
         page.get_by_placeholder("メールアドレス").wait_for(state="detached", timeout=15000)
     except PlaywrightTimeoutError:
+        # 実際に何が表示されているか(CAPTCHAかどうか)を後から目視確認できるよう保存する
+        DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        shot_path = DOWNLOAD_DIR / "login_failure.png"
+        try:
+            page.screenshot(path=str(shot_path))
+        except Exception:
+            pass
         raise RuntimeError(
             "ログインに失敗しました(CAPTCHA等の可能性)。--keep-openで起動し、"
             ".chrome_stera_profileのブラウザ画面を直接確認してください。"
