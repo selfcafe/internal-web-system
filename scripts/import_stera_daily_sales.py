@@ -131,9 +131,12 @@ def login_if_needed(page, email, password):
     email_input.fill(email)
     page.get_by_placeholder("パスワード").fill(password)
     page.get_by_role("button", name="ログイン").click()
-    page.wait_for_load_state("domcontentloaded")
-    time.sleep(2)
-    if page.get_by_placeholder("メールアドレス").count() > 0:
+    # ここも固定sleep(2)+即時判定だと、CI環境の遷移遅延で誤って「失敗」と判定しうる
+    # (2026-08-08判明)。ログインフォームがDOMから消える(=ページ遷移が完了する)まで
+    # 明示的に待ち、それでも消えなければ本当に失敗(CAPTCHA等)とみなす
+    try:
+        page.get_by_placeholder("メールアドレス").wait_for(state="detached", timeout=15000)
+    except PlaywrightTimeoutError:
         raise RuntimeError(
             "ログインに失敗しました(CAPTCHA等の可能性)。--keep-openで起動し、"
             ".chrome_stera_profileのブラウザ画面を直接確認してください。"
