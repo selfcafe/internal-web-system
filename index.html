@@ -4650,7 +4650,7 @@ function addItemToGroup(groupId, requestDate) {
 function lockGroup(groupId) {
   const group = storeRows.filter(r => (r.groupId||r.id) === groupId);
   if (group.some(r => !r.requestDate)) { alert('依頼日を入力してください。'); return; }
-  group.forEach(r => { r.locked = true; r.isNew = true; });
+  group.forEach(r => { r.locked = true; r.isNew = true; r.requestDate = today(); });
   saveA(storeTab, storeRows);
   renderStore();
 }
