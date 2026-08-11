@@ -218,6 +218,7 @@ function doGet(e) {
     else if (a === 'getChecksheetData') result = getChecksheetData(e.parameter.storeId);
     else if (a === 'getChecksheetStockChecks') result = getChecksheetStockChecks(e.parameter.storeId);
     else if (a === 'getInventoryHistory') result = getInventoryHistory(e.parameter.storeId, e.parameter.periodLabel);
+    else if (a === 'getLatestConsumptionByCode') result = getLatestConsumptionByCode(e.parameter.storeId);
     else if (a === 'getInventoryDeliveryAuto') result = getInventoryDeliveryAuto(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'getInventoryDeliveryManual') result = getInventoryDeliveryManual(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'getInventoryTabData')       result = getInventoryTabData(e.parameter.storeId, e.parameter.periodLabel, e.parameter.prevPeriodLabel);
@@ -1333,6 +1334,38 @@ function getInventoryHistory(storeId, periodLabel) {
     (!storeId || String(r.store_id) === String(storeId)) &&
     (!periodLabel || r.period_label === String(periodLabel))
   );
+}
+
+// 発注タブでの発注数量の初期提案に使う(2026-08-11追加)。指定店舗について商品コードごとに
+// 直近(period_labelが最も新しい)棚卸の消費量を返す。商品名ではなく商品コードをキーにするのは、
+// 発注側のPRODUCTS(商品名)と棚卸側のinventory_log(商品名+商品コード)を突き合わせる際、
+// 表記ゆれではなく一意な商品コードで結びつけたいというユーザー要望による。
+// 消費量が空欄(未入力)や0以下の行は候補から除外する(発注数量の提案としては意味を持たないため)。
+function getLatestConsumptionByCode(storeId) {
+  const data = _inventoryLogRowsCached_();
+  const result = {};
+  if (data.length <= 1) return result;
+  const codeIdx   = INVENTORY_COLS.indexOf('code');
+  const sidIdx     = INVENTORY_COLS.indexOf('store_id');
+  const periodIdx  = INVENTORY_COLS.indexOf('period_label');
+  const consIdx    = INVENTORY_COLS.indexOf('consumption');
+  const latestPeriodByCode = {};
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (String(row[sidIdx]) !== String(storeId)) continue;
+    const code = row[codeIdx];
+    if (!code) continue;
+    const consumption = row[consIdx];
+    if (consumption === '' || consumption === null || consumption === undefined) continue;
+    const n = Number(consumption);
+    if (!(n > 0)) continue;
+    const period = _invMonthLabelStr(row[periodIdx]);
+    if (!latestPeriodByCode[code] || period > latestPeriodByCode[code]) {
+      latestPeriodByCode[code] = period;
+      result[code] = n;
+    }
+  }
+  return result;
 }
 
 // 同じ店舗×年月の既存行を全て削除してから送信内容を書き直す（当月分は何度でも上書き修正できる）。
