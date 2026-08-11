@@ -5191,6 +5191,77 @@ async function renderLostAdmin() {
     </div>`;
 }
 
+// 店舗ごとの最新ステータス（getMachinePhotoStatusの結果を店舗IDでグループ化したもの）。
+// チェックボックス/台数変更のたびにサーバーへ再取得しに行くと重いので、ここにキャッシュしておき
+// ローカルの再計算だけで該当店舗の行を更新する（_machinePhotoRefreshStoreRow参照）
+let _machinePhotoStatusByStore = {};
+
+function _machinePhotoDaysBadge(daysSince) {
+  if (daysSince == null) return '<span style="color:#ef4444;font-weight:700;font-size:12px">未提出</span>';
+  const color = daysSince <= 5 ? '#16a34a' : daysSince <= 9 ? '#d97706' : '#ef4444';
+  return `<span style="color:${color};font-weight:700;font-size:12px">${daysSince}日前</span>`;
+}
+
+// 1店舗分の行(店舗名セルのrowspan込み)を組み立てる。初回描画・部分更新のどちらからも呼ばれる
+function _machinePhotoBuildStoreRows(storeId) {
+  const storeName = STORES[storeId] || storeId;
+  const regionId = getStoreRegion(storeId) || 'tokai';
+  const enabled = isMachinePhotoEnabled(storeId);
+  const machines = (_machinePhotoStatusByStore[storeId] || []).slice().sort((a, b) => a.machineIndex - b.machineIndex);
+  const nameCell = `<td rowspan="${machines.length || 1}" style="font-size:13px;padding:7px 10px;white-space:nowrap;color:#22703d;font-weight:600;border-bottom:1px solid #ddd;vertical-align:top">
+    <div>${esc(storeName)}</div>
+    <div style="font-size:10px;color:#999;font-weight:400;margin-bottom:6px">${esc(REGIONS[regionId].label)}</div>
+    <label style="display:flex;align-items:center;gap:4px;font-size:11px;font-weight:400;color:#555;margin-bottom:4px;white-space:nowrap;cursor:pointer">
+      <input type="checkbox" ${enabled ? 'checked' : ''} onchange="setMachinePhotoEnabledAdmin('${esc(storeId)}', this.checked)">
+      アルバム有効
+    </label>
+    <label style="display:flex;align-items:center;gap:4px;font-size:11px;font-weight:400;color:#555;white-space:nowrap">
+      台数：
+      <input type="number" min="1" max="10" value="${getMachinePhotoMachineCount(storeId)}"
+        style="width:44px;border:1px solid #ddd;border-radius:4px;padding:2px 4px;font-size:11px;font-family:inherit"
+        onchange="setMachinePhotoMachineCountAdmin('${esc(storeId)}', this.value)">
+    </label>
+  </td>`;
+  if (!machines.length) {
+    return `<tr style="${enabled ? '' : 'opacity:.5'}">${nameCell}
+      <td colspan="4" style="color:#aaa;font-size:12px;padding:7px 10px;border-bottom:1px solid #eee">マシン台数の設定がありません</td>
+    </tr>`;
+  }
+  return machines.map((m, idx) => `<tr style="${enabled ? '' : 'opacity:.5'}">
+    ${idx === 0 ? nameCell : ''}
+    <td style="font-size:13px;padding:7px 10px;white-space:nowrap;border-bottom:1px solid #eee">マシン${MACHINE_NUMBER_LABELS[m.machineIndex] || (m.machineIndex + 1)}</td>
+    <td style="font-size:13px;padding:7px 10px;white-space:nowrap;border-bottom:1px solid #eee">${m.uploadedAt ? esc(String(m.uploadedAt).slice(0,16)) : '—'}</td>
+    <td style="padding:7px 10px;white-space:nowrap;border-bottom:1px solid #eee">${_machinePhotoDaysBadge(m.daysSince)}</td>
+    <td style="padding:5px 8px;border-bottom:1px solid #eee">${m.photoUrls && m.photoUrls.length ? buildLostImageCell(m.photoUrls, 44) : '<span style="color:#ccc;font-size:11px">なし</span>'}</td>
+  </tr>`).join('');
+}
+
+function _machinePhotoRefreshStoreRow(storeId) {
+  const tbody = document.getElementById('mp-tbody-' + storeId);
+  if (tbody) tbody.innerHTML = _machinePhotoBuildStoreRows(storeId);
+}
+
+// アルバムの有効/無効はサーバーの提出状況(枚数・日付)に影響しないため、サーバーへの再取得なしで
+// その場でチェック状態を保存し、該当店舗の行だけ再描画する
+function setMachinePhotoEnabledAdmin(storeId, checked) {
+  setMachinePhotoEnabled(storeId, checked);
+  _machinePhotoRefreshStoreRow(storeId);
+}
+
+// 台数変更も同様にサーバー再取得なしで反映する。既存の提出データがある番号(0〜旧台数-1)は
+// そのまま使い、増えた分は「未提出」のダミー行、減った分は末尾を切り捨てるだけでよい
+function setMachinePhotoMachineCountAdmin(storeId, rawValue) {
+  setMachinePhotoMachineCount(storeId, rawValue);
+  const count = getMachinePhotoMachineCount(storeId);
+  const prev = _machinePhotoStatusByStore[storeId] || [];
+  const next = [];
+  for (let i = 0; i < count; i++) {
+    next.push(prev[i] || { storeId, machineIndex: i, uploadedAt: null, daysSince: null, photoUrls: [] });
+  }
+  _machinePhotoStatusByStore[storeId] = next;
+  _machinePhotoRefreshStoreRow(storeId);
+}
+
 async function renderMachinePhotoAdmin() {
   document.querySelector('#page-admin .table-wrap').style.display = 'none';
   document.getElementById('pagination').style.display = 'none';
@@ -5203,76 +5274,35 @@ async function renderMachinePhotoAdmin() {
   container.innerHTML = `<div style="color:#aaa;font-size:13px;padding:10px 0">読み込み中…</div>`;
 
   const statusRows = await gasGet('getMachinePhotoStatus'); // [{storeId, machineIndex, uploadedAt, daysSince, photoUrls}]
-  const statusByStore = {};
+  _machinePhotoStatusByStore = {};
   (statusRows || []).forEach(r => {
-    if (!statusByStore[r.storeId]) statusByStore[r.storeId] = [];
-    statusByStore[r.storeId].push(r);
+    if (!_machinePhotoStatusByStore[r.storeId]) _machinePhotoStatusByStore[r.storeId] = [];
+    _machinePhotoStatusByStore[r.storeId].push(r);
   });
 
-  const daysBadge = daysSince => {
-    if (daysSince == null) return '<span style="color:#ef4444;font-weight:700;font-size:12px">未提出</span>';
-    const color = daysSince <= 5 ? '#16a34a' : daysSince <= 9 ? '#d97706' : '#ef4444';
-    return `<span style="color:${color};font-weight:700;font-size:12px">${daysSince}日前</span>`;
-  };
-
   // 地域ごとにアコーディオンを分けていると開閉クリックが増えるため、1つの表にまとめる。
-  // 店舗名はマシン台数分の行にrowspanでまとめ、同じ店舗名が何行も繰り返されるのを防ぐ
-  const buildAllStoresTable = () => {
-    const rowsHtml = [];
-    ['tokai', 'kansai', 'kanto'].forEach(regionId => {
-      REGIONS[regionId].stores.forEach(storeId => {
-        const storeName = STORES[storeId] || storeId;
-        const enabled = isMachinePhotoEnabled(storeId);
-        const machines = (statusByStore[storeId] || []).slice().sort((a, b) => a.machineIndex - b.machineIndex);
-        const nameCell = `<td rowspan="${machines.length || 1}" style="font-size:13px;padding:7px 10px;white-space:nowrap;color:#22703d;font-weight:600;border-bottom:1px solid #ddd;vertical-align:top">
-          <div>${esc(storeName)}</div>
-          <div style="font-size:10px;color:#999;font-weight:400;margin-bottom:6px">${esc(REGIONS[regionId].label)}</div>
-          <label style="display:flex;align-items:center;gap:4px;font-size:11px;font-weight:400;color:#555;margin-bottom:4px;white-space:nowrap;cursor:pointer">
-            <input type="checkbox" ${enabled ? 'checked' : ''} onchange="setMachinePhotoEnabled('${esc(storeId)}', this.checked);renderMachinePhotoAdmin()">
-            アルバム有効
-          </label>
-          <label style="display:flex;align-items:center;gap:4px;font-size:11px;font-weight:400;color:#555;white-space:nowrap">
-            台数：
-            <input type="number" min="1" max="10" value="${getMachinePhotoMachineCount(storeId)}"
-              style="width:44px;border:1px solid #ddd;border-radius:4px;padding:2px 4px;font-size:11px;font-family:inherit"
-              onchange="setMachinePhotoMachineCount('${esc(storeId)}', this.value);renderMachinePhotoAdmin()">
-          </label>
-        </td>`;
-        if (!machines.length) {
-          rowsHtml.push(`<tr style="${enabled ? '' : 'opacity:.5'}">${nameCell}
-            <td colspan="4" style="color:#aaa;font-size:12px;padding:7px 10px;border-bottom:1px solid #eee">マシン台数の設定がありません</td>
-          </tr>`);
-          return;
-        }
-        machines.forEach((m, idx) => {
-          rowsHtml.push(`<tr style="${enabled ? '' : 'opacity:.5'}">
-            ${idx === 0 ? nameCell : ''}
-            <td style="font-size:13px;padding:7px 10px;white-space:nowrap;border-bottom:1px solid #eee">マシン${MACHINE_NUMBER_LABELS[m.machineIndex] || (m.machineIndex + 1)}</td>
-            <td style="font-size:13px;padding:7px 10px;white-space:nowrap;border-bottom:1px solid #eee">${m.uploadedAt ? esc(String(m.uploadedAt).slice(0,16)) : '—'}</td>
-            <td style="padding:7px 10px;white-space:nowrap;border-bottom:1px solid #eee">${daysBadge(m.daysSince)}</td>
-            <td style="padding:5px 8px;border-bottom:1px solid #eee">${m.photoUrls && m.photoUrls.length ? buildLostImageCell(m.photoUrls, 44) : '<span style="color:#ccc;font-size:11px">なし</span>'}</td>
-          </tr>`);
-        });
-      });
-    });
-    return `<div style="overflow-x:auto">
-      <table style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);table-layout:fixed">
-        <thead><tr style="background:#c2d63a;color:#1a2a05">
-          <th style="text-align:left;font-size:13px;padding:9px 10px;width:150px">店舗</th>
-          <th style="text-align:left;font-size:13px;padding:9px 10px;width:80px">マシン</th>
-          <th style="text-align:left;font-size:13px;padding:9px 10px;width:140px">最終提出日時</th>
-          <th style="text-align:left;font-size:13px;padding:9px 10px;width:90px">経過</th>
-          <th style="text-align:left;font-size:13px;padding:9px 10px">写真5点</th>
-        </tr></thead>
-        <tbody>${rowsHtml.join('')}</tbody>
-      </table>
-    </div>`;
-  };
+  // 店舗ごとに<tbody>を分けておくことで、台数/有効無効の変更時にその店舗の<tbody>だけを
+  // 差し替えられるようにする（表全体の再構築・サーバー再取得を避けて即座に反映させるため）
+  const allStoreIds = [].concat(REGIONS.tokai.stores, REGIONS.kansai.stores, REGIONS.kanto.stores);
+  const tbodies = allStoreIds.map(storeId =>
+    `<tbody id="mp-tbody-${esc(storeId)}">${_machinePhotoBuildStoreRows(storeId)}</tbody>`
+  ).join('');
 
   container.innerHTML = `
     <div style="font-size:12px;color:#888;margin-bottom:10px">マシン点検が不要な店舗は「アルバム有効」のチェックを外すと、パートナー画面のチェックシートタブ内「アルバム」サブタブが非表示になります（デフォルトは全店舗ON）。マシン台数は店舗ごとに変更できます。</div>
     <div class="settings-card" style="margin-bottom:16px;padding:12px">
-      ${buildAllStoresTable()}
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);table-layout:fixed">
+          <thead><tr style="background:#c2d63a;color:#1a2a05">
+            <th style="text-align:left;font-size:13px;padding:9px 10px;width:150px">店舗</th>
+            <th style="text-align:left;font-size:13px;padding:9px 10px;width:80px">マシン</th>
+            <th style="text-align:left;font-size:13px;padding:9px 10px;width:140px">最終提出日時</th>
+            <th style="text-align:left;font-size:13px;padding:9px 10px;width:90px">経過</th>
+            <th style="text-align:left;font-size:13px;padding:9px 10px">写真5点</th>
+          </tr></thead>
+          ${tbodies}
+        </table>
+      </div>
     </div>`;
 }
 
