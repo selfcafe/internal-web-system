@@ -42,10 +42,11 @@ const ORDER_COLS = [
   'delivery_date','created_at','denied','image_url','actual_unit_mode'
 ];
 const LOST_COLS = ['id','store_id','found_date','note','image_url','added_at'];
-// マシン庫内点検写真（5枠固定：フィルター正面/カップ庫内/原料タンク/庫内全体/使用済みフィルター）。
-// 忘れ物のようなカンマ結合ではなく列を分けている——枠ごとにラベルが固定で対応するため
+// マシン庫内点検写真（5カテゴリ：フィルター正面/カップ庫内/原料タンク/庫内全体/フィルター残り）。
+// 店舗によってマシン台数が異なり(1台〜複数台)、カテゴリごとに台数分の写真が必要なため、
+// 固定列ではなくphotos_json列に{カテゴリキー:[url,...]}のJSONで可変枚数を保持する
 const SHEET_MACHINE_PHOTOS = 'machine_photos';
-const MACHINE_PHOTO_COLS = ['id','store_id','uploaded_at','photo1_url','photo2_url','photo3_url','photo4_url','photo5_url'];
+const MACHINE_PHOTO_COLS = ['id','store_id','uploaded_at','photos_json'];
 // 発注を「納品済み」にした際のログ。1回の操作で1行追加（append-onlyのログシート、
 // ordersのような全件削除→再送信はしない。自動削除もしない——消えては困る記録のため）
 const SHEET_DELIVERY_HISTORY = 'delivery_history';
@@ -278,7 +279,7 @@ function doPost(e) {
     else if (b.action === 'deleteLeaveRequest')  result = deleteLeaveRequest(b.id);
     else if (b.action === 'saveDeliveryHistory') result = saveDeliveryHistory(b.storeId, b.row);
     else if (b.action === 'clearDeliveryHistory') result = clearDeliveryHistory(b.storeId);
-    else if (b.action === 'saveMachinePhotoSet') result = saveMachinePhotoSet(b.storeId, b.imagesBase64, b.imageMime);
+    else if (b.action === 'saveMachinePhotoSet') result = saveMachinePhotoSet(b.storeId, b.imagesByCategory, b.imageMime);
     else result = { error: 'Unknown action: ' + b.action };
   } catch(err) {
     result = { error: err.message };
@@ -683,13 +684,17 @@ function _trashDriveImages(imageUrlList) {
 // パートナーが5点セットをアップロードし、フィルター/材料/カップ切れ等を早期発見する）
 // ----------------------------------------------------------------
 
-const MACHINE_PHOTOS_CACHE_KEY = 'machine_photos_rows_v1';
+const MACHINE_PHOTOS_CACHE_KEY = 'machine_photos_rows_v2';
 function _machinePhotosRowsCached_() {
   const cache = CacheService.getScriptCache();
   const cached = cache.get(MACHINE_PHOTOS_CACHE_KEY);
   if (cached) return JSON.parse(cached);
   const rows = sheetRows(getSheet(SHEET_MACHINE_PHOTOS), MACHINE_PHOTO_COLS)
-    .map(r => ({ ...r, uploaded_at: _dateTimeStr(r.uploaded_at) }));
+    .map(r => ({
+      ...r,
+      uploaded_at: _dateTimeStr(r.uploaded_at),
+      photosByCategory: (() => { try { return JSON.parse(r.photos_json || '{}'); } catch (e) { return {}; } })(),
+    }));
   try { cache.put(MACHINE_PHOTOS_CACHE_KEY, JSON.stringify(rows), 25); } catch (e) {}
   return rows;
 }
@@ -697,21 +702,26 @@ function _invalidateMachinePhotosCache_() {
   try { CacheService.getScriptCache().remove(MACHINE_PHOTOS_CACHE_KEY); } catch (e) {}
 }
 
-// imagesBase64: 5枚固定（フィルター正面/カップ庫内/原料タンク/庫内全体/使用済みフィルター）
-function saveMachinePhotoSet(storeId, imagesBase64, imageMime) {
+// imagesByCategory: { カテゴリキー: [base64, ...] }。配列の長さ=その店舗のマシン台数
+// （台数は店舗ごとに異なるため、送られてきた枚数をそのまま台数として扱う。バックエンド側では台数を検証しない）
+function saveMachinePhotoSet(storeId, imagesByCategory, imageMime) {
   const sheet = getSheet(SHEET_MACHINE_PHOTOS);
   ensureHeaders(sheet, MACHINE_PHOTO_COLS);
   const id = Utilities.getUuid();
   const uploadedAt = Utilities.formatDate(new Date(), _sheetTz(), 'yyyy-MM-dd HH:mm:ss');
-  const urls = (imagesBase64 || []).map((b64, i) =>
-    saveImageToDrive(b64, imageMime || 'image/jpeg', 'machine_' + storeId + '_' + id + '_' + i)
-  );
-  sheet.appendRow([id, storeId, uploadedAt, urls[0] || '', urls[1] || '', urls[2] || '', urls[3] || '', urls[4] || '']);
+  const urlsByCategory = {};
+  Object.keys(imagesByCategory || {}).forEach(catKey => {
+    urlsByCategory[catKey] = (imagesByCategory[catKey] || []).map((b64, i) =>
+      b64 ? saveImageToDrive(b64, imageMime || 'image/jpeg', 'machine_' + storeId + '_' + id + '_' + catKey + '_' + i) : ''
+    );
+  });
+  sheet.appendRow([id, storeId, uploadedAt, JSON.stringify(urlsByCategory)]);
   _invalidateMachinePhotosCache_();
-  return { ok: true, photoUrls: urls, uploadedAt };
+  return { ok: true, urlsByCategory, uploadedAt };
 }
 
-// 管理者一覧用：店舗ごとに最新の1セットだけを残して返す
+// 管理者一覧用：店舗ごとに最新の1セットだけを残して返す。photoUrlsは全カテゴリ・全台数分を
+// フラットにまとめたサムネイル表示用リスト
 function getMachinePhotoStatus() {
   const rows = _machinePhotosRowsCached_();
   const latestByStore = {};
@@ -724,11 +734,13 @@ function getMachinePhotoStatus() {
     const r = latestByStore[storeId];
     const uploadedDate = String(r.uploaded_at).slice(0, 10);
     const daysSince = Math.round((new Date(todayStr) - new Date(uploadedDate)) / (24 * 60 * 60 * 1000));
+    const photoUrls = [].concat(...Object.values(r.photosByCategory || {})).filter(Boolean);
     return {
       storeId,
       uploadedAt: r.uploaded_at,
       daysSince,
-      photoUrls: [r.photo1_url, r.photo2_url, r.photo3_url, r.photo4_url, r.photo5_url].filter(Boolean),
+      photoUrls,
+      photosByCategory: r.photosByCategory || {},
     };
   });
 }
@@ -737,6 +749,7 @@ function getMachinePhotoStatus() {
 function getMachinePhotoHistory(storeId) {
   return _machinePhotosRowsCached_()
     .filter(r => String(r.store_id) === String(storeId))
+    .map(r => ({ id: r.id, store_id: r.store_id, uploaded_at: r.uploaded_at, photosByCategory: r.photosByCategory }))
     .sort((a, b) => String(b.uploaded_at).localeCompare(String(a.uploaded_at)));
 }
 
@@ -749,12 +762,16 @@ function purgeOldMachinePhotos() {
   const data = sheet.getDataRange().getValues();
   const hdrs = data[0].map(String);
   const uploadedIdx = hdrs.indexOf('uploaded_at');
-  const photoIdxs = ['photo1_url', 'photo2_url', 'photo3_url', 'photo4_url', 'photo5_url'].map(c => hdrs.indexOf(c));
+  const jsonIdx = hdrs.indexOf('photos_json');
   if (uploadedIdx < 0) return;
   for (let i = data.length - 1; i >= 1; i--) {
     const uploadedAt = _dateTimeStr(data[i][uploadedIdx]);
     if (!uploadedAt || uploadedAt >= limitStr) continue;
-    const urls = photoIdxs.map(idx => (idx >= 0 ? data[i][idx] : '')).filter(Boolean).join(',');
+    let urls = '';
+    try {
+      const photosByCategory = JSON.parse((jsonIdx >= 0 ? data[i][jsonIdx] : '') || '{}');
+      urls = [].concat(...Object.values(photosByCategory)).filter(Boolean).join(',');
+    } catch (e) {}
     _trashDriveImages(urls);
     sheet.deleteRow(i + 1);
   }
@@ -1416,6 +1433,10 @@ function saveInventorySnapshot(storeId, periodLabel, rows, remarks) {
     if (newRows.length > 1) {
       const remarksCol = INVENTORY_COLS.indexOf('remarks') + 1;
       sheet.getRange(startRow, remarksCol, newRows.length, 1).setVerticalAlignment('middle').merge();
+      // 更新日時(M列)も備考と同じ理由(見た目の重複感を減らす)で縦結合する(2026-08-11、ユーザー指摘)。
+      // 全商品行に同じnowを書き込む処理自体は変えず、表示だけ月ブロック先頭行の1か所にまとめる
+      const updatedAtCol = INVENTORY_COLS.indexOf('updated_at') + 1;
+      sheet.getRange(startRow, updatedAtCol, newRows.length, 1).setVerticalAlignment('middle').merge();
     }
     // 渋谷神南タブへの自動反映(buildStoreInventorySheet)はここでは呼ばない——doPostは同期実行のため
     // ここで呼ぶと「棚卸完了」ボタンの応答がその処理時間分遅くなり、送信中の表示が長引く原因になった
