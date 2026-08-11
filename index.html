@@ -3967,10 +3967,12 @@ let _machinePhotoLastByMachine = {};
 function renderMachinePhotoSampleStrip() {
   const wrap = document.getElementById('machine-photo-samples');
   if (!wrap) return;
+  // height:autoで元画像の縦横比のまま表示する（固定height+object-fitだと切り取られて見えることがあるため、
+  // 幅だけ決めて高さは追従させ、必ず画像全体が表示されるようにする）
   wrap.innerHTML = MACHINE_PHOTO_SLOTS.map((slot, i) => `
-    <div style="width:90px;text-align:center">
-      <img src="${slot.sample}" onclick="showLostImage(this.src)" style="width:90px;height:110px;object-fit:contain;background:#f4f4f4;border-radius:6px;border:1px solid #ddd;cursor:zoom-in">
-      <div style="font-size:10px;color:#666;margin-top:2px">${i + 1}. ${esc(slot.label)}</div>
+    <div style="width:150px;text-align:center">
+      <img src="${slot.sample}" onclick="showLostImage(this.src)" style="width:150px;height:auto;display:block;background:#f4f4f4;border-radius:6px;border:1px solid #ddd;cursor:zoom-in">
+      <div style="font-size:11px;color:#666;margin-top:4px">${i + 1}. ${esc(slot.label)}</div>
     </div>`).join('');
 }
 
