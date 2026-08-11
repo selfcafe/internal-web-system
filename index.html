@@ -4033,8 +4033,8 @@ function renderMachinePhotoSlots() {
     return `
     <div style="background:white;border-radius:10px;padding:10px;box-shadow:0 1px 4px rgba(0,0,0,.08)">
       <div style="font-weight:600;font-size:13px;color:#22703d;margin-bottom:6px">${catIdx + 1}. ${esc(slot.label)}</div>
-      <div style="font-size:10px;color:#999;margin-bottom:4px">お手本</div>
-      <img src="${slot.sample}" style="width:100%;height:80px;object-fit:cover;border-radius:6px;border:1px solid #ddd;margin-bottom:8px">
+      <div style="font-size:10px;color:#999;margin-bottom:4px">お手本（タップで拡大）</div>
+      <img src="${slot.sample}" onclick="showLostImage(this.src)" style="width:100%;height:160px;object-fit:contain;background:#f4f4f4;border-radius:6px;border:1px solid #ddd;margin-bottom:8px;cursor:zoom-in">
       <div style="display:flex;gap:6px;flex-wrap:wrap">${machineCells}</div>
     </div>`;
   }).join('');
