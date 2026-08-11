@@ -5215,36 +5215,46 @@ async function renderMachinePhotoAdmin() {
     return `<span style="color:${color};font-weight:700;font-size:12px">${daysSince}日前</span>`;
   };
 
-  const buildRegionTable = regionId => {
-    const rows = REGIONS[regionId].stores.flatMap(storeId => {
-      const storeName = STORES[storeId] || storeId;
-      const enabled = isMachinePhotoEnabled(storeId);
-      const nameCell = `${esc(storeName)}${enabled ? '' : '<span style="color:#999;font-weight:400;font-size:11px"> (無効)</span>'}`;
-      const machines = (statusByStore[storeId] || []).slice().sort((a, b) => a.machineIndex - b.machineIndex);
-      if (!machines.length) {
-        return [`<tr style="border-bottom:1px solid #eee${enabled ? '' : ';opacity:.5'}">
-          <td style="font-size:13px;padding:7px 10px;white-space:nowrap;color:#22703d;font-weight:600">${nameCell}</td>
-          <td colspan="4" style="color:#aaa;font-size:12px;padding:7px 10px">マシン台数の設定がありません</td>
-        </tr>`];
-      }
-      return machines.map(m => `<tr style="border-bottom:1px solid #eee${enabled ? '' : ';opacity:.5'}">
-        <td style="font-size:13px;padding:7px 10px;white-space:nowrap;color:#22703d;font-weight:600">${nameCell}</td>
-        <td style="font-size:13px;padding:7px 10px;white-space:nowrap">マシン${MACHINE_NUMBER_LABELS[m.machineIndex] || (m.machineIndex + 1)}</td>
-        <td style="font-size:13px;padding:7px 10px;white-space:nowrap">${m.uploadedAt ? esc(String(m.uploadedAt).slice(0,16)) : '—'}</td>
-        <td style="padding:7px 10px;white-space:nowrap">${daysBadge(m.daysSince)}</td>
-        <td style="padding:5px 8px">${m.photoUrls && m.photoUrls.length ? buildLostImageCell(m.photoUrls, 44) : '<span style="color:#ccc;font-size:11px">なし</span>'}</td>
-      </tr>`);
-    }).join('');
+  // 地域ごとにアコーディオンを分けていると開閉クリックが増えるため、1つの表にまとめる。
+  // 店舗名はマシン台数分の行にrowspanでまとめ、同じ店舗名が何行も繰り返されるのを防ぐ
+  const buildAllStoresTable = () => {
+    const rowsHtml = [];
+    ['tokai', 'kansai', 'kanto'].forEach(regionId => {
+      REGIONS[regionId].stores.forEach(storeId => {
+        const storeName = STORES[storeId] || storeId;
+        const enabled = isMachinePhotoEnabled(storeId);
+        const machines = (statusByStore[storeId] || []).slice().sort((a, b) => a.machineIndex - b.machineIndex);
+        const nameCell = `<td rowspan="${machines.length || 1}" style="font-size:13px;padding:7px 10px;white-space:nowrap;color:#22703d;font-weight:600;border-bottom:1px solid #ddd;vertical-align:top">
+          ${esc(storeName)}${enabled ? '' : '<span style="color:#999;font-weight:400;font-size:11px"> (無効)</span>'}
+          <div style="font-size:10px;color:#999;font-weight:400">${esc(REGIONS[regionId].label)}</div>
+        </td>`;
+        if (!machines.length) {
+          rowsHtml.push(`<tr style="${enabled ? '' : 'opacity:.5'}">${nameCell}
+            <td colspan="4" style="color:#aaa;font-size:12px;padding:7px 10px;border-bottom:1px solid #eee">マシン台数の設定がありません</td>
+          </tr>`);
+          return;
+        }
+        machines.forEach((m, idx) => {
+          rowsHtml.push(`<tr style="${enabled ? '' : 'opacity:.5'}">
+            ${idx === 0 ? nameCell : ''}
+            <td style="font-size:13px;padding:7px 10px;white-space:nowrap;border-bottom:1px solid #eee">マシン${MACHINE_NUMBER_LABELS[m.machineIndex] || (m.machineIndex + 1)}</td>
+            <td style="font-size:13px;padding:7px 10px;white-space:nowrap;border-bottom:1px solid #eee">${m.uploadedAt ? esc(String(m.uploadedAt).slice(0,16)) : '—'}</td>
+            <td style="padding:7px 10px;white-space:nowrap;border-bottom:1px solid #eee">${daysBadge(m.daysSince)}</td>
+            <td style="padding:5px 8px;border-bottom:1px solid #eee">${m.photoUrls && m.photoUrls.length ? buildLostImageCell(m.photoUrls, 44) : '<span style="color:#ccc;font-size:11px">なし</span>'}</td>
+          </tr>`);
+        });
+      });
+    });
     return `<div style="overflow-x:auto">
       <table style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);table-layout:fixed">
         <thead><tr style="background:#c2d63a;color:#1a2a05">
-          <th style="text-align:left;font-size:13px;padding:9px 10px;width:120px">店舗</th>
+          <th style="text-align:left;font-size:13px;padding:9px 10px;width:150px">店舗</th>
           <th style="text-align:left;font-size:13px;padding:9px 10px;width:80px">マシン</th>
           <th style="text-align:left;font-size:13px;padding:9px 10px;width:140px">最終提出日時</th>
           <th style="text-align:left;font-size:13px;padding:9px 10px;width:90px">経過</th>
           <th style="text-align:left;font-size:13px;padding:9px 10px">写真5点</th>
         </tr></thead>
-        <tbody>${rows}</tbody>
+        <tbody>${rowsHtml.join('')}</tbody>
       </table>
     </div>`;
   };
@@ -5269,17 +5279,9 @@ async function renderMachinePhotoAdmin() {
       </div>
     </div>
 
-    ${['tokai','kansai','kanto'].map(regionId => `
-    <div class="settings-card" style="margin-bottom:16px;padding:0;overflow:hidden">
-      <div class="settings-accordion-hdr" onclick="toggleLostAccordion('admin-machine-${regionId}-body','admin-machine-${regionId}-arrow')" style="cursor:pointer">
-        <span>${esc(REGIONS[regionId].label)}</span>
-        <span id="admin-machine-${regionId}-arrow" style="font-size:12px;color:#888">▼ 閉じる</span>
-      </div>
-      <div id="admin-machine-${regionId}-body" style="padding:0 12px 12px">
-        ${buildRegionTable(regionId)}
-      </div>
-    </div>
-  `).join('')}`;
+    <div class="settings-card" style="margin-bottom:16px;padding:12px">
+      ${buildAllStoresTable()}
+    </div>`;
 }
 
 function toggleMachinePhotoCfgGroup() {
