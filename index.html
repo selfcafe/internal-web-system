@@ -5225,8 +5225,18 @@ async function renderMachinePhotoAdmin() {
         const enabled = isMachinePhotoEnabled(storeId);
         const machines = (statusByStore[storeId] || []).slice().sort((a, b) => a.machineIndex - b.machineIndex);
         const nameCell = `<td rowspan="${machines.length || 1}" style="font-size:13px;padding:7px 10px;white-space:nowrap;color:#22703d;font-weight:600;border-bottom:1px solid #ddd;vertical-align:top">
-          ${esc(storeName)}${enabled ? '' : '<span style="color:#999;font-weight:400;font-size:11px"> (無効)</span>'}
-          <div style="font-size:10px;color:#999;font-weight:400">${esc(REGIONS[regionId].label)}</div>
+          <div>${esc(storeName)}</div>
+          <div style="font-size:10px;color:#999;font-weight:400;margin-bottom:6px">${esc(REGIONS[regionId].label)}</div>
+          <label style="display:flex;align-items:center;gap:4px;font-size:11px;font-weight:400;color:#555;margin-bottom:4px;white-space:nowrap;cursor:pointer">
+            <input type="checkbox" ${enabled ? 'checked' : ''} onchange="setMachinePhotoEnabled('${esc(storeId)}', this.checked);renderMachinePhotoAdmin()">
+            アルバム有効
+          </label>
+          <label style="display:flex;align-items:center;gap:4px;font-size:11px;font-weight:400;color:#555;white-space:nowrap">
+            台数：
+            <input type="number" min="1" max="10" value="${getMachinePhotoMachineCount(storeId)}"
+              style="width:44px;border:1px solid #ddd;border-radius:4px;padding:2px 4px;font-size:11px;font-family:inherit"
+              onchange="setMachinePhotoMachineCount('${esc(storeId)}', this.value);renderMachinePhotoAdmin()">
+          </label>
         </td>`;
         if (!machines.length) {
           rowsHtml.push(`<tr style="${enabled ? '' : 'opacity:.5'}">${nameCell}
@@ -5260,58 +5270,10 @@ async function renderMachinePhotoAdmin() {
   };
 
   container.innerHTML = `
-    <!-- アルバム機能 店舗設定（ON/OFF） -->
-    <div class="settings-card" style="margin-bottom:16px;padding:12px">
-      <div class="settings-accordion-hdr" onclick="toggleMachinePhotoCfgGroup()">
-        <span>アルバム機能 店舗設定</span>
-        <span id="machine-photo-cfg-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
-      </div>
-      <div id="machine-photo-cfg-body" style="display:none;margin-top:10px">
-        <div class="settings-accordion-body">
-          <div style="font-size:12px;color:#888;margin-bottom:10px">マシン点検が不要な店舗はチェックを外すと、パートナー画面のチェックシートタブ内「アルバム」サブタブが非表示になります（デフォルトは全店舗ON）。</div>
-          <input type="text" placeholder="店舗名で検索..." oninput="filterStoreOptions('machine-photo-cfg-store-sel', this.value)"
-            style="border:1px solid #ddd;border-radius:6px;padding:7px 12px;font-size:13px;font-family:inherit;width:100%;margin-bottom:8px;box-sizing:border-box">
-          <select id="machine-photo-cfg-store-sel" style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:100%;margin-bottom:12px" onchange="renderMachinePhotoCfg()">
-            ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}
-          </select>
-          <div id="machine-photo-cfg-inner"></div>
-        </div>
-      </div>
-    </div>
-
+    <div style="font-size:12px;color:#888;margin-bottom:10px">マシン点検が不要な店舗は「アルバム有効」のチェックを外すと、パートナー画面のチェックシートタブ内「アルバム」サブタブが非表示になります（デフォルトは全店舗ON）。マシン台数は店舗ごとに変更できます。</div>
     <div class="settings-card" style="margin-bottom:16px;padding:12px">
       ${buildAllStoresTable()}
     </div>`;
-}
-
-function toggleMachinePhotoCfgGroup() {
-  const body = document.getElementById('machine-photo-cfg-body');
-  const arrow = document.getElementById('machine-photo-cfg-arrow');
-  if (!body) return;
-  const open = body.style.display === 'none';
-  body.style.display = open ? 'block' : 'none';
-  if (arrow) arrow.textContent = open ? '▼ 閉じる' : '▶ タップして開く';
-  if (open) renderMachinePhotoCfg();
-}
-
-function renderMachinePhotoCfg() {
-  const sel = document.getElementById('machine-photo-cfg-store-sel');
-  const inner = document.getElementById('machine-photo-cfg-inner');
-  if (!sel || !inner) return;
-  const sid = sel.value;
-  const enabled = isMachinePhotoEnabled(sid);
-  const count = getMachinePhotoMachineCount(sid);
-  inner.innerHTML = `
-    <label style="display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600;margin-bottom:12px">
-      <input type="checkbox" ${enabled ? 'checked' : ''} onchange="setMachinePhotoEnabled('${esc(sid)}', this.checked)">
-      この店舗でアルバム機能（機械内点検写真）を有効にする
-    </label>
-    <label style="display:flex;align-items:center;gap:8px;font-size:13px">
-      マシン台数：
-      <input type="number" min="1" max="10" value="${count}" style="width:60px;border:1px solid #ddd;border-radius:6px;padding:5px 8px;font-size:13px;font-family:inherit"
-        onchange="setMachinePhotoMachineCount('${esc(sid)}', this.value)">
-      台（各カテゴリでこの台数分の写真をアップロードします）
-    </label>`;
 }
 
 /* 店舗選択セレクトの候補を店舗名で絞り込み。選択中の店舗が絞り込みで隠れてしまった場合は
