@@ -3932,20 +3932,21 @@ function renderMachinePhotoAlbum(wrap) {
   wrap.innerHTML = `
     <div style="max-width:1100px">
       <div style="font-size:12px;color:#b45309;background:#fef9c3;border:1px solid #fde68a;border-radius:6px;padding:8px 12px;margin-bottom:12px;line-height:1.7">
-        毎月5日・10日・15日・20日・25日・30日を目安に、マシン庫内の写真セットをアップロードしてください。<br>
+        毎月5日・10日・15日・20日・25日・30日を目安に、マシン庫内の写真をアップロードしてください。<br>
         フィルター切れ・材料切れ・カップ切れなどのトラブルを未然に防ぐための点検です。<br>
         5日周期での提出が難しい店舗は、できるだけ間隔があかないようご対応をお願いします。<br>
         ※フィルターは必ず正面から撮影してください（お手本の画角に合わせて撮影してください）。<br>
-        ※マシンが複数台ある店舗は、各カテゴリでマシン①・②…とすべて撮影してください。
+        ※マシンごとに5項目すべて撮影すると、そのマシン単位でアップロードできます。マシンが1台しか無い店舗はマシン①だけで大丈夫です。<br>
+        ※マシンは向かって左から①②③…の順に撮影してください。
       </div>
-      <div id="machine-photo-last-upload" style="font-size:13px;color:#555;margin-bottom:14px"></div>
-      <div id="machine-photo-slots" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(260px,1fr));gap:14px;margin-bottom:16px"></div>
-      <button id="machine-photo-submit-btn" onclick="submitMachinePhotoSet()" disabled
-        style="background:#22703d;color:white;padding:10px 22px;font-size:14px;font-weight:700;border-radius:6px;border:none;cursor:pointer;font-family:inherit;opacity:.5">写真をすべて選択してアップロード</button>
-      <div id="machine-photo-msg" style="font-size:13px;margin-top:8px;min-height:18px"></div>
+      <div style="font-weight:600;font-size:12px;color:#22703d;margin-bottom:6px">お手本（タップで拡大）</div>
+      <div id="machine-photo-samples" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px"></div>
+      <div id="machine-photo-machines" style="display:flex;flex-direction:column;gap:16px"></div>
+      <div id="machine-photo-msg" style="font-size:13px;margin-top:10px;min-height:18px"></div>
     </div>`;
+  renderMachinePhotoSampleStrip();
   _ensureMachinePhotoItemsShape(getMachinePhotoMachineCount(storeTab));
-  renderMachinePhotoSlots();
+  renderMachinePhotoMachines();
   loadMachinePhotoLastUpload(storeTab);
 }
 
@@ -3960,6 +3961,18 @@ const MACHINE_PHOTO_SLOTS = [
 // { カテゴリキー: [{blob,url}|null, ...] }。各配列の長さ=現在の台数(_machinePhotoItemsCount)
 let _machinePhotoItems = {};
 let _machinePhotoItemsCount = 0;
+// { machineIndex: uploaded_at文字列 }。マシンごとの最終提出日時（getMachinePhotoHistoryから算出）
+let _machinePhotoLastByMachine = {};
+
+function renderMachinePhotoSampleStrip() {
+  const wrap = document.getElementById('machine-photo-samples');
+  if (!wrap) return;
+  wrap.innerHTML = MACHINE_PHOTO_SLOTS.map((slot, i) => `
+    <div style="width:90px;text-align:center">
+      <img src="${slot.sample}" onclick="showLostImage(this.src)" style="width:90px;height:110px;object-fit:contain;background:#f4f4f4;border-radius:6px;border:1px solid #ddd;cursor:zoom-in">
+      <div style="font-size:10px;color:#666;margin-top:2px">${i + 1}. ${esc(slot.label)}</div>
+    </div>`).join('');
+}
 
 // 台数が変わった時だけ配列を作り直す（あふれた分のobjectURLは解放）。既存の選択済み写真は
 // 台数が変わらない限り保持されるので、他のサブタブに移動して戻ってきても消えない
@@ -3975,6 +3988,15 @@ function _ensureMachinePhotoItemsShape(count) {
   _machinePhotoItemsCount = count;
 }
 
+// そのマシン(列)が'empty'(未入力)/'partial'(一部だけ入力)/'full'(5項目すべて入力済み)のどれか。
+// 台数無しの店舗は他のマシン列を触らずマシン①だけ'full'にすればよく、②③は'empty'のまま無視される
+function _machinePhotoMachineFillStatus(mIdx) {
+  const filled = MACHINE_PHOTO_SLOTS.filter(s => !!(_machinePhotoItems[s.key] || [])[mIdx]).length;
+  if (filled === 0) return 'empty';
+  if (filled === MACHINE_PHOTO_SLOTS.length) return 'full';
+  return 'partial';
+}
+
 function previewMachinePhoto(categoryKey, machineIdx, input) {
   const file = input.files && input.files[0];
   input.value = '';
@@ -3984,7 +4006,7 @@ function previewMachinePhoto(categoryKey, machineIdx, input) {
     const prev = arr[machineIdx];
     if (prev) URL.revokeObjectURL(prev.url);
     arr[machineIdx] = { blob, url: URL.createObjectURL(blob) };
-    renderMachinePhotoSlots();
+    renderMachinePhotoMachines();
   });
 }
 
@@ -3993,103 +4015,107 @@ function removeMachinePhoto(categoryKey, machineIdx) {
   const it = arr[machineIdx];
   if (it) URL.revokeObjectURL(it.url);
   arr[machineIdx] = null;
-  renderMachinePhotoSlots();
+  renderMachinePhotoMachines();
 }
 
-function _machinePhotoAllFilled() {
-  return MACHINE_PHOTO_SLOTS.every(s => {
-    const arr = _machinePhotoItems[s.key] || [];
-    return arr.length === _machinePhotoItemsCount && arr.every(Boolean);
-  });
+function _machinePhotoLastText(mIdx) {
+  const last = _machinePhotoLastByMachine[mIdx];
+  if (!last) return '前回提出：まだ提出がありません';
+  const uploadedDate = String(last).slice(0, 10);
+  const daysSince = Math.round((new Date(new Date().toLocaleDateString('sv')) - new Date(uploadedDate)) / (24 * 60 * 60 * 1000));
+  return `前回提出：${uploadedDate}（${daysSince}日前）`;
 }
 
-function renderMachinePhotoSlots() {
-  const wrap = document.getElementById('machine-photo-slots');
+// マシンごとに5項目の入力欄と、そのマシン専用のアップロードボタンを描画する
+function renderMachinePhotoMachines() {
+  const wrap = document.getElementById('machine-photo-machines');
   if (!wrap) return;
-  wrap.innerHTML = MACHINE_PHOTO_SLOTS.map((slot, catIdx) => {
-    const items = _machinePhotoItems[slot.key] || [];
-    const machineCells = items.map((item, mIdx) => `
-      <div style="flex:1;min-width:110px">
-        <div style="font-size:10px;color:#888;margin-bottom:4px">マシン${MACHINE_NUMBER_LABELS[mIdx] || (mIdx + 1)}</div>
+  wrap.innerHTML = Array.from({ length: _machinePhotoItemsCount }, (_, mIdx) => {
+    const status = _machinePhotoMachineFillStatus(mIdx);
+    const machineLabel = MACHINE_NUMBER_LABELS[mIdx] || (mIdx + 1);
+    const cells = MACHINE_PHOTO_SLOTS.map((slot, catIdx) => {
+      const item = (_machinePhotoItems[slot.key] || [])[mIdx];
+      return `
+      <div style="min-width:110px;flex:1">
+        <div style="font-size:11px;color:#888;margin-bottom:4px">${catIdx + 1}. ${esc(slot.label)}</div>
         ${item ? `
           <div style="position:relative">
-            <img src="${item.url}" style="width:100%;height:90px;object-fit:cover;border-radius:6px;border:2px solid #22703d">
+            <img src="${item.url}" style="width:100%;height:80px;object-fit:cover;border-radius:6px;border:2px solid #22703d">
             <button onclick="removeMachinePhoto('${slot.key}',${mIdx})" title="削除"
               style="position:absolute;top:-6px;right:-6px;background:#ef4444;color:#fff;border:none;border-radius:50%;width:20px;height:20px;font-size:12px;line-height:18px;cursor:pointer;padding:0">×</button>
           </div>
         ` : `
           <div style="display:flex;gap:4px">
-            <label style="flex:1;text-align:center;display:inline-flex;align-items:center;justify-content:center;background:#f0f7e8;border:1px solid #b8d4a0;border-radius:6px;padding:9px 2px;font-size:14px;cursor:pointer;font-family:inherit">
+            <label style="flex:1;text-align:center;background:#f0f7e8;border:1px solid #b8d4a0;border-radius:6px;padding:9px 2px;font-size:14px;cursor:pointer;font-family:inherit">
               📷
               <input type="file" accept="image/*" capture="environment" style="display:none" onchange="previewMachinePhoto('${slot.key}',${mIdx},this)">
             </label>
-            <label style="flex:1;text-align:center;display:inline-flex;align-items:center;justify-content:center;background:#f0f7e8;border:1px solid #b8d4a0;border-radius:6px;padding:9px 2px;font-size:14px;cursor:pointer;font-family:inherit">
+            <label style="flex:1;text-align:center;background:#f0f7e8;border:1px solid #b8d4a0;border-radius:6px;padding:9px 2px;font-size:14px;cursor:pointer;font-family:inherit">
               📁
               <input type="file" accept="image/*" style="display:none" onchange="previewMachinePhoto('${slot.key}',${mIdx},this)">
             </label>
           </div>
         `}
-      </div>`).join('');
+      </div>`;
+    }).join('');
     return `
-    <div style="background:white;border-radius:10px;padding:10px;box-shadow:0 1px 4px rgba(0,0,0,.08)">
-      <div style="font-weight:600;font-size:13px;color:#22703d;margin-bottom:6px">${catIdx + 1}. ${esc(slot.label)}</div>
-      <div style="font-size:10px;color:#999;margin-bottom:4px">お手本（タップで拡大）</div>
-      <img src="${slot.sample}" onclick="showLostImage(this.src)" style="width:100%;height:160px;object-fit:contain;background:#f4f4f4;border-radius:6px;border:1px solid #ddd;margin-bottom:8px;cursor:zoom-in">
-      <div style="display:flex;gap:6px;flex-wrap:wrap">${machineCells}</div>
+    <div style="background:white;border-radius:10px;padding:14px;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;flex-wrap:wrap;gap:6px">
+        <div style="font-weight:700;font-size:14px;color:#22703d">マシン${machineLabel}</div>
+        <div id="machine-photo-last-${mIdx}" style="font-size:12px;color:#888">${_machinePhotoLastText(mIdx)}</div>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:12px">${cells}</div>
+      <button onclick="submitMachinePhotoForMachine(${mIdx})" ${status === 'full' ? '' : 'disabled'}
+        style="background:#22703d;color:white;padding:8px 18px;font-size:13px;font-weight:700;border-radius:6px;border:none;cursor:pointer;font-family:inherit;${status === 'full' ? '' : 'opacity:.5'}">
+        マシン${machineLabel}をアップロード
+      </button>
+      ${status === 'partial' ? `<div style="font-size:11px;color:#b45309;margin-top:6px">※このマシンは5項目すべて撮影すると提出できます</div>` : ''}
     </div>`;
   }).join('');
-  const btn = document.getElementById('machine-photo-submit-btn');
-  if (btn) {
-    const allFilled = _machinePhotoAllFilled();
-    const total = MACHINE_PHOTO_SLOTS.length * _machinePhotoItemsCount;
-    btn.disabled = !allFilled;
-    btn.style.opacity = allFilled ? '1' : '.5';
-    btn.textContent = allFilled ? `この${total}枚をアップロード` : '写真をすべて選択してアップロード';
-  }
 }
 
 async function loadMachinePhotoLastUpload(storeId) {
-  const wrap = document.getElementById('machine-photo-last-upload');
-  if (!wrap) return;
-  wrap.textContent = '読み込み中…';
   try {
     const history = await gasGet('getMachinePhotoHistory', { storeId });
-    if (!history || !history.length) { wrap.textContent = '前回提出：まだ提出がありません'; return; }
-    const last = history[0];
-    const uploadedDate = String(last.uploaded_at).slice(0, 10);
-    const daysSince = Math.round((new Date(new Date().toLocaleDateString('sv')) - new Date(uploadedDate)) / (24*60*60*1000));
-    wrap.textContent = `前回提出：${uploadedDate}（${daysSince}日前）`;
+    _machinePhotoLastByMachine = {};
+    (history || []).forEach(r => {
+      const key = r.machine_index;
+      if (_machinePhotoLastByMachine[key] == null || String(r.uploaded_at) > String(_machinePhotoLastByMachine[key])) {
+        _machinePhotoLastByMachine[key] = r.uploaded_at;
+      }
+    });
   } catch(e) {
     console.error('loadMachinePhotoLastUpload error:', e);
-    wrap.textContent = '';
+    _machinePhotoLastByMachine = {};
+  }
+  for (let m = 0; m < _machinePhotoItemsCount; m++) {
+    const el = document.getElementById('machine-photo-last-' + m);
+    if (el) el.textContent = _machinePhotoLastText(m);
   }
 }
 
-async function submitMachinePhotoSet() {
-  if (!_machinePhotoAllFilled()) return;
-  const btn = document.getElementById('machine-photo-submit-btn');
+async function submitMachinePhotoForMachine(mIdx) {
+  if (_machinePhotoMachineFillStatus(mIdx) !== 'full') return;
   const msg = document.getElementById('machine-photo-msg');
-  if (btn) { btn.disabled = true; btn.textContent = 'アップロード中…'; }
-  if (msg) msg.textContent = '';
+  if (msg) msg.textContent = 'アップロード中…';
   try {
     const imagesByCategory = {};
     for (const slot of MACHINE_PHOTO_SLOTS) {
-      imagesByCategory[slot.key] = await Promise.all(_machinePhotoItems[slot.key].map(it => _blobToBase64(it.blob)));
+      imagesByCategory[slot.key] = await _blobToBase64(_machinePhotoItems[slot.key][mIdx].blob);
     }
-    const r = await gasPost('saveMachinePhotoSet', { storeId: storeTab, imagesByCategory, imageMime: 'image/jpeg' });
+    const r = await gasPost('saveMachinePhotoSet', { storeId: storeTab, machineIndex: mIdx, imagesByCategory, imageMime: 'image/jpeg' });
     if (r.error) throw new Error(r.error);
     MACHINE_PHOTO_SLOTS.forEach(slot => {
-      (_machinePhotoItems[slot.key] || []).forEach(it => it && URL.revokeObjectURL(it.url));
-      _machinePhotoItems[slot.key] = new Array(_machinePhotoItemsCount).fill(null);
+      const it = _machinePhotoItems[slot.key][mIdx];
+      if (it) URL.revokeObjectURL(it.url);
+      _machinePhotoItems[slot.key][mIdx] = null;
     });
-    renderMachinePhotoSlots();
+    renderMachinePhotoMachines();
     await loadMachinePhotoLastUpload(storeTab);
-    if (msg) msg.textContent = 'アップロードしました。ご協力ありがとうございます。';
+    if (msg) msg.textContent = `マシン${MACHINE_NUMBER_LABELS[mIdx] || (mIdx + 1)}をアップロードしました。ご協力ありがとうございます。`;
   } catch(e) {
-    console.error('submitMachinePhotoSet error:', e);
+    console.error('submitMachinePhotoForMachine error:', e);
     if (msg) msg.textContent = 'アップロードに失敗しました: ' + e.message;
-  } finally {
-    renderMachinePhotoSlots();
   }
 }
 
@@ -5174,9 +5200,12 @@ async function renderMachinePhotoAdmin() {
   container.style.display = 'block';
   container.innerHTML = `<div style="color:#aaa;font-size:13px;padding:10px 0">読み込み中…</div>`;
 
-  const statusRows = await gasGet('getMachinePhotoStatus');
+  const statusRows = await gasGet('getMachinePhotoStatus'); // [{storeId, machineIndex, uploadedAt, daysSince, photoUrls}]
   const statusByStore = {};
-  (statusRows || []).forEach(r => { statusByStore[r.storeId] = r; });
+  (statusRows || []).forEach(r => {
+    if (!statusByStore[r.storeId]) statusByStore[r.storeId] = [];
+    statusByStore[r.storeId].push(r);
+  });
 
   const daysBadge = daysSince => {
     if (daysSince == null) return '<span style="color:#ef4444;font-weight:700;font-size:12px">未提出</span>';
@@ -5185,21 +5214,30 @@ async function renderMachinePhotoAdmin() {
   };
 
   const buildRegionTable = regionId => {
-    const rows = REGIONS[regionId].stores.map(storeId => {
-      const s = statusByStore[storeId];
+    const rows = REGIONS[regionId].stores.flatMap(storeId => {
       const storeName = STORES[storeId] || storeId;
       const enabled = isMachinePhotoEnabled(storeId);
-      return `<tr style="border-bottom:1px solid #eee${enabled ? '' : ';opacity:.5'}">
-        <td style="font-size:13px;padding:7px 10px;white-space:nowrap;color:#22703d;font-weight:600">${esc(storeName)}${enabled ? '' : '<span style="color:#999;font-weight:400;font-size:11px"> (無効)</span>'}</td>
-        <td style="font-size:13px;padding:7px 10px;white-space:nowrap">${s ? esc(String(s.uploadedAt).slice(0,16)) : '—'}</td>
-        <td style="padding:7px 10px;white-space:nowrap">${daysBadge(s ? s.daysSince : null)}</td>
-        <td style="padding:5px 8px">${s ? buildLostImageCell(s.photoUrls, 44) : '<span style="color:#ccc;font-size:11px">なし</span>'}</td>
-      </tr>`;
+      const nameCell = `${esc(storeName)}${enabled ? '' : '<span style="color:#999;font-weight:400;font-size:11px"> (無効)</span>'}`;
+      const machines = (statusByStore[storeId] || []).slice().sort((a, b) => a.machineIndex - b.machineIndex);
+      if (!machines.length) {
+        return [`<tr style="border-bottom:1px solid #eee${enabled ? '' : ';opacity:.5'}">
+          <td style="font-size:13px;padding:7px 10px;white-space:nowrap;color:#22703d;font-weight:600">${nameCell}</td>
+          <td colspan="4" style="color:#aaa;font-size:12px;padding:7px 10px">マシン台数の設定がありません</td>
+        </tr>`];
+      }
+      return machines.map(m => `<tr style="border-bottom:1px solid #eee${enabled ? '' : ';opacity:.5'}">
+        <td style="font-size:13px;padding:7px 10px;white-space:nowrap;color:#22703d;font-weight:600">${nameCell}</td>
+        <td style="font-size:13px;padding:7px 10px;white-space:nowrap">マシン${MACHINE_NUMBER_LABELS[m.machineIndex] || (m.machineIndex + 1)}</td>
+        <td style="font-size:13px;padding:7px 10px;white-space:nowrap">${m.uploadedAt ? esc(String(m.uploadedAt).slice(0,16)) : '—'}</td>
+        <td style="padding:7px 10px;white-space:nowrap">${daysBadge(m.daysSince)}</td>
+        <td style="padding:5px 8px">${m.photoUrls && m.photoUrls.length ? buildLostImageCell(m.photoUrls, 44) : '<span style="color:#ccc;font-size:11px">なし</span>'}</td>
+      </tr>`);
     }).join('');
     return `<div style="overflow-x:auto">
       <table style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);table-layout:fixed">
         <thead><tr style="background:#c2d63a;color:#1a2a05">
-          <th style="text-align:left;font-size:13px;padding:9px 10px;width:130px">店舗</th>
+          <th style="text-align:left;font-size:13px;padding:9px 10px;width:120px">店舗</th>
+          <th style="text-align:left;font-size:13px;padding:9px 10px;width:80px">マシン</th>
           <th style="text-align:left;font-size:13px;padding:9px 10px;width:140px">最終提出日時</th>
           <th style="text-align:left;font-size:13px;padding:9px 10px;width:90px">経過</th>
           <th style="text-align:left;font-size:13px;padding:9px 10px">写真5点</th>

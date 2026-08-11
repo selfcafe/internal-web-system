@@ -46,7 +46,7 @@ const LOST_COLS = ['id','store_id','found_date','note','image_url','added_at'];
 // 店舗によってマシン台数が異なり(1台〜複数台)、カテゴリごとに台数分の写真が必要なため、
 // 固定列ではなくphotos_json列に{カテゴリキー:[url,...]}のJSONで可変枚数を保持する
 const SHEET_MACHINE_PHOTOS = 'machine_photos';
-const MACHINE_PHOTO_COLS = ['id','store_id','uploaded_at','photos_json'];
+const MACHINE_PHOTO_COLS = ['id','store_id','machine_index','uploaded_at','photos_json'];
 // 発注を「納品済み」にした際のログ。1回の操作で1行追加（append-onlyのログシート、
 // ordersのような全件削除→再送信はしない。自動削除もしない——消えては困る記録のため）
 const SHEET_DELIVERY_HISTORY = 'delivery_history';
@@ -280,7 +280,7 @@ function doPost(e) {
     else if (b.action === 'deleteLeaveRequest')  result = deleteLeaveRequest(b.id);
     else if (b.action === 'saveDeliveryHistory') result = saveDeliveryHistory(b.storeId, b.row);
     else if (b.action === 'clearDeliveryHistory') result = clearDeliveryHistory(b.storeId);
-    else if (b.action === 'saveMachinePhotoSet') result = saveMachinePhotoSet(b.storeId, b.imagesByCategory, b.imageMime);
+    else if (b.action === 'saveMachinePhotoSet') result = saveMachinePhotoSet(b.storeId, b.machineIndex, b.imagesByCategory, b.imageMime);
     else result = { error: 'Unknown action: ' + b.action };
   } catch(err) {
     result = { error: err.message };
@@ -685,7 +685,7 @@ function _trashDriveImages(imageUrlList) {
 // パートナーが5点セットをアップロードし、フィルター/材料/カップ切れ等を早期発見する）
 // ----------------------------------------------------------------
 
-const MACHINE_PHOTOS_CACHE_KEY = 'machine_photos_rows_v2';
+const MACHINE_PHOTOS_CACHE_KEY = 'machine_photos_rows_v3';
 function _machinePhotosRowsCached_() {
   const cache = CacheService.getScriptCache();
   const cached = cache.get(MACHINE_PHOTOS_CACHE_KEY);
@@ -703,54 +703,78 @@ function _invalidateMachinePhotosCache_() {
   try { CacheService.getScriptCache().remove(MACHINE_PHOTOS_CACHE_KEY); } catch (e) {}
 }
 
-// imagesByCategory: { カテゴリキー: [base64, ...] }。配列の長さ=その店舗のマシン台数
-// （台数は店舗ごとに異なるため、送られてきた枚数をそのまま台数として扱う。バックエンド側では台数を検証しない）
-function saveMachinePhotoSet(storeId, imagesByCategory, imageMime) {
+// 店舗ごとのマシン台数設定（app_settingsの'machine_photo_machine_counts'、{storeId:count}のJSON）。
+// フロント側のデフォルト値(3台)と合わせておく
+function _machinePhotoMachineCounts_() {
+  try {
+    const s = getSettings().find(x => x.key === 'machine_photo_machine_counts');
+    return s ? JSON.parse(s.value || '{}') : {};
+  } catch (e) { return {}; }
+}
+function _machinePhotoMachineCount_(storeId, counts) {
+  const n = (counts || _machinePhotoMachineCounts_())[storeId];
+  return (n && n >= 1) ? n : 3;
+}
+
+// マシン1台単位で1回のアップロード。imagesByCategory: { カテゴリキー: base64 }（1カテゴリ1枚）。
+// 台数が違う店舗でも「入力を終えたマシンだけ」個別に送信できるようにするため、
+// 以前の「1回の提出=店舗の全マシン分」という単位をやめ、1行=1店舗×1マシン×1回の点検にした
+// （2026-08-11、3台無い店舗が全マシン分埋めないと送信できなかった問題への対応。
+// 副次効果として1回の送信で扱う画像が最大15枚→5枚に減り、アップロード時間も短縮される）
+function saveMachinePhotoSet(storeId, machineIndex, imagesByCategory, imageMime) {
   const sheet = getSheet(SHEET_MACHINE_PHOTOS);
   ensureHeaders(sheet, MACHINE_PHOTO_COLS);
   const id = Utilities.getUuid();
   const uploadedAt = Utilities.formatDate(new Date(), _sheetTz(), 'yyyy-MM-dd HH:mm:ss');
   const urlsByCategory = {};
   Object.keys(imagesByCategory || {}).forEach(catKey => {
-    urlsByCategory[catKey] = (imagesByCategory[catKey] || []).map((b64, i) =>
-      b64 ? saveImageToDrive(b64, imageMime || 'image/jpeg', 'machine_' + storeId + '_' + id + '_' + catKey + '_' + i) : ''
-    );
+    const b64 = imagesByCategory[catKey];
+    urlsByCategory[catKey] = b64
+      ? saveImageToDrive(b64, imageMime || 'image/jpeg', 'machine_' + storeId + '_' + machineIndex + '_' + id + '_' + catKey)
+      : '';
   });
-  sheet.appendRow([id, storeId, uploadedAt, JSON.stringify(urlsByCategory)]);
+  sheet.appendRow([id, storeId, machineIndex, uploadedAt, JSON.stringify(urlsByCategory)]);
   _invalidateMachinePhotosCache_();
   return { ok: true, urlsByCategory, uploadedAt };
 }
 
-// 管理者一覧用：店舗ごとに最新の1セットだけを残して返す。photoUrlsは全カテゴリ・全台数分を
-// フラットにまとめたサムネイル表示用リスト
+// 管理者一覧用：店舗×マシンごとに最新の1回分を返す（そのマシンが一度も提出されていなければ
+// uploadedAt=nullの「未提出」行として返す）。台数は_machinePhotoMachineCounts_の設定に従う
 function getMachinePhotoStatus() {
   const rows = _machinePhotosRowsCached_();
-  const latestByStore = {};
+  const latestByStoreMachine = {};
   rows.forEach(r => {
-    const prev = latestByStore[r.store_id];
-    if (!prev || String(r.uploaded_at) > String(prev.uploaded_at)) latestByStore[r.store_id] = r;
+    const key = r.store_id + '|' + r.machine_index;
+    const prev = latestByStoreMachine[key];
+    if (!prev || String(r.uploaded_at) > String(prev.uploaded_at)) latestByStoreMachine[key] = r;
   });
+  const machineCounts = _machinePhotoMachineCounts_();
   const todayStr = Utilities.formatDate(new Date(), _sheetTz(), 'yyyy-MM-dd');
-  return Object.keys(latestByStore).map(storeId => {
-    const r = latestByStore[storeId];
-    const uploadedDate = String(r.uploaded_at).slice(0, 10);
-    const daysSince = Math.round((new Date(todayStr) - new Date(uploadedDate)) / (24 * 60 * 60 * 1000));
-    const photoUrls = [].concat(...Object.values(r.photosByCategory || {})).filter(Boolean);
-    return {
-      storeId,
-      uploadedAt: r.uploaded_at,
-      daysSince,
-      photoUrls,
-      photosByCategory: r.photosByCategory || {},
-    };
+  const result = [];
+  Object.keys(_storeNames_()).forEach(storeId => {
+    const count = _machinePhotoMachineCount_(storeId, machineCounts);
+    for (let m = 0; m < count; m++) {
+      const r = latestByStoreMachine[storeId + '|' + m];
+      if (!r) { result.push({ storeId, machineIndex: m, uploadedAt: null, daysSince: null, photoUrls: [] }); continue; }
+      const uploadedDate = String(r.uploaded_at).slice(0, 10);
+      const daysSince = Math.round((new Date(todayStr) - new Date(uploadedDate)) / (24 * 60 * 60 * 1000));
+      result.push({
+        storeId,
+        machineIndex: m,
+        uploadedAt: r.uploaded_at,
+        daysSince,
+        photoUrls: Object.values(r.photosByCategory || {}).filter(Boolean),
+      });
+    }
   });
+  return result;
 }
 
-// パートナー側「前回提出日」表示用：自店舗の過去アップロード履歴（新しい順）
+// パートナー側「前回提出日」表示用：自店舗の過去アップロード履歴（マシンごとに新しい順で使う）
 function getMachinePhotoHistory(storeId) {
   return _machinePhotosRowsCached_()
     .filter(r => String(r.store_id) === String(storeId))
-    .map(r => ({ id: r.id, store_id: r.store_id, uploaded_at: r.uploaded_at, photosByCategory: r.photosByCategory }))
+    .map(r => ({ id: r.id, store_id: r.store_id, machine_index: r.machine_index, uploaded_at: r.uploaded_at, photosByCategory: r.photosByCategory }))
     .sort((a, b) => String(b.uploaded_at).localeCompare(String(a.uploaded_at)));
 }
 
@@ -771,7 +795,7 @@ function purgeOldMachinePhotos() {
     let urls = '';
     try {
       const photosByCategory = JSON.parse((jsonIdx >= 0 ? data[i][jsonIdx] : '') || '{}');
-      urls = [].concat(...Object.values(photosByCategory)).filter(Boolean).join(',');
+      urls = Object.values(photosByCategory).filter(Boolean).join(',');
     } catch (e) {}
     _trashDriveImages(urls);
     sheet.deleteRow(i + 1);
