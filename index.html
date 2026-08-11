@@ -628,6 +628,7 @@
       <div class="checksheet-subtab-bar" id="checksheet-cat-bar">
         <button class="checksheet-subtab" id="checksheet-cat-daily_count" onclick="switchChecksheetCategory('daily_count')">デイリーカウント</button>
         <button class="checksheet-subtab" id="checksheet-cat-clean_check" onclick="switchChecksheetCategory('clean_check')">清掃・点検</button>
+        <button class="checksheet-subtab" id="checksheet-cat-album" onclick="switchChecksheetCategory('album')" style="display:none">アルバム</button>
       </div>
       <div class="checksheet-view-bar" id="checksheet-view-bar">
         <button class="checksheet-view-btn" id="checksheet-view-toggle" onclick="toggleChecksheetView()"></button>
@@ -730,6 +731,7 @@
     </div>
   </div>
 
+
 </div>
 
 <!-- 管理者ポータル -->
@@ -761,6 +763,7 @@
           <div class="admin-menu-item" id="menu-overview"  onclick="menuSelect('view','overview')">発注依頼一覧</div>
           <div class="admin-menu-item" id="menu-history"   onclick="menuSelect('view','history')">履歴</div>
           <div class="admin-menu-item" id="menu-lost"      onclick="menuSelect('view','lost')">忘れ物一覧</div>
+          <div class="admin-menu-item" id="menu-machinePhoto" onclick="menuSelect('view','machinePhoto')">機械内写真</div>
         </div>
       </div>
       <button class="admin-settings-btn" id="admin-settings-btn" onclick="menuSelect('view','settings')" title="設定"><span class="menu-label">設定</span></button>
@@ -778,6 +781,7 @@
     <button class="sub-tab active" id="sub-overview" onclick="switchAdminView('overview')">発注依頼一覧</button>
     <button class="sub-tab"        id="sub-history"  onclick="switchAdminView('history')">履歴</button>
     <button class="sub-tab"        id="sub-lost"     onclick="switchAdminView('lost')">忘れ物一覧</button>
+    <button class="sub-tab"        id="sub-machinePhoto" onclick="switchAdminView('machinePhoto')">機械内写真</button>
   </div>
 
   <div class="summary" id="admin-summary"></div>
@@ -1057,6 +1061,7 @@ async function initGas() {
       if (r.key === 'attendance_store_coords')   localStorage.setItem(ATTENDANCE_COORDS_KEY,  clean(r.value));
       if (r.key === 'attendance_staff_schedule') localStorage.setItem(ATTENDANCE_SCHEDULE_KEY, clean(r.value));
       if (r.key === 'attendance_store_default_schedule') localStorage.setItem(ATTENDANCE_STORE_DEFAULT_SCHEDULE_KEY, clean(r.value));
+      if (r.key === 'machine_photo_disabled_stores') localStorage.setItem(MACHINE_PHOTO_DISABLED_KEY, clean(r.value));
     });
     if (gasKeys.has('all_products') || gasKeys.has('vendor_config')) {
       loadVendorConfig();
@@ -1082,6 +1087,7 @@ async function initGas() {
     if (!gasKeys.has('attendance_store_coords')   && localStorage.getItem(ATTENDANCE_COORDS_KEY))  _gasSaveSetting('attendance_store_coords',   localStorage.getItem(ATTENDANCE_COORDS_KEY));
     if (!gasKeys.has('attendance_staff_schedule') && localStorage.getItem(ATTENDANCE_SCHEDULE_KEY)) _gasSaveSetting('attendance_staff_schedule', localStorage.getItem(ATTENDANCE_SCHEDULE_KEY));
     if (!gasKeys.has('attendance_store_default_schedule') && localStorage.getItem(ATTENDANCE_STORE_DEFAULT_SCHEDULE_KEY)) _gasSaveSetting('attendance_store_default_schedule', localStorage.getItem(ATTENDANCE_STORE_DEFAULT_SCHEDULE_KEY));
+    if (!gasKeys.has('machine_photo_disabled_stores') && localStorage.getItem(MACHINE_PHOTO_DISABLED_KEY)) _gasSaveSetting('machine_photo_disabled_stores', localStorage.getItem(MACHINE_PHOTO_DISABLED_KEY));
     loadCustomStores();
     loadDeletedStores();
     loadStoreRegions();
@@ -1090,6 +1096,7 @@ async function initGas() {
     const pwList = document.getElementById('store-pw-list');
     if (pwList && pwList.innerHTML) pwList.innerHTML = buildStorePwList();
     updatePartnerAttendanceTabVisibility();
+    updatePartnerMachinePhotoTabVisibility();
     return true;
   } catch(e) { console.error('GAS init error:', e); return false; }
 }
@@ -3104,10 +3111,21 @@ function showChecksheetLastMonth() {
 function renderChecksheet() {
   const wrap = document.getElementById('checksheet-table-wrap');
   if (!wrap) return;
-  const groups = _checksheetColumnGroups(storeTab);
 
-  ['daily_count','clean_check'].forEach(k =>
+  ['daily_count','clean_check','album'].forEach(k =>
     document.getElementById('checksheet-cat-'+k)?.classList.toggle('active', k === checksheetActiveCategory));
+
+  // アルバムには当日入力/当月履歴/先月履歴の切替が無いため、その操作バーごと隠す
+  const viewBar = document.getElementById('checksheet-view-bar');
+  if (viewBar) viewBar.style.display = checksheetActiveCategory === 'album' ? 'none' : '';
+  const lastMonthBtn = document.getElementById('checksheet-lastmonth-btn');
+  if (lastMonthBtn) lastMonthBtn.style.display = checksheetActiveCategory === 'album' ? 'none' : '';
+  if (checksheetActiveCategory === 'album') {
+    renderMachinePhotoAlbum(wrap);
+    return;
+  }
+
+  const groups = _checksheetColumnGroups(storeTab);
   const viewBtn = document.getElementById('checksheet-view-toggle');
   if (viewBtn) viewBtn.textContent = checksheetActiveView === 'today' ? '当月のチェックシート履歴' : '当日のチェックシート入力';
   document.getElementById('checksheet-lastmonth-btn')?.classList.toggle('active', checksheetActiveView === 'last_month');
@@ -3296,6 +3314,16 @@ function updatePartnerAttendanceTabVisibility() {
     const lbl = spBtn.querySelector('span');
     if (lbl) lbl.style.visibility = enabled ? '' : 'hidden';
   }
+}
+
+// アルバム（機械内点検写真）タブの表示切替。マシン点検が不要な店舗は管理者側で無効化すると
+// チェックシートタブ内の「アルバム」サブタブごと非表示になる（デフォルトは全店舗ON、
+// 管理者ポータルでチェックを外した店舗だけが無効化される——業務開始のデフォルトOFFとは逆）
+function updatePartnerMachinePhotoTabVisibility() {
+  const enabled = isMachinePhotoEnabled(storeTab);
+  const btn = document.getElementById('checksheet-cat-album');
+  if (btn) btn.style.display = enabled ? '' : 'none';
+  if (!enabled && checksheetActiveCategory === 'album') checksheetActiveCategory = 'daily_count';
 }
 
 // 押し忘れ対策（非ブロック版）: ログイン（セッション復元含む、showPage('store')が呼ばれた時点）で
@@ -3861,6 +3889,151 @@ function renderLostItems(loading = false) {
   container.innerHTML = buildLostTable(items, storeTab);
 }
 
+/* ===== 機械内点検写真（チェックシートタブ内の「アルバム」サブタブ） ===== */
+// アルバム機能の店舗ごとON/OFF。デフォルトは全店舗ON——ここに載った店舗IDだけが無効化される
+// （業務開始のようなデフォルトOFFの試験導入opt-inとは逆の意味を持つリストなので注意）
+const MACHINE_PHOTO_DISABLED_KEY = 'machine_photo_disabled_stores';
+function getMachinePhotoDisabledStores() {
+  try { return JSON.parse(localStorage.getItem(MACHINE_PHOTO_DISABLED_KEY) || '[]'); } catch(_) { return []; }
+}
+function isMachinePhotoEnabled(storeId) { return !getMachinePhotoDisabledStores().includes(storeId); }
+function setMachinePhotoEnabled(storeId, enabled) {
+  const list = getMachinePhotoDisabledStores();
+  const idx = list.indexOf(storeId);
+  if (!enabled && idx < 0) list.push(storeId);
+  if (enabled && idx >= 0) list.splice(idx, 1);
+  localStorage.setItem(MACHINE_PHOTO_DISABLED_KEY, JSON.stringify(list));
+  _gasSaveSetting('machine_photo_disabled_stores', JSON.stringify(list));
+}
+
+// チェックシートタブの「アルバム」サブタブが選択された時に#checksheet-table-wrap内へ描画する
+function renderMachinePhotoAlbum(wrap) {
+  wrap.innerHTML = `
+    <div style="max-width:900px">
+      <div style="font-size:12px;color:#b45309;background:#fef9c3;border:1px solid #fde68a;border-radius:6px;padding:8px 12px;margin-bottom:12px;line-height:1.7">
+        毎月5日・10日・15日・20日・25日・30日を目安に、マシン庫内の写真5点セットをアップロードしてください。<br>
+        フィルター切れ・材料切れ・カップ切れなどのトラブルを未然に防ぐための点検です。<br>
+        5日周期での提出が難しい店舗は、できるだけ間隔があかないようご対応をお願いします。<br>
+        ※フィルターは必ず正面から撮影してください（お手本の画角に合わせて撮影してください）。
+      </div>
+      <div id="machine-photo-last-upload" style="font-size:13px;color:#555;margin-bottom:14px"></div>
+      <div id="machine-photo-slots" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(220px,1fr));gap:14px;margin-bottom:16px"></div>
+      <button id="machine-photo-submit-btn" onclick="submitMachinePhotoSet()" disabled
+        style="background:#22703d;color:white;padding:10px 22px;font-size:14px;font-weight:700;border-radius:6px;border:none;cursor:pointer;font-family:inherit;opacity:.5">5枚すべて選択してアップロード</button>
+      <div id="machine-photo-msg" style="font-size:13px;margin-top:8px;min-height:18px"></div>
+    </div>`;
+  renderMachinePhotoSlots();
+  loadMachinePhotoLastUpload(storeTab);
+}
+
+// 5枠固定。sampleは撮影お手本の静的画像（リポジトリ直下に配置）
+const MACHINE_PHOTO_SLOTS = [
+  { key: 'filter',   label: 'フィルター（正面）',   sample: 'machine-sample-1.jpg' },
+  { key: 'cups',     label: 'カップ庫内',           sample: 'machine-sample-2.jpg' },
+  { key: 'material', label: '原料タンク',           sample: 'machine-sample-3.jpg' },
+  { key: 'overall',  label: '庫内全体',             sample: 'machine-sample-4.jpg' },
+  { key: 'usedfilter', label: '使用済みフィルター', sample: 'machine-sample-5.jpg' },
+];
+let _machinePhotoItems = [null, null, null, null, null]; // [{blob,url}|null] x5
+
+function previewMachinePhoto(idx, input) {
+  const file = input.files && input.files[0];
+  input.value = '';
+  if (!file) return;
+  compressLostImage(file).then(blob => {
+    const prev = _machinePhotoItems[idx];
+    if (prev) URL.revokeObjectURL(prev.url);
+    _machinePhotoItems[idx] = { blob, url: URL.createObjectURL(blob) };
+    renderMachinePhotoSlots();
+  });
+}
+
+function removeMachinePhoto(idx) {
+  const it = _machinePhotoItems[idx];
+  if (it) URL.revokeObjectURL(it.url);
+  _machinePhotoItems[idx] = null;
+  renderMachinePhotoSlots();
+}
+
+function renderMachinePhotoSlots() {
+  const wrap = document.getElementById('machine-photo-slots');
+  if (!wrap) return;
+  wrap.innerHTML = MACHINE_PHOTO_SLOTS.map((slot, idx) => {
+    const item = _machinePhotoItems[idx];
+    return `
+    <div style="background:white;border-radius:10px;padding:10px;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+      <div style="font-weight:600;font-size:13px;color:#22703d;margin-bottom:6px">${idx+1}. ${esc(slot.label)}</div>
+      <div style="font-size:10px;color:#999;margin-bottom:4px">お手本</div>
+      <img src="${slot.sample}" style="width:100%;height:90px;object-fit:cover;border-radius:6px;border:1px solid #ddd;margin-bottom:8px">
+      ${item ? `
+        <div style="position:relative;margin-bottom:8px">
+          <img src="${item.url}" style="width:100%;height:120px;object-fit:cover;border-radius:6px;border:2px solid #22703d">
+          <button onclick="removeMachinePhoto(${idx})" title="削除"
+            style="position:absolute;top:-6px;right:-6px;background:#ef4444;color:#fff;border:none;border-radius:50%;width:22px;height:22px;font-size:13px;line-height:20px;cursor:pointer;padding:0">×</button>
+        </div>
+      ` : `
+        <div style="display:flex;gap:6px;margin-bottom:8px">
+          <label style="flex:1;text-align:center;display:inline-flex;align-items:center;justify-content:center;gap:4px;background:#f0f7e8;border:1px solid #b8d4a0;border-radius:6px;padding:8px 4px;font-size:12px;cursor:pointer;font-family:inherit">
+            📷 撮影
+            <input type="file" accept="image/*" capture="environment" style="display:none" onchange="previewMachinePhoto(${idx}, this)">
+          </label>
+          <label style="flex:1;text-align:center;display:inline-flex;align-items:center;justify-content:center;gap:4px;background:#f0f7e8;border:1px solid #b8d4a0;border-radius:6px;padding:8px 4px;font-size:12px;cursor:pointer;font-family:inherit">
+            📁 添付
+            <input type="file" accept="image/*" style="display:none" onchange="previewMachinePhoto(${idx}, this)">
+          </label>
+        </div>
+      `}
+    </div>`;
+  }).join('');
+  const btn = document.getElementById('machine-photo-submit-btn');
+  if (btn) {
+    const allFilled = _machinePhotoItems.every(Boolean);
+    btn.disabled = !allFilled;
+    btn.style.opacity = allFilled ? '1' : '.5';
+    btn.textContent = allFilled ? 'この5枚をアップロード' : '5枚すべて選択してアップロード';
+  }
+}
+
+async function loadMachinePhotoLastUpload(storeId) {
+  const wrap = document.getElementById('machine-photo-last-upload');
+  if (!wrap) return;
+  wrap.textContent = '読み込み中…';
+  try {
+    const history = await gasGet('getMachinePhotoHistory', { storeId });
+    if (!history || !history.length) { wrap.textContent = '前回提出：まだ提出がありません'; return; }
+    const last = history[0];
+    const uploadedDate = String(last.uploaded_at).slice(0, 10);
+    const daysSince = Math.round((new Date(new Date().toLocaleDateString('sv')) - new Date(uploadedDate)) / (24*60*60*1000));
+    wrap.textContent = `前回提出：${uploadedDate}（${daysSince}日前）`;
+  } catch(e) {
+    console.error('loadMachinePhotoLastUpload error:', e);
+    wrap.textContent = '';
+  }
+}
+
+async function submitMachinePhotoSet() {
+  if (!_machinePhotoItems.every(Boolean)) return;
+  const btn = document.getElementById('machine-photo-submit-btn');
+  const msg = document.getElementById('machine-photo-msg');
+  if (btn) { btn.disabled = true; btn.textContent = 'アップロード中…'; }
+  if (msg) msg.textContent = '';
+  try {
+    const imagesBase64 = await Promise.all(_machinePhotoItems.map(it => _blobToBase64(it.blob)));
+    const r = await gasPost('saveMachinePhotoSet', { storeId: storeTab, imagesBase64, imageMime: 'image/jpeg' });
+    if (r.error) throw new Error(r.error);
+    _machinePhotoItems.forEach(it => it && URL.revokeObjectURL(it.url));
+    _machinePhotoItems = [null, null, null, null, null];
+    renderMachinePhotoSlots();
+    await loadMachinePhotoLastUpload(storeTab);
+    if (msg) msg.textContent = 'アップロードしました。ご協力ありがとうございます。';
+  } catch(e) {
+    console.error('submitMachinePhotoSet error:', e);
+    if (msg) msg.textContent = 'アップロードに失敗しました: ' + e.message;
+  } finally {
+    renderMachinePhotoSlots();
+  }
+}
+
 /* ===== 店舗別商品設定 ===== */
 const STORE_PRODUCTS_KEY = 'store_product_cfg';
 function getStoreProductConfig(storeId) {
@@ -4096,6 +4269,7 @@ async function showPage(p) {
       const lbl = document.getElementById('active-store-label');
       if (lbl) lbl.textContent = STORES[authedStore] + '店';
       updatePartnerAttendanceTabVisibility();
+    updatePartnerMachinePhotoTabVisibility();
     }
     const navSearch = document.getElementById('store-nav-search');
     if (navSearch) navSearch.style.display = 'none';
@@ -4753,8 +4927,8 @@ function switchRegion(r) {
 
 function switchAdminView(v) {
   adminView = v; adminPage = 1;
-  ['overview','history','lost'].forEach(k => document.getElementById('sub-'+k)?.classList.toggle('active', k===v));
-  document.getElementById('admin-region-nav')?.classList.toggle('nav-disabled', v === 'lost');
+  ['overview','history','lost','machinePhoto'].forEach(k => document.getElementById('sub-'+k)?.classList.toggle('active', k===v));
+  document.getElementById('admin-region-nav')?.classList.toggle('nav-disabled', v === 'lost' || v === 'machinePhoto');
   updateAdminMenuActive();
   renderAdmin();
 }
@@ -4763,6 +4937,7 @@ function renderAdmin() {
   if      (adminView==='overview')   renderOverview();
   else if (adminView==='history')    renderHistory();
   else if (adminView==='lost')       renderLostAdmin();
+  else if (adminView==='machinePhoto') renderMachinePhotoAdmin();
   else if (adminView==='attendance') renderAttendanceAdmin();
   else                                renderSettings();
 }
@@ -4906,6 +5081,108 @@ async function renderLostAdmin() {
       <tbody>${rows}</tbody>
     </table>
     </div>`;
+}
+
+async function renderMachinePhotoAdmin() {
+  document.querySelector('#page-admin .table-wrap').style.display = 'none';
+  document.getElementById('pagination').style.display = 'none';
+  document.getElementById('admin-thead').innerHTML = '';
+  document.getElementById('admin-tbody').innerHTML = '';
+  document.getElementById('admin-summary').innerHTML = '';
+
+  const container = document.getElementById('settings-container');
+  container.style.display = 'block';
+  container.innerHTML = `<div style="color:#aaa;font-size:13px;padding:10px 0">読み込み中…</div>`;
+
+  const statusRows = await gasGet('getMachinePhotoStatus');
+  const statusByStore = {};
+  (statusRows || []).forEach(r => { statusByStore[r.storeId] = r; });
+
+  const daysBadge = daysSince => {
+    if (daysSince == null) return '<span style="color:#ef4444;font-weight:700;font-size:12px">未提出</span>';
+    const color = daysSince <= 5 ? '#16a34a' : daysSince <= 9 ? '#d97706' : '#ef4444';
+    return `<span style="color:${color};font-weight:700;font-size:12px">${daysSince}日前</span>`;
+  };
+
+  const buildRegionTable = regionId => {
+    const rows = REGIONS[regionId].stores.map(storeId => {
+      const s = statusByStore[storeId];
+      const storeName = STORES[storeId] || storeId;
+      const enabled = isMachinePhotoEnabled(storeId);
+      return `<tr style="border-bottom:1px solid #eee${enabled ? '' : ';opacity:.5'}">
+        <td style="font-size:13px;padding:7px 10px;white-space:nowrap;color:#22703d;font-weight:600">${esc(storeName)}${enabled ? '' : '<span style="color:#999;font-weight:400;font-size:11px"> (無効)</span>'}</td>
+        <td style="font-size:13px;padding:7px 10px;white-space:nowrap">${s ? esc(String(s.uploadedAt).slice(0,16)) : '—'}</td>
+        <td style="padding:7px 10px;white-space:nowrap">${daysBadge(s ? s.daysSince : null)}</td>
+        <td style="padding:5px 8px">${s ? buildLostImageCell(s.photoUrls, 44) : '<span style="color:#ccc;font-size:11px">なし</span>'}</td>
+      </tr>`;
+    }).join('');
+    return `<div style="overflow-x:auto">
+      <table style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08);table-layout:fixed">
+        <thead><tr style="background:#c2d63a;color:#1a2a05">
+          <th style="text-align:left;font-size:13px;padding:9px 10px;width:130px">店舗</th>
+          <th style="text-align:left;font-size:13px;padding:9px 10px;width:140px">最終提出日時</th>
+          <th style="text-align:left;font-size:13px;padding:9px 10px;width:90px">経過</th>
+          <th style="text-align:left;font-size:13px;padding:9px 10px">写真5点</th>
+        </tr></thead>
+        <tbody>${rows}</tbody>
+      </table>
+    </div>`;
+  };
+
+  container.innerHTML = `
+    <!-- アルバム機能 店舗設定（ON/OFF） -->
+    <div class="settings-card" style="margin-bottom:16px;padding:12px">
+      <div class="settings-accordion-hdr" onclick="toggleMachinePhotoCfgGroup()">
+        <span>アルバム機能 店舗設定</span>
+        <span id="machine-photo-cfg-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
+      </div>
+      <div id="machine-photo-cfg-body" style="display:none;margin-top:10px">
+        <div class="settings-accordion-body">
+          <div style="font-size:12px;color:#888;margin-bottom:10px">マシン点検が不要な店舗はチェックを外すと、パートナー画面のチェックシートタブ内「アルバム」サブタブが非表示になります（デフォルトは全店舗ON）。</div>
+          <input type="text" placeholder="店舗名で検索..." oninput="filterStoreOptions('machine-photo-cfg-store-sel', this.value)"
+            style="border:1px solid #ddd;border-radius:6px;padding:7px 12px;font-size:13px;font-family:inherit;width:100%;margin-bottom:8px;box-sizing:border-box">
+          <select id="machine-photo-cfg-store-sel" style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:100%;margin-bottom:12px" onchange="renderMachinePhotoCfg()">
+            ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}
+          </select>
+          <div id="machine-photo-cfg-inner"></div>
+        </div>
+      </div>
+    </div>
+
+    ${['tokai','kansai','kanto'].map(regionId => `
+    <div class="settings-card" style="margin-bottom:16px;padding:0;overflow:hidden">
+      <div class="settings-accordion-hdr" onclick="toggleLostAccordion('admin-machine-${regionId}-body','admin-machine-${regionId}-arrow')" style="cursor:pointer">
+        <span>${esc(REGIONS[regionId].label)}</span>
+        <span id="admin-machine-${regionId}-arrow" style="font-size:12px;color:#888">▼ 閉じる</span>
+      </div>
+      <div id="admin-machine-${regionId}-body" style="padding:0 12px 12px">
+        ${buildRegionTable(regionId)}
+      </div>
+    </div>
+  `).join('')}`;
+}
+
+function toggleMachinePhotoCfgGroup() {
+  const body = document.getElementById('machine-photo-cfg-body');
+  const arrow = document.getElementById('machine-photo-cfg-arrow');
+  if (!body) return;
+  const open = body.style.display === 'none';
+  body.style.display = open ? 'block' : 'none';
+  if (arrow) arrow.textContent = open ? '▼ 閉じる' : '▶ タップして開く';
+  if (open) renderMachinePhotoCfg();
+}
+
+function renderMachinePhotoCfg() {
+  const sel = document.getElementById('machine-photo-cfg-store-sel');
+  const inner = document.getElementById('machine-photo-cfg-inner');
+  if (!sel || !inner) return;
+  const sid = sel.value;
+  const enabled = isMachinePhotoEnabled(sid);
+  inner.innerHTML = `
+    <label style="display:flex;align-items:center;gap:8px;font-size:14px;font-weight:600">
+      <input type="checkbox" ${enabled ? 'checked' : ''} onchange="setMachinePhotoEnabled('${esc(sid)}', this.checked)">
+      この店舗でアルバム機能（機械内点検写真）を有効にする
+    </label>`;
 }
 
 /* 店舗選択セレクトの候補を店舗名で絞り込み。選択中の店舗が絞り込みで隠れてしまった場合は

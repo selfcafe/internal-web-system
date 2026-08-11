@@ -42,6 +42,10 @@ const ORDER_COLS = [
   'delivery_date','created_at','denied','image_url','actual_unit_mode'
 ];
 const LOST_COLS = ['id','store_id','found_date','note','image_url','added_at'];
+// マシン庫内点検写真（5枠固定：フィルター正面/カップ庫内/原料タンク/庫内全体/使用済みフィルター）。
+// 忘れ物のようなカンマ結合ではなく列を分けている——枠ごとにラベルが固定で対応するため
+const SHEET_MACHINE_PHOTOS = 'machine_photos';
+const MACHINE_PHOTO_COLS = ['id','store_id','uploaded_at','photo1_url','photo2_url','photo3_url','photo4_url','photo5_url'];
 // 発注を「納品済み」にした際のログ。1回の操作で1行追加（append-onlyのログシート、
 // ordersのような全件削除→再送信はしない。自動削除もしない——消えては困る記録のため）
 const SHEET_DELIVERY_HISTORY = 'delivery_history';
@@ -234,6 +238,8 @@ function doGet(e) {
     else if (a === 'getLeaveRequests')          result = getLeaveRequests(e.parameter.storeId);
     else if (a === 'getAttendanceTabData')      result = getAttendanceTabData(e.parameter.storeId);
     else if (a === 'getDeliveryHistory')        result = getDeliveryHistory(e.parameter.storeId, e.parameter.month);
+    else if (a === 'getMachinePhotoStatus')     result = getMachinePhotoStatus();
+    else if (a === 'getMachinePhotoHistory')    result = getMachinePhotoHistory(e.parameter.storeId);
     else result = { error: 'Unknown action: ' + a };
     return json(result);
   } catch(err) {
@@ -272,6 +278,7 @@ function doPost(e) {
     else if (b.action === 'deleteLeaveRequest')  result = deleteLeaveRequest(b.id);
     else if (b.action === 'saveDeliveryHistory') result = saveDeliveryHistory(b.storeId, b.row);
     else if (b.action === 'clearDeliveryHistory') result = clearDeliveryHistory(b.storeId);
+    else if (b.action === 'saveMachinePhotoSet') result = saveMachinePhotoSet(b.storeId, b.imagesBase64, b.imageMime);
     else result = { error: 'Unknown action: ' + b.action };
   } catch(err) {
     result = { error: err.message };
@@ -669,6 +676,103 @@ function _trashDriveImages(imageUrlList) {
       if (m) DriveApp.getFileById(m[1]).setTrashed(true);
     } catch(e) {}
   });
+}
+
+// ----------------------------------------------------------------
+// machine_photos（マシン庫内点検写真、毎月5/10/15/20/25/30日を目安に
+// パートナーが5点セットをアップロードし、フィルター/材料/カップ切れ等を早期発見する）
+// ----------------------------------------------------------------
+
+const MACHINE_PHOTOS_CACHE_KEY = 'machine_photos_rows_v1';
+function _machinePhotosRowsCached_() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(MACHINE_PHOTOS_CACHE_KEY);
+  if (cached) return JSON.parse(cached);
+  const rows = sheetRows(getSheet(SHEET_MACHINE_PHOTOS), MACHINE_PHOTO_COLS)
+    .map(r => ({ ...r, uploaded_at: _dateTimeStr(r.uploaded_at) }));
+  try { cache.put(MACHINE_PHOTOS_CACHE_KEY, JSON.stringify(rows), 25); } catch (e) {}
+  return rows;
+}
+function _invalidateMachinePhotosCache_() {
+  try { CacheService.getScriptCache().remove(MACHINE_PHOTOS_CACHE_KEY); } catch (e) {}
+}
+
+// imagesBase64: 5枚固定（フィルター正面/カップ庫内/原料タンク/庫内全体/使用済みフィルター）
+function saveMachinePhotoSet(storeId, imagesBase64, imageMime) {
+  const sheet = getSheet(SHEET_MACHINE_PHOTOS);
+  ensureHeaders(sheet, MACHINE_PHOTO_COLS);
+  const id = Utilities.getUuid();
+  const uploadedAt = Utilities.formatDate(new Date(), _sheetTz(), 'yyyy-MM-dd HH:mm:ss');
+  const urls = (imagesBase64 || []).map((b64, i) =>
+    saveImageToDrive(b64, imageMime || 'image/jpeg', 'machine_' + storeId + '_' + id + '_' + i)
+  );
+  sheet.appendRow([id, storeId, uploadedAt, urls[0] || '', urls[1] || '', urls[2] || '', urls[3] || '', urls[4] || '']);
+  _invalidateMachinePhotosCache_();
+  return { ok: true, photoUrls: urls, uploadedAt };
+}
+
+// 管理者一覧用：店舗ごとに最新の1セットだけを残して返す
+function getMachinePhotoStatus() {
+  const rows = _machinePhotosRowsCached_();
+  const latestByStore = {};
+  rows.forEach(r => {
+    const prev = latestByStore[r.store_id];
+    if (!prev || String(r.uploaded_at) > String(prev.uploaded_at)) latestByStore[r.store_id] = r;
+  });
+  const todayStr = Utilities.formatDate(new Date(), _sheetTz(), 'yyyy-MM-dd');
+  return Object.keys(latestByStore).map(storeId => {
+    const r = latestByStore[storeId];
+    const uploadedDate = String(r.uploaded_at).slice(0, 10);
+    const daysSince = Math.round((new Date(todayStr) - new Date(uploadedDate)) / (24 * 60 * 60 * 1000));
+    return {
+      storeId,
+      uploadedAt: r.uploaded_at,
+      daysSince,
+      photoUrls: [r.photo1_url, r.photo2_url, r.photo3_url, r.photo4_url, r.photo5_url].filter(Boolean),
+    };
+  });
+}
+
+// パートナー側「前回提出日」表示用：自店舗の過去アップロード履歴（新しい順）
+function getMachinePhotoHistory(storeId) {
+  return _machinePhotosRowsCached_()
+    .filter(r => String(r.store_id) === String(storeId))
+    .sort((a, b) => String(b.uploaded_at).localeCompare(String(a.uploaded_at)));
+}
+
+// アップロードから30日経過したセットを自動削除（found_dateではなくuploaded_at基準。
+// 忘れ物のpurgeOldLostItemsと同じ形だが、判定列だけ異なる）
+function purgeOldMachinePhotos() {
+  const sheet = getSheet(SHEET_MACHINE_PHOTOS);
+  if (sheet.getLastRow() <= 1) return;
+  const limitStr = Utilities.formatDate(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), _sheetTz(), 'yyyy-MM-dd HH:mm:ss');
+  const data = sheet.getDataRange().getValues();
+  const hdrs = data[0].map(String);
+  const uploadedIdx = hdrs.indexOf('uploaded_at');
+  const photoIdxs = ['photo1_url', 'photo2_url', 'photo3_url', 'photo4_url', 'photo5_url'].map(c => hdrs.indexOf(c));
+  if (uploadedIdx < 0) return;
+  for (let i = data.length - 1; i >= 1; i--) {
+    const uploadedAt = _dateTimeStr(data[i][uploadedIdx]);
+    if (!uploadedAt || uploadedAt >= limitStr) continue;
+    const urls = photoIdxs.map(idx => (idx >= 0 ? data[i][idx] : '')).filter(Boolean).join(',');
+    _trashDriveImages(urls);
+    sheet.deleteRow(i + 1);
+  }
+  _invalidateMachinePhotosCache_();
+}
+
+// 店舗ごとの提出タイミングがずれるため、店舗別の未提出督促はせず、6日おき(6/12/18/24/30日)に
+// セルフカフェ社員（全国）グループへ「管理者ポータルで確認してください」と定期的に知らせるだけに留める
+// （2026-08-11、ユーザー要望により店舗別・エリア別の督促ロジックから変更）
+const MACHINE_PHOTO_CHANNEL_PROP_ = 'LW_CHANNEL_ID_MACHINEPHOTO'; // セルフカフェ社員（全国）グループのチャンネルID。Script Propertiesに設定すること
+function _machinePhotoChannel_() {
+  var props = PropertiesService.getScriptProperties();
+  return props.getProperty(MACHINE_PHOTO_CHANNEL_PROP_) || props.getProperty('LW_CHANNEL_ID');
+}
+
+function sendMachinePhotoReminder() {
+  if (new Date().getDate() % 6 !== 0) return; // 6,12,18,24,30日のみ送信
+  sendLineWorksNotification('管理者ポータル内にてマシン点検画像を確認してください', _machinePhotoChannel_());
 }
 
 // ----------------------------------------------------------------
@@ -2853,6 +2957,8 @@ function sendDailyOrderNotification() {
   // 未設定のうちはSpreadsheetApp.openByIdが例外を投げるため、それで発注の日次通知自体が
   // 止まってしまわないようtry/catchで囲む
   try { purgeOldDeliveryHistory(); } catch (e) { console.error('purgeOldDeliveryHistory error:', e.message); }
+  try { purgeOldMachinePhotos(); } catch (e) { console.error('purgeOldMachinePhotos error:', e.message); }
+  try { sendMachinePhotoReminder(); } catch (e) { console.error('sendMachinePhotoReminder error:', e.message); }
   var ss = SpreadsheetApp.openById(SHEET_ID);
   var sheet = ss.getSheetByName(SHEET_ORDERS);
   if (!sheet || sheet.getLastRow() <= 1) return;
