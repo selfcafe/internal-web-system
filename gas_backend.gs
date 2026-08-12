@@ -881,14 +881,29 @@ function sendMachinePhotoReminder() {
 // checksheet_data（チェックシートの日別入力）
 // ----------------------------------------------------------------
 
-function getChecksheetData(storeId) {
-  let rows = sheetRows(getSheet(SHEET_CHECKSHEET), CHECKSHEET_COLS);
-  if (storeId) rows = rows.filter(r => String(r.store_id) === String(storeId));
-  return rows.map(r => ({
+// チェックシート・アルバムタブを開くたびに（getChecksheetStockChecks経由でも二重に）
+// シート全体を読み直していたため、忘れ物/勤怠と同じ25秒キャッシュを追加する
+// （2026-08-12、同時アクセスが多い時の負荷軽減のため）
+const CHECKSHEET_DATA_CACHE_KEY = 'checksheet_data_rows_v1';
+function _checksheetDataRowsCached_() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(CHECKSHEET_DATA_CACHE_KEY);
+  if (cached) return JSON.parse(cached);
+  const rows = sheetRows(getSheet(SHEET_CHECKSHEET), CHECKSHEET_COLS).map(r => ({
     store_id: r.store_id,
     period_label: _monthLabelStr(r.period_label),
     data: r.data ? JSON.parse(r.data) : {},
   }));
+  try { cache.put(CHECKSHEET_DATA_CACHE_KEY, JSON.stringify(rows), 25); } catch (e) {}
+  return rows;
+}
+function _invalidateChecksheetDataCache_() {
+  try { CacheService.getScriptCache().remove(CHECKSHEET_DATA_CACHE_KEY); } catch (e) {}
+}
+function getChecksheetData(storeId) {
+  let rows = _checksheetDataRowsCached_();
+  if (storeId) rows = rows.filter(r => String(r.store_id) === String(storeId));
+  return rows;
 }
 
 // "2026-07"のような年月文字列を書き込むと、Sheetsが日付型セルへ自動変換し、
@@ -938,6 +953,7 @@ function saveChecksheetData(storeId, periodLabel, data) {
         const merged = _stampChecksheetEntryTimes_(oldData, data || {});
         sheet.getRange(i + 1, dataIdx + 1).setValue(JSON.stringify(merged));
         sheet.getRange(i + 1, updIdx + 1).setValue(now);
+        _invalidateChecksheetDataCache_();
         return { ok: true };
       }
     }
@@ -947,6 +963,7 @@ function saveChecksheetData(storeId, periodLabel, data) {
   sheet.getRange(startRow, CHECKSHEET_COLS.indexOf('period_label') + 1).setNumberFormat('@');
   const merged = _stampChecksheetEntryTimes_({}, data || {});
   sheet.appendRow([storeId, periodLabel, JSON.stringify(merged), now]);
+  _invalidateChecksheetDataCache_();
   return { ok: true };
 }
 
@@ -1350,6 +1367,7 @@ function compactChecksheetData() {
     cell.setNumberFormat('@').setValue(clean);
   });
   Logger.log('重複削除: %s行削除、%s件のユニークな店舗×年月が残りました', toDelete.length, Object.keys(keep).length);
+  _invalidateChecksheetDataCache_();
 }
 
 // ----------------------------------------------------------------
