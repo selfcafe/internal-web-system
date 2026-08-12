@@ -1523,6 +1523,23 @@ function _dbToHistRow(r) {
 // フォールバックデータを返す
 const loadH = id => _deliveryHistoryGasOk[id] ? migrateRows(DELIVERY_HISTORY_CACHE[id] || []) : _loadLocalH(id);
 
+// 配列の全要素に非同期処理をかけつつ、同時実行数をlimit件までに制限する
+// （2026-08-12、renderHistoryが地域内の全店舗分をPromise.allで完全並列取得しており、
+// 店舗数の多い地域(東海35店舗等)では管理者の1クリックで35件同時アクセスが発生し、
+// Apps Script側の同時実行数を消費して読み込み失敗の一因になっていたため導入）
+async function _mapLimited(items, limit, fn) {
+  const results = new Array(items.length);
+  let i = 0;
+  async function worker() {
+    while (i < items.length) {
+      const idx = i++;
+      results[idx] = await fn(items[idx], idx);
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+  return results;
+}
+
 async function fetchDeliveryHistory(id) {
   try {
     const rows = await gasGet('getDeliveryHistory', { storeId: id });
@@ -5637,8 +5654,10 @@ async function renderHistory() {
 
   const region = REGIONS[adminRegion];
 
-  // 店舗ごとにGASから取得（納品確認日から1ヶ月経過分はGAS側で自動削除済み）
-  await Promise.all(region.stores.map(sid => fetchDeliveryHistory(sid)));
+  // 店舗ごとにGASから取得（納品確認日から1ヶ月経過分はGAS側で自動削除済み）。
+  // 地域内の全店舗を一度に並列取得すると店舗数の多い地域で同時アクセスが集中するため、
+  // 同時5件までに制限する（2026-08-12、_mapLimitedのコメント参照）
+  await _mapLimited(region.stores, 5, sid => fetchDeliveryHistory(sid));
 
   // 全店舗の履歴件数を集計
   const storeData = region.stores.map(sid => {
