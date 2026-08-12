@@ -1646,25 +1646,42 @@ function recordInventoryDelivery(storeId, periodLabel, product, qty) {
   // period_labelが"YYYY-MM"のまま日付型に自動変換されないよう固定
   sheet.getRange(startRow, DELIVERY_AUTO_COLS.indexOf('period_label') + 1, 1, 1).setNumberFormat('@');
   sheet.getRange(startRow, 1, 1, DELIVERY_AUTO_COLS.length).setValues([row]);
+  _invalidateDeliveryAutoCache_();
   return { ok: true };
 }
 
 // 店舗×期間の当月納品（自動）を商品名ごとに合計して返す
-function getInventoryDeliveryAuto(storeId, periodLabel) {
+// 棚卸表タブを開くたびにinventory_delivery_autoシート全体を読み直していたため、
+// 忘れ物/勤怠と同じ25秒キャッシュを追加する（2026-08-12、同時アクセスが多い時の負荷軽減）
+const DELIVERY_AUTO_CACHE_KEY = 'delivery_auto_rows_v1';
+function _deliveryAutoRowsCached_() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(DELIVERY_AUTO_CACHE_KEY);
+  if (cached) return JSON.parse(cached);
   const sheet = getDeliveryAutoSheet();
-  if (sheet.getLastRow() <= 1) return {};
-  const data = sheet.getDataRange().getValues();
-  const hdrs = data[0].map(String);
-  const pIdx = hdrs.indexOf('period_label'), sIdx = hdrs.indexOf('store_id'),
-        prIdx = hdrs.indexOf('product'), qIdx = hdrs.indexOf('qty');
-  const totals = {};
-  for (let i = 1; i < data.length; i++) {
-    const row = data[i];
-    if (String(row[sIdx]) !== String(storeId)) continue;
-    if (_invMonthLabelStr(row[pIdx]) !== String(periodLabel)) continue;
-    const product = row[prIdx];
-    totals[product] = (totals[product] || 0) + Number(row[qIdx] || 0);
+  let rows = [];
+  if (sheet.getLastRow() > 1) {
+    const data = sheet.getDataRange().getValues();
+    const hdrs = data[0].map(String);
+    const pIdx = hdrs.indexOf('period_label'), sIdx = hdrs.indexOf('store_id'),
+          prIdx = hdrs.indexOf('product'), qIdx = hdrs.indexOf('qty');
+    rows = data.slice(1).map(row => ({
+      period_label: _invMonthLabelStr(row[pIdx]), store_id: row[sIdx], product: row[prIdx], qty: Number(row[qIdx] || 0),
+    }));
   }
+  try { cache.put(DELIVERY_AUTO_CACHE_KEY, JSON.stringify(rows), 25); } catch (e) {}
+  return rows;
+}
+function _invalidateDeliveryAutoCache_() {
+  try { CacheService.getScriptCache().remove(DELIVERY_AUTO_CACHE_KEY); } catch (e) {}
+}
+function getInventoryDeliveryAuto(storeId, periodLabel) {
+  const totals = {};
+  _deliveryAutoRowsCached_().forEach(row => {
+    if (String(row.store_id) !== String(storeId)) return;
+    if (row.period_label !== String(periodLabel)) return;
+    totals[row.product] = (totals[row.product] || 0) + row.qty;
+  });
   return totals;
 }
 
@@ -1704,28 +1721,47 @@ function getProductCodeMap() {
   return map;
 }
 
+// 棚卸表タブを開くたびに手動納品シート（本部が直接編集する外部スプレッドシート）
+// 全体を読み直していたため、25秒キャッシュを追加する（2026-08-12、同時アクセスが多い時の
+// 負荷軽減。appは書き込まない読み取り専用シートのため、無効化のトリガーは無く時間経過のみで
+// 失効する——本部の編集が反映されるまで最大25秒のズレは許容）
+const DELIVERY_MANUAL_CACHE_KEY = 'delivery_manual_rows_v1';
+function _deliveryManualRowsCached_() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(DELIVERY_MANUAL_CACHE_KEY);
+  if (cached) return JSON.parse(cached);
+  let rows = [];
+  if (MANUAL_DELIVERY_SHEET_ID) {
+    const sheet = getDeliveryManualSheet();
+    if (sheet.getLastRow() > 1) {
+      const data = sheet.getDataRange().getValues();
+      const hdrs = data[0].map(String);
+      const pIdx = hdrs.indexOf('期間ラベル'), sIdx = hdrs.indexOf('店舗ID'),
+            cIdx = hdrs.indexOf('商品コード'), qIdx = hdrs.indexOf('数量');
+      rows = data.slice(1).map((row, i) => ({
+        sheetRow: i + 2, period_label: _manualDeliveryMonthLabelStr(row[pIdx]),
+        store_id: row[sIdx], code: String(row[cIdx]), qty: Number(row[qIdx] || 0),
+      }));
+    }
+  }
+  try { cache.put(DELIVERY_MANUAL_CACHE_KEY, JSON.stringify(rows), 25); } catch (e) {}
+  return rows;
+}
+
 // 店舗×期間の当月納品（手動）を商品名ごとに合計して返す。商品コードが商品設定の
 // どれとも一致しない行はskippedへ積んで返す（サイレントに数量を捨てない）
 function getInventoryDeliveryManual(storeId, periodLabel) {
   if (!MANUAL_DELIVERY_SHEET_ID) return { totals: {}, skipped: [] };
-  const sheet = getDeliveryManualSheet();
-  if (sheet.getLastRow() <= 1) return { totals: {}, skipped: [] };
-  const data = sheet.getDataRange().getValues();
-  const hdrs = data[0].map(String);
-  const pIdx = hdrs.indexOf('期間ラベル'), sIdx = hdrs.indexOf('店舗ID'),
-        cIdx = hdrs.indexOf('商品コード'), qIdx = hdrs.indexOf('数量');
   const codeToName = getProductCodeMap();
   const totals = {};
   const skipped = [];
-  for (let i = 1; i < data.length; i++) {
-    const row = data[i];
-    if (String(row[sIdx]) !== String(storeId)) continue;
-    if (_manualDeliveryMonthLabelStr(row[pIdx]) !== String(periodLabel)) continue;
-    const code = String(row[cIdx]);
-    const name = codeToName[code];
-    if (!name) { skipped.push({ sheetRow: i + 1, code: code, qty: row[qIdx] }); continue; }
-    totals[name] = (totals[name] || 0) + Number(row[qIdx] || 0);
-  }
+  _deliveryManualRowsCached_().forEach(row => {
+    if (String(row.store_id) !== String(storeId)) return;
+    if (row.period_label !== String(periodLabel)) return;
+    const name = codeToName[row.code];
+    if (!name) { skipped.push({ sheetRow: row.sheetRow, code: row.code, qty: row.qty }); return; }
+    totals[name] = (totals[name] || 0) + row.qty;
+  });
   return { totals, skipped };
 }
 
@@ -1884,20 +1920,13 @@ function _productCaseInfo_() {
 // スナップショットで古くなりうるため、ロールアップでは常にこちらの生ログから集計し直す
 // （ユーザー要望：「納品済みボタン押されたら自動的にこのシート側で納品カウントもする」に対応）
 function _deliveryAutoTotalsForPeriod_(periodLabel) {
-  const sheet = getDeliveryAutoSheet();
   const totals = {};
-  if (sheet.getLastRow() <= 1) return totals;
-  const data = sheet.getDataRange().getValues();
-  const hdrs = data[0].map(String);
-  const pIdx = hdrs.indexOf('period_label'), sIdx = hdrs.indexOf('store_id'),
-        prIdx = hdrs.indexOf('product'), qIdx = hdrs.indexOf('qty');
-  for (let i = 1; i < data.length; i++) {
-    const row = data[i];
-    if (_invMonthLabelStr(row[pIdx]) !== String(periodLabel)) continue;
-    const sid = String(row[sIdx]), prod = String(row[prIdx]);
+  _deliveryAutoRowsCached_().forEach(row => {
+    if (row.period_label !== String(periodLabel)) return;
+    const sid = String(row.store_id), prod = String(row.product);
     if (!totals[sid]) totals[sid] = {};
-    totals[sid][prod] = (totals[sid][prod] || 0) + Number(row[qIdx] || 0);
-  }
+    totals[sid][prod] = (totals[sid][prod] || 0) + row.qty;
+  });
   return totals;
 }
 
