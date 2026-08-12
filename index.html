@@ -6851,6 +6851,10 @@ function renderSettings() {
       <div id="store-pw-settings-body" style="display:none">
         <div class="settings-accordion-body">
           <div style="font-size:12px;color:#888;margin-bottom:12px">各店舗の現在のパスワードを確認・変更できます。</div>
+          <div style="font-size:12px;color:#b45309;background:#fef9c3;border:1px solid #fde68a;border-radius:6px;padding:8px 12px;margin-bottom:12px;line-height:1.6">
+            ※パスワードを変更した直後は、ログイン画面の高速化のため各端末が古いパスワードのキャッシュを使うことがあり、
+            変更前のパスワードでも数十秒〜数分ほどログインできてしまう場合があります。変更後は少し時間をおいてからご利用ください。
+          </div>
           <div id="store-pw-list">${buildStorePwList()}</div>
           <div id="store-pw-msg" style="font-size:12px;margin-top:8px;min-height:18px;color:#22703d"></div>
           <div style="margin-top:14px;padding-top:12px;border-top:1px solid #e0ede5">
@@ -7947,12 +7951,19 @@ async function submitInvoiceCombinedForm() {
   if (sessionStorage.getItem('admin_authed') === '1' || isSiteAuthed()) {
     document.getElementById('site-lock').classList.add('hidden');
   }
-  // GAS読み込み中はログインボタンを無効化し、ゲージが溜まっていく見た目で待ち時間を可視化する
+  // GAS読み込み中はログインボタンを無効化し、ゲージが溜まっていく見た目で待ち時間を可視化する。
+  // ただし、この端末で以前ログインに成功しキャッシュ済みのパスワード一覧(STORE_PW_KEY)が
+  // 既にある場合は、submitSiteLogin()がローカルキャッシュだけで照合する処理のため
+  // initGas()の完了を待つ必要が無い。同時アクセスが多い時にgetSettingsが遅れて
+  // ログインボタンが長時間押せなくなる問題への対応（2026-08-12）。初回端末（キャッシュ無し）
+  // だけ従来通り読み込み中表示にする——パスワード変更直後の数十秒〜数分は旧パスワードでも
+  // ログインできてしまう可能性があるため、店舗別パスワード設定画面に案内を追加済み
   const loginBtn = document.querySelector('button.btn-pin-submit');
   const loginGauge = document.getElementById('site-login-gauge');
   const loginGaugeFill = document.getElementById('site-login-gauge-fill');
+  const hasCachedLogin = !!localStorage.getItem(STORE_PW_KEY);
   let loadingTimer = null;
-  if (loginBtn) {
+  if (loginBtn && !hasCachedLogin) {
     loginBtn.disabled = true;
     loginBtn.textContent = '読み込み中…';
     if (loginGauge) loginGauge.style.display = 'block';
