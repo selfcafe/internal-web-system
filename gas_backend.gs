@@ -6,7 +6,11 @@
 // 実IDは絶対にここへコミットしない。実IDはApps Scriptエディタ側（本番デプロイ環境）にのみ設定する。
 // 【設定】デプロイ前に以下2行を入力してください
 const SHEET_ID        = '';  // GoogleスプレッドシートのID
-const IMAGE_FOLDER_ID = '1adg7TQIYXSkWIo19ohVo93raDY2HsTW_';  // 画像保存用DriveフォルダのID
+// 画像保存用DriveフォルダのID。フォルダ自体の共有設定を「リンクを知っている全員：閲覧者」に
+// している（2026-08-12）ため、このフォルダ内に新しく作るファイルは何もしなくても
+// リンクで閲覧可能になる。請求書PDF等、非公開にしたいファイルは絶対にこのフォルダへ
+// 保存しないこと（別フォルダを使う。buildInvoiceReceiptPdf等が使うfolderは別物なので問題ない）
+const IMAGE_FOLDER_ID = '1adg7TQIYXSkWIo19ohVo93raDY2HsTW_';
 // 棚卸完了の送信先（別Driveの「棚卸集計」スプレッドシート、この実行アカウントに編集権限で共有しておくこと）
 const INVENTORY_SHEET_ID = '';  // 棚卸集計スプレッドシートのID
 // 月初納品分など、アプリを通さず本部が直接手配・受領した納品を本部が手入力するスプレッドシート
@@ -2537,16 +2541,18 @@ function saveInvoiceReceiptImage(imageBase64, imageMime, filename) {
   if (!IMAGE_FOLDER_ID) return { error: 'IMAGE_FOLDER_IDが設定されていません' };
   const folder = DriveApp.getFolderById(IMAGE_FOLDER_ID);
   const blob = Utilities.newBlob(Utilities.base64Decode(imageBase64), imageMime || 'image/jpeg', (filename || 'invoice_receipt') + '.jpg');
+  // IMAGE_FOLDER_ID自体が「リンクを知っている全員：閲覧者」共有のため、ファイル個別のsetSharingは不要
+  // （2026-08-12、Drive API呼び出しを1枚あたり2回→1回に削減。IMAGE_FOLDER_IDのコメント参照）
   const file = folder.createFile(blob);
-  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
   return { ok: true, image_url: 'https://drive.google.com/thumbnail?id=' + file.getId() + '&sz=w800', file_id: file.getId() };
 }
 
 function saveImageToDrive(base64, mimeType, filename) {
   const folder = DriveApp.getFolderById(IMAGE_FOLDER_ID);
   const blob   = Utilities.newBlob(Utilities.base64Decode(base64), mimeType, filename + '.jpg');
+  // IMAGE_FOLDER_ID自体が「リンクを知っている全員：閲覧者」共有のため、ファイル個別のsetSharingは不要
+  // （2026-08-12、Drive API呼び出しを1枚あたり2回→1回に削減。IMAGE_FOLDER_IDのコメント参照）
   const file   = folder.createFile(blob);
-  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
   return 'https://drive.google.com/thumbnail?id=' + file.getId() + '&sz=w800';
 }
 
