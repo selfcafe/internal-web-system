@@ -1121,6 +1121,11 @@ function _initRealtime() {
     // ORDERS_CACHEを古いスナップショットで上書きし、直後の保存で
     // 未送信の変更が消えてしまうのを防ぐ）
     if (val && typeof val === 'object' && val.by === _CLIENT_ID) return;
+    // 誰か1人が保存すると、開いている全端末が一斉に同じ瞬間にgetOrdersを叩いてしまい、
+    // Apps Script側の同時実行数に不要な負荷が集中する（2026-08-12、この一斉アクセスが
+    // 発注データ読み込み失敗の一因と判明）。0〜4秒のランダムな遅延で各端末の再取得タイミングを
+    // ずらし、同時アクセス数のピークを下げる（自分の保存への反映はこの関数の対象外なので影響なし）
+    await new Promise(r => setTimeout(r, Math.random() * 4000));
     try {
       const orders = await gasGet('getOrders');
       Object.keys(ORDERS_CACHE).forEach(k => delete ORDERS_CACHE[k]);
@@ -1161,6 +1166,8 @@ function _initChecksheetRealtime() {
     const val = snap.val();
     if (val && typeof val === 'object' && val.by === _CLIENT_ID) return;
     if (!val || !val.storeId) return;
+    // 発注と同じ理由（2026-08-12対応）で、一斉再取得を避けるためランダムに遅延させる
+    await new Promise(r => setTimeout(r, Math.random() * 4000));
     try {
       await loadChecksheetDataFromDb(val.storeId);
       if (val.storeId === storeTab && partnerTabCurrent === 'checklist') renderChecksheet();
