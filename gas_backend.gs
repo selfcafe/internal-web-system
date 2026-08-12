@@ -548,12 +548,25 @@ function deleteOrderRows(ids) {
 // app_settings
 // ----------------------------------------------------------------
 
+// ログイン時・getMachinePhotoStatus内の台数設定取得等、複数箇所から毎回シート全体を
+// 読み直していたため60秒だけCacheServiceで共有する（2026-08-12、同時アクセスが多い時の
+// 負荷軽減のため追加。設定はsaveSetting経由の変更なら即キャッシュ破棄されるので、
+// 反映漏れは最大60秒のみ）
+const SETTINGS_CACHE_KEY = 'settings_rows_v1';
 function getSettings() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(SETTINGS_CACHE_KEY);
+  if (cached) { try { return JSON.parse(cached); } catch (e) {} }
   const sheet = getSheet(SHEET_SETTINGS);
   if (sheet.getLastRow() <= 1) return [];
   const data = sheet.getDataRange().getValues();
   const ki = data[0].indexOf('key'), vi = data[0].indexOf('value');
-  return data.slice(1).map(r => ({ key: r[ki], value: r[vi] }));
+  const rows = data.slice(1).map(r => ({ key: r[ki], value: r[vi] }));
+  try { cache.put(SETTINGS_CACHE_KEY, JSON.stringify(rows), 60); } catch (e) {}
+  return rows;
+}
+function _invalidateSettingsCache_() {
+  try { CacheService.getScriptCache().remove(SETTINGS_CACHE_KEY); } catch (e) {}
 }
 
 function saveSetting(key, value) {
@@ -565,11 +578,13 @@ function saveSetting(key, value) {
     if (String(data[i][ki]) === String(key)) {
       _logSettingHistory(key, data[i][vi]);
       sheet.getRange(i + 1, vi + 1).setValue(value);
+      _invalidateSettingsCache_();
       return { ok: true };
     }
   }
   _logSettingHistory(key, '');
   sheet.appendRow([key, value]);
+  _invalidateSettingsCache_();
   return { ok: true };
 }
 
