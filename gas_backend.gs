@@ -264,10 +264,15 @@ function doGet(e) {
 
 function doPost(e) {
   const lock = LockService.getScriptLock();
+  // ロック待ち時間を計測してログに残す（2026-08-12、doPostが同時に何件も来た時に
+  // 「ロック待ちで詰まっている」のか「処理自体が遅い」のかを次回切り分けられるようにするため）
+  const _lockWaitStart = Date.now();
   lock.waitLock(30000);
+  const _lockWaitMs = Date.now() - _lockWaitStart;
   let result;
   try {
     const b = JSON.parse(e.postData.contents);
+    console.log('doPost action=' + (b.action || '(lineworks/kaihipay callback)') + ' storeId=' + (b.storeId || '') + ' lockWaitMs=' + _lockWaitMs);
     const isKaihipayBotCallback_ = !!(e.parameter && e.parameter.bot === 'kaihipay');
     if      (isKaihipayBotCallback_ && isLineWorksCallback_(b)) result = handleKaihipayApprovalTextReply_(b);
     else if (isLineWorksCallback_(b))           result = handleLineWorksStockInquiry_(b);
