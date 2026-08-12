@@ -167,19 +167,27 @@ function reorderStoreTabs() {
 
 // 店舗名マスタ。手動複製で二重管理にせず、GitHub Pagesで公開されているstores.js(フロントの
 // 共有ファイル)を都度UrlFetchAppで取得・パースして使う——stores.js側を直せば自動的に反映される。
-// 1回の実行(doGet/doPost/トリガー呼び出し)内でのみキャッシュし、同じ実行内で何度呼ばれても
-// 取得は1回だけにする（実行をまたいだキャッシュはしない＝毎回最新を取りに行く）。
+// 1回の実行(doGet/doPost/トリガー呼び出し)内ではメモリ変数でキャッシュし、何度呼ばれても
+// 取得は1回だけにする。さらに実行をまたいだ分はCacheServiceで60秒だけ共有する
+// （2026-08-12、getMachinePhotoStatus等が同時アクセスの多いタイミングで毎回GitHub Pagesへ
+// 外部fetchし直しており、遅延・失敗の一因になっていたため追加。新規店舗追加の反映が
+// 最大60秒遅れる可能性はあるが、頻度が低いため許容——60秒より長いとズレが気になるとの判断）。
 // 取得・パースに失敗した場合（GitHub Pagesの一時的な障害等）は店舗名なし(IDのみ)にフォールバック
 // し、通知自体は従来通り送る（名前解決の失敗で通知が止まらないようにする）
 const STORES_JS_URL = 'https://selfcafe.github.io/internal-web-system/stores.js';
+const STORE_NAMES_CACHE_KEY = 'store_names_v1';
 let _cachedStoreNames = null;
 function _storeNames_() {
   if (_cachedStoreNames) return _cachedStoreNames;
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(STORE_NAMES_CACHE_KEY);
+  if (cached) { try { _cachedStoreNames = JSON.parse(cached); return _cachedStoreNames; } catch (e) {} }
   try {
     const text = UrlFetchApp.fetch(STORES_JS_URL, { muteHttpExceptions: true }).getContentText();
     // stores.jsは "const STORES = {...};" という単純なJS定義のみのファイル（信頼できる自リポジトリ）
     // なので、Functionコンストラクタでその場限りの関数スコープとして実行しSTORESだけを取り出す
     _cachedStoreNames = new Function(text + '; return STORES;')();
+    try { cache.put(STORE_NAMES_CACHE_KEY, JSON.stringify(_cachedStoreNames), 60); } catch (e) {}
   } catch (e) {
     console.error('stores.js取得に失敗、店舗名なしで通知します:', e.message);
     _cachedStoreNames = {};
