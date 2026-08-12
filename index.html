@@ -4102,9 +4102,8 @@ async function submitMachinePhotoForMachine(mIdx) {
   if (msg) msg.textContent = 'アップロード中…';
   try {
     const imagesByCategory = {};
-    for (const slot of MACHINE_PHOTO_SLOTS) {
-      imagesByCategory[slot.key] = await _blobToBase64(_machinePhotoItems[slot.key][mIdx].blob);
-    }
+    const base64List = await Promise.all(MACHINE_PHOTO_SLOTS.map(slot => _blobToBase64(_machinePhotoItems[slot.key][mIdx].blob)));
+    MACHINE_PHOTO_SLOTS.forEach((slot, i) => { imagesByCategory[slot.key] = base64List[i]; });
     const r = await gasPost('saveMachinePhotoSet', { storeId: storeTab, machineIndex: mIdx, imagesByCategory, imageMime: 'image/jpeg' });
     if (r.error) throw new Error(r.error);
     MACHINE_PHOTO_SLOTS.forEach(slot => {

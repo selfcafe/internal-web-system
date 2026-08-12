@@ -726,13 +726,16 @@ function saveMachinePhotoSet(storeId, machineIndex, imagesByCategory, imageMime)
   ensureHeaders(sheet, MACHINE_PHOTO_COLS);
   const id = Utilities.getUuid();
   const uploadedAt = Utilities.formatDate(new Date(), _sheetTz(), 'yyyy-MM-dd HH:mm:ss');
+  // 5枚を1枚ずつ逐次アップロードすると待ち時間が積み重なるため、_saveImagesToDriveBulk_で
+  // まとめて並列アップロードする（2026-08-12、アップロード高速化対応）
+  const catKeys = Object.keys(imagesByCategory || {}).filter(k => imagesByCategory[k]);
+  const urls = _saveImagesToDriveBulk_(catKeys.map(catKey => ({
+    base64: imagesByCategory[catKey],
+    mimeType: imageMime || 'image/jpeg',
+    filename: 'machine_' + storeId + '_' + machineIndex + '_' + id + '_' + catKey + '.jpg',
+  })));
   const urlsByCategory = {};
-  Object.keys(imagesByCategory || {}).forEach(catKey => {
-    const b64 = imagesByCategory[catKey];
-    urlsByCategory[catKey] = b64
-      ? saveImageToDrive(b64, imageMime || 'image/jpeg', 'machine_' + storeId + '_' + machineIndex + '_' + id + '_' + catKey)
-      : '';
-  });
+  catKeys.forEach((catKey, i) => { urlsByCategory[catKey] = urls[i]; });
   sheet.appendRow([id, storeId, machineIndex, uploadedAt, JSON.stringify(urlsByCategory)]);
   _invalidateMachinePhotosCache_();
   return { ok: true, urlsByCategory, uploadedAt };
@@ -2512,6 +2515,59 @@ function saveImageToDrive(base64, mimeType, filename) {
   const file   = folder.createFile(blob);
   file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
   return 'https://drive.google.com/thumbnail?id=' + file.getId() + '&sz=w800';
+}
+
+// saveImageToDriveをN枚分そのまま繰り返すと、アップロード+共有設定で1枚あたり2回の
+// 逐次Drive API呼び出しが発生し、枚数分だけ待ち時間が積み重なる。Drive API v3を
+// UrlFetchApp.fetchAllで直接呼ぶことでアップロード・共有設定それぞれを全枚数まとめて
+// 並列リクエスト化し、待ち時間を実質1枚分程度に圧縮する（2026-08-12、マシン点検写真の
+// アップロード高速化のため導入。他機能のsaveImageToDriveはそのまま流用しない）。
+// items: [{ base64, mimeType, filename }]（filenameは拡張子込みでそのままDrive上の名前になる）
+function _saveImagesToDriveBulk_(items) {
+  if (!items.length) return [];
+  const token = ScriptApp.getOAuthToken();
+  const boundary = 'gas_bulk_upload_boundary_' + Utilities.getUuid();
+
+  const uploadRequests = items.map(it => {
+    const metadata = JSON.stringify({ name: it.filename, parents: [IMAGE_FOLDER_ID] });
+    const pre = '--' + boundary + '\r\n' +
+      'Content-Type: application/json; charset=UTF-8\r\n\r\n' +
+      metadata + '\r\n' +
+      '--' + boundary + '\r\n' +
+      'Content-Type: ' + it.mimeType + '\r\n\r\n';
+    const post = '\r\n--' + boundary + '--';
+    const payload = Utilities.newBlob(pre).getBytes()
+      .concat(Utilities.base64Decode(it.base64))
+      .concat(Utilities.newBlob(post).getBytes());
+    return {
+      url: 'https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id',
+      method: 'post',
+      contentType: 'multipart/related; boundary="' + boundary + '"',
+      payload,
+      headers: { Authorization: 'Bearer ' + token },
+      muteHttpExceptions: true,
+    };
+  });
+
+  const uploadResponses = UrlFetchApp.fetchAll(uploadRequests);
+  const fileIds = uploadResponses.map((res, i) => {
+    if (res.getResponseCode() >= 300) {
+      throw new Error('Drive画像アップロード失敗(' + items[i].filename + '): ' + res.getContentText());
+    }
+    return JSON.parse(res.getContentText()).id;
+  });
+
+  const permRequests = fileIds.map(id => ({
+    url: 'https://www.googleapis.com/drive/v3/files/' + id + '/permissions?fields=id',
+    method: 'post',
+    contentType: 'application/json',
+    payload: JSON.stringify({ role: 'reader', type: 'anyone' }),
+    headers: { Authorization: 'Bearer ' + token },
+    muteHttpExceptions: true,
+  }));
+  UrlFetchApp.fetchAll(permRequests); // 共有設定は失敗しても保存自体は継続させる（サムネイル表示に影響するだけのため）
+
+  return fileIds.map(id => 'https://drive.google.com/thumbnail?id=' + id + '&sz=w800');
 }
 
 // ----------------------------------------------------------------
