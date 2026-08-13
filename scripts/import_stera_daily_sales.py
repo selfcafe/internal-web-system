@@ -241,13 +241,22 @@ def wait_and_download(page, remark, timeout_sec=120):
     while time.time() < deadline:
         page.reload()
         page.wait_for_load_state("domcontentloaded")
-        time.sleep(2)
+        # domcontentloadedはAnt Designの一覧テーブルが非同期取得される前に発火するため、
+        # 直後に判定すると常に0件になる(2026-08-13実地検証: CSVはサーバ側で数秒で準備完了
+        # していたにもかかわらず、120秒間ずっとテーブルが空判定のままタイムアウトしていた)。
+        # このダッシュボードは常時ポーリングしておりnetworkidleには到達しないため、
+        # テーブル行の出現そのものを(タイムアウトしても無視して)個別に待つ。
+        try:
+            page.wait_for_selector("table tbody tr", timeout=10000)
+        except PlaywrightTimeoutError:
+            continue
         candidate = page.locator("tr", has_text=remark).filter(has_text="注文詳細一覧")
         if candidate.count():
             text = candidate.first.inner_text()
             if "処理完了" in text or "ダウンロード済み" in text:
                 row = candidate.first
                 break
+        time.sleep(1)
     if row is None:
         raise RuntimeError("タイムアウト: 注文詳細CSVの生成が完了しませんでした")
 
