@@ -290,6 +290,8 @@ function doPost(e) {
     else if (b.action === 'recordInventoryDelivery') result = recordInventoryDelivery(b.storeId, b.periodLabel, b.product, b.qty);
     else if (b.action === 'importSteraOrdersCsv') result = importSteraOrdersCsv(b.csvText);
     else if (b.action === 'importSteraDailySales') result = importSteraDailySales(b.dateStr, b.csvText);
+    else if (b.action === 'updateSteraRealtimeToday') result = updateSteraRealtimeToday(b.dateStr, b.rows);
+    else if (b.action === 'reportScriptFailure') result = reportScriptFailure(b.message, b.key);
     else if (b.action === 'checkChecksheetStockMismatch') result = checkChecksheetStockMismatch(b.storeId, b.product);
     else if (b.action === 'submitInvoice')       result = submitInvoice(b.payload);
     else if (b.action === 'saveInvoiceReceiptImage') result = saveInvoiceReceiptImage(b.imageBase64, b.imageMime, b.filename);
@@ -2407,6 +2409,64 @@ function getSteraDailyTotal_(storeId, prdId, fromDateExclusive, toDateInclusive)
 }
 
 // ----------------------------------------------------------------
+// ステラ当日リアルタイム売上(表示の当日ラグ解消) 2026-08-15
+// ----------------------------------------------------------------
+// stera_daily_salesは「前日分までしか無い」のが仕様(CSVエクスポート由来)だが、そのせいで
+// チェックシートの「前回入力からの実売上」が当日分を一切拾わず、水のように当日でも普通に売れる
+// 商品ですら「実売上0」と表示され続けパートナーが混乱する問題があった。ステラの公式APIには
+// 商品別・店舗別の売上数量を取れるエンドポイントが無いが、管理画面(dashboard.sterasmartone.com)
+// 自身が使っている内部集計API(admin-api.elepay.io、非公開・無保証のエンドポイント)を
+// scripts/poll_stera_realtime_sales.pyが数分おきにポーリングし、その結果をここに書き込む。
+// stera_daily_salesとは意図的に別シート・別関数にする(「前日分までは確定値」という既存の前提を
+// 壊さないため、当日分は上書きされ続ける速報値として明確に分離する)。
+const SHEET_STERA_REALTIME = 'stera_realtime_today';
+const STERA_REALTIME_COLS = ['date', 'store_id', 'prd_id', 'qty', 'updated_at'];
+
+function getSteraRealtimeSheet_() {
+  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const sheet = ss.getSheetByName(SHEET_STERA_REALTIME) || ss.insertSheet(SHEET_STERA_REALTIME);
+  ensureHeaders(sheet, STERA_REALTIME_COLS);
+  return sheet;
+}
+
+// poll_stera_realtime_sales.pyから数分おきに呼ばれる想定。rowsは[{storeId, prdId, qty}, ...]で、
+// 差分ではなく「その時点での本日分の累計」を毎回まるごと送る前提。このシートは常に「today」1日分
+// だけを保持する(importSteraDailySalesの「同じdateStrの行だけ削除」とは意図的に条件を変えている
+// ——日付が変わった直後の実行で前日分の残骸が残らないよう、dateStrに関わらず既存行は全削除する)。
+// ?action=updateSteraRealtimeToday(POST、{dateStr, rows})で実行。
+function updateSteraRealtimeToday(dateStr, rows) {
+  if (!dateStr) return { error: 'dateStrは必須です(例: 2026-08-15)' };
+  if (!Array.isArray(rows)) return { error: 'rowsは配列で指定してください' };
+  const sheet = getSteraRealtimeSheet_();
+  if (sheet.getLastRow() > 1) {
+    sheet.deleteRows(2, sheet.getLastRow() - 1);
+  }
+  if (!rows.length) return { ok: true, rows: 0 };
+  const now = Utilities.formatDate(new Date(), _invSheetTz(), 'yyyy-MM-dd HH:mm:ss');
+  const newRows = rows.map(r => [dateStr, r.storeId, r.prdId, Number(r.qty) || 0, now]);
+  const startRow = sheet.getLastRow() + 1;
+  sheet.getRange(startRow, STERA_REALTIME_COLS.indexOf('date') + 1, newRows.length, 1).setNumberFormat('@');
+  sheet.getRange(startRow, 1, newRows.length, STERA_REALTIME_COLS.length).setValues(newRows);
+  return { ok: true, rows: newRows.length };
+}
+
+// getChecksheetStockChecks専用: 当該storeIdの{prd_id: qty}をまとめて返す。dateStrが今日と
+// 一致しない行(ポーリングが日付跨ぎ後まだ走っていない間の残骸)は無視して古い数字を出し続けない
+// ようにする。STERA_SALES_MAPPINGの商品数分(8件)呼ばれてもシートは1回しか開かない設計にする
+// こと(N+1回避、theft-detection-notes.mdの既存方針と同じ——呼び出し側で1回だけ呼ぶこと)
+function _getSteraRealtimeTodayMap_(storeId) {
+  const today = Utilities.formatDate(new Date(), _invSheetTz(), 'yyyy-MM-dd');
+  const rows = sheetRows(getSteraRealtimeSheet_(), STERA_REALTIME_COLS);
+  const map = {};
+  rows.forEach(r => {
+    if (String(r.date) !== today) return;
+    if (String(r.store_id) !== String(storeId)) return;
+    map[r.prd_id] = (map[r.prd_id] || 0) + (Number(r.qty) || 0);
+  });
+  return map;
+}
+
+// ----------------------------------------------------------------
 // 盗難検知①: チェックシート入力欄の「前回入力からの実売上」表示(読み取り専用) 2026-07-31
 // ----------------------------------------------------------------
 // STERA_SALES_MAPPINGに載っている商品(販売品類の一部)について、グループ(ourProducts)内のどれかの
@@ -2426,6 +2486,8 @@ function getChecksheetStockChecks(storeId) {
   const today = Utilities.formatDate(new Date(), _invSheetTz(), 'yyyy-MM-dd');
   const yesterday = Utilities.formatDate(new Date(Date.now() - 86400000), _invSheetTz(), 'yyyy-MM-dd');
   const priorDays = Object.keys(allDays).filter(d => d < today).sort().reverse();
+  // 当日分の速報値は呼び出しループの外で1回だけ読み込む(N+1回避、上記_getSteraRealtimeTodayMap_参照)
+  const realtimeToday = _getSteraRealtimeTodayMap_(storeId);
 
   const result = {};
   STERA_SALES_MAPPING.forEach(m => {
@@ -2438,10 +2500,13 @@ function getChecksheetStockChecks(storeId) {
         break;
       }
     }
-    // steraQtyはstera_daily_salesに取り込み済みの前日分までで揃える(当日分はまだ取込み前で
-    // 必ず0のため、todayを上限にすると「前日まで確定」の補充量比較が崩れる。2026-08-04発覚)
+    // qtyは「sinceDate(除く)〜前日(含む)」の確定分(stera_daily_sales)に、当日分の速報値
+    // (stera_realtime_today、ポーリングスクリプトが管理画面の内部集計APIから数分おきに取得)を
+    // 加算する(2026-08-15、パートナーが「当日の実売上が常に0と表示され混乱する」との指摘を受けて追加。
+    // checkChecksheetStockMismatch側の閾値判定はinputQty側も当日分を含めない設計のため意図的に
+    // 変更していない——表示専用のこちらだけ当日分を反映する)
     const entry = sinceDate
-      ? { label: m.label, sinceDate, qty: getSteraDailyTotal_(storeId, m.prdId, sinceDate, yesterday) }
+      ? { label: m.label, sinceDate, qty: getSteraDailyTotal_(storeId, m.prdId, sinceDate, yesterday) + (realtimeToday[m.prdId] || 0) }
       : null;
     m.ourProducts.forEach(name => { result[name] = entry; });
   });
@@ -2801,6 +2866,36 @@ function sendStockBotNotification_(message, userIdOverride) {
       payload: body
     });
   }
+}
+
+// ----------------------------------------------------------------
+// スクリプト(Task Scheduler経由)の失敗通知 2026-08-15
+// ----------------------------------------------------------------
+// poll_stera_realtime_sales.py・import_stera_daily_sales.pyはこのPC上でTask Scheduler経由で
+// 無人実行されるため、失敗してもスクリプト自身がコンソールにエラーを出すだけで誰も気づけない
+// (実際に当日表示が「翌日まで0」に静かに戻ってしまう問題があった)。失敗時にLINE WORKSへ
+// 通知するための汎用アクション。keyごとに直近の通知時刻をScript Propertiesへ記録し、
+// SCRIPT_FAILURE_NOTIFY_THROTTLE_MIN以内の再通知はスキップする(10分おきに動くポーリングが
+// 壊れたままだと10分ごとに通知が来て埋もれてしまうため、スクリプトごとに最大1時間に1通に絞る)。
+// ?action=reportScriptFailure(POST、{message, key})で実行。
+const SCRIPT_FAILURE_NOTIFY_THROTTLE_MIN = 60;
+function reportScriptFailure(message, key) {
+  if (!message) return { error: 'messageは必須です' };
+  const props = PropertiesService.getScriptProperties();
+  const throttleKey = 'scriptFailureNotifiedAt_' + (key || 'default');
+  const lastNotified = Number(props.getProperty(throttleKey) || 0);
+  const now = Date.now();
+  if (now - lastNotified < SCRIPT_FAILURE_NOTIFY_THROTTLE_MIN * 60 * 1000) {
+    return { ok: true, skipped: 'throttled' };
+  }
+  try {
+    sendStockBotNotification_('【スクリプト失敗】' + message);
+    props.setProperty(throttleKey, String(now));
+  } catch (e) {
+    console.error('reportScriptFailureの通知送信エラー:', e.message);
+    return { error: '通知送信自体に失敗: ' + e.message };
+  }
+  return { ok: true };
 }
 
 function testStockBotNotification() {

@@ -283,6 +283,24 @@ def post_to_gas(gas_url, target_date, csv_path):
     return resp.json()
 
 
+def notify_failure(script_name, error):
+    """Task Scheduler経由の無人実行だと失敗に誰も気づけないため、LINE WORKSへ通知する
+    (2026-08-15追加、GAS側のreportScriptFailureが1時間に1通へスロットリングする)。
+    通知自体が失敗しても、元のエラー(呼び出し元でraiseし直す)を握りつぶさないよう、
+    ここでは例外を外に出さずログに残すだけにする。"""
+    gas_url = os.environ.get("GAS_URL")
+    if not gas_url:
+        return
+    try:
+        requests.post(gas_url, json={
+            "action": "reportScriptFailure",
+            "message": f"{script_name}が失敗しました: {error}",
+            "key": script_name,
+        }, timeout=15)
+    except Exception as notify_err:
+        print(f"失敗通知の送信にも失敗しました: {notify_err}")
+
+
 def main():
     args = parse_args()
     gas_url = os.environ.get("GAS_URL")
@@ -296,8 +314,8 @@ def main():
     target_date = resolve_target_date(args.date)
     print(f"対象日: {target_date}")
 
-    launch_cdp_chrome()
     try:
+        launch_cdp_chrome()
         with sync_playwright() as p:
             browser = p.chromium.connect_over_cdp(f"http://localhost:{CDP_PORT}")
             context = browser.contexts[0]
@@ -321,7 +339,10 @@ def main():
             if result.get("unmatchedStores"):
                 print(f"⚠️ 店舗名が一致しなかった行があります(stores.jsと表記が合っていない可能性): {result['unmatchedStores']}")
             if result.get("error"):
-                sys.exit(f"エラー: {result['error']}")
+                raise RuntimeError(result["error"])
+    except Exception as e:
+        notify_failure("import_stera_daily_sales.py", e)
+        raise
     finally:
         if not args.keep_open:
             kill_cdp_chrome()
