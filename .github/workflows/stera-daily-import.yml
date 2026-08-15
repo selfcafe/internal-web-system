@@ -4,11 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       date:
-        description: "対象日(YYYY-MM-DD)。省略時は前日"
+        description: "対象日(YYYY-MM-DD)。省略時は前日。手動での再取込み・バックフィル用"
         required: false
-  schedule:
-    # 毎日06:00 JST(旧PCのタスクスケジューラと同じ時刻) = 21:00 UTC(前日)
-    - cron: "0 21 * * *"
+  # scheduleトリガーは2026-08-15に削除。理由: このPC自身のタスクスケジューラ
+  # (SteraDailySalesImport、毎朝06:03)に一本化したため(kaihipay_pipeline.ymlで
+  # 既に判明していた「GitHub Actionsのscheduleは遅延・未発火が起きて信頼できない」
+  # という前例に合わせた。project_selfhosted_runner_migration.md参照)。
+  # 両方を併用すると同じPC上で同じChromeプロファイル・同じCDPポートを取り合い競合するため、
+  # 定期実行はタスクスケジューラ側だけに任せる。workflow_dispatchは手動実行用に残す。
 
 jobs:
   import:
