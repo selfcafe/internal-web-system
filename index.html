@@ -3192,7 +3192,7 @@ function renderChecksheetTodayForm(wrap, subgroups) {
         // 新しい要素を追加せずspan内に<br>で収める(他の行のレイアウトに一切影響を与えないための工夫)
         const check = _checksheetStockChecks[col.id.replace(/^prod:/, '')];
         const checkNote = check
-          ? `<br><small style="color:#888;font-weight:400">前回(${esc(check.sinceDate.slice(5))})比 実売上:${esc(check.qty)}個</small>`
+          ? `<br><small style="color:#888;font-weight:400">前回入力(${esc(check.sinceDate.slice(5))})以降の実売上:${esc(check.qty)}個</small>`
           : '';
         return `<div class="checksheet-today-row"><span>${esc(col.name)}${checkNote}</span>${input}</div>`;
       }).join('')}
