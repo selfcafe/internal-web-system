@@ -2592,6 +2592,9 @@ function getChecksheetStockChecks(storeId) {
 // 「社内ポータル通知」の既定チャンネル、2026-07-31時点でテスト運用としてこの形。
 // channelIdOverride省略で既定チャンネルへ送る)。通知文言は断定しない中立表現にする
 // (パートナーの数え間違い・処分・店舗間移動等でも同じ差異が出るため、盗難と決めつけない)
+// 2026-08-16: 比較期間を「sinceDate(除く)〜前日(含む)」から「sinceDate(除く)〜当日(含む、
+// stera_realtime_today経由)」に拡張。従来は毎日連続入力(=通常運用)だと比較期間が空になり
+// 差異が常に0対0で通知が事実上機能しない問題があったため。
 const CHECKSHEET_STOCK_MISMATCH_THRESHOLD = 2;
 function checkChecksheetStockMismatch(storeId, product) {
   if (!storeId || !product) return { error: 'storeId/productは必須です' };
@@ -2618,17 +2621,20 @@ function checkChecksheetStockMismatch(storeId, product) {
   }
   if (!sinceDate) return { ok: true, skipped: 'no_prior_entry' }; // 今回が初回入力、比較対象が無い
 
-  // 補充量(inputQty)とステラ実売上(steraQty)を同じ「sinceDate(除く)〜前日(含む)」の期間で揃える。
-  // stera_daily_salesは前日分までしか取り込まれていない(SteraDailySalesImportが毎日06:00に
-  // 前日分を取込む設計)ため、上限をtodayにすると当日分の補充だけが一方的に加算され、ラグ由来の
-  // 見せかけの差異が出てしまう(2026-08-04発覚)。当日分の補充入力は次回の比較サイクルへ自然に繰り越す。
+  // 補充量(inputQty)とステラ実売上(steraQty)を同じ「sinceDate(除く)〜当日(含む)」の期間で揃える。
+  // 2026-08-04時点ではstera_daily_salesが前日分までしか無かったため当日分を除外していたが
+  // (当日分の補充だけ一方的に加算されラグ由来の見せかけの差異が出る問題があった)、
+  // 2026-08-16にstera_realtime_today(当日分のリアルタイム売上)を追加したことで当日分も
+  // 正しく比較できるようになったため含めるよう変更。これにより「前回入力の翌日〜前回入力当日」
+  // の間隔が1日(=毎日連続入力)の時は比較期間が空になり差異検知が事実上機能しない、という
+  // 見落としも解消される(毎日連続入力が通常運用のため、これが直らないと①の通知はほぼ発火しない)。
   let inputQty = 0;
   Object.keys(allDays).forEach(dayKey => {
-    if (!(dayKey > sinceDate && dayKey <= yesterday)) return;
+    if (!(dayKey > sinceDate && dayKey <= today)) return;
     itemKeys.forEach(k => { inputQty += Number(allDays[dayKey][k]) || 0; });
   });
 
-  const steraQty = getSteraDailyTotal_(storeId, group.prdId, sinceDate, yesterday);
+  const steraQty = getSteraDailyTotal_(storeId, group.prdId, sinceDate, yesterday) + (_getSteraRealtimeTodayMap_(storeId)[group.prdId] || 0);
   const diff = inputQty - steraQty;
   if (diff >= CHECKSHEET_STOCK_MISMATCH_THRESHOLD) {
     try {
@@ -2636,11 +2642,11 @@ function checkChecksheetStockMismatch(storeId, product) {
       sendStockBotNotification_(
         '【在庫差異検知】' + _storeIdLabel_(storeId) + '・' + group.label +
         'で在庫差異(補充' + inputQty + '個／ステラ実売上' + steraQty + '個、差' + diff + '個)を検知しました。ご確認ください。' +
-        '(' + sinceDate + '〜' + yesterday + '分)'
+        '(' + sinceDate + '〜本日分)'
       );
     } catch (e) { console.error('LINE WORKS通知エラー(在庫差異検知):', e.message); }
   }
-  return { ok: true, sinceDate, throughDate: yesterday, inputQty, steraQty, diff };
+  return { ok: true, sinceDate, throughDate: today, inputQty, steraQty, diff };
 }
 
 // ----------------------------------------------------------------

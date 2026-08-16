@@ -213,37 +213,24 @@ def main():
 
         date_str = datetime.now().strftime("%Y-%m-%d")
         result_rows = []
-        refund_rows = []
         for shop_id, store_id in shop_id_map.items():
             products = fetch_today_products_for_shop(app_id, token, shop_id)
             for p in products:
                 if p["id"] not in STERA_SALES_MAPPING_PRD_IDS:
                     continue
-                refunded_qty = p.get("refundedQuantity", 0)
-                net_qty = p["totalQuantity"] - refunded_qty
+                # 返金は売上数量から引く(net_qty)だけにして、LINE WORKS通知はしない
+                # (2026-08-16、返金は別途自分たちで管理しているため通知不要とのユーザー判断)。
+                # post_refunds_to_gas/checkSteraRefunds自体はGAS側に残してあるので、
+                # 将来また通知したくなったらここで再度呼べばよい。
+                net_qty = p["totalQuantity"] - p.get("refundedQuantity", 0)
                 if net_qty != 0:
                     result_rows.append({"storeId": store_id, "prdId": p["id"], "qty": net_qty})
-                if refunded_qty > 0:
-                    refund_rows.append({
-                        "storeId": store_id,
-                        "prdId": p["id"],
-                        "label": STERA_SALES_MAPPING.get(p["id"], p["id"]),
-                        "refundedQuantity": refunded_qty,
-                        "refundedAmount": p.get("refundedAmount", 0),
-                    })
 
         print(f"対象商品の売上あり行数: {len(result_rows)}")
         gas_result = post_to_gas(gas_url, date_str, result_rows)
         print(f"GASへの送信結果: {gas_result}")
         if gas_result.get("error"):
             raise RuntimeError(gas_result["error"])
-
-        if refund_rows:
-            print(f"返金あり行数: {len(refund_rows)}")
-            refund_result = post_refunds_to_gas(gas_url, date_str, refund_rows)
-            print(f"返金通知結果: {refund_result}")
-            if refund_result.get("error"):
-                raise RuntimeError(refund_result["error"])
     except Exception as e:
         base.notify_failure("poll_stera_realtime_sales.py", e)
         raise
