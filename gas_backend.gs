@@ -291,6 +291,7 @@ function doPost(e) {
     else if (b.action === 'importSteraOrdersCsv') result = importSteraOrdersCsv(b.csvText);
     else if (b.action === 'importSteraDailySales') result = importSteraDailySales(b.dateStr, b.csvText);
     else if (b.action === 'updateSteraRealtimeToday') result = updateSteraRealtimeToday(b.dateStr, b.rows);
+    else if (b.action === 'checkSteraRefunds') result = checkSteraRefunds(b.dateStr, b.refunds);
     else if (b.action === 'reportScriptFailure') result = reportScriptFailure(b.message, b.key);
     else if (b.action === 'checkChecksheetStockMismatch') result = checkChecksheetStockMismatch(b.storeId, b.product);
     else if (b.action === 'submitInvoice')       result = submitInvoice(b.payload);
@@ -2464,6 +2465,73 @@ function _getSteraRealtimeTodayMap_(storeId) {
     map[r.prd_id] = (map[r.prd_id] || 0) + (Number(r.qty) || 0);
   });
   return map;
+}
+
+// ----------------------------------------------------------------
+// ステラ返金の検知通知 2026-08-16
+// ----------------------------------------------------------------
+// 「ステラ注文詳細」タブは返金金額・最終返金日時をCSVから読んではいるが、原価率計算に使うだけで
+// 返金の発生自体を検知・通知する仕組みがこれまで一切無かった(エラーにもならず誰も気づけない)。
+// poll_stera_realtime_sales.pyが当日分のrefundedQuantityを送ってくるたびに、前回通知済みの
+// 数量と比較し、増えていれば差分をLINE WORKSへ通知する。ステラの当日集計は累計値のため、
+// 差分ではなく毎回「本日の返金個数合計」が送られてくる想定——同じ返金を10分おきに何度も
+// 通知しないよう、stera_refund_notifiedシートに「その日・店舗・商品について直近何個まで
+// 通知済みか」を記録し、増分がある時だけ通知する。
+const SHEET_STERA_REFUND_NOTIFIED = 'stera_refund_notified';
+const STERA_REFUND_NOTIFIED_COLS = ['date', 'store_id', 'prd_id', 'notified_qty'];
+
+function getSteraRefundNotifiedSheet_() {
+  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const sheet = ss.getSheetByName(SHEET_STERA_REFUND_NOTIFIED) || ss.insertSheet(SHEET_STERA_REFUND_NOTIFIED);
+  ensureHeaders(sheet, STERA_REFUND_NOTIFIED_COLS);
+  return sheet;
+}
+
+// ?action=checkSteraRefunds(POST、{dateStr, refunds: [{storeId, prdId, label, refundedQuantity, refundedAmount}]})
+// で実行。refundsは呼び出し側(poll_stera_realtime_sales.py)がrefundedQuantity>0の行だけに
+// 絞って渡す想定。このシートは「today」1日分の通知済み状態だけを保持する(呼び出しのたびに
+// dateStr以外の残骸も含めて全削除→書き直し、stera_realtime_todayと同じ設計)。
+function checkSteraRefunds(dateStr, refunds) {
+  if (!dateStr) return { error: 'dateStrは必須です' };
+  if (!Array.isArray(refunds)) return { error: 'refundsは配列で指定してください' };
+
+  const sheet = getSteraRefundNotifiedSheet_();
+  const existingRows = sheetRows(sheet, STERA_REFUND_NOTIFIED_COLS);
+  const notifiedMap = {}; // `storeId|prdId` -> notified_qty(dateStrが一致する行のみ採用)
+  existingRows.forEach(r => {
+    if (String(r.date) !== String(dateStr)) return;
+    notifiedMap[r.store_id + '|' + r.prd_id] = Number(r.notified_qty) || 0;
+  });
+
+  let notifiedCount = 0;
+  refunds.forEach(r => {
+    const key = r.storeId + '|' + r.prdId;
+    const prevNotified = notifiedMap[key] || 0;
+    const currentQty = Number(r.refundedQuantity) || 0;
+    if (currentQty > prevNotified) {
+      const delta = currentQty - prevNotified;
+      try {
+        sendStockBotNotification_(
+          '【返金検知】' + _storeIdLabel_(r.storeId) + '・' + (r.label || r.prdId) +
+          'で返金' + delta + '個(本日累計' + currentQty + '個' +
+          (r.refundedAmount ? '、' + r.refundedAmount + '円' : '') + ')を検知しました。'
+        );
+        notifiedCount++;
+      } catch (e) { console.error('返金通知エラー:', e.message); }
+    }
+    notifiedMap[key] = currentQty;
+  });
+
+  if (sheet.getLastRow() > 1) sheet.deleteRows(2, sheet.getLastRow() - 1);
+  const newRows = Object.keys(notifiedMap).map(key => {
+    const parts = key.split('|');
+    return [dateStr, parts[0], parts[1], notifiedMap[key]];
+  });
+  if (newRows.length) {
+    sheet.getRange(2, STERA_REFUND_NOTIFIED_COLS.indexOf('date') + 1, newRows.length, 1).setNumberFormat('@');
+    sheet.getRange(2, 1, newRows.length, STERA_REFUND_NOTIFIED_COLS.length).setValues(newRows);
+  }
+  return { ok: true, notified: notifiedCount };
 }
 
 // ----------------------------------------------------------------

@@ -26,6 +26,12 @@ updateSteraRealtimeToday経由でstera_realtime_todayシートへ書き込む。
 STERA_SALES_MAPPINGはgas_backend.js/gsのものと手動で同期させること(商品を追加・削除
 したら両方直すこと)。
 
+**返金検知(2026-08-16追加)**: これまで返金の発生を検知・通知する仕組みが一切無かった
+(「ステラ注文詳細」タブは返金金額・返金日時をCSVから読んではいるが原価率計算に使うだけ)
+ため、当日分のrefundedQuantityが1件以上ある商品をGASのcheckSteraRefundsへ送り、
+LINE WORKSへ通知させる(GAS側で「前回通知済みの数量」と比較し、増分がある時だけ通知する
+ので同じ返金を10分おきに連投しない)。
+
 使い方:
     STERA_EMAIL=xxx STERA_PASSWORD=xxx GAS_URL=https://script.google.com/macros/s/xxx/exec \
         python poll_stera_realtime_sales.py
@@ -46,17 +52,18 @@ import import_stera_daily_sales as base
 SCRIPT_DIR = Path(__file__).parent
 load_dotenv(SCRIPT_DIR.parent / ".env")
 
-# gas_backend.js/gsのSTERA_SALES_MAPPINGと同じ内容(prdIdだけ使う。手動同期——変更したら両方直す)
-STERA_SALES_MAPPING_PRD_IDS = [
-    "prd_223df30ea1f511d1df19c6c",  # 水
-    "prd_12fd82ee35d41bcef497baa",  # レディーボーデン各種
-    "prd_535430d421048c6d58de73e",  # プリングルス各種
-    "prd_db5c32edaf3cba6889315ce",  # プチシリーズ
-    "prd_e5beda23225e76774172fe8",  # ソイジョイ
-    "prd_57998f0bdebf586bcd3e51c",  # 大粒ラムネ
-    "prd_7603e1635070498fefa4a85",  # 果汁グミ
-    "prd_ea6c0ebc5bf327d051ad172",  # クランキーアーモンドチョコレート
-]
+# gas_backend.js/gsのSTERA_SALES_MAPPINGと同じ内容(prdId→labelのみ使う。手動同期——変更したら両方直す)
+STERA_SALES_MAPPING = {
+    "prd_223df30ea1f511d1df19c6c": "水",
+    "prd_12fd82ee35d41bcef497baa": "レディーボーデン各種",
+    "prd_535430d421048c6d58de73e": "プリングルス各種",
+    "prd_db5c32edaf3cba6889315ce": "プチシリーズ",
+    "prd_e5beda23225e76774172fe8": "ソイジョイ",
+    "prd_57998f0bdebf586bcd3e51c": "大粒ラムネ",
+    "prd_7603e1635070498fefa4a85": "果汁グミ",
+    "prd_ea6c0ebc5bf327d051ad172": "クランキーアーモンドチョコレート",
+}
+STERA_SALES_MAPPING_PRD_IDS = list(STERA_SALES_MAPPING.keys())
 
 STORES_JS_PATH = SCRIPT_DIR.parent / "stores.js"
 
@@ -182,6 +189,16 @@ def post_to_gas(gas_url, date_str, rows):
     return resp.json()
 
 
+def post_refunds_to_gas(gas_url, date_str, refunds):
+    resp = requests.post(
+        gas_url,
+        json={"action": "checkSteraRefunds", "dateStr": date_str, "refunds": refunds},
+        timeout=60,
+    )
+    resp.raise_for_status()
+    return resp.json()
+
+
 def main():
     gas_url = os.environ.get("GAS_URL")
     if not gas_url:
@@ -196,21 +213,37 @@ def main():
 
         date_str = datetime.now().strftime("%Y-%m-%d")
         result_rows = []
+        refund_rows = []
         for shop_id, store_id in shop_id_map.items():
             products = fetch_today_products_for_shop(app_id, token, shop_id)
             for p in products:
                 if p["id"] not in STERA_SALES_MAPPING_PRD_IDS:
                     continue
-                net_qty = p["totalQuantity"] - p.get("refundedQuantity", 0)
-                if net_qty == 0:
-                    continue
-                result_rows.append({"storeId": store_id, "prdId": p["id"], "qty": net_qty})
+                refunded_qty = p.get("refundedQuantity", 0)
+                net_qty = p["totalQuantity"] - refunded_qty
+                if net_qty != 0:
+                    result_rows.append({"storeId": store_id, "prdId": p["id"], "qty": net_qty})
+                if refunded_qty > 0:
+                    refund_rows.append({
+                        "storeId": store_id,
+                        "prdId": p["id"],
+                        "label": STERA_SALES_MAPPING.get(p["id"], p["id"]),
+                        "refundedQuantity": refunded_qty,
+                        "refundedAmount": p.get("refundedAmount", 0),
+                    })
 
         print(f"対象商品の売上あり行数: {len(result_rows)}")
         gas_result = post_to_gas(gas_url, date_str, result_rows)
         print(f"GASへの送信結果: {gas_result}")
         if gas_result.get("error"):
             raise RuntimeError(gas_result["error"])
+
+        if refund_rows:
+            print(f"返金あり行数: {len(refund_rows)}")
+            refund_result = post_refunds_to_gas(gas_url, date_str, refund_rows)
+            print(f"返金通知結果: {refund_result}")
+            if refund_result.get("error"):
+                raise RuntimeError(refund_result["error"])
     except Exception as e:
         base.notify_failure("poll_stera_realtime_sales.py", e)
         raise
