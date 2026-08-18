@@ -1,4 +1,4 @@
-$action = New-ScheduledTaskAction -Execute "C:\Users\80000785\AppData\Local\Programs\Python\Python312\python.exe" -Argument '"C:\Users\80000785\internal-web-system\scripts\poll_stera_realtime_sales.py"' -WorkingDirectory "C:\Users\80000785\internal-web-system\scripts"
+$action = New-ScheduledTaskAction -Execute "C:\Users\80000785\internal-web-system\scripts\run_poll_stera_realtime_sales.cmd" -WorkingDirectory "C:\Users\80000785\internal-web-system\scripts"
 
 $trigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 10) -RepetitionDuration (New-TimeSpan -Days 3650)
 
