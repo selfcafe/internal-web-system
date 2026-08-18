@@ -94,10 +94,10 @@ function genInvoicePassword() {
 // 2026-07-11に「パートナーさん○月分」一覧（既存の運用資料）から抽出した店舗番号の初期値。
 // 店名の表記ゆれ（ヶ/が、省略表記）があるため一部は確度が低い。新規店舗・未掲載店舗は空のまま。
 const INVOICE_STORE_CODE_SEED = {
-  sasashima:31, chikusa:33, gokiso:34, kamisawa:35, nakamura_nisseki:36, tsuruma:37, sakurayama:38,
+  sasashima:31, chikusa:33, gokiso:34, kamisawa:35, nakamura_nisseki:36, tsurumai:37, sakurayama:38,
   midori_kofubutsu:39, akatsuka:40, seto_iwayadou:41, shin_moriyama:42, tokoname:43, hamamatsu:44,
   tenma:45, sakae:46, inzai:47, nonami:48, rokubanchou:49, nagakute:50, meieki_nishi:51, nadia_sakae:52,
-  higashiosaka:53, aikawa:55, eisei:57, shinmizuhashi:58, hotei:59, abeno:60, minami_morimachi:61,
+  higashiosaka:53, aikawa:55, sako:57, aratamabashi:58, hotei:59, abeno:60, minami_morimachi:61,
   tanimachi9:63, kamejima:64, nakamura_torii:65, taikodori:66, moriguchi:67, taishibashi:68,
   kouta:72, hibino:73, kyobashi_kita:74, hoshigaoka:75, shinsaibashi:76, toyota:77, ikeshita:78,
   kishi:81, otsuka:82, umeda:83, sugamo:84, umejima:85, kami_shinjyo:86, shibuya:87, osaka_hirano:88,
@@ -132,10 +132,10 @@ function seedInvoiceStoreCodesOnce() {
 // 空欄・判読不能だった店舗、複数パートナー店舗（幸田=koutaは西村文乃/有澤奈穂の2名）は含めていない。
 const INVOICE_BIZCODE_SEED = {
   sasashima: '50039600', meieki_nishi: '50039600',
-  hibino: '50065087', gokiso: '50065087', sakurayama: '50065087', hara: '50065087', tsuruma: '50065087', chikusa: '50065087',
+  hibino: '50065087', gokiso: '50065087', sakurayama: '50065087', hara: '50065087', tsurumai: '50065087', chikusa: '50065087',
   kamisawa: '50038400', nakamura_nisseki: '50038500', akatsuka: '50040800', hamamatsu: '50058900', tenma: '50065645',
   nonami: '50059000', rokubanchou: '50065049', nagakute: '50059200', nadia_sakae: '50065052',
-  aikawa: '50055300', eisei: '50059400', shinmizuhashi: '50065058', hotei: '50059500', abeno: '50065660',
+  aikawa: '50055300', sako: '50059400', aratamabashi: '50065058', hotei: '50059500', abeno: '50065660',
   minami_morimachi: '50061800', tanimachi9: '50065062', shinsaibashi: '50065062', kamejima: '50065764',
   taikodori: '50065666', kyobashi_kita: '50065074', kishi: '50065081', osaka_hirano: '50065088',
   hikone: '50065090', fujigaoka: '50065093',

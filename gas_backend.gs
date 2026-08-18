@@ -89,7 +89,7 @@ const ATTENDANCE_LEAVE_COLS = ['id','store_id','name','leave_date','submitted_at
 // 参照)の方が優先される——このデフォルト自体は基本的に変わらないため、_areaForStore_を通さない
 // 単純な用途(通知グループ振り分け以外)ではこのまま直接参照してよい）
 const AREA_STORES = {
-  '東海': ['sasashima','chikusa','gokiso','tsuruma','kamisawa','nakamura_nisseki','midori_kofubutsu','sakurayama','akatsuka','shin_moriyama','tokoname','hamamatsu','sakae','rokubanchou','nonami','seto_iwayadou','nagakute','meieki_nishi','nadia_sakae','shinmizuhashi','eisei','hotei','kamejima','nakamura_torii','taikodori','kouta','hibino','hoshigaoka','ikeshita','toyota','hara','fujigaoka','gifu_kitagata','narumi'],
+  '東海': ['sasashima','chikusa','gokiso','tsurumai','kamisawa','nakamura_nisseki','midori_kofubutsu','sakurayama','akatsuka','shin_moriyama','tokoname','hamamatsu','sakae','rokubanchou','nonami','seto_iwayadou','nagakute','meieki_nishi','nadia_sakae','aratamabashi','sako','hotei','kamejima','nakamura_torii','taikodori','kouta','hibino','hoshigaoka','ikeshita','toyota','hara','fujigaoka','gifu_kitagata','narumiyamashita'],
   '関西': ['tenma','higashiosaka','aikawa','minami_morimachi','abeno','tanimachi9','moriguchi','taishibashi','kyobashi_kita','shinsaibashi','kishi','umeda','kami_shinjyo','osaka_hirano','hikone','aeon_higashiosaka','gamo4'],
   '関東': ['inzai','otsuka','sugamo','umejima','shibuya','shinjuku_fc','kamisato']
 };
@@ -100,10 +100,57 @@ const REGION_ID_LABEL_ = { tokai: '東海', kansai: '関西', kanto: '関東' };
 // 誤読み"gokaiso"から正しい"gokiso"へ改名した際に追加。各シートに既に書き込み済みの
 // 過去データ(store_id列)は書き換えていないため、旧IDのまま残っている行を新IDと
 // 同一店舗として扱えるよう、sheetRows()で読み込む際にstore_id列をここで正規化する。
-const STORE_ID_ALIASES = { gokaiso: 'gokiso' };
+// 2026-08-18、新瑞橋・栄生・鶴舞・鳴海山下の誤読みIDも同様に改名したため追加
+// (migrateStoreIdRenames()で既存データ自体も新IDへ書き換え済みだが、旧IDを覚えている
+// 端末のキャッシュ・ブックマーク等からの送信に備えてエイリアスは残す)。
+const STORE_ID_ALIASES = {
+  gokaiso: 'gokiso',
+  shinmizuhashi: 'aratamabashi',
+  eisei: 'sako',
+  tsuruma: 'tsurumai',
+  narumi: 'narumiyamashita',
+};
 function _normalizeStoreId_(id) {
   const key = String(id);
   return Object.prototype.hasOwnProperty.call(STORE_ID_ALIASES, key) ? STORE_ID_ALIASES[key] : id;
+}
+
+// STORE_ID_ALIASESに登録した旧ID→新IDの改名を、既存データ(店舗ID改名前に書き込まれた行)
+// 自体にも反映するワンショット移行関数(2026-08-18)。メインスプレッドシート(SHEET_ID)と
+// 棚卸集計スプレッドシート(INVENTORY_SHEET_ID)の両方について、全シートを走査し「store_id」
+// という見出しの列を持つシートだけを対象に、値がSTORE_ID_ALIASESのキーと一致するセルを
+// 新IDへ書き換える。個別の関数(saveOrders/saveChecksheetData/inventory_log関連等)を
+// 1つずつ直すのではなく、シート側のデータを新IDに揃えてしまうことで、店舗IDで生の文字列
+// 比較をしている箇所すべてを一括で正しく動くようにする狙い。store_id列自体を縦結合(merge)
+// しているシートは今のところ無いことを確認済み(結合されているのはremarks/updated_at/期間列)。
+// 何度実行しても安全(既に新IDになっている行は変更されない)。
+// ?action=migrateStoreIdRenames で実行。
+function migrateStoreIdRenames() {
+  const spreadsheetIds = [SHEET_ID, INVENTORY_SHEET_ID];
+  const summary = [];
+  spreadsheetIds.forEach(ssId => {
+    const ss = SpreadsheetApp.openById(ssId);
+    ss.getSheets().forEach(sheet => {
+      const lastRow = sheet.getLastRow(), lastCol = sheet.getLastColumn();
+      if (lastRow < 2 || lastCol < 1) return;
+      const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(String);
+      const sidCol = headers.indexOf('store_id') + 1; // 1-based、無ければ0
+      if (sidCol < 1) return;
+      const range = sheet.getRange(2, sidCol, lastRow - 1, 1);
+      const values = range.getValues();
+      let changed = 0;
+      const newValues = values.map(row => {
+        const v = String(row[0]);
+        if (Object.prototype.hasOwnProperty.call(STORE_ID_ALIASES, v)) { changed++; return [STORE_ID_ALIASES[v]]; }
+        return row;
+      });
+      if (changed > 0) {
+        range.setValues(newValues);
+        summary.push({ spreadsheetId: ssId, sheet: sheet.getName(), changed });
+      }
+    });
+  });
+  return { ok: true, summary };
 }
 
 // 棚卸集計スプレッドシート内の店舗タブ(例:「渋谷神南」)を、エリアごとに色分け・グループ化して
@@ -221,6 +268,8 @@ function _isFcStore_(storeId) {
 function doGet(e) {
   try {
     const a = e.parameter.action;
+    // doPost側と同じ理由で、GET経由のstoreIdも旧ID→新IDへ正規化する(STORE_ID_ALIASES参照)
+    if (e.parameter.storeId) e.parameter.storeId = _normalizeStoreId_(e.parameter.storeId);
     let result;
     if      (a === '_peekMainSheetTabByGid') result = _peekMainSheetTabByGid_(Number(e.parameter.gid), Number(e.parameter.rows) || 5);
     else if (a === '_provisionDeliveryHistorySheet') result = _provisionDeliveryHistorySheet_();
@@ -237,6 +286,7 @@ function doGet(e) {
     else if (a === 'getInvoiceLog')             result = getInvoiceLog();
     else if (a === 'migrateOrderColumns')       result = migrateOrderColumns();
     else if (a === 'migrateInventoryColumns')   result = migrateInventoryColumns();
+    else if (a === 'migrateStoreIdRenames')     result = migrateStoreIdRenames();
     else if (a === 'setupInventoryDisposedHighlight') result = setupInventoryDisposedHighlight();
     else if (a === 'buildInventoryRollup')      result = buildInventoryRollup(e.parameter.periodLabel);
     else if (a === 'buildStoreInventorySheet')  result = buildStoreInventorySheet(e.parameter.storeId, e.parameter.periodLabel);
@@ -272,6 +322,11 @@ function doPost(e) {
   let result;
   try {
     const b = JSON.parse(e.postData.contents);
+    // 店舗ID改名の後方互換: 旧IDを覚えたままの端末が送ってきても新IDとして扱う
+    // (STORE_ID_ALIASES参照。sheetRows()経由の読み取りだけでなく、生のgetValues()で
+    // store_id列を直接比較しているsaveOrders/saveChecksheetData等の書き込み系関数も
+    // ここで一括して救済する)
+    if (b && b.storeId) b.storeId = _normalizeStoreId_(b.storeId);
     console.log('doPost action=' + (b.action || '(lineworks/kaihipay callback)') + ' storeId=' + (b.storeId || '') + ' lockWaitMs=' + _lockWaitMs);
     const isKaihipayBotCallback_ = !!(e.parameter && e.parameter.bot === 'kaihipay');
     if      (isKaihipayBotCallback_ && isLineWorksCallback_(b)) result = handleKaihipayApprovalTextReply_(b);
