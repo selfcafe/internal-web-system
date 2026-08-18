@@ -95,7 +95,10 @@ def launch_cdp_chrome():
         try:
             requests.get(f"http://localhost:{CDP_PORT}/json/version", timeout=2)
             return
-        except requests.exceptions.ConnectionError:
+        except requests.exceptions.RequestException:
+            # ConnectionErrorだけでなくReadTimeout等も含めて待ち続ける
+            # (2026-08-18、ReadTimeoutが未捕捉のまま伝播しスクリプト全体が
+            # 失敗していた不具合を修正)
             time.sleep(1)
     raise RuntimeError(f"CDPポート{CDP_PORT}が起動しませんでした")
 
