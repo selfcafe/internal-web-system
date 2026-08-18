@@ -126,7 +126,9 @@ function _normalizeStoreId_(id) {
 // 何度実行しても安全(既に新IDになっている行は変更されない)。
 // ?action=migrateStoreIdRenames で実行。
 function migrateStoreIdRenames() {
-  const spreadsheetIds = [SHEET_ID, INVENTORY_SHEET_ID];
+  // store_id列を持ちうる全スプレッドシートを対象にする(MANUAL_DELIVERY_SHEET_IDは
+  // 現状未設定=空文字のため、設定済みのIDだけに絞る)
+  const spreadsheetIds = [SHEET_ID, INVENTORY_SHEET_ID, DELIVERY_HISTORY_SHEET_ID, MANUAL_DELIVERY_SHEET_ID].filter(Boolean);
   const summary = [];
   spreadsheetIds.forEach(ssId => {
     const ss = SpreadsheetApp.openById(ssId);
