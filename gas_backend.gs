@@ -2129,9 +2129,13 @@ function buildStoreInventorySheet(storeId, periodLabel) {
     .sort((a, b) => b.startIdx - a.startIdx) // 末尾側から消して行番号ズレを避ける
     .forEach(b => sheet.deleteRows(b.startIdx + 2, b.endIdx - b.startIdx + 1));
 
+  // 新しい期間ほど上に来るよう、末尾追記ではなくヘッダー直下(2行目)に挿入する
+  // (2026-08-18、ユーザー要望。既存ブロックはinsertRowsBeforeで自動的に下へ押し出され、
+  // 各ブロックの数式は自己参照のみのためGoogle Sheetsの行挿入時のセル参照自動調整で崩れない)。
   // 期首在庫額等を実セル参照の数式にするため、書き込み先の絶対行番号を先に確定させる
   // (削除処理より後で確定させないと、数式が指す行番号が実際の書き込み位置とズレる)
-  const startRow = sheet.getLastRow() + 1;
+  sheet.insertRowsBefore(2, outRows.length);
+  const startRow = 2;
   const colOpening = _storeInvColLetter_('opening_amount');
   const colClosing = _storeInvColLetter_('closing_amount');
   const colConsumption = _storeInvColLetter_('consumption_amount');
