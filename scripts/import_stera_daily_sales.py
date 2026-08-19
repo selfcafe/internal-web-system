@@ -160,7 +160,20 @@ def resolve_orders_url(page):
     page.goto(STERA_BASE_URL + "/business/apps/")
     page.wait_for_load_state("domcontentloaded")
     time.sleep(1)
-    page.get_by_text("SaaSサービス", exact=True).click()
+    try:
+        page.get_by_text("SaaSサービス", exact=True).click()
+    except PlaywrightTimeoutError:
+        # 2026-08-19、原因不明のまま(画面が実際どうなっていたか分からず)失敗した回が
+        # あったため、ログイン失敗時と同じくスクリーンショットを残して次回の診断に使う
+        DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        shot_path = DOWNLOAD_DIR / "resolve_orders_url_failure.png"
+        try:
+            page.screenshot(path=str(shot_path))
+        except Exception:
+            pass
+        raise RuntimeError(
+            f"「SaaSサービス」リンクが見つかりませんでした(画面状態を{shot_path}に保存)"
+        )
     page.wait_for_url(re.compile(r"/apps/app_"), timeout=15000)
     page.wait_for_load_state("domcontentloaded")
     time.sleep(1)
@@ -304,6 +317,26 @@ def notify_failure(script_name, error):
         print(f"失敗通知の送信にも失敗しました: {notify_err}")
 
 
+def run_with_retry(fn, script_name, attempts=2):
+    """ここ数日の失敗はいずれも原因が毎回違う一過性のもの(404、ソケット未接続、CDP接続
+    タイムアウト、UI要素待ちタイムアウト)で、手動再実行では即成功していた。CDP Chromeを
+    起動し直して最初からやり直す1回だけの自動リトライを挟み、それでも失敗した場合だけ
+    LINE WORKSへ通知する(2026-08-19追加)。"""
+    last_err = None
+    for attempt in range(1, attempts + 1):
+        try:
+            fn()
+            return
+        except Exception as e:
+            last_err = e
+            print(f"試行{attempt}/{attempts}回目が失敗しました: {e}")
+            kill_cdp_chrome()
+            if attempt < attempts:
+                time.sleep(3)
+    notify_failure(script_name, last_err)
+    raise last_err
+
+
 def main():
     args = parse_args()
     gas_url = os.environ.get("GAS_URL")
@@ -317,7 +350,7 @@ def main():
     target_date = resolve_target_date(args.date)
     print(f"対象日: {target_date}")
 
-    try:
+    def _attempt():
         launch_cdp_chrome()
         with sync_playwright() as p:
             browser = p.chromium.connect_over_cdp(f"http://localhost:{CDP_PORT}")
@@ -343,9 +376,9 @@ def main():
                 print(f"⚠️ 店舗名が一致しなかった行があります(stores.jsと表記が合っていない可能性): {result['unmatchedStores']}")
             if result.get("error"):
                 raise RuntimeError(result["error"])
-    except Exception as e:
-        notify_failure("import_stera_daily_sales.py", e)
-        raise
+
+    try:
+        run_with_retry(_attempt, "import_stera_daily_sales.py")
     finally:
         if not args.keep_open:
             kill_cdp_chrome()

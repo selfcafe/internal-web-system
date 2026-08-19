@@ -206,7 +206,7 @@ def main():
     if not os.environ.get("STERA_EMAIL") or not os.environ.get("STERA_PASSWORD"):
         sys.exit("環境変数 STERA_EMAIL / STERA_PASSWORD を設定してください")
 
-    try:
+    def _attempt():
         app_id, token = capture_token_and_app_id()
         shop_id_map, unmatched = build_shop_id_map(app_id, token)
         print(f"店舗マッピング: {len(shop_id_map)}件 (未一致: {len(unmatched)}件 {unmatched})")
@@ -231,9 +231,9 @@ def main():
         print(f"GASへの送信結果: {gas_result}")
         if gas_result.get("error"):
             raise RuntimeError(gas_result["error"])
-    except Exception as e:
-        base.notify_failure("poll_stera_realtime_sales.py", e)
-        raise
+
+    try:
+        base.run_with_retry(_attempt, "poll_stera_realtime_sales.py")
     finally:
         base.kill_cdp_chrome()
 
