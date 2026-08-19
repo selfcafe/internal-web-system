@@ -2127,6 +2127,19 @@ function _storeInvColLetter_(name) {
 // 計算自体はエリア別販売価格と無関係で、アペックス/トーヨーでも問題なく出せるとユーザー指摘で判明
 // (エリア別価格が問題になるのは売上ベースの真の原価率(buildSalesCategoryCostRatio側)の話であり、
 // この在庫消費率とは無関係)。
+// ステラ管理外(自主管理)の商品のうち、フレーバー違いを原価率算出の単位でグループ化したい
+// もの(2026-08-19追加)。STERA_SALES_MAPPINGと発想は同じ(発注時は個別コードのまま区別し、
+// 原価率だけまとめる)だが、こちらはステラの実売上データが無いため、棚卸ベースの期首/期末
+// 在庫額を商品名でグループ合算する。フレーバー単体だと動きが小さく原価率がブレやすい商品が
+// 増えたら、ここに追記していく。
+const SELF_MANAGED_COST_GROUPS = [
+  { label: 'じゃがりこ各種', products: ['カルビー じゃがりこ サラダ57g', 'カルビー じゃがりこ チーズ55g', 'カルビー じゃがりこ じゃがバター55g'] },
+];
+function _selfManagedCostGroupMembers_(product) {
+  const group = SELF_MANAGED_COST_GROUPS.find(g => g.products.includes(product));
+  return group ? group.products : null;
+}
+
 function buildStoreInventorySheet(storeId, periodLabel) {
   if (!storeId) return { error: 'storeIdは必須です' };
   if (!periodLabel) return { error: 'periodLabelは必須です（例: 2026-07）' };
@@ -2200,6 +2213,13 @@ function buildStoreInventorySheet(storeId, periodLabel) {
   const colEndStock = _storeInvColLetter_('end_stock');
   const colPrice = _storeInvColLetter_('price');
 
+  // ステラ対象外(自主管理)のフレーバー違い商品は、フレーバー単体だと動きが小さく原価率が
+  // ブレやすいため、SELF_MANAGED_COST_GROUPSで定義したグループ単位の合算値を使う
+  // (2026-08-19追加)。行番号はこの後のmapでの並び順(products配列の順)で確定するため、
+  // 数式生成時に他フレーバーの行を参照できるよう先にproduct→rowNumの対応を作っておく。
+  const rowNumByProduct = {};
+  products.forEach((p, i) => { rowNumByProduct[p] = startRow + i; });
+
   const outRows = products.map((product, i) => {
     const r = curRows[product];
     const info = meta[product] || {};
@@ -2216,8 +2236,18 @@ function buildStoreInventorySheet(storeId, periodLabel) {
     // 期首在庫/期末在庫セル自体が空欄(初月・記入漏れ等)の場合はIF()で空文字を返し、0除算も回避する。
     let openingAmount = '', closingAmount = '', consumptionAmount = '', costRate = '';
     if (product !== 'その他') {
-      openingAmount = `=IF($${colOpenStock}${rowNum}="","",$${colPrice}${rowNum}*$${colOpenStock}${rowNum})`;
-      closingAmount = `=IF($${colEndStock}${rowNum}="","",$${colPrice}${rowNum}*$${colEndStock}${rowNum})`;
+      const groupProducts = _selfManagedCostGroupMembers_(product);
+      const groupRows = groupProducts && groupProducts
+        .map(p => rowNumByProduct[p])
+        .filter(rn => rn !== undefined);
+      if (groupRows && groupRows.length > 1) {
+        // グループ内の各行のIFERROR(単価×在庫,0)を合算する(空欄行は0扱いで合算から除外)
+        openingAmount = '=' + groupRows.map(rn => `IFERROR($${colPrice}${rn}*$${colOpenStock}${rn},0)`).join('+');
+        closingAmount = '=' + groupRows.map(rn => `IFERROR($${colPrice}${rn}*$${colEndStock}${rn},0)`).join('+');
+      } else {
+        openingAmount = `=IF($${colOpenStock}${rowNum}="","",$${colPrice}${rowNum}*$${colOpenStock}${rowNum})`;
+        closingAmount = `=IF($${colEndStock}${rowNum}="","",$${colPrice}${rowNum}*$${colEndStock}${rowNum})`;
+      }
       consumptionAmount = `=IF(OR($${colOpening}${rowNum}="",$${colClosing}${rowNum}=""),"",$${colOpening}${rowNum}-$${colClosing}${rowNum})`;
       costRate = `=IF(OR($${colOpening}${rowNum}="",$${colOpening}${rowNum}=0),"",$${colConsumption}${rowNum}/$${colOpening}${rowNum})`;
     }
