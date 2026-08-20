@@ -1929,11 +1929,37 @@ function setupInventoryDisposedHighlight() {
 // ----------------------------------------------------------------
 const SHEET_INVENTORY_ROLLUP = '全店舗棚卸集計';
 const SHEET_INVENTORY_MISSING = '棚卸未提出店舗';
-const INVENTORY_ROLLUP_COLS = ['period_label','store_type','store_name','store_id','product_code','product','open_stock','delivery','end_stock','consumption','disposed_qty','low_stock'];
+// 2026-08-20、店舗×商品ごとの生データ一覧(商品の内訳は各店舗タブで見られるため)から、
+// 店舗×カテゴリの原価金額サマリーに変更(ユーザー要望。このシート自体は未使用だったため
+// 置き換えで問題ないと確認済み)。カテゴリはvendor(仕入先)ベースで、sales(販売品)だけは
+// 「水」「アイス」(レディーボーデン各種)「お菓子」(それ以外+tokai_snack)にさらに分ける。
+// other(消耗品)・vcmr4g507w(清掃用品)は原価率の話ではないため対象外。
+const ROLLUP_CATEGORIES = ['アペックス', 'トーベン', 'CS3', '水', 'お菓子', 'アイス'];
+const ROLLUP_METRIC_SUFFIXES = ['opening_amount', 'closing_amount', 'consumption_amount', 'cost_rate'];
+const ROLLUP_METRIC_HEADERS_JA = ['期首在庫額', '期末在庫額', '消費額', '原価率'];
+const INVENTORY_ROLLUP_COLS = ['period_label', 'store_type', 'store_name', 'store_id']
+  .concat(ROLLUP_CATEGORIES.flatMap(cat => ROLLUP_METRIC_SUFFIXES.map(suf => `${cat}_${suf}`)));
 // シート上の見出し表示専用（英語キーのINVENTORY_ROLLUP_COLSとは順序を揃えるだけの対応関係）。
 // 内部の列参照(indexOf等)は引き続き上のCOLSキーで行い、書き込み時の1行目だけこちらに差し替える
-const INVENTORY_ROLLUP_HEADERS_JA = ['期間','店舗区分','店舗名','店舗ID','商品コード','商品名','期首在庫','当月納品','期末在庫','消費量','処分数量','在庫僅少'];
+const INVENTORY_ROLLUP_HEADERS_JA = ['期間', '店舗区分', '店舗名', '店舗ID']
+  .concat(ROLLUP_CATEGORIES.flatMap(cat => ROLLUP_METRIC_HEADERS_JA.map(h => `${cat}${h}`)));
 const INVENTORY_MISSING_HEADERS_JA = ['期間','店舗ID','店舗名'];
+
+// 商品名からROLLUP_CATEGORIESのどれに属するか判定する。vendorはmeta(_productMeta_)経由。
+// 対象外(other・vcmr4g507w等)はnullを返す。
+function _rollupCategoryForProduct_(product, meta) {
+  const vendor = (meta[product] && meta[product].vendor) || '';
+  if (vendor === 'apex') return 'アペックス';
+  if (vendor === 'toyo') return 'トーベン';
+  if (vendor === 'cs3') return 'CS3';
+  if (vendor === 'tokai_snack') return 'お菓子'; // 東海限定お菓子は「お菓子」に合流(ユーザー確認済み)
+  if (vendor === 'sales') {
+    if (product === '水') return '水';
+    if (product.indexOf('アイス') >= 0) return 'アイス'; // レディーボーデン各種
+    return 'お菓子';
+  }
+  return null; // other・vcmr4g507w(消耗品)は原価率集計の対象外
+}
 
 // 全店舗ID一覧（stores.js＋custom_stores、deleted_storesを除外）。「棚卸未提出店舗」の
 // 判定に必要——inventory_logは提出があった店舗の行しか持たないため、提出そのものが
@@ -1999,11 +2025,11 @@ function buildInventoryRollup(periodLabel) {
   INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
 
   const storeNames = _storeNames_();
-  const deliveryTotals = _deliveryAutoTotalsForPeriod_(periodLabel);
-  const caseInfo = _productCaseInfo_();
+  const meta = _productMeta_();
 
+  // 店舗ID -> カテゴリ -> {opening, closing}(円)の合計
+  const totalsByStore = {};
   const submitted = {};
-  const outRows = [];
   if (hasData) {
     for (let i = 1; i < data.length; i++) {
       const r = data[i];
@@ -2011,26 +2037,29 @@ function buildInventoryRollup(periodLabel) {
       const storeId = String(r[idx.store_id]);
       submitted[storeId] = true;
       const product = r[idx.product];
+      const category = _rollupCategoryForProduct_(product, meta);
+      if (!category) continue; // other・vcmr4g507w(消耗品)は対象外
+      const price = Number(r[idx.price]) || 0;
+      const openStock = r[idx.open_stock];
       const endStock = r[idx.end_stock];
-      const liveDelivery = (deliveryTotals[storeId] && deliveryTotals[storeId][product]) || 0;
-      const info = caseInfo[product] || {};
-      const low = !!(info.caseOnly && info.casePieces && endStock !== '' && endStock !== null && Number(endStock) <= info.casePieces);
-      outRows.push([
-        periodLabel,
-        _isFcStore_(storeId) ? 'FC' : '直営',
-        storeNames[storeId] || storeId,
-        storeId,
-        r[idx.code],
-        product,
-        r[idx.open_stock],
-        liveDelivery,
-        endStock,
-        r[idx.consumption],
-        r[idx.disposed_qty],
-        low ? '要確認' : ''
-      ]);
+      if (!totalsByStore[storeId]) totalsByStore[storeId] = {};
+      if (!totalsByStore[storeId][category]) totalsByStore[storeId][category] = { opening: 0, closing: 0 };
+      if (openStock !== '' && openStock !== null) totalsByStore[storeId][category].opening += price * Number(openStock);
+      if (endStock !== '' && endStock !== null) totalsByStore[storeId][category].closing += price * Number(endStock);
     }
   }
+
+  const outRows = Object.keys(totalsByStore).sort().map(storeId => {
+    const row = [periodLabel, _isFcStore_(storeId) ? 'FC' : '直営', storeNames[storeId] || storeId, storeId];
+    ROLLUP_CATEGORIES.forEach(cat => {
+      const t = totalsByStore[storeId][cat];
+      if (!t) { row.push('', '', '', ''); return; }
+      const consumption = t.opening - t.closing;
+      const costRate = t.opening > 0 ? consumption / t.opening : '';
+      row.push(Math.round(t.opening), Math.round(t.closing), Math.round(consumption), costRate);
+    });
+    return row;
+  });
 
   const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
   const sheet = ss.getSheetByName(SHEET_INVENTORY_ROLLUP) || ss.insertSheet(SHEET_INVENTORY_ROLLUP);
@@ -2039,16 +2068,14 @@ function buildInventoryRollup(periodLabel) {
   sheet.getRange(1, 1, 1, INVENTORY_ROLLUP_COLS.length).setValues([INVENTORY_ROLLUP_HEADERS_JA]);
   if (outRows.length) {
     sheet.getRange(2, 1, outRows.length, INVENTORY_ROLLUP_COLS.length).setValues(outRows);
-    const lowColIdx = INVENTORY_ROLLUP_COLS.indexOf('low_stock') + 1;
-    const lowColLetter = String.fromCharCode(64 + lowColIdx);
-    const range = sheet.getRange(2, 1, outRows.length, INVENTORY_ROLLUP_COLS.length);
-    sheet.setConditionalFormatRules([
-      SpreadsheetApp.newConditionalFormatRule()
-        .whenFormulaSatisfied('=$' + lowColLetter + '2="要確認"')
-        .setBackground('#ffcdd2')
-        .setRanges([range])
-        .build()
-    ]);
+    ROLLUP_CATEGORIES.forEach(cat => {
+      ['opening_amount', 'closing_amount', 'consumption_amount'].forEach(suf => {
+        const col = INVENTORY_ROLLUP_COLS.indexOf(`${cat}_${suf}`) + 1;
+        sheet.getRange(2, col, outRows.length, 1).setNumberFormat(INVOICE_YEN_FORMAT);
+      });
+      const rateCol = INVENTORY_ROLLUP_COLS.indexOf(`${cat}_cost_rate`) + 1;
+      sheet.getRange(2, rateCol, outRows.length, 1).setNumberFormat('0.0%');
+    });
   }
 
   const allIds = _allStoreIds_();
