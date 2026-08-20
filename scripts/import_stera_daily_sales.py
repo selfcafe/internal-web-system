@@ -154,15 +154,29 @@ def login_if_needed(page, email, password):
     print("ログイン完了:", page.url)
 
 
-def resolve_orders_url(page):
+def resolve_orders_url(page, max_attempts=3):
     """SaaSサービスのapp_idはアカウント固有のためハードコードせず、
-    アプリ一覧からリンクを辿って実際のURLを解決する。"""
-    page.goto(STERA_BASE_URL + "/business/apps/")
-    page.wait_for_load_state("domcontentloaded")
-    time.sleep(1)
-    try:
-        page.get_by_text("SaaSサービス", exact=True).click()
-    except PlaywrightTimeoutError:
+    アプリ一覧からリンクを辿って実際のURLを解決する。
+
+    2026-08-19〜20、1回きりの判定(固定sleep(1)後に即click、失敗即エラー)で
+    複数回失敗した(スクリーンショットで確認すると実際には「SaaSサービス」が
+    正しく表示されており、その日だけ描画が遅かっただけと推測される。同日、
+    page.goto自体もタイムアウトした回もあり、stera側がその日によって
+    遅いことがある模様)。kaihipay-downloaderのe-MOSS従業員一覧対応と同様、
+    goto自体のタイムアウトを延長し、要素が見つからない場合はページを
+    作り直して複数回リトライするようにした。"""
+    last_error = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            page.goto(STERA_BASE_URL + "/business/apps/", timeout=60000)
+            page.wait_for_load_state("domcontentloaded")
+            page.get_by_text("SaaSサービス", exact=True).click(timeout=20000)
+            break
+        except PlaywrightTimeoutError as e:
+            last_error = e
+            print(f"「SaaSサービス」リンクが見つかりません({attempt}/{max_attempts})。再試行します。")
+            time.sleep(3)
+    else:
         # 2026-08-19、原因不明のまま(画面が実際どうなっていたか分からず)失敗した回が
         # あったため、ログイン失敗時と同じくスクリーンショットを残して次回の診断に使う
         DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
@@ -172,7 +186,7 @@ def resolve_orders_url(page):
         except Exception:
             pass
         raise RuntimeError(
-            f"「SaaSサービス」リンクが見つかりませんでした(画面状態を{shot_path}に保存)"
+            f"「SaaSサービス」リンクが見つかりませんでした(画面状態を{shot_path}に保存): {last_error}"
         )
     page.wait_for_url(re.compile(r"/apps/app_"), timeout=15000)
     page.wait_for_load_state("domcontentloaded")
