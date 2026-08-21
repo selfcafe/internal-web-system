@@ -1937,12 +1937,17 @@ const SHEET_INVENTORY_MISSING = '棚卸未提出店舗';
 const ROLLUP_CATEGORIES = ['アペックス', 'トーベン', 'CS3', '水', 'お菓子', 'アイス'];
 const ROLLUP_METRIC_SUFFIXES = ['opening_amount', 'closing_amount', 'consumption_amount', 'cost_rate'];
 const ROLLUP_METRIC_HEADERS_JA = ['期首在庫額', '期末在庫額', '消費額', '原価率'];
-const INVENTORY_ROLLUP_COLS = ['period_label', 'store_type', 'store_name', 'store_id']
+// 2026-08-21、ユーザー要望で東海/関西/関東のエリアごとにまとめて表示するよう変更(FC店舗は対象外に
+// なったため意味が無くなったstore_type(FC/直営)列は廃止し、代わりにエリア列を持たせる)
+const INVENTORY_ROLLUP_COLS = ['period_label', 'area', 'store_name', 'store_id']
   .concat(ROLLUP_CATEGORIES.flatMap(cat => ROLLUP_METRIC_SUFFIXES.map(suf => `${cat}_${suf}`)));
 // シート上の見出し表示専用（英語キーのINVENTORY_ROLLUP_COLSとは順序を揃えるだけの対応関係）。
 // 内部の列参照(indexOf等)は引き続き上のCOLSキーで行い、書き込み時の1行目だけこちらに差し替える
-const INVENTORY_ROLLUP_HEADERS_JA = ['期間', '店舗区分', '店舗名', '店舗ID']
+const INVENTORY_ROLLUP_HEADERS_JA = ['期間', 'エリア', '店舗名', '店舗ID']
   .concat(ROLLUP_CATEGORIES.flatMap(cat => ROLLUP_METRIC_HEADERS_JA.map(h => `${cat}${h}`)));
+// _areaForStore_()の返り値(東海/関西/関東)をこの順で並べる。既存のAREA_STORES反復順(東海→関西→関東)
+// に合わせている。エリア未設定の店舗(store_regions上書きもAREA_STORES登録も無い)は末尾にまとめる
+const ROLLUP_AREA_ORDER = ['東海', '関西', '関東', '(エリア未設定)'];
 const INVENTORY_MISSING_HEADERS_JA = ['期間','店舗ID','店舗名'];
 
 // 商品名からROLLUP_CATEGORIESのどれに属するか判定する。vendorはmeta(_productMeta_)経由。
@@ -2036,6 +2041,9 @@ function buildInventoryRollup(periodLabel) {
       if (_invMonthLabelStr(r[idx.period_label]) !== String(periodLabel)) continue;
       const storeId = String(r[idx.store_id]);
       submitted[storeId] = true;
+      // FC店舗は全店舗棚卸集計(このシート)の対象外(ユーザー要望、2026-08-21)。
+      // 「棚卸未提出店舗」判定は従来通りFCも含めるため、上のsubmittedへの記録はスキップしない
+      if (_isFcStore_(storeId)) continue;
       const product = r[idx.product];
       const category = _rollupCategoryForProduct_(product, meta);
       if (!category) continue; // other・vcmr4g507w(消耗品)は対象外
@@ -2049,16 +2057,43 @@ function buildInventoryRollup(periodLabel) {
     }
   }
 
-  const outRows = Object.keys(totalsByStore).sort().map(storeId => {
-    const row = [periodLabel, _isFcStore_(storeId) ? 'FC' : '直営', storeNames[storeId] || storeId, storeId];
+  // 東海→関西→関東の順にまとめ、各エリアの末尾に「エリア小計」行を挟む(ユーザー要望、2026-08-21)。
+  // 小計はエリア内の店舗を先に円換算で合算してから消費額・原価率を出す(店舗ごとの原価率の単純平均ではない)
+  const rowsByArea = {};
+  Object.keys(totalsByStore).forEach(storeId => {
+    const area = _areaForStore_(storeId) || '(エリア未設定)';
+    if (!rowsByArea[area]) rowsByArea[area] = [];
+    rowsByArea[area].push(storeId);
+  });
+
+  const subtotalRowIdxs = []; // 書き込み後に太字にする行番号(1始まり、ヘッダー分+1込み)を集める
+  const outRows = [];
+  ROLLUP_AREA_ORDER.filter(area => rowsByArea[area]).forEach(area => {
+    const areaTotals = {};
+    rowsByArea[area].sort().forEach(storeId => {
+      const row = [periodLabel, area, storeNames[storeId] || storeId, storeId];
+      ROLLUP_CATEGORIES.forEach(cat => {
+        const t = totalsByStore[storeId][cat];
+        if (!t) { row.push('', '', '', ''); return; }
+        const consumption = t.opening - t.closing;
+        const costRate = t.opening > 0 ? consumption / t.opening : '';
+        row.push(Math.round(t.opening), Math.round(t.closing), Math.round(consumption), costRate);
+        if (!areaTotals[cat]) areaTotals[cat] = { opening: 0, closing: 0 };
+        areaTotals[cat].opening += t.opening;
+        areaTotals[cat].closing += t.closing;
+      });
+      outRows.push(row);
+    });
+    const subtotalRow = [periodLabel, area, area + ' 小計', ''];
     ROLLUP_CATEGORIES.forEach(cat => {
-      const t = totalsByStore[storeId][cat];
-      if (!t) { row.push('', '', '', ''); return; }
+      const t = areaTotals[cat];
+      if (!t) { subtotalRow.push('', '', '', ''); return; }
       const consumption = t.opening - t.closing;
       const costRate = t.opening > 0 ? consumption / t.opening : '';
-      row.push(Math.round(t.opening), Math.round(t.closing), Math.round(consumption), costRate);
+      subtotalRow.push(Math.round(t.opening), Math.round(t.closing), Math.round(consumption), costRate);
     });
-    return row;
+    outRows.push(subtotalRow);
+    subtotalRowIdxs.push(outRows.length + 1); // +1: ヘッダー行の分
   });
 
   const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
@@ -2075,6 +2110,9 @@ function buildInventoryRollup(periodLabel) {
       });
       const rateCol = INVENTORY_ROLLUP_COLS.indexOf(`${cat}_cost_rate`) + 1;
       sheet.getRange(2, rateCol, outRows.length, 1).setNumberFormat('0.0%');
+    });
+    subtotalRowIdxs.forEach(rowIdx => {
+      sheet.getRange(rowIdx, 1, 1, INVENTORY_ROLLUP_COLS.length).setFontWeight('bold');
     });
   }
 
