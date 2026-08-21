@@ -1,4 +1,4 @@
-$action = New-ScheduledTaskAction -Execute "C:\Users\80000785\internal-web-system\scripts\run_import_stera_daily_sales.cmd" -WorkingDirectory "C:\Users\80000785\internal-web-system\scripts"
+﻿$action = New-ScheduledTaskAction -Execute "C:\Users\80000785\internal-web-system\scripts\run_import_stera_daily_sales.cmd" -WorkingDirectory "C:\Users\80000785\internal-web-system\scripts"
 
 $trigger = New-ScheduledTaskTrigger -Daily -At "06:03"
 
