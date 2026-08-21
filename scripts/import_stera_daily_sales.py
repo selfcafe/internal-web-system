@@ -164,12 +164,25 @@ def resolve_orders_url(page, max_attempts=3):
     page.goto自体もタイムアウトした回もあり、stera側がその日によって
     遅いことがある模様)。kaihipay-downloaderのe-MOSS従業員一覧対応と同様、
     goto自体のタイムアウトを延長し、要素が見つからない場合はページを
-    作り直して複数回リトライするようにした。"""
+    作り直して複数回リトライするようにした。
+
+    2026-08-21、3回リトライしても失敗した回のスクリーンショットを確認したところ、
+    エラー画面やCAPTCHAではなく「アプリ一覧」ページ中央にローディングスピナーが
+    出たままだった(=アプリ一覧を非同期取得するAPI呼び出しがまだ完了していない状態)。
+    domcontentloadedはHTML解析完了時点で発火し、この非同期取得の完了を待たないため、
+    このAPI応答が遅い日は毎回のリトライで同じ「まだ読み込み中」を捉えてタイムアウト
+    していたと考えられる。networkidle(500ms通信が無い状態)を追加で待つことで、
+    この非同期取得の完了を待てるようにする(networkidle自体がタイムアウトしても
+    致命的にはせず、そのままクリックを試す——待っても改善しない場合の保険)。"""
     last_error = None
     for attempt in range(1, max_attempts + 1):
         try:
             page.goto(STERA_BASE_URL + "/business/apps/", timeout=60000)
             page.wait_for_load_state("domcontentloaded")
+            try:
+                page.wait_for_load_state("networkidle", timeout=15000)
+            except PlaywrightTimeoutError:
+                pass
             page.get_by_text("SaaSサービス", exact=True).click(timeout=20000)
             break
         except PlaywrightTimeoutError as e:
