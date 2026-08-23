@@ -133,7 +133,7 @@ def _complete_google_consent(context, page):
     return True
 
 
-def run(log=print):
+def _run_once(log=print):
     _launch_chrome()
     time.sleep(2)
     try:
@@ -163,6 +163,22 @@ def run(log=print):
         return False, f"自動再認可中に例外: {e}"
     finally:
         _close_chrome()
+
+
+def run(log=print, attempts=2):
+    """UIの一時的な取りこぼし(要素がまだ描画されていない等)による偽の失敗を減らすため、
+    Chromeを完全に再起動した上で最大attempts回試す(2026-08-23、ユーザーが手元にいない間に
+    失敗して詰む事態を避けたいとの要望)。最後の試行の失敗理由を返す。"""
+    last_reason = None
+    for i in range(attempts):
+        ok, reason = _run_once(log=log)
+        if ok:
+            return True, None
+        last_reason = reason
+        log(f"再認可の試行{i + 1}/{attempts}回目が失敗: {reason}")
+        if i < attempts - 1:
+            time.sleep(10)
+    return False, last_reason
 
 
 if __name__ == "__main__":

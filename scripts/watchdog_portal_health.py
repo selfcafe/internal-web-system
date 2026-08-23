@@ -109,18 +109,29 @@ def notify(message, log=print):
         log(f"LINE WORKS通知の送信に失敗しました: {e}")
 
 
-def _load_prev_ok():
+# 障害が続く間、何度目の連続失敗ごとに再通知するか(10分間隔想定で12回=2時間おき)。
+# 2026-08-23、ユーザーから「失敗した時に自分がPCを触れない状況だと困る」との指摘を受け追加。
+# 初回1通だけだと、それを見逃す/対応できるタイミングにいなかった場合に気づく手段が無くなるため
+REMINDER_EVERY_N_FAILURES = 12
+
+
+def _load_state():
     if not STATE_FILE.exists():
-        return None
+        return {"ok": None, "reason": None, "consecutive_failures": 0}
     try:
-        return json.loads(STATE_FILE.read_text(encoding="utf-8")).get("ok")
+        state = json.loads(STATE_FILE.read_text(encoding="utf-8"))
+        state.setdefault("consecutive_failures", 0)
+        return state
     except Exception:
-        return None
+        return {"ok": None, "reason": None, "consecutive_failures": 0}
 
 
-def _save_state(ok, reason):
+def _save_state(ok, reason, consecutive_failures):
     STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
-    STATE_FILE.write_text(json.dumps({"ok": ok, "reason": reason}, ensure_ascii=False), encoding="utf-8")
+    STATE_FILE.write_text(
+        json.dumps({"ok": ok, "reason": reason, "consecutive_failures": consecutive_failures}, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
 
 def main():
@@ -143,22 +154,37 @@ def main():
         else:
             print(f"自動修復失敗: {fix_reason}")
 
-    prev_ok = _load_prev_ok()
-    _save_state(ok, reason)
+    prev_state = _load_state()
+    prev_ok = prev_state["ok"]
 
     if ok:
+        consecutive_failures = 0
+        _save_state(ok, reason, consecutive_failures)
         print("OK: 社内ポータルは正常応答" + ("(自動修復済み)" if prev_ok is False else ""))
         if prev_ok is False:
             notify("【社内ポータル】異常を検知し、自動再認可により復旧しました。")
         return
 
-    if prev_ok is not False:
+    consecutive_failures = prev_state["consecutive_failures"] + 1
+    _save_state(ok, reason, consecutive_failures)
+
+    # 初回検知時、およびそれ以降は自動修復が効かないまま連続失敗が続く限り
+    # REMINDER_EVERY_N_FAILURES回おき(10分間隔なら約2時間おき)に再通知する。
+    # 「初回の通知だけ」だと、それを見逃した/対応できるタイミングでなかった場合に
+    # 気づく手段が無くなってしまうため(2026-08-23、ユーザー指摘)
+    is_first_failure = prev_ok is not False
+    is_periodic_reminder = consecutive_failures % REMINDER_EVERY_N_FAILURES == 0
+    if is_first_failure or is_periodic_reminder:
+        prefix = "【社内ポータル障害・継続中】" if is_periodic_reminder else "【社内ポータル障害】"
         notify(
-            "【社内ポータル障害】自動修復を試みましたが失敗しました。手動対応が必要です。\n"
+            f"{prefix}自動修復を試みましたが失敗しました。手動対応が必要です"
+            f"(連続失敗{consecutive_failures}回、約{consecutive_failures * 10}分間)。\n"
             f"理由: {reason}\n"
             "「承認が必要です」系のOAuth再認可切れの可能性が高いです。"
             "Apps Scriptエディタでgetsettings等の関数を実行→「権限を確認」→続行、で復旧できます"
-            "(https://script.google.com/u/1/home/projects/1J5qtNKPyXt3L7wmX6MMmAD33t1LQF5hBaDfjG2mghCinlc4h4xwagxP2/edit)。"
+            "(https://script.google.com/u/1/home/projects/1J5qtNKPyXt3L7wmX6MMmAD33t1LQF5hBaDfjG2mghCinlc4h4xwagxP2/edit)。\n"
+            "PCが触れない場合、スマートフォンのブラウザで同じURLを開くことも可能ですが、"
+            "Apps Scriptエディタはモバイル最適化されておらず操作しづらい可能性があります(未検証)。"
         )
 
 
