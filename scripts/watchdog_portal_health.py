@@ -18,18 +18,29 @@ LINE WORKS通知を送る。監視対象と同じOAuth認可が壊れても通�
   - レスポンス本文に「承認が必要です」「Authorization is required」等の既知の失敗兆候を含む
   - JSONとしてパースできない、またはgetSettingsが返すはずの配列形式でない
 
-直前の状態をlogs/portal_watchdog_state.jsonに保存し、「正常→異常」「異常→正常」に
-変化した瞬間だけ通知する(異常が続く間は10分おきに連投しない)。
+異常を検知すると、その場でauto_reauthorize_portal.run()による自動再認可を試み、成功すれば
+再チェックしてから「自動修復しました」を通知する。失敗した場合のみ、手動対応を促す通知を送る
+(2026-08-22、ユーザー要望「自分が気づいていない時でも止まったりエラーが起きないようにしたい」
+に対応)。**このスクリプトはWindowsタスクスケジューラから直接起動されるプレーンなPythonプロセスで
+あり、Claude Codeの許可プロンプト/自動モード分類器の対象には一切ならない**(それらはClaude Code
+自身がツール経由で操作を実行する時だけ働く仕組みのため)。よってここでの自動修復呼び出しに
+Claude Code側の権限設定は不要——無人実行を妨げるものは無い。
+
+直前の状態(自動修復トライ後の最終結果)をlogs/portal_watchdog_state.jsonに保存し、
+「正常→異常」「異常→正常」に変化した瞬間だけ通知する(異常が続く間は10分おきに連投しない。
+自動修復が毎回失敗し続ける場合も、初回の失敗通知1回だけで以降は静かにリトライを続ける)。
 """
 import json
 import os
 import sys
+import time
 from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
 
 SCRIPT_DIR = Path(__file__).parent
+sys.path.insert(0, str(SCRIPT_DIR))
 load_dotenv(SCRIPT_DIR.parent / ".env")  # GAS_URL(監視対象の本番Web App)
 load_dotenv(Path.home() / "kaihipay-downloader" / ".env")  # KAIHIPAY_APPROVAL_WEBHOOK_URL(通知専用、別GASプロジェクト)
 
@@ -48,7 +59,7 @@ FAILURE_MARKERS = [
 ]
 
 
-def check_portal():
+def _check_portal_once():
     """(ok: bool, reason: str|None)を返す。okがFalseの時だけreasonを埋める。"""
     try:
         resp = requests.get(GAS_URL, params={"action": "getSettings"}, timeout=30)
@@ -72,6 +83,19 @@ def check_portal():
         return False, f"getSettingsの想定形式(空でない配列)と異なる応答: {text[:200]}"
 
     return True, None
+
+
+def check_portal(retries=3, retry_wait_seconds=8):
+    """一時的なSSL/接続エラー(2026-08-22実際に誤検知した実例あり)で誤報しないよう、
+    連続retries回失敗して初めて異常と判定する(1回でも成功すればOK扱い)。"""
+    reason = None
+    for attempt in range(retries):
+        ok, reason = _check_portal_once()
+        if ok:
+            return True, None
+        if attempt < retries - 1:
+            time.sleep(retry_wait_seconds)
+    return False, reason
 
 
 def notify(message, log=print):
@@ -101,19 +125,36 @@ def _save_state(ok, reason):
 
 def main():
     ok, reason = check_portal()
+
+    if not ok:
+        print(f"NG: {reason}")
+        print("自動再認可を試みます...")
+        try:
+            import auto_reauthorize_portal
+            fixed, fix_reason = auto_reauthorize_portal.run(log=print)
+        except Exception as e:
+            fixed, fix_reason = False, f"自動修復スクリプト自体が例外: {e}"
+
+        if fixed:
+            ok, reason = check_portal()
+            if not ok:
+                fixed = False
+                print(f"自動修復処理は完了したが再チェックでまだ異常: {reason}")
+        else:
+            print(f"自動修復失敗: {fix_reason}")
+
     prev_ok = _load_prev_ok()
     _save_state(ok, reason)
 
     if ok:
-        print("OK: 社内ポータルは正常応答")
+        print("OK: 社内ポータルは正常応答" + ("(自動修復済み)" if prev_ok is False else ""))
         if prev_ok is False:
-            notify("【社内ポータル】復旧しました(getSettingsが正常応答に戻りました)。")
+            notify("【社内ポータル】異常を検知し、自動再認可により復旧しました。")
         return
 
-    print(f"NG: {reason}")
     if prev_ok is not False:
         notify(
-            "【社内ポータル障害】GAS Web Appの応答が異常です。\n"
+            "【社内ポータル障害】自動修復を試みましたが失敗しました。手動対応が必要です。\n"
             f"理由: {reason}\n"
             "「承認が必要です」系のOAuth再認可切れの可能性が高いです。"
             "Apps Scriptエディタでgetsettings等の関数を実行→「権限を確認」→続行、で復旧できます"
