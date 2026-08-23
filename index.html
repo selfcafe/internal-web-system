@@ -1003,6 +1003,7 @@ async function syncAllStoreDataToGas() {
     _gasSaveSetting('deleted_stores',   localStorage.getItem(DELETED_STORES_KEY) || '[]'),
     _gasSaveSetting('store_regions',    localStorage.getItem(STORE_REGION_KEY) || '{}'),
     _gasSaveSetting('store_product_cfg',localStorage.getItem(STORE_PRODUCTS_KEY) || '{}'),
+    _gasSaveSetting('reorder_targets',  localStorage.getItem(REORDER_TARGETS_KEY) || '{}'),
     _gasSaveSetting('all_products',     localStorage.getItem(ALL_PRODUCTS_KEY)   || '[]'),
     _gasSaveSetting('vendor_config',    localStorage.getItem(VENDOR_CONFIG_KEY)  || '[]'),
     _gasSaveSetting('store_checksheet_cfg', localStorage.getItem(STORE_CHECKSHEET_KEY) || '{}'),
@@ -1048,6 +1049,7 @@ async function initGas() {
       if (r.key === 'deleted_stores')    localStorage.setItem(DELETED_STORES_KEY,  clean(r.value));
       if (r.key === 'store_regions')     localStorage.setItem(STORE_REGION_KEY,    clean(r.value));
       if (r.key === 'store_product_cfg') localStorage.setItem(STORE_PRODUCTS_KEY,  clean(r.value));
+      if (r.key === 'reorder_targets')   localStorage.setItem(REORDER_TARGETS_KEY, clean(r.value));
       if (r.key === 'all_products')      localStorage.setItem(ALL_PRODUCTS_KEY,    clean(r.value));
       if (r.key === 'deleted_products')  localStorage.setItem(DELETED_PRODUCTS_KEY, clean(r.value));
       if (r.key === 'vendor_config')     localStorage.setItem(VENDOR_CONFIG_KEY,   clean(r.value));
@@ -1075,6 +1077,7 @@ async function initGas() {
     if (!gasKeys.has('deleted_stores')    && localStorage.getItem(DELETED_STORES_KEY))  _syncDeletedStores();
     if (!gasKeys.has('store_regions')     && localStorage.getItem(STORE_REGION_KEY))    _syncStoreRegions();
     if (!gasKeys.has('store_product_cfg') && localStorage.getItem(STORE_PRODUCTS_KEY))  _syncStoreProductCfg();
+    if (!gasKeys.has('reorder_targets')   && localStorage.getItem(REORDER_TARGETS_KEY)) _syncReorderTargets();
     if (!gasKeys.has('all_products')      && localStorage.getItem(ALL_PRODUCTS_KEY))    _gasSaveSetting('all_products',  localStorage.getItem(ALL_PRODUCTS_KEY));
     if (!gasKeys.has('deleted_products')  && localStorage.getItem(DELETED_PRODUCTS_KEY)) _syncDeletedProducts();
     if (!gasKeys.has('vendor_config')     && localStorage.getItem(VENDOR_CONFIG_KEY))   _gasSaveSetting('vendor_config', localStorage.getItem(VENDOR_CONFIG_KEY));
@@ -2457,6 +2460,10 @@ async function _submitInventoryInner() {
     // 渋谷限定を解除し全店舗へ展開)
     gasGet('buildStockCheckMonthly', { storeId: storeTab, periodLabel: period.label })
       .catch(e => console.error('buildStockCheckMonthly自動反映エラー:', e));
+    // 月初発注(基準値ベースの発注数算出+対象店舗はGmail下書き作成)も同じタイミングで実行する
+    // (2026-08-23追加)。基準値未設定の店舗では内部でスキップされるだけなので、全店舗共通で呼んでよい
+    gasGet('processMonthlyReorder', { storeId: storeTab, periodLabel: period.label })
+      .catch(e => console.error('processMonthlyReorder自動反映エラー:', e));
     // 画面の再構築(renderInventory)は呼び出し元(submitInventory)がボタン上の
     // 「✓送信しました」表示を一瞬見せた後に行う
     const toast = document.getElementById('inventory-toast');
@@ -4177,6 +4184,25 @@ function setStoreProductConfig(storeId, productNames) {
 function getAvailableProducts(storeId) {
   const cfg = getStoreProductConfig(storeId);
   return cfg ? PRODUCTS.filter(p => !cfg.includes(p.name)) : PRODUCTS;
+}
+
+/* ===== 発注基準値設定(月初発注) ===== */
+// 2026-08-23追加。{storeId: {商品コード: 基準値}}。商品コードが無い(またはここに未登録の)
+// 商品は月初発注の対象外——基準値を入れた商品コードだけがgas_backend.gsのbuildStoreInventorySheet/
+// processMonthlyReorderで発注数算出の対象になる
+const REORDER_TARGETS_KEY = 'reorder_targets';
+function getReorderTargets(storeId) {
+  const cfg = JSON.parse(localStorage.getItem(REORDER_TARGETS_KEY) || '{}');
+  return cfg[storeId] || {};
+}
+function setReorderTargets(storeId, targetsByCode) {
+  const cfg = JSON.parse(localStorage.getItem(REORDER_TARGETS_KEY) || '{}');
+  cfg[storeId] = targetsByCode;
+  localStorage.setItem(REORDER_TARGETS_KEY, JSON.stringify(cfg));
+  _syncReorderTargets();
+}
+function _syncReorderTargets() {
+  _gasSaveSetting('reorder_targets', localStorage.getItem(REORDER_TARGETS_KEY) || '{}');
 }
 
 const SITE_PW        = 'selfcafe001';
@@ -6745,6 +6771,33 @@ function renderSettings() {
           </div>
         </div>
 
+        <!-- 発注基準値設定(月初発注) -->
+        <div>
+          <div class="settings-accordion-hdr" onclick="toggleReorderTargetSettings()">
+            <span>発注基準値設定(月初発注)</span>
+            <span id="reorder-target-settings-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
+          </div>
+          <div id="reorder-target-settings-body" style="display:none">
+            <div class="settings-accordion-body">
+              <div style="font-size:12px;color:#888;margin-bottom:10px">棚卸完了時、ここで基準値(目標在庫数)を設定した商品だけ発注数(基準値−期末在庫)を自動算出します。空欄の商品は対象外です(従来通り随時発注のみ)。</div>
+              <div class="store-prod-cfg-wrap">
+                <input id="reorder-target-cfg-search" type="text" placeholder="店舗名で検索..." oninput="filterReorderTargetCfgSelect()"
+                  style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:100%;margin-bottom:6px;box-sizing:border-box">
+                <select id="reorder-target-cfg-sel" class="store-prod-cfg-store-sel"
+                  onchange="renderReorderTargetCfg()">
+                  ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}
+                </select>
+              </div>
+              <div id="reorder-target-cfg-body" style="margin-top:12px"></div>
+              <div style="margin-top:10px;display:flex;gap:8px">
+                <button onclick="saveReorderTargetCfg()"
+                  style="background:#22703d;color:white;padding:8px 20px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">保存</button>
+                <span id="reorder-target-cfg-msg" style="font-size:12px;color:#22703d;align-self:center;min-height:18px"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+
       </div>
     </div>
 
@@ -7036,6 +7089,79 @@ function clearStoreProdCfg() {
   setStoreProductConfig(sid, null);
   renderStoreProdCfg();
   if (msg) { msg.textContent = '✓ 全商品表示に戻しました'; setTimeout(() => { if(msg) msg.textContent=''; }, 2500); }
+}
+
+/* ===== 発注基準値設定（月初発注、管理画面） ===== */
+// 対象はvendor:'apex'/'toyo'の商品のみ(2026-08-23時点の月初発注機能が対応する仕入先)。
+// 対応仕入先を増やす場合はこの配列に追記する
+const REORDER_TARGET_VENDORS = ['apex', 'toyo'];
+
+function toggleReorderTargetSettings() {
+  const body  = document.getElementById('reorder-target-settings-body');
+  const arrow = document.getElementById('reorder-target-settings-arrow');
+  const open  = body.style.display === 'none';
+  body.style.display = open ? 'block' : 'none';
+  arrow.textContent  = open ? '▼ 閉じる' : '▶ タップして開く';
+  if (open) renderReorderTargetCfg();
+}
+
+function filterReorderTargetCfgSelect() {
+  const q = (document.getElementById('reorder-target-cfg-search')?.value || '').trim().toLowerCase();
+  const sel = document.getElementById('reorder-target-cfg-sel');
+  if (!sel) return;
+  const prevValue = sel.value;
+  sel.innerHTML = Object.entries(STORES)
+    .filter(([sid, sname]) => !q || sname.toLowerCase().includes(q) || sid.toLowerCase().includes(q))
+    .map(([sid, sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`)
+    .join('');
+  if ([...sel.options].some(o => o.value === prevValue)) sel.value = prevValue;
+  renderReorderTargetCfg();
+}
+
+function renderReorderTargetCfg() {
+  const sel = document.getElementById('reorder-target-cfg-sel');
+  const container = document.getElementById('reorder-target-cfg-body');
+  if (!sel || !container) return;
+  if (!sel.options.length) { container.innerHTML = '<div style="font-size:12px;color:#888">該当する店舗がありません</div>'; return; }
+  const sid = sel.value;
+  const targets = getReorderTargets(sid);
+
+  const VENDOR_LABELS = Object.fromEntries(VENDOR_CONFIG.map(v => [v.key, v.label]));
+  const byVendor = {};
+  PRODUCTS.forEach(p => {
+    if (!REORDER_TARGET_VENDORS.includes(p.vendor)) return;
+    if (!p.code) return; // 商品コードが無い商品は突き合わせできないため対象外
+    if (!byVendor[p.vendor]) byVendor[p.vendor] = [];
+    byVendor[p.vendor].push(p);
+  });
+
+  container.innerHTML = REORDER_TARGET_VENDORS.map(vkey => {
+    const items = byVendor[vkey] || [];
+    if (!items.length) return '';
+    return `<div class="store-prod-vendor-hdr"><span>${esc(VENDOR_LABELS[vkey] || vkey)}</span></div>
+      <div class="store-prod-vendor-grid">` +
+      items.map(p => `<label style="display:flex;align-items:center;gap:6px">
+          <span style="flex:1">${esc(p.label||p.name)}</span>
+          <input type="number" min="0" step="1" data-reorder-code="${esc(p.code)}" value="${targets[p.code] !== undefined ? esc(String(targets[p.code])) : ''}"
+            placeholder="未設定" style="width:70px;border:1px solid #ddd;border-radius:6px;padding:4px 6px;font-size:13px;font-family:inherit">
+        </label>`).join('') +
+      `</div>`;
+  }).join('') || '<div style="font-size:12px;color:#888">対象の商品がありません(仕入先がapex/toyoの商品のみ対象)</div>';
+}
+
+function saveReorderTargetCfg() {
+  const sel = document.getElementById('reorder-target-cfg-sel');
+  const container = document.getElementById('reorder-target-cfg-body');
+  const msg = document.getElementById('reorder-target-cfg-msg');
+  if (!sel || !container) return;
+  const sid = sel.value;
+  const targets = {};
+  container.querySelectorAll('input[data-reorder-code]').forEach(el => {
+    const v = el.value.trim();
+    if (v !== '') targets[el.dataset.reorderCode] = Number(v);
+  });
+  setReorderTargets(sid, targets);
+  if (msg) { msg.textContent = '✓ 保存しました'; setTimeout(() => { if(msg) msg.textContent=''; }, 2500); }
 }
 
 /* ===== 店舗別チェックシート項目設定（管理画面） ===== */

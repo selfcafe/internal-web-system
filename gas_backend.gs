@@ -292,6 +292,7 @@ function doGet(e) {
     else if (a === 'setupInventoryDisposedHighlight') result = setupInventoryDisposedHighlight();
     else if (a === 'buildInventoryRollup')      result = buildInventoryRollup(e.parameter.periodLabel);
     else if (a === 'buildStoreInventorySheet')  result = buildStoreInventorySheet(e.parameter.storeId, e.parameter.periodLabel);
+    else if (a === 'processMonthlyReorder')     result = processMonthlyReorder(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'reorderStoreTabs')          result = reorderStoreTabs();
     else if (a === 'removeInventoryLabelColumn') result = removeInventoryLabelColumn();
     else if (a === 'pruneBlankStoreInventoryRows') result = pruneBlankStoreInventoryRows(e.parameter.storeId);
@@ -2166,8 +2167,10 @@ function _productMeta_() {
 // 2026-08-01、ユーザーがシート上で単価をD列付近へ手動移動 → 最終的に「単価はD列に固定してほしい」と
 // 指示を受け、コード側の並び順もD列(4番目)に変更した。列数は変わらず16列のまま(A〜P)なので、
 // この後ろに続くステラ関連ブロック(STOCK_CHECK_START_COL等)の列位置には影響しない。
-const STORE_INVENTORY_COLS = ['period_label','code','product','price','opening_amount','closing_amount','consumption_amount','cost_rate','open_stock','end_stock','delivery','consumption','disposed_qty','daily_count','count_diff','low_stock'];
-const STORE_INVENTORY_HEADERS_JA = ['期間','商品コード','商品名','単価','期首在庫額','期末在庫額','月消費額','原価率','期首在庫','期末在庫','当月納品','消費量','処分数量','デイリーカウント','差異(消費量-デイリーカウント)','在庫僅少'];
+// 2026-08-23、末尾に基準値・発注数の2列を追加(月初発注機能、[[reorder_targets設定]]参照)。
+// 既存ルール通り新規列は必ず末尾に追加する(途中挿入すると過去期間の既存データ行が列ズレする)
+const STORE_INVENTORY_COLS = ['period_label','code','product','price','opening_amount','closing_amount','consumption_amount','cost_rate','open_stock','end_stock','delivery','consumption','disposed_qty','daily_count','count_diff','low_stock','reorder_target','reorder_qty'];
+const STORE_INVENTORY_HEADERS_JA = ['期間','商品コード','商品名','単価','期首在庫額','期末在庫額','月消費額','原価率','期首在庫','期末在庫','当月納品','消費量','処分数量','デイリーカウント','差異(消費量-デイリーカウント)','在庫僅少','基準値','発注数'];
 // 列名→列文字(A,B,C...)の変換ヘルパー。STORE_INVENTORY_COLSの並び順を単一の情報源として、
 // 数式内のセル参照(例:$P2)を組み立てる際に使う——列順を変える場合はSTORE_INVENTORY_COLSを直すだけでよい
 function _storeInvColLetter_(name) {
@@ -2205,6 +2208,19 @@ function _selfManagedCostGroupMembers_(product) {
   return group ? group.products : null;
 }
 
+// ----------------------------------------------------------------
+// 月初発注(基準値ベースの発注数自動算出) 2026-08-23
+// ----------------------------------------------------------------
+// 設定キー'reorder_targets'(管理者ポータル「発注基準値設定」画面で編集)。
+// 形式: {storeId: {商品コード: 基準値(目標在庫数)}}。店舗×商品コードの組み合わせに
+// エントリが無い商品は月初発注の対象外(通常通り随時発注のみ)。
+const REORDER_TARGETS_KEY = 'reorder_targets';
+function _getReorderTargets_() {
+  const entry = getSettings().find(s => s.key === REORDER_TARGETS_KEY);
+  if (!entry || !entry.value) return {};
+  try { return JSON.parse(entry.value); } catch (e) { return {}; }
+}
+
 function buildStoreInventorySheet(storeId, periodLabel) {
   if (!storeId) return { error: 'storeIdは必須です' };
   if (!periodLabel) return { error: 'periodLabelは必須です（例: 2026-07）' };
@@ -2217,6 +2233,7 @@ function buildStoreInventorySheet(storeId, periodLabel) {
 
   const deliveryTotals = (_deliveryAutoTotalsForPeriod_(periodLabel)[storeId]) || {};
   const meta = _productMeta_();
+  const reorderTargets = _getReorderTargets_()[storeId] || {};
 
   const curRows = {}; // product -> この期間の行
   for (let i = 1; i < data.length; i++) {
@@ -2268,8 +2285,13 @@ function buildStoreInventorySheet(storeId, periodLabel) {
   // (2026-08-18、ユーザー要望。既存ブロックはinsertRowsBeforeで自動的に下へ押し出され、
   // 各ブロックの数式は自己参照のみのためGoogle Sheetsの行挿入時のセル参照自動調整で崩れない)。
   // 期首在庫額等を実セル参照の数式にするため、書き込み先の絶対行番号を先に確定させる
-  // (削除処理より後で確定させないと、数式が指す行番号が実際の書き込み位置とズレる)
-  sheet.insertRowsBefore(2, outRows.length);
+  // (削除処理より後で確定させないと、数式が指す行番号が実際の書き込み位置とズレる)。
+  // 2026-08-23判明・修正: ここで`outRows.length`を参照していたが、outRowsはこの後ろで
+  // 定義される(const宣言のtemporal dead zone)ため、実行するたびに必ず
+  // "Cannot access 'outRows' before initialization"で失敗していた(2026-08-18の本変更導入時から)。
+  // outRows.length は products.length と常に同じ(1:1のmapのため)なので、既に確定している
+  // products.length を使う
+  sheet.insertRowsBefore(2, products.length);
   const startRow = 2;
   const colOpening = _storeInvColLetter_('opening_amount');
   const colClosing = _storeInvColLetter_('closing_amount');
@@ -2324,13 +2346,20 @@ function buildStoreInventorySheet(storeId, periodLabel) {
     const countDiff = (consumption !== '' && consumption !== null && dailyCount !== '' && dailyCount !== null)
       ? Number(consumption) - Number(dailyCount) : '';
 
+    // 基準値(目標在庫数)が設定されている商品コードだけ発注数(max(0,基準値-期末在庫))を出す。
+    // 未設定の商品コード、または期末在庫が未入力の場合は両列とも空欄(月初発注の対象外)
+    const reorderTarget = reorderTargets[String(r[idx.code])];
+    const reorderQty = (reorderTarget !== undefined && endStock !== '' && endStock !== null)
+      ? Math.max(0, Number(reorderTarget) - Number(endStock)) : '';
+
     return [
       _periodLabelJa_(periodLabel), r[idx.code], product,
       price,
       openingAmount, closingAmount, consumptionAmount, costRate,
       r[idx.open_stock], endStock, liveDelivery, consumption, r[idx.disposed_qty],
       dailyCount, countDiff,
-      low ? '要確認' : ''
+      low ? '要確認' : '',
+      reorderTarget !== undefined ? Number(reorderTarget) : '', reorderQty
     ];
   });
 
@@ -2350,6 +2379,73 @@ function buildStoreInventorySheet(storeId, periodLabel) {
   });
 
   return { ok: true, store: sheetName, period: periodLabel, rows: outRows.length };
+}
+
+// アペックス発注書の送付先(2026-08-23、スモールスタートとして渋谷神南のみ対応。
+// 大塚駅南口はトーヨーベンディングの機械のため発注書自体を作らず、店舗タブの発注数列
+// (buildStoreInventorySheetのreorder_qty)を見て人が判断する運用でよいとユーザー確認済み)。
+// 対象店舗を増やす場合はここに追記する。
+const APEX_REORDER_RECIPIENTS = {
+  shibuya: { to: 'mb218@apex-co.co.jp', cc: 'selfcafe001@gmail.com' },
+};
+
+// 棚卸完了(index.htmlの_submitInventoryInner)からbuildStoreInventorySheetと同じタイミングで
+// 呼ばれる「月初発注」処理(2026-08-23追加)。基準値(reorder_targets)が設定されている商品コード
+// について発注数(max(0,基準値-期末在庫))を計算し、1件以上発注が必要でAPEX_REORDER_RECIPIENTSに
+// 送付先が設定されている店舗なら、簡易な表形式PDFを生成してGmail下書きを自動作成する
+// (人が内容を確認して送信ボタンを押す運用、山崎さんのorder-automationシステムに倣った)。
+// 発注数の算出結果自体はbuildStoreInventorySheet側が店舗タブに書き込むため、この関数の役割は
+// 「PDF+Gmail下書き作成が必要な店舗だけ、それを行う」ことに絞られる——基準値未設定の店舗や
+// 送付先未設定の店舗(例: 大塚駅南口)では何もせず正常終了する。
+function processMonthlyReorder(storeId, periodLabel) {
+  const targets = _getReorderTargets_()[storeId];
+  if (!targets || !Object.keys(targets).length) return { ok: true, skipped: 'no_targets_configured' };
+
+  const recipient = APEX_REORDER_RECIPIENTS[storeId];
+  if (!recipient) return { ok: true, skipped: 'no_recipient_configured' };
+
+  const data = _inventoryLogRowsCached_();
+  const idx = {};
+  INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
+
+  const items = [];
+  for (let i = 1; i < data.length; i++) {
+    const r = data[i];
+    if (String(r[idx.store_id]) !== String(storeId)) continue;
+    if (_invMonthLabelStr(r[idx.period_label]) !== String(periodLabel)) continue;
+    const code = String(r[idx.code]);
+    if (!(code in targets)) continue;
+    const endStock = r[idx.end_stock];
+    if (endStock === '' || endStock === null) continue;
+    const qty = Math.max(0, Number(targets[code]) - Number(endStock));
+    if (qty > 0) items.push({ code, product: r[idx.product], qty });
+  }
+  if (!items.length) return { ok: true, skipped: 'no_reorder_needed' };
+
+  const storeName = _storeNames_()[storeId] || storeId;
+  const periodJa = _periodLabelJa_(periodLabel);
+  const fileBaseName = `${storeName}_発注書_${periodLabel}`;
+
+  const doc = DocumentApp.create(fileBaseName + '_作業用');
+  const body = doc.getBody();
+  body.appendParagraph(`${storeName}　発注書（${periodJa}分棚卸に基づく）`).setHeading(DocumentApp.ParagraphHeading.HEADING2);
+  const tableRows = [['商品コード', '商品名', '発注数']].concat(items.map(it => [it.code, it.product, String(it.qty)]));
+  const table = body.appendTable(tableRows);
+  table.getRow(0).editAsText().setBold(true);
+  doc.saveAndClose();
+
+  const docFile = DriveApp.getFileById(doc.getId());
+  const pdfBlob = docFile.getAs('application/pdf').setName(fileBaseName + '.pdf');
+  docFile.setTrashed(true);
+
+  GmailApp.createDraft(
+    recipient.to,
+    `${storeName}　${periodJa}分　発注書`,
+    `いつもお世話になっております。\n${storeName}の${periodJa}分棚卸に基づく発注書を添付いたします。\nご確認のほど、よろしくお願いいたします。`,
+    { cc: recipient.cc, attachments: [pdfBlob] }
+  );
+
+  return { ok: true, items: items.length, draftCreated: true };
 }
 
 // ----------------------------------------------------------------
