@@ -89,7 +89,7 @@ const ATTENDANCE_LEAVE_COLS = ['id','store_id','name','leave_date','submitted_at
 // 参照)の方が優先される——このデフォルト自体は基本的に変わらないため、_areaForStore_を通さない
 // 単純な用途(通知グループ振り分け以外)ではこのまま直接参照してよい）
 const AREA_STORES = {
-  '東海': ['sasashima','chikusa','gokiso','tsurumai','kamisawa','nakamura_nisseki','midori_kofubutsu','sakurayama','akatsuka','shin_moriyama','tokoname','hamamatsu','sakae','rokubanchou','nonami','seto_iwayadou','nagakute','meieki_nishi','nadia_sakae','aratamabashi','sako','hotei','kamejima','nakamura_torii','taikodori','kouta','hibino','hoshigaoka','ikeshita','toyota','hara','fujigaoka','gifu_kitagata','narumiyamashita'],
+  '東海': ['sasashima','chikusa','gokiso','tsurumai','kamisawa','nakamura_nisseki','midori_kofubutsu','sakurayama','akatsuka','shin_moriyama','tokoname','hamamatsu','sakae','rokubanchou','nonami','seto_iwayadou','nagakute','meieki_nishi','nadia_sakae','aratamabashi','sako','hotei','kamejima','nakamura_torii','taikodori','kouta','hibino','hoshigaoka','ikeshita','toyota','hara','fujigaoka','gifu_kitagata','narumiyamashita','kisomisaki'],
   '関西': ['tenma','higashiosaka','aikawa','minami_morimachi','abeno','tanimachi9','moriguchi','taishibashi','kyobashi_kita','shinsaibashi','kishi','umeda','kami_shinjyo','osaka_hirano','hikone','aeon_higashiosaka','gamo4','tenmabashi_kita'],
   '関東': ['inzai','otsuka','sugamo','umejima','shibuya','kamisato'],
   // 2026-08-24追加。関東セルフ・FC・業務委託は、既存の東海/関西/関東とは別の新規カテゴリ
@@ -97,8 +97,8 @@ const AREA_STORES = {
   // 同じ内容(詳細はそちら側のコメント参照)。新宿西口店(shinjuku_fc)は関東からFCへ移動。
   // 千歳烏山はメニュー表記が「ニッカ関東セルフカフェデフォルト」のため関東セルフへ、天満橋北(大阪)は
   // 関西へ、盛岡駅前・盛岡大通(岩手、地理的にはどのエリアにも属さない)はFCとして追加
-  '関東セルフ': ['chitose_karasuyama'],
-  'FC': ['shinjuku_fc', 'morioka_ekimae', 'morioka_odori'],
+  '関東セルフ': ['chitose_karasuyama', 'waseda'],
+  'FC': ['shinjuku_fc', 'morioka_ekimae', 'morioka_odori', 'gamagori', 'kariya', 'tottori_ekimae'],
   '業務委託': []
 };
 // フロントのREGIONS定数のid('tokai'/'kansai'/'kanto'/'kanto_self'/'fc'/'gyomu_itaku')→日本語ラベルの対応

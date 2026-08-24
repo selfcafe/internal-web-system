@@ -11,7 +11,7 @@ const STORES = {
   hotei:'布袋駅', kamejima:'亀島', nakamura_torii:'中村日赤鳥居通',
   taikodori:'太閤通駅', kouta:'幸田', hibino:'日比野', hoshigaoka:'星が丘',
   ikeshita:'池下', toyota:'T-FACE豊田', hara:'原', fujigaoka:'藤が丘',
-  gifu_kitagata:'イオンタウン岐阜北方', narumiyamashita:'鳴海山下',
+  gifu_kitagata:'イオンタウン岐阜北方', narumiyamashita:'鳴海山下', kisomisaki:'木曽岬',
   /* 関西 */
   tenma:'天満', higashiosaka:'東大阪小若江', aikawa:'相川駅前',
   minami_morimachi:'南森町', abeno:'あべの南', tanimachi9:'谷町九丁目',
@@ -23,8 +23,9 @@ const STORES = {
   inzai:'印西牧の原', otsuka:'大塚駅南口', sugamo:'巣鴨駅南口',
   umejima:'梅島', shibuya:'渋谷神南', kamisato:'カインズ上里本庄',
   /* 関東セルフ */
-  chitose_karasuyama:'千歳烏山',
+  chitose_karasuyama:'千歳烏山', waseda:'早稲田',
   /* FC */
   shinjuku_fc:'FC 新宿西口Shinjuku Future Gallery',
   morioka_ekimae:'盛岡駅前', morioka_odori:'盛岡大通',
+  gamagori:'クラスポ蒲郡', kariya:'ルビットタウン刈谷', tottori_ekimae:'鳥取駅前',
 };
