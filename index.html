@@ -5102,7 +5102,7 @@ function switchRegion(r) {
 function switchAdminView(v) {
   adminView = v; adminPage = 1;
   ['overview','history','lost','machinePhoto'].forEach(k => document.getElementById('sub-'+k)?.classList.toggle('active', k===v));
-  document.getElementById('admin-region-nav')?.classList.toggle('nav-disabled', v === 'lost' || v === 'machinePhoto');
+  document.getElementById('admin-region-nav')?.classList.toggle('nav-disabled', v === 'lost');
   updateAdminMenuActive();
   renderAdmin();
 }
@@ -5346,10 +5346,10 @@ async function renderMachinePhotoAdmin() {
     _machinePhotoStatusByStore[r.storeId].push(r);
   });
 
-  // 地域ごとにアコーディオンを分けていると開閉クリックが増えるため、1つの表にまとめる。
+  // 自分のエリアの店舗を探しづらいという要望により、地域タブ(adminRegion)で絞り込む(2026-08-24)。
   // 店舗ごとに<tbody>を分けておくことで、台数/有効無効の変更時にその店舗の<tbody>だけを
   // 差し替えられるようにする（表全体の再構築・サーバー再取得を避けて即座に反映させるため）
-  const allStoreIds = [].concat(REGIONS.tokai.stores, REGIONS.kansai.stores, REGIONS.kanto.stores);
+  const allStoreIds = REGIONS[adminRegion].stores;
   const tbodies = allStoreIds.map(storeId =>
     `<tbody id="mp-tbody-${esc(storeId)}">${_machinePhotoBuildStoreRows(storeId)}</tbody>`
   ).join('');
