@@ -152,7 +152,72 @@ function migrateStoreIdRenames() {
       }
     });
   });
+  summary.push(..._migrateStoreIdAliasesInSettings_());
   return { ok: true, summary };
+}
+
+// シートのstore_id列だけでなく、app_settingsに保存されたstoreIdキーのJSON設定
+// (店舗ごとにdict/arrayでキー・値を持つもの)にも旧ID→新IDの改名を反映する(2026-08-24追加)。
+// 2026-08-18の改名時にこちらを見落としていたため、対象5店舗の店舗ログインパスワード
+// (store_passwords)をはじめ複数の設定が長期間旧IDのまま参照できなくなっていた
+// (パスワード欄には旧IDの値が残るが、実際のログイン照合は新IDで行われないため
+// 「パスワードが違う」「間違った店舗にログインする」といった形で表面化する)。
+// dict形式は新IDに既に値があれば新IDを優先して残し(上書きしない)、無ければ旧IDの値を
+// 新IDへ移す。array形式は旧IDを新IDに置き換えて重複を除く。何度実行しても安全。
+const STORE_KEYED_SETTINGS_DICT_ = [
+  'store_passwords', 'store_regions', 'store_product_cfg', 'store_checksheet_cfg',
+  'machine_photo_machine_counts', 'reorder_targets', 'attendance_staff_list',
+  'attendance_staff_schedule', 'attendance_store_coords', 'attendance_store_default_schedule',
+  'invoice_store_cfg',
+];
+const STORE_KEYED_SETTINGS_ARRAY_ = [
+  'machine_photo_disabled_stores', 'attendance_enabled_stores', 'deleted_stores',
+];
+function _migrateStoreIdAliasesInSettings_() {
+  const rows = getSettings();
+  const byKey = {};
+  rows.forEach(r => byKey[r.key] = r.value);
+  const summary = [];
+
+  STORE_KEYED_SETTINGS_DICT_.forEach(key => {
+    const raw = byKey[key];
+    if (!raw) return;
+    let obj;
+    try { obj = JSON.parse(raw); } catch (e) { return; }
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return;
+    let changed = 0;
+    Object.keys(STORE_ID_ALIASES).forEach(oldId => {
+      if (!Object.prototype.hasOwnProperty.call(obj, oldId)) return;
+      const newId = STORE_ID_ALIASES[oldId];
+      if (!Object.prototype.hasOwnProperty.call(obj, newId)) obj[newId] = obj[oldId];
+      delete obj[oldId];
+      changed++;
+    });
+    if (changed > 0) {
+      saveSetting(key, JSON.stringify(obj));
+      summary.push({ setting: key, renamed: changed });
+    }
+  });
+
+  STORE_KEYED_SETTINGS_ARRAY_.forEach(key => {
+    const raw = byKey[key];
+    if (!raw) return;
+    let arr;
+    try { arr = JSON.parse(raw); } catch (e) { return; }
+    if (!Array.isArray(arr)) return;
+    let changed = 0;
+    const mapped = arr.map(v => {
+      if (Object.prototype.hasOwnProperty.call(STORE_ID_ALIASES, v)) { changed++; return STORE_ID_ALIASES[v]; }
+      return v;
+    });
+    const deduped = [...new Set(mapped)];
+    if (changed > 0 || deduped.length !== arr.length) {
+      saveSetting(key, JSON.stringify(deduped));
+      summary.push({ setting: key, renamed: changed });
+    }
+  });
+
+  return summary;
 }
 
 // 棚卸集計スプレッドシート内の店舗タブ(例:「渋谷神南」)を、エリアごとに色分け・グループ化して
