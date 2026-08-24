@@ -757,7 +757,8 @@
           <div class="admin-menu-section">エリア</div>
           <div class="admin-menu-item" id="menu-tokai"  onclick="menuSelect('region','tokai')">東海<span class="menu-badge" id="mbadge-tokai"  style="display:none"></span></div>
           <div class="admin-menu-item" id="menu-kansai" onclick="menuSelect('region','kansai')">関西<span class="menu-badge" id="mbadge-kansai" style="display:none"></span></div>
-          <div class="admin-menu-item" id="menu-kanto"  onclick="menuSelect('region','kanto')">関東セルフ<span class="menu-badge" id="mbadge-kanto"  style="display:none"></span></div>
+          <div class="admin-menu-item" id="menu-kanto"  onclick="menuSelect('region','kanto')">関東<span class="menu-badge" id="mbadge-kanto"  style="display:none"></span></div>
+          <div class="admin-menu-item" id="menu-kanto_self"  onclick="menuSelect('region','kanto_self')">関東セルフ<span class="menu-badge" id="mbadge-kanto_self"  style="display:none"></span></div>
           <div class="admin-menu-item" id="menu-fc"  onclick="menuSelect('region','fc')">FC<span class="menu-badge" id="mbadge-fc"  style="display:none"></span></div>
           <div class="admin-menu-item" id="menu-gyomu_itaku"  onclick="menuSelect('region','gyomu_itaku')">業務委託<span class="menu-badge" id="mbadge-gyomu_itaku"  style="display:none"></span></div>
           <div class="admin-menu-divider"></div>
@@ -777,7 +778,8 @@
   <div class="sub-nav-wrap" id="admin-region-nav">
     <button class="sub-tab active" id="sub-tokai"  onclick="switchRegion('tokai')">東海<span class="tab-badge" id="badge-tokai"  style="display:none"></span></button>
     <button class="sub-tab"        id="sub-kansai" onclick="switchRegion('kansai')">関西<span class="tab-badge" id="badge-kansai" style="display:none"></span></button>
-    <button class="sub-tab"        id="sub-kanto"  onclick="switchRegion('kanto')">関東セルフ<span class="tab-badge" id="badge-kanto"  style="display:none"></span></button>
+    <button class="sub-tab"        id="sub-kanto"  onclick="switchRegion('kanto')">関東<span class="tab-badge" id="badge-kanto"  style="display:none"></span></button>
+    <button class="sub-tab"        id="sub-kanto_self"  onclick="switchRegion('kanto_self')">関東セルフ<span class="tab-badge" id="badge-kanto_self"  style="display:none"></span></button>
     <button class="sub-tab"        id="sub-fc"  onclick="switchRegion('fc')">FC<span class="tab-badge" id="badge-fc"  style="display:none"></span></button>
     <button class="sub-tab"        id="sub-gyomu_itaku"  onclick="switchRegion('gyomu_itaku')">業務委託<span class="tab-badge" id="badge-gyomu_itaku"  style="display:none"></span></button>
   </div>
@@ -1325,12 +1327,14 @@ const REGIONS = {
     'moriguchi','taishibashi','kyobashi_kita','shinsaibashi','kishi','umeda',
     'kami_shinjyo','osaka_hirano','hikone','aeon_higashiosaka','gamo4',
   ]},
-  kanto: { label:'関東セルフ', stores:[
+  kanto: { label:'関東', stores:[
     'inzai','otsuka','sugamo','umejima','shibuya','kamisato',
   ]},
-  // 2026-08-24追加。FC・業務委託はエリア(地域)ではなく運営形態による分類のため、東海/関西/関東セルフとは
-  // 別軸だが、店舗管理画面ではこれらと同じ並びのカテゴリとして扱う(ユーザー要望)。新宿西口店(shinjuku_fc)は
-  // 関東からFCへ移動。全国どのエリアの店舗も今後FC/業務委託になり得る想定のため、地域を問わない単独カテゴリとする
+  // 2026-08-24追加。関東セルフ・FC・業務委託は、既存の東海/関西/関東とは別の新規カテゴリ
+  // (関東セルフは既存の「関東」とは別物——リネームではない、ユーザー明示)。新宿西口店(shinjuku_fc)は
+  // 関東からFCへ移動。3つとも現時点では新規店舗の追加先として空の状態で用意する
+  kanto_self: { label:'関東セルフ', stores:[
+  ]},
   fc: { label:'FC', stores:[
     'shinjuku_fc',
   ]},
@@ -6700,7 +6704,8 @@ function renderSettings() {
         <select id="new-store-region" style="border:1px solid #ddd;border-radius:6px;padding:8px 10px;font-size:14px;font-family:inherit">
           <option value="tokai">東海</option>
           <option value="kansai">関西</option>
-          <option value="kanto">関東セルフ</option>
+          <option value="kanto">関東</option>
+          <option value="kanto_self">関東セルフ</option>
           <option value="fc">FC</option>
           <option value="gyomu_itaku">業務委託</option>
         </select>

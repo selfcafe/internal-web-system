@@ -91,15 +91,18 @@ const ATTENDANCE_LEAVE_COLS = ['id','store_id','name','leave_date','submitted_at
 const AREA_STORES = {
   '東海': ['sasashima','chikusa','gokiso','tsurumai','kamisawa','nakamura_nisseki','midori_kofubutsu','sakurayama','akatsuka','shin_moriyama','tokoname','hamamatsu','sakae','rokubanchou','nonami','seto_iwayadou','nagakute','meieki_nishi','nadia_sakae','aratamabashi','sako','hotei','kamejima','nakamura_torii','taikodori','kouta','hibino','hoshigaoka','ikeshita','toyota','hara','fujigaoka','gifu_kitagata','narumiyamashita'],
   '関西': ['tenma','higashiosaka','aikawa','minami_morimachi','abeno','tanimachi9','moriguchi','taishibashi','kyobashi_kita','shinsaibashi','kishi','umeda','kami_shinjyo','osaka_hirano','hikone','aeon_higashiosaka','gamo4'],
-  '関東セルフ': ['inzai','otsuka','sugamo','umejima','shibuya','kamisato'],
-  // 2026-08-24追加。FC・業務委託は地域ではなく運営形態による分類(フロントのREGIONS定数と同じ、
-  // 詳細はそちら側のコメント参照)。新宿西口店(shinjuku_fc)は関東からFCへ移動
+  '関東': ['inzai','otsuka','sugamo','umejima','shibuya','kamisato'],
+  // 2026-08-24追加。関東セルフ・FC・業務委託は、既存の東海/関西/関東とは別の新規カテゴリ
+  // (関東セルフは既存の「関東」とは別物——リネームではない、ユーザー明示)。フロントのREGIONS定数と
+  // 同じ内容(詳細はそちら側のコメント参照)。新宿西口店(shinjuku_fc)は関東からFCへ移動。
+  // 3つとも現時点では新規店舗の追加先として空の状態で用意する
+  '関東セルフ': [],
   'FC': ['shinjuku_fc'],
   '業務委託': []
 };
-// フロントのREGIONS定数のid('tokai'/'kansai'/'kanto'/'fc'/'gyomu_itaku')→日本語ラベルの対応
+// フロントのREGIONS定数のid('tokai'/'kansai'/'kanto'/'kanto_self'/'fc'/'gyomu_itaku')→日本語ラベルの対応
 // （store_regions設定の値はid形式のため）
-const REGION_ID_LABEL_ = { tokai: '東海', kansai: '関西', kanto: '関東セルフ', fc: 'FC', gyomu_itaku: '業務委託' };
+const REGION_ID_LABEL_ = { tokai: '東海', kansai: '関西', kanto: '関東', kanto_self: '関東セルフ', fc: 'FC', gyomu_itaku: '業務委託' };
 
 // 店舗ID改名の後方互換エイリアス(旧ID→新ID)。2026-08-04、御器所の店舗IDを
 // 誤読み"gokaiso"から正しい"gokiso"へ改名した際に追加。各シートに既に書き込み済みの
@@ -230,11 +233,11 @@ function _migrateStoreIdAliasesInSettings_() {
 // ほしい」と依頼を受け追加)。AREA_STORESの並び順(東海→関西→関東、各エリア内は追加された順)を
 // そのままタブの正準な並び順として使う——stores.js自体が新規店舗をエリアごとの末尾に追記していく
 // 運用のため、この並び順が自然と「新しい店舗ほど後ろ」になる。
-// 2026-08-24、関東セルフ/FC/業務委託に分割。FC/業務委託は色分けの都合上ここに含めるが、
-// 実際の並び順・色付けは各エリアの店舗数(業務委託は現時点で0店舗)に応じて自然に反映される
-const AREA_TAB_COLORS = { '東海': '#93c47d', '関西': '#6fa8dc', '関東セルフ': '#f6b26b', 'FC': '#c27ba0', '業務委託': '#8e7cc3' }; // 緑/青/オレンジ/ピンク/紫
+// 2026-08-24、関東セルフ/FC/業務委託を新規カテゴリとして追加(いずれも現時点で0〜1店舗)。
+// 色分けの都合上ここに含めるが、実際の並び順・色付けは各エリアの店舗数に応じて自然に反映される
+const AREA_TAB_COLORS = { '東海': '#93c47d', '関西': '#6fa8dc', '関東': '#f6b26b', '関東セルフ': '#f1c232', 'FC': '#c27ba0', '業務委託': '#8e7cc3' }; // 緑/青/オレンジ/黄/ピンク/紫
 function _storeTabCanonicalOrder_() {
-  return [].concat(AREA_STORES['東海'], AREA_STORES['関西'], AREA_STORES['関東セルフ'], AREA_STORES['FC'], AREA_STORES['業務委託']);
+  return [].concat(AREA_STORES['東海'], AREA_STORES['関西'], AREA_STORES['関東'], AREA_STORES['関東セルフ'], AREA_STORES['FC'], AREA_STORES['業務委託']);
 }
 // タブの色分け専用の軽量エリア判定。_areaForStore_()とは意図的に別実装——_areaForStore_()は
 // 店舗管理画面でのエリア上書き(_storeRegionOverrides_→getSettings())を反映するため、無関係な
@@ -2021,7 +2024,7 @@ const INVENTORY_ROLLUP_HEADERS_JA = ['期間', 'エリア', '店舗名', '店舗
 // _areaForStore_()の返り値をこの順で並べる。既存のAREA_STORES反復順に合わせている。
 // エリア未設定の店舗(store_regions上書きもAREA_STORES登録も無い)は末尾にまとめる。
 // FCは_isFcStore_()で別途対象外にしているため(下記continue参照)ここには含めない
-const ROLLUP_AREA_ORDER = ['東海', '関西', '関東セルフ', '業務委託', '(エリア未設定)'];
+const ROLLUP_AREA_ORDER = ['東海', '関西', '関東', '関東セルフ', '業務委託', '(エリア未設定)'];
 const INVENTORY_MISSING_HEADERS_JA = ['期間','店舗ID','店舗名'];
 
 // 商品名からROLLUP_CATEGORIESのどれに属するか判定する。vendorはmeta(_productMeta_)経由。
@@ -3545,9 +3548,7 @@ function _parseStockInquiryText_(text) {
 //   LW_CHANNEL_ID_ATTENDANCE_TOKAI / _KANSAI / _KANTO
 // エリア別が未設定の間はLW_CHANNEL_ID_ATTENDANCE（業務開始共通チャンネル）、
 // それも未設定なら従来の発注用チャンネル(LW_CHANNEL_ID)にフォールバックする。
-// 2026-08-24、関東→関東セルフに改称(FC/業務委託を分離したため)。プロパティ名自体は
-// KANTOのまま変更しない(スクリプトプロパティの再設定が不要なように)
-const ATTENDANCE_AREA_CHANNEL_PROP_ = { '東海': 'LW_CHANNEL_ID_ATTENDANCE_TOKAI', '関西': 'LW_CHANNEL_ID_ATTENDANCE_KANSAI', '関東セルフ': 'LW_CHANNEL_ID_ATTENDANCE_KANTO' };
+const ATTENDANCE_AREA_CHANNEL_PROP_ = { '東海': 'LW_CHANNEL_ID_ATTENDANCE_TOKAI', '関西': 'LW_CHANNEL_ID_ATTENDANCE_KANSAI', '関東': 'LW_CHANNEL_ID_ATTENDANCE_KANTO' };
 
 // 管理者が「店舗管理」画面の「店舗のエリア変更」で行った上書き(app_settingsの'store_regions'キー、
 // {storeId:'tokai'|'kansai'|'kanto'}のJSON)を1回の実行内でのみキャッシュして取得
@@ -3586,8 +3587,7 @@ function _attendanceLineWorksChannel_(storeId) {
 // エリア別が未設定ならLW_CHANNEL_ID_LEAVE（休み申請共通）、それも未設定なら従来通り
 // 業務開始共通(LW_CHANNEL_ID_ATTENDANCE)→発注用(LW_CHANNEL_ID)の順にフォールバックする
 // （何も新しく設定しなければ今まで通りの送り先のまま変わらない）
-// 2026-08-24、関東→関東セルフに改称(ATTENDANCE_AREA_CHANNEL_PROP_と同様の理由)
-const LEAVE_AREA_CHANNEL_PROP_ = { '東海': 'LW_CHANNEL_ID_LEAVE_TOKAI', '関西': 'LW_CHANNEL_ID_LEAVE_KANSAI', '関東セルフ': 'LW_CHANNEL_ID_LEAVE_KANTO' };
+const LEAVE_AREA_CHANNEL_PROP_ = { '東海': 'LW_CHANNEL_ID_LEAVE_TOKAI', '関西': 'LW_CHANNEL_ID_LEAVE_KANSAI', '関東': 'LW_CHANNEL_ID_LEAVE_KANTO' };
 function _leaveChannelForArea_(area) {
   var props = PropertiesService.getScriptProperties();
   var propKey = area && LEAVE_AREA_CHANNEL_PROP_[area];
