@@ -7169,7 +7169,9 @@ function renderReorderTargetCfg() {
 
   const VENDOR_LABELS = Object.fromEntries(VENDOR_CONFIG.map(v => [v.key, v.label]));
   const byVendor = {};
-  PRODUCTS.forEach(p => {
+  // その店舗が実際に取り扱っている商品(店舗別取扱商品設定の除外リストを反映)だけを対象にする。
+  // 未設定(除外リストなし)の店舗は元々全商品扱いなので、getAvailableProductsでもPRODUCTS全件のまま変わらない
+  getAvailableProducts(sid).forEach(p => {
     if (!REORDER_TARGET_VENDORS.includes(p.vendor)) return;
     if (!p.code) return; // 商品コードが無い商品は突き合わせできないため対象外
     if (!byVendor[p.vendor]) byVendor[p.vendor] = [];
