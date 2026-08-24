@@ -5101,6 +5101,7 @@ function switchRegion(r) {
 
 function switchAdminView(v) {
   adminView = v; adminPage = 1;
+  if (v === 'machinePhoto') _machinePhotoForceRefresh = true;
   ['overview','history','lost','machinePhoto'].forEach(k => document.getElementById('sub-'+k)?.classList.toggle('active', k===v));
   document.getElementById('admin-region-nav')?.classList.toggle('nav-disabled', v === 'lost');
   updateAdminMenuActive();
@@ -5328,6 +5329,9 @@ function setMachinePhotoMachineCountAdmin(storeId, rawValue) {
   _machinePhotoRefreshStoreRow(storeId);
 }
 
+let _machinePhotoStatusCache = null; // gasGet('getMachinePhotoStatus')の結果をキャッシュし、地域タブ切替では再取得しない
+let _machinePhotoForceRefresh = true; // 機械内写真タブへの遷移時にtrueにして、地域タブ切替時と区別する
+
 async function renderMachinePhotoAdmin() {
   document.querySelector('#page-admin .table-wrap').style.display = 'none';
   document.getElementById('pagination').style.display = 'none';
@@ -5337,11 +5341,15 @@ async function renderMachinePhotoAdmin() {
 
   const container = document.getElementById('settings-container');
   container.style.display = 'block';
-  container.innerHTML = `<div style="color:#aaa;font-size:13px;padding:10px 0">読み込み中…</div>`;
 
-  const statusRows = await gasGet('getMachinePhotoStatus'); // [{storeId, machineIndex, uploadedAt, daysSince, photoUrls}]
+  const needsFetch = _machinePhotoForceRefresh || !_machinePhotoStatusCache;
+  _machinePhotoForceRefresh = false;
+  if (needsFetch) {
+    container.innerHTML = `<div style="color:#aaa;font-size:13px;padding:10px 0">読み込み中…</div>`;
+    _machinePhotoStatusCache = await gasGet('getMachinePhotoStatus'); // [{storeId, machineIndex, uploadedAt, daysSince, photoUrls}]
+  }
   _machinePhotoStatusByStore = {};
-  (statusRows || []).forEach(r => {
+  (_machinePhotoStatusCache || []).forEach(r => {
     if (!_machinePhotoStatusByStore[r.storeId]) _machinePhotoStatusByStore[r.storeId] = [];
     _machinePhotoStatusByStore[r.storeId].push(r);
   });
