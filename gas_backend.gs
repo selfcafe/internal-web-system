@@ -330,13 +330,13 @@ function _storeIdLabel_(storeId) {
   return nm ? storeId + '（' + nm + '）' : String(storeId);
 }
 // FC(フランチャイズ)店舗かどうかの判定（2026-07-25、棚卸集計スプレッドシートのstore_type列用）。
-// stores.js上の表示名が「FC 」で始まるという既存の命名規則を正とする。stores.js取得に失敗した場合や
-// custom_storesで追加され表示名が引けない店舗は、store_id自体の末尾"_fc"規則にフォールバックする
-// （現行の唯一のFC店舗shinjuku_fcはid・表示名どちらの規則にも合致する）。該当なしは直営扱い。
+// 2026-08-24、AREA_STORES['FC']への所属で判定するよう変更(店舗管理のFC区分が正になったため)。
+// 以前は表示名が「FC 」で始まるか/店舗IDが"_fc"で終わるかという命名規則で判定していたが、
+// FC区分に店舗が増えた際(盛岡駅前・クラスポ蒲郡等、名前にもIDにも"FC"を含まない)に
+// 判定漏れするため廃止した。店舗のエリア上書き(store_regions)でFCへ移した場合も正しく判定される
+// よう_areaForStore_と同じ考え方(上書き優先)にする。該当なしは直営扱い。
 function _isFcStore_(storeId) {
-  const nm = _storeNames_()[storeId];
-  if (nm) return nm.indexOf('FC ') === 0;
-  return /_fc$/.test(String(storeId));
+  return _areaForStore_(storeId) === 'FC';
 }
 
 // ----------------------------------------------------------------
@@ -4299,7 +4299,6 @@ function checkNewStoresFromMasterSheet() {
   const KNOWN_NAME_ALIASES = { // シート表記 -> ポータル表記
     'ドンキ栄': '栄',
     '大阪平野西': '平野西',
-    '新宿西口Shinjuku Future Gallery': 'FC 新宿西口Shinjuku Future Gallery',
   };
   const portalNames = new Set(Object.values(_storeNames_()));
   const isKnown = sheetName => portalNames.has(sheetName) || portalNames.has(KNOWN_NAME_ALIASES[sheetName]);

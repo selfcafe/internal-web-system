@@ -25,7 +25,7 @@ const STORES = {
   /* 関東セルフ */
   chitose_karasuyama:'千歳烏山', waseda:'早稲田',
   /* FC */
-  shinjuku_fc:'FC 新宿西口Shinjuku Future Gallery',
+  shinjuku_fc:'新宿西口Shinjuku Future Gallery',
   morioka_ekimae:'盛岡駅前', morioka_odori:'盛岡大通',
   gamagori:'クラスポ蒲郡', kariya:'ルビットタウン刈谷', tottori_ekimae:'鳥取駅前',
 };
