@@ -1325,18 +1325,20 @@ const REGIONS = {
   kansai: { label:'関西', stores:[
     'tenma','higashiosaka','aikawa','minami_morimachi','abeno','tanimachi9',
     'moriguchi','taishibashi','kyobashi_kita','shinsaibashi','kishi','umeda',
-    'kami_shinjyo','osaka_hirano','hikone','aeon_higashiosaka','gamo4',
+    'kami_shinjyo','osaka_hirano','hikone','aeon_higashiosaka','gamo4','tenmabashi_kita',
   ]},
   kanto: { label:'関東', stores:[
     'inzai','otsuka','sugamo','umejima','shibuya','kamisato',
   ]},
   // 2026-08-24追加。関東セルフ・FC・業務委託は、既存の東海/関西/関東とは別の新規カテゴリ
   // (関東セルフは既存の「関東」とは別物——リネームではない、ユーザー明示)。新宿西口店(shinjuku_fc)は
-  // 関東からFCへ移動。3つとも現時点では新規店舗の追加先として空の状態で用意する
+  // 関東からFCへ移動。千歳烏山はメニュー表記が「ニッカ関東セルフカフェデフォルト」のため関東セルフへ、
+  // 天満橋北(大阪)は関西へ、盛岡駅前・盛岡大通(岩手、地理的にはどのエリアにも属さない)はFCとして追加
   kanto_self: { label:'関東セルフ', stores:[
+    'chitose_karasuyama',
   ]},
   fc: { label:'FC', stores:[
-    'shinjuku_fc',
+    'shinjuku_fc','morioka_ekimae','morioka_odori',
   ]},
   gyomu_itaku: { label:'業務委託', stores:[
   ]},

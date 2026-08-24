@@ -90,14 +90,15 @@ const ATTENDANCE_LEAVE_COLS = ['id','store_id','name','leave_date','submitted_at
 // 単純な用途(通知グループ振り分け以外)ではこのまま直接参照してよい）
 const AREA_STORES = {
   '東海': ['sasashima','chikusa','gokiso','tsurumai','kamisawa','nakamura_nisseki','midori_kofubutsu','sakurayama','akatsuka','shin_moriyama','tokoname','hamamatsu','sakae','rokubanchou','nonami','seto_iwayadou','nagakute','meieki_nishi','nadia_sakae','aratamabashi','sako','hotei','kamejima','nakamura_torii','taikodori','kouta','hibino','hoshigaoka','ikeshita','toyota','hara','fujigaoka','gifu_kitagata','narumiyamashita'],
-  '関西': ['tenma','higashiosaka','aikawa','minami_morimachi','abeno','tanimachi9','moriguchi','taishibashi','kyobashi_kita','shinsaibashi','kishi','umeda','kami_shinjyo','osaka_hirano','hikone','aeon_higashiosaka','gamo4'],
+  '関西': ['tenma','higashiosaka','aikawa','minami_morimachi','abeno','tanimachi9','moriguchi','taishibashi','kyobashi_kita','shinsaibashi','kishi','umeda','kami_shinjyo','osaka_hirano','hikone','aeon_higashiosaka','gamo4','tenmabashi_kita'],
   '関東': ['inzai','otsuka','sugamo','umejima','shibuya','kamisato'],
   // 2026-08-24追加。関東セルフ・FC・業務委託は、既存の東海/関西/関東とは別の新規カテゴリ
   // (関東セルフは既存の「関東」とは別物——リネームではない、ユーザー明示)。フロントのREGIONS定数と
   // 同じ内容(詳細はそちら側のコメント参照)。新宿西口店(shinjuku_fc)は関東からFCへ移動。
-  // 3つとも現時点では新規店舗の追加先として空の状態で用意する
-  '関東セルフ': [],
-  'FC': ['shinjuku_fc'],
+  // 千歳烏山はメニュー表記が「ニッカ関東セルフカフェデフォルト」のため関東セルフへ、天満橋北(大阪)は
+  // 関西へ、盛岡駅前・盛岡大通(岩手、地理的にはどのエリアにも属さない)はFCとして追加
+  '関東セルフ': ['chitose_karasuyama'],
+  'FC': ['shinjuku_fc', 'morioka_ekimae', 'morioka_odori'],
   '業務委託': []
 };
 // フロントのREGIONS定数のid('tokai'/'kansai'/'kanto'/'kanto_self'/'fc'/'gyomu_itaku')→日本語ラベルの対応
@@ -383,6 +384,8 @@ function doGet(e) {
     else if (a === 'getMachinePhotoStatus')     result = getMachinePhotoStatus();
     else if (a === 'getMachinePhotoHistory')    result = getMachinePhotoHistory(e.parameter.storeId);
     else if (a === 'migrateMachinePhotoColumns') result = migrateMachinePhotoColumns();
+    else if (a === 'checkNewStoresFromMasterSheet') result = checkNewStoresFromMasterSheet();
+    else if (a === 'setNewStoreCheckTrigger')   { setNewStoreCheckTrigger(); result = { ok: true }; }
     else result = { error: 'Unknown action: ' + a };
     return json(result);
   } catch(err) {
@@ -4257,4 +4260,77 @@ function setMonthlyAttendanceTrigger() {
     }
   }
   ScriptApp.newTrigger('sendMonthlyAttendanceCheck').timeBased().onMonthDay(1).atHour(9).inTimezone('Asia/Tokyo').create();
+}
+
+// ----------------------------------------------------------------
+// 新規店舗検知(2026-08-24追加)。店舗マスタ管理用の別スプレッドシート(gid=0、B列=店舗名、
+// F列=営業状況「営業中」/「閉店」)を毎日読み、F列が「営業中」かつポータル(stores.js)に
+// 未登録の店舗名をLINE WORKSへ通知する。実際の追加(stores.js編集+エリア/パスワード設定等)は
+// 人が管理者ポータル「店舗管理→新規追加」画面で行う想定——エリア判定・パスワード発行など
+// 人の判断が要る項目が多く全自動追加はリスクが高いため、検知・通知のみに留める(ユーザー確認済み)。
+// ヘッダー行・列位置は固定の行番号/列番号で決め打ちせず、「店舗名」というセルを持つ行を
+// 動的に探して求める(手動運用のシートのため行・列がズレる可能性に備える)。
+// ----------------------------------------------------------------
+const STORE_MASTER_SHEET_ID = '1EL61iL_TZouB1xDLlUl7e3k1FJOLxwIApvV9RYAi36Q';
+function checkNewStoresFromMasterSheet() {
+  const ss = SpreadsheetApp.openById(STORE_MASTER_SHEET_ID);
+  const sheet = ss.getSheets()[0]; // gid=0(スプレッドシート内の最初のシート)
+  const data = sheet.getDataRange().getValues();
+
+  let headerRow = -1, nameCol = -1;
+  for (let r = 0; r < Math.min(data.length, 10); r++) {
+    const idx = data[r].indexOf('店舗名');
+    if (idx >= 0) { headerRow = r; nameCol = idx; break; }
+  }
+  if (headerRow < 0) return { error: '店舗マスタシートのヘッダー行(店舗名)が見つかりません' };
+  const statusCol = data[headerRow].indexOf('閉店日'); // このシートでは営業中/閉店のステータス欄として使われている
+
+  const sheetStoreNames = [];
+  for (let r = headerRow + 1; r < data.length; r++) {
+    const name = String(data[r][nameCol] || '').trim();
+    if (!name) continue;
+    const status = statusCol >= 0 ? String(data[r][statusCol] || '').trim() : '';
+    if (status === '営業中') sheetStoreNames.push(name);
+  }
+
+  // 完全一致のみで判定する(部分一致だと「天満橋北」が既存店舗「天満」に誤って
+  // マッチしてしまう等、無関係な店舗名の部分文字列衝突で見逃す方が危険なため)。
+  // シート側とポータル側で表記が異なることが分かっている店舗だけ、個別に別名を登録する
+  const KNOWN_NAME_ALIASES = { // シート表記 -> ポータル表記
+    'ドンキ栄': '栄',
+    '大阪平野西': '平野西',
+    '新宿西口Shinjuku Future Gallery': 'FC 新宿西口Shinjuku Future Gallery',
+  };
+  const portalNames = new Set(Object.values(_storeNames_()));
+  const isKnown = sheetName => portalNames.has(sheetName) || portalNames.has(KNOWN_NAME_ALIASES[sheetName]);
+  const missing = sheetStoreNames.filter(n => !isKnown(n));
+
+  return { ok: true, checkedCount: sheetStoreNames.length, missing };
+}
+
+function sendNewStoreCheckNotification() {
+  const channelId = PropertiesService.getScriptProperties().getProperty('LW_CHANNEL_ID_NEWSTORES');
+  let result;
+  try {
+    result = checkNewStoresFromMasterSheet();
+  } catch (e) {
+    sendLineWorksNotification('【店舗マスタチェック】エラー: ' + e.message, channelId);
+    return;
+  }
+  if (result.error) { sendLineWorksNotification('【店舗マスタチェック】エラー: ' + result.error, channelId); return; }
+  if (!result.missing.length) return; // 差分なしの日は通知しない(毎日ノイズになるため)
+  const msg = '【店舗マスタチェック】ポータル未登録の店舗があります(営業中のみ):\n'
+    + result.missing.map(n => '・' + n).join('\n')
+    + '\n\n管理者ポータルの「店舗管理→新規追加」から登録してください。';
+  sendLineWorksNotification(msg, channelId);
+}
+
+// デプロイ後、Apps Scriptエディタ（またはclasp run、doGet ?action=setNewStoreCheckTrigger）で
+// 一度だけ手動実行すること（setDailyTrigger等と同じ運用。push/deployだけではトリガーは登録されない）
+function setNewStoreCheckTrigger() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === 'sendNewStoreCheckNotification') ScriptApp.deleteTrigger(triggers[i]);
+  }
+  ScriptApp.newTrigger('sendNewStoreCheckNotification').timeBased().atHour(9).nearMinute(0).everyDays(1).inTimezone('Asia/Tokyo').create();
 }

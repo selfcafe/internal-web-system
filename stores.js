@@ -18,9 +18,13 @@ const STORES = {
   moriguchi:'守口駅前', taishibashi:'太子橋', kyobashi_kita:'京橋北',
   shinsaibashi:'心斎橋東急ビル', kishi:'喜志', umeda:'梅田センタービル',
   kami_shinjyo:'上新庄', osaka_hirano:'平野西', hikone:'イオンタウン彦根',
-  aeon_higashiosaka:'イオンタウン東大阪', gamo4:'蒲生四丁目',
+  aeon_higashiosaka:'イオンタウン東大阪', gamo4:'蒲生四丁目', tenmabashi_kita:'天満橋北',
   /* 関東 */
   inzai:'印西牧の原', otsuka:'大塚駅南口', sugamo:'巣鴨駅南口',
-  umejima:'梅島', shibuya:'渋谷神南',
-  shinjuku_fc:'FC 新宿西口Shinjuku Future Gallery', kamisato:'カインズ上里本庄',
+  umejima:'梅島', shibuya:'渋谷神南', kamisato:'カインズ上里本庄',
+  /* 関東セルフ */
+  chitose_karasuyama:'千歳烏山',
+  /* FC */
+  shinjuku_fc:'FC 新宿西口Shinjuku Future Gallery',
+  morioka_ekimae:'盛岡駅前', morioka_odori:'盛岡大通',
 };
