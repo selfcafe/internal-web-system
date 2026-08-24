@@ -3896,6 +3896,10 @@ async function addLostItem() {
 async function deleteLostItem(storeId, itemId) {
   const item = getLostItems(storeId).find(x => x.id === itemId);
   if (LOST_CACHE[storeId]) LOST_CACHE[storeId] = LOST_CACHE[storeId].filter(x => x.id !== itemId);
+  // 月内・先月一覧もキャッシュしているため(renderLostAdmin参照)、ここで同時に取り除いておかないと
+  // 削除後の再描画がキャッシュ経由になった際に削除済みの行が残って見えてしまう
+  if (_lostMonthCache) _lostMonthCache = _lostMonthCache.filter(x => x.id !== itemId);
+  if (_lostLastMonthCache) _lostLastMonthCache = _lostLastMonthCache.filter(x => x.id !== itemId);
   if (storeId === storeTab && partnerTabCurrent === 'lost') renderLostItems();
   if (adminView === 'lost') renderLostAdmin();
   try {
@@ -5102,6 +5106,8 @@ function switchRegion(r) {
 function switchAdminView(v) {
   adminView = v; adminPage = 1;
   if (v === 'machinePhoto') _machinePhotoForceRefresh = true;
+  if (v === 'lost') _lostForceRefresh = true;
+  if (v === 'history') _historyForceRefresh = true;
   ['overview','history','lost','machinePhoto'].forEach(k => document.getElementById('sub-'+k)?.classList.toggle('active', k===v));
   document.getElementById('admin-region-nav')?.classList.toggle('nav-disabled', v === 'lost');
   updateAdminMenuActive();
@@ -5118,6 +5124,12 @@ function renderAdmin() {
 }
 
 let adminLostStore = '';
+
+// 月内・先月の全店舗一覧はadminLostStore(店舗別一覧の選択店舗)には依存しないため、
+// 店舗切替のたびに再取得しないようキャッシュする(2026-08-24)。deleteLostItemで
+// 削除した時はここも同時にローカルで取り除き、キャッシュのまま整合性を保つ
+let _lostMonthCache = null, _lostLastMonthCache = null, _lostMonthCacheKey = null;
+let _lostForceRefresh = true; // 忘れ物一覧タブへの遷移時にtrueにして、店舗切替時と区別する
 
 async function renderLostAdmin() {
   document.querySelector('#page-admin .table-wrap').style.display = 'none';
@@ -5137,25 +5149,35 @@ async function renderLostAdmin() {
     `<option value="${esc(sid)}" ${sid === adminLostStore ? 'selected' : ''}>${esc(sname)}</option>`
   ).join('');
 
-  container.innerHTML = `<div style="color:#aaa;font-size:13px;padding:10px 0">読み込み中…</div>`;
-
-  // 月内・先月の全店舗分 + 選択店舗を並列取得
   const now = new Date();
   const thisMonth = now.toISOString().slice(0, 7);
   const lastMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
   const lastMonth = `${lastMonthDate.getFullYear()}-${String(lastMonthDate.getMonth()+1).padStart(2,'0')}`;
-  const [monthData, lastMonthData] = await Promise.all([
-    gasGet('getLostItems', { month: thisMonth }),
-    gasGet('getLostItems', { month: lastMonth }),
-    loadLostItemsFromDb(adminLostStore),
-  ]);
+  const monthCacheKey = thisMonth + '|' + lastMonth;
+
+  const needsMonthFetch = _lostForceRefresh || _lostMonthCacheKey !== monthCacheKey;
+  const needsStoreFetch = _lostForceRefresh || !LOST_CACHE[adminLostStore];
+  _lostForceRefresh = false;
+
+  if (needsMonthFetch || needsStoreFetch) {
+    container.innerHTML = `<div style="color:#aaa;font-size:13px;padding:10px 0">読み込み中…</div>`;
+  }
+  const fetches = [];
+  if (needsMonthFetch) {
+    fetches.push(gasGet('getLostItems', { month: thisMonth }).then(d => _lostMonthCache = d));
+    fetches.push(gasGet('getLostItems', { month: lastMonth }).then(d => _lostLastMonthCache = d));
+    _lostMonthCacheKey = monthCacheKey;
+  }
+  if (needsStoreFetch) fetches.push(loadLostItemsFromDb(adminLostStore));
+  await Promise.all(fetches);
+
   const mapLostApiRows = data => (data || []).map(r => ({
     id: r.id, storeId: r.store_id, storeName: STORES[r.store_id] || r.store_id,
     foundDate: r.found_date || '', note: r.note || '',
     imageUrls: r.image_url ? String(r.image_url).split(',').filter(Boolean) : [], addedAt: r.added_at || 0,
   })).sort((a,b) => (b.foundDate||'').localeCompare(a.foundDate||''));
-  const monthAllItems     = mapLostApiRows(monthData);
-  const lastMonthAllItems = mapLostApiRows(lastMonthData);
+  const monthAllItems     = mapLostApiRows(_lostMonthCache);
+  const lastMonthAllItems = mapLostApiRows(_lostLastMonthCache);
 
   const buildAllStoresRows = (allItems, emptyMsg) => allItems.length ? allItems.map(item => `
     <tr style="border-bottom:1px solid #eee" data-store="${esc(item.storeName)}">
@@ -5693,6 +5715,12 @@ function buildHistTable(sid) {
   return html;
 }
 
+// 地域ごとに一度取得済みなら、店舗別ドロップダウンの切替では再取得しない(2026-08-24)。
+// 地域タブ切替時は自動的にキャッシュミスになり取得される。タブへの遷移時だけは
+// _historyForceRefreshで強制的に再取得し直す(switchAdminView参照)
+let _historyFetchedRegions = new Set();
+let _historyForceRefresh = true;
+
 async function renderHistory() {
   document.querySelector('#page-admin .table-wrap').style.display = 'none';
   document.getElementById('pagination').style.display = 'none';
@@ -5701,14 +5729,19 @@ async function renderHistory() {
 
   const container = document.getElementById('settings-container');
   container.style.display = 'block';
-  container.innerHTML = '<div style="color:#aaa;font-size:13px;padding:12px 0">読み込み中…</div>';
 
   const region = REGIONS[adminRegion];
+  const needsFetch = _historyForceRefresh || !_historyFetchedRegions.has(adminRegion);
+  _historyForceRefresh = false;
 
-  // 店舗ごとにGASから取得（納品確認日から1ヶ月経過分はGAS側で自動削除済み）。
-  // 地域内の全店舗を一度に並列取得すると店舗数の多い地域で同時アクセスが集中するため、
-  // 同時5件までに制限する（2026-08-12、_mapLimitedのコメント参照）
-  await _mapLimited(region.stores, 5, sid => fetchDeliveryHistory(sid));
+  if (needsFetch) {
+    container.innerHTML = '<div style="color:#aaa;font-size:13px;padding:12px 0">読み込み中…</div>';
+    // 店舗ごとにGASから取得（納品確認日から1ヶ月経過分はGAS側で自動削除済み）。
+    // 地域内の全店舗を一度に並列取得すると店舗数の多い地域で同時アクセスが集中するため、
+    // 同時5件までに制限する（2026-08-12、_mapLimitedのコメント参照）
+    await _mapLimited(region.stores, 5, sid => fetchDeliveryHistory(sid));
+    _historyFetchedRegions.add(adminRegion);
+  }
 
   // 全店舗の履歴件数を集計
   const storeData = region.stores.map(sid => {
