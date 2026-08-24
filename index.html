@@ -759,7 +759,7 @@
           <div class="admin-menu-item" id="menu-kansai" onclick="menuSelect('region','kansai')">関西<span class="menu-badge" id="mbadge-kansai" style="display:none"></span></div>
           <div class="admin-menu-item" id="menu-kanto"  onclick="menuSelect('region','kanto')">関東<span class="menu-badge" id="mbadge-kanto"  style="display:none"></span></div>
           <div class="admin-menu-item" id="menu-kanto_self"  onclick="menuSelect('region','kanto_self')">関東セルフ<span class="menu-badge" id="mbadge-kanto_self"  style="display:none"></span></div>
-          <div class="admin-menu-item" id="menu-fc"  onclick="menuSelect('region','fc')">FC<span class="menu-badge" id="mbadge-fc"  style="display:none"></span></div>
+          <div class="admin-menu-item" id="menu-fc"  onclick="menuSelect('region','fc')" style="display:none">FC<span class="menu-badge" id="mbadge-fc"  style="display:none"></span></div>
           <div class="admin-menu-item" id="menu-gyomu_itaku"  onclick="menuSelect('region','gyomu_itaku')">業務委託<span class="menu-badge" id="mbadge-gyomu_itaku"  style="display:none"></span></div>
           <div class="admin-menu-divider"></div>
           <div class="admin-menu-section">表示</div>
@@ -780,7 +780,7 @@
     <button class="sub-tab"        id="sub-kansai" onclick="switchRegion('kansai')">関西<span class="tab-badge" id="badge-kansai" style="display:none"></span></button>
     <button class="sub-tab"        id="sub-kanto"  onclick="switchRegion('kanto')">関東<span class="tab-badge" id="badge-kanto"  style="display:none"></span></button>
     <button class="sub-tab"        id="sub-kanto_self"  onclick="switchRegion('kanto_self')">関東セルフ<span class="tab-badge" id="badge-kanto_self"  style="display:none"></span></button>
-    <button class="sub-tab"        id="sub-fc"  onclick="switchRegion('fc')">FC<span class="tab-badge" id="badge-fc"  style="display:none"></span></button>
+    <button class="sub-tab"        id="sub-fc"  onclick="switchRegion('fc')" style="display:none">FC<span class="tab-badge" id="badge-fc"  style="display:none"></span></button>
     <button class="sub-tab"        id="sub-gyomu_itaku"  onclick="switchRegion('gyomu_itaku')">業務委託<span class="tab-badge" id="badge-gyomu_itaku"  style="display:none"></span></button>
   </div>
   <div class="sub-nav-wrap level2 last">
@@ -1108,6 +1108,7 @@ async function initGas() {
     if (pwList && pwList.innerHTML) pwList.innerHTML = buildStorePwList();
     updatePartnerAttendanceTabVisibility();
     updatePartnerMachinePhotoTabVisibility();
+    updatePartnerOrderTabVisibility();
     return true;
   } catch(e) { console.error('GAS init error:', e); return false; }
 }
@@ -3394,6 +3395,17 @@ function updatePartnerMachinePhotoTabVisibility() {
   if (!enabled && checksheetActiveCategory === 'album') checksheetActiveCategory = 'daily_count';
 }
 
+// FC店舗は自社で仕入れを行うため、セルフカフェ側の発注依頼・履歴機能は不要という運用判断により
+// 「発注」タブ自体を非表示にする(2026-08-24、ユーザー要望)。個別店舗ごとのON/OFFではなく
+// FC区分そのものに対する一律の挙動のため、machine_photo_disabled_stores等のような
+// 設定リストは使わずgetStoreRegion()で直接判定する
+function updatePartnerOrderTabVisibility() {
+  const isFc = getStoreRegion(storeTab) === 'fc';
+  const btn = document.getElementById('ptab-order');
+  if (btn) btn.style.display = isFc ? 'none' : '';
+  if (isFc && partnerTabCurrent === 'order') switchPartnerTab('checklist');
+}
+
 // 押し忘れ対策（非ブロック版）: ログイン（セッション復元含む、showPage('store')が呼ばれた時点）で
 // 判定し、当日まだ「登録スタッフ全員」の打刻が揃っていなければ一度だけモーダルで促す。閉じても
 // 他の操作は通常通り行える。誰が今この端末を触っているかは特定できないため、
@@ -4446,6 +4458,7 @@ async function showPage(p) {
       if (lbl) lbl.textContent = STORES[authedStore] + '店';
       updatePartnerAttendanceTabVisibility();
     updatePartnerMachinePhotoTabVisibility();
+    updatePartnerOrderTabVisibility();
     }
     const navSearch = document.getElementById('store-nav-search');
     if (navSearch) navSearch.style.display = 'none';
@@ -5115,10 +5128,17 @@ function menuSelect(type, val) {
 
 function switchRegion(r) {
   if (adminView === 'lost') return;
+  if (r === 'fc' && _fcTabHiddenForView_(adminView)) return; // 発注依頼一覧・履歴ではFCタブ自体を隠しているため選択不可
   adminRegion = r; adminPage = 1;
   Object.keys(REGIONS).forEach(k => document.getElementById('sub-'+k)?.classList.toggle('active', k===r));
   updateAdminMenuActive();
   renderAdmin();
+}
+
+// FC店舗は発注機能自体を使わないため、発注依頼一覧・履歴ではFCの地域タブを表示しない
+// (2026-08-24、ユーザー要望。機械内写真・忘れ物一覧では引き続き表示する)
+function _fcTabHiddenForView_(v) {
+  return v === 'overview' || v === 'history';
 }
 
 function switchAdminView(v) {
@@ -5128,6 +5148,11 @@ function switchAdminView(v) {
   if (v === 'history') _historyForceRefresh = true;
   ['overview','history','lost','machinePhoto'].forEach(k => document.getElementById('sub-'+k)?.classList.toggle('active', k===v));
   document.getElementById('admin-region-nav')?.classList.toggle('nav-disabled', v === 'lost');
+  const hideFc = _fcTabHiddenForView_(v);
+  const subFcEl = document.getElementById('sub-fc'), menuFcEl = document.getElementById('menu-fc');
+  if (subFcEl) subFcEl.style.display = hideFc ? 'none' : '';
+  if (menuFcEl) menuFcEl.style.display = hideFc ? 'none' : '';
+  if (hideFc && adminRegion === 'fc') { switchRegion('tokai'); return; }
   updateAdminMenuActive();
   renderAdmin();
 }
