@@ -2913,6 +2913,64 @@ function getChecksheetStockChecks(storeId) {
 }
 
 // ----------------------------------------------------------------
+// 盗難検知①-補助: 日またぎ取りこぼし対策のチェックポイント 2026-08-25
+// ----------------------------------------------------------------
+// 従来はsinceDate(前回入力日)を比較期間から除外していたため、「前回入力した"時刻"〜その日の24時」の
+// 実売上がどのチェックにも一度も含まれない空白になっていた(前回入力時のチェックはその時点までの
+// 実売上しか見えず、翌日以降のチェックはsinceDateの日をまるごと比較範囲外にしてしまうため)。
+// 対策: チェックのたびに「その日の実売上をどこまで数えたか(=stera_realtime_todayの累計値)」を
+// チェックポイントとして記録しておく。翌日以降のチェックで、前回のsinceDateが確定値
+// (stera_daily_sales、CSV取込み後)になっていたら、その日の確定合計からチェックポイントを
+// 差し引いた「取りこぼし分」をcarryOverとして繰り越して回収する。
+// 確定値がまだ来ていない(CSV未取込み、深夜〜早朝の稀なケース)場合は今回はcarryOver=0のまま
+// チェックポイントを進める(その回だけ取りこぼしを許容する——毎日必ず取りこぼす従来の状態からの
+// 大幅な改善であり、これ以上の完全解決は複雑さに見合わないと判断)。
+const SHEET_STOCK_MISMATCH_CHECKPOINT = 'stock_mismatch_checkpoint';
+const STOCK_MISMATCH_CHECKPOINT_COLS = ['store_id', 'prd_id', 'checkpoint_date', 'checkpoint_qty'];
+
+function _getStockMismatchCheckpointSheet_() {
+  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const sheet = ss.getSheetByName(SHEET_STOCK_MISMATCH_CHECKPOINT) || ss.insertSheet(SHEET_STOCK_MISMATCH_CHECKPOINT);
+  ensureHeaders(sheet, STOCK_MISMATCH_CHECKPOINT_COLS);
+  return sheet;
+}
+
+// sinceDateの「打ち切られた残り」を確定値から回収するcarryOverを計算する。
+function _stockMismatchCarryOver_(storeId, prdId, sinceDate) {
+  const checkpoint = sheetRows(_getStockMismatchCheckpointSheet_(), STOCK_MISMATCH_CHECKPOINT_COLS)
+    .find(r => String(r.store_id) === String(storeId) && String(r.prd_id) === String(prdId));
+  if (!checkpoint || String(checkpoint.checkpoint_date) !== sinceDate) return 0;
+  if (!_hasSteraDailyDataForDate_(sinceDate)) return 0; // CSV未取込み、次回以降に回収する
+  const fullQty = _getSteraDailySingleDayQty_(storeId, prdId, sinceDate);
+  return Math.max(0, fullQty - Number(checkpoint.checkpoint_qty || 0));
+}
+
+function _hasSteraDailyDataForDate_(dateStr) {
+  return sheetRows(getSteraDailySheet_(), STERA_DAILY_COLS).some(r => String(r.date) === dateStr);
+}
+
+function _getSteraDailySingleDayQty_(storeId, prdId, dateStr) {
+  return sheetRows(getSteraDailySheet_(), STERA_DAILY_COLS)
+    .filter(r => String(r.store_id) === String(storeId) && String(r.prd_id) === String(prdId) && String(r.date) === dateStr)
+    .reduce((sum, r) => sum + (Number(r.qty) || 0), 0);
+}
+
+function _setStockMismatchCheckpoint_(storeId, prdId, dateStr, qty) {
+  const sheet = _getStockMismatchCheckpointSheet_();
+  const lastRow = sheet.getLastRow();
+  if (lastRow >= 2) {
+    const values = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
+    for (let i = 0; i < values.length; i++) {
+      if (String(values[i][0]) === String(storeId) && String(values[i][1]) === String(prdId)) {
+        sheet.getRange(i + 2, 3, 1, 2).setValues([[dateStr, qty]]);
+        return;
+      }
+    }
+  }
+  sheet.appendRow([storeId, prdId, dateStr, qty]);
+}
+
+// ----------------------------------------------------------------
 // 盗難検知①: 補充数量入力時の自動突き合わせ通知 2026-07-31
 // ----------------------------------------------------------------
 // saveChecksheetDataとは完全に独立した読み取り専用アクション(書き込みロックを取らないため、既存の
@@ -2926,6 +2984,8 @@ function getChecksheetStockChecks(storeId) {
 // 2026-08-16: 比較期間を「sinceDate(除く)〜前日(含む)」から「sinceDate(除く)〜当日(含む、
 // stera_realtime_today経由)」に拡張。従来は毎日連続入力(=通常運用)だと比較期間が空になり
 // 差異が常に0対0で通知が事実上機能しない問題があったため。
+// 2026-08-25: sinceDateの日が「前回入力した時刻〜24時」で打ち切られ実売上が取りこぼされる問題を
+// チェックポイント(上記_stockMismatchCarryOver_)で解消。
 const CHECKSHEET_STOCK_MISMATCH_THRESHOLD = 2;
 function checkChecksheetStockMismatch(storeId, product) {
   if (!storeId || !product) return { error: 'storeId/productは必須です' };
@@ -2965,7 +3025,10 @@ function checkChecksheetStockMismatch(storeId, product) {
     itemKeys.forEach(k => { inputQty += Number(allDays[dayKey][k]) || 0; });
   });
 
-  const steraQty = getSteraDailyTotal_(storeId, group.prdId, sinceDate, yesterday) + (_getSteraRealtimeTodayMap_(storeId)[group.prdId] || 0);
+  const carryOver = _stockMismatchCarryOver_(storeId, group.prdId, sinceDate);
+  const todayRealtimeQty = _getSteraRealtimeTodayMap_(storeId)[group.prdId] || 0;
+  const steraQty = carryOver + getSteraDailyTotal_(storeId, group.prdId, sinceDate, yesterday) + todayRealtimeQty;
+  _setStockMismatchCheckpoint_(storeId, group.prdId, today, todayRealtimeQty);
   const diff = inputQty - steraQty;
   if (diff >= CHECKSHEET_STOCK_MISMATCH_THRESHOLD) {
     try {
@@ -2977,7 +3040,7 @@ function checkChecksheetStockMismatch(storeId, product) {
       );
     } catch (e) { console.error('LINE WORKS通知エラー(在庫差異検知):', e.message); }
   }
-  return { ok: true, sinceDate, throughDate: today, inputQty, steraQty, diff };
+  return { ok: true, sinceDate, throughDate: today, inputQty, steraQty, diff, carryOver };
 }
 
 // ----------------------------------------------------------------
