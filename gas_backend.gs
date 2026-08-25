@@ -2765,12 +2765,23 @@ function getSteraRealtimeSheet_() {
 // 差分ではなく「その時点での本日分の累計」を毎回まるごと送る前提。このシートは常に「today」1日分
 // だけを保持する(importSteraDailySalesの「同じdateStrの行だけ削除」とは意図的に条件を変えている
 // ——日付が変わった直後の実行で前日分の残骸が残らないよう、dateStrに関わらず既存行は全削除する)。
+// 2026-08-25: SteraRealtimeSalesPollは10分おき・24時間365日稼働(業務時間限定の条件は無し)なので、
+// 削除前の既存行(=前日の最後のポーリング時点での確定寸前の合計)を捨てずにstera_daily_salesへ
+// 速報値として書き込む(_seedSteraDailyFromRealtimeRollover_)。これにより「確定値(CSV取込み、
+// 毎朝06:03)待ち」の空白が最大約6時間→最大10分(次のポーリングまでの間隔)に縮まる
+// (_stockMismatchCarryOver_参照)。06:03の本チャンネルCSV取込みが来れば同dateの行は削除されて
+// 正確な値に置き換わるので、速報値はあくまで暫定として上書きされる前提。
 // ?action=updateSteraRealtimeToday(POST、{dateStr, rows})で実行。
 function updateSteraRealtimeToday(dateStr, rows) {
   if (!dateStr) return { error: 'dateStrは必須です(例: 2026-08-15)' };
   if (!Array.isArray(rows)) return { error: 'rowsは配列で指定してください' };
   const sheet = getSteraRealtimeSheet_();
   if (sheet.getLastRow() > 1) {
+    const existing = sheet.getRange(2, 1, sheet.getLastRow() - 1, STERA_REALTIME_COLS.length).getValues();
+    const outgoingDate = existing.length ? String(existing[0][STERA_REALTIME_COLS.indexOf('date')]) : null;
+    if (outgoingDate && outgoingDate !== String(dateStr)) {
+      _seedSteraDailyFromRealtimeRollover_(outgoingDate, existing);
+    }
     sheet.deleteRows(2, sheet.getLastRow() - 1);
   }
   if (!rows.length) return { ok: true, rows: 0 };
@@ -2780,6 +2791,23 @@ function updateSteraRealtimeToday(dateStr, rows) {
   sheet.getRange(startRow, STERA_REALTIME_COLS.indexOf('date') + 1, newRows.length, 1).setNumberFormat('@');
   sheet.getRange(startRow, 1, newRows.length, STERA_REALTIME_COLS.length).setValues(newRows);
   return { ok: true, rows: newRows.length };
+}
+
+// 日付ロールオーバーで消される直前のstera_realtime_today(前日の最終ポーリング値)を、
+// stera_daily_salesへ速報値として書き込む。既にその日付の確定行がある場合は何もしない
+// (06:03のCSV取込みが既に走っていた場合等、確定済みデータを速報値で上書きしないための保険)。
+function _seedSteraDailyFromRealtimeRollover_(dateStr, existingRealtimeRows) {
+  if (_hasSteraDailyDataForDate_(dateStr)) return;
+  const idx = {};
+  STERA_REALTIME_COLS.forEach((c, i) => { idx[c] = i; });
+  const newRows = existingRealtimeRows
+    .filter(r => (Number(r[idx.qty]) || 0) > 0)
+    .map(r => [dateStr, r[idx.store_id], r[idx.prd_id], Number(r[idx.qty]) || 0]);
+  if (!newRows.length) return;
+  const sheet = getSteraDailySheet_();
+  const startRow = sheet.getLastRow() + 1;
+  sheet.getRange(startRow, STERA_DAILY_COLS.indexOf('date') + 1, newRows.length, 1).setNumberFormat('@');
+  sheet.getRange(startRow, 1, newRows.length, STERA_DAILY_COLS.length).setValues(newRows);
 }
 
 // getChecksheetStockChecks専用: 当該storeIdの{prd_id: qty}をまとめて返す。dateStrが今日と
