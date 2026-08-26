@@ -2902,9 +2902,12 @@ function checkSteraRefunds(dateStr, refunds) {
 // 1回まとめて呼ぶ想定(タップごとに毎回呼ばない)。?action=getChecksheetStockChecks&storeId=... で実行。
 // 戻り値は{商品名: {label, sinceDate, qty} または null(まだ前回入力が無い商品)}
 // 2026-08-26: 「前回入力"時刻"〜次回入力"時刻"の実売上を過不足なく見せてほしい」という要望を受け、
-// checkChecksheetStockMismatch側と同じチェックポイント方式(_stockMismatchCarryOver_)でsinceDateの
-// 日の取りこぼしを解消。通知は送らないが、チェックポイントシートへの書き込みは行う(チェックシート
-// 保存フロー自体には一切触れないので、上記の「通知は一切行わない」という既存方針とは矛盾しない)。
+// checkChecksheetStockMismatch側と同じチェックポイント方式(_stockMismatchCarryOverFromRows_)で
+// sinceDateの日の取りこぼしを解消。通知は送らないが、チェックポイントシートへの書き込みは行う
+// (チェックシート保存フロー自体には一切触れないので、上記の「通知は一切行わない」という既存方針とは
+// 矛盾しない)。stera_daily_salesは蓄積型で行数が増え続けるため、8商品分をループする前に1回だけ
+// 全件読み込んでメモリ上で使い回す(N+1回避。商品ごとに読み直すと、タブを開くたびのロードが
+// データが増えるほど遅くなってしまうため——2026-08-26、パフォーマンス改善)。
 function getChecksheetStockChecks(storeId) {
   if (!storeId) return { error: 'storeIdは必須です' };
   const periods = getChecksheetData(storeId);
@@ -2917,11 +2920,13 @@ function getChecksheetStockChecks(storeId) {
   const today = Utilities.formatDate(new Date(), _invSheetTz(), 'yyyy-MM-dd');
   const yesterday = Utilities.formatDate(new Date(Date.now() - 86400000), _invSheetTz(), 'yyyy-MM-dd');
   const priorDays = Object.keys(allDays).filter(d => d < today).sort().reverse();
-  // 当日分の速報値・チェックポイントは呼び出しループの外で1回だけ読み込む(N+1回避)
+  // 以下3つは全商品分のループに入る前に1回だけ読み込む(N+1回避)
   const realtimeToday = _getSteraRealtimeTodayMap_(storeId);
   const checkpointRows = sheetRows(_getStockMismatchCheckpointSheet_(), STOCK_MISMATCH_CHECKPOINT_COLS);
+  const dailyRows = sheetRows(getSteraDailySheet_(), STERA_DAILY_COLS);
 
   const result = {};
+  const checkpointUpdates = [];
   STERA_SALES_MAPPING.forEach(m => {
     const itemKeys = m.ourProducts.map(name => 'prod:' + name);
     let sinceDate = null;
@@ -2938,14 +2943,18 @@ function getChecksheetStockChecks(storeId) {
     // 追加してsinceDateの日の取りこぼしも解消)。
     let entry = null;
     if (sinceDate) {
-      const carryOver = _stockMismatchCarryOver_(storeId, m.prdId, sinceDate, checkpointRows);
+      const carryOver = _stockMismatchCarryOverFromRows_(dailyRows, checkpointRows, storeId, m.prdId, sinceDate);
+      const rangeQty = dailyRows
+        .filter(r => String(r.store_id) === String(storeId) && String(r.prd_id) === String(m.prdId) &&
+          String(r.date) > sinceDate && String(r.date) <= yesterday)
+        .reduce((sum, r) => sum + (Number(r.qty) || 0), 0);
       const todayQty = realtimeToday[m.prdId] || 0;
-      const qty = carryOver + getSteraDailyTotal_(storeId, m.prdId, sinceDate, yesterday) + todayQty;
-      entry = { label: m.label, sinceDate, qty };
-      _setStockMismatchCheckpoint_(storeId, m.prdId, today, todayQty);
+      entry = { label: m.label, sinceDate, qty: carryOver + rangeQty + todayQty };
+      checkpointUpdates.push({ storeId, prdId: m.prdId, dateStr: today, qty: todayQty });
     }
     m.ourProducts.forEach(name => { result[name] = entry; });
   });
+  if (checkpointUpdates.length) _batchUpsertStockMismatchCheckpoints_(checkpointRows, checkpointUpdates);
   return result;
 }
 
@@ -2972,41 +2981,37 @@ function _getStockMismatchCheckpointSheet_() {
   return sheet;
 }
 
-// sinceDateの「打ち切られた残り」を確定値から回収するcarryOverを計算する。
-// checkpointRowsを渡した場合はそれを使う(複数商品をループする呼び出し側でのN+1回避、
-// getChecksheetStockChecks参照)。省略時はこの呼び出し単体でチェックポイントシートを読む。
-function _stockMismatchCarryOver_(storeId, prdId, sinceDate, checkpointRows) {
-  const checkpoint = (checkpointRows || sheetRows(_getStockMismatchCheckpointSheet_(), STOCK_MISMATCH_CHECKPOINT_COLS))
-    .find(r => String(r.store_id) === String(storeId) && String(r.prd_id) === String(prdId));
+// sinceDateの「打ち切られた残り」を確定値から回収するcarryOverを計算する。dailyRows/checkpointRowsは
+// 呼び出し側で事前に全件取得済みの配列を渡すこと(N+1回避。stera_daily_salesは蓄積型で行数が
+// 増え続けるため、商品ごとに読み直すとタブを開くたびのロードがデータが増えるほど遅くなってしまう)。
+function _stockMismatchCarryOverFromRows_(dailyRows, checkpointRows, storeId, prdId, sinceDate) {
+  const checkpoint = checkpointRows.find(r => String(r.store_id) === String(storeId) && String(r.prd_id) === String(prdId));
   if (!checkpoint || String(checkpoint.checkpoint_date) !== sinceDate) return 0;
-  if (!_hasSteraDailyDataForDate_(sinceDate)) return 0; // CSV未取込み、次回以降に回収する
-  const fullQty = _getSteraDailySingleDayQty_(storeId, prdId, sinceDate);
+  const sinceDateRows = dailyRows.filter(r => String(r.date) === sinceDate);
+  if (!sinceDateRows.length) return 0; // まだCSV未取込み(確定していない)。次回以降に回収する
+  const fullQty = sinceDateRows
+    .filter(r => String(r.store_id) === String(storeId) && String(r.prd_id) === String(prdId))
+    .reduce((sum, r) => sum + (Number(r.qty) || 0), 0);
   return Math.max(0, fullQty - Number(checkpoint.checkpoint_qty || 0));
 }
 
+// stera_daily_salesにdateStr当日の行が1件でもあれば、その日はCSV取込み済み(確定)とみなす
+// (_seedSteraDailyFromRealtimeRollover_専用、日付ロールオーバー時に1回だけ呼ばれる低頻度パスなので
+// 都度シートを読んでも問題ない)
 function _hasSteraDailyDataForDate_(dateStr) {
   return sheetRows(getSteraDailySheet_(), STERA_DAILY_COLS).some(r => String(r.date) === dateStr);
 }
 
-function _getSteraDailySingleDayQty_(storeId, prdId, dateStr) {
-  return sheetRows(getSteraDailySheet_(), STERA_DAILY_COLS)
-    .filter(r => String(r.store_id) === String(storeId) && String(r.prd_id) === String(prdId) && String(r.date) === dateStr)
-    .reduce((sum, r) => sum + (Number(r.qty) || 0), 0);
-}
-
-function _setStockMismatchCheckpoint_(storeId, prdId, dateStr, qty) {
+// 複数商品分のチェックポイント更新をまとめて1回のシート書き込みで反映する(N+1回避)。
+// existingRowsは呼び出し側で事前に取得済みのチェックポイント全行(getChecksheetStockChecks等参照)。
+function _batchUpsertStockMismatchCheckpoints_(existingRows, updates) {
+  const map = {};
+  existingRows.forEach(r => { map[r.store_id + '|' + r.prd_id] = [r.store_id, r.prd_id, r.checkpoint_date, r.checkpoint_qty]; });
+  updates.forEach(u => { map[u.storeId + '|' + u.prdId] = [u.storeId, u.prdId, u.dateStr, u.qty]; });
+  const rows = Object.keys(map).map(k => map[k]);
   const sheet = _getStockMismatchCheckpointSheet_();
-  const lastRow = sheet.getLastRow();
-  if (lastRow >= 2) {
-    const values = sheet.getRange(2, 1, lastRow - 1, 2).getValues();
-    for (let i = 0; i < values.length; i++) {
-      if (String(values[i][0]) === String(storeId) && String(values[i][1]) === String(prdId)) {
-        sheet.getRange(i + 2, 3, 1, 2).setValues([[dateStr, qty]]);
-        return;
-      }
-    }
-  }
-  sheet.appendRow([storeId, prdId, dateStr, qty]);
+  if (sheet.getLastRow() > 1) sheet.deleteRows(2, sheet.getLastRow() - 1);
+  if (rows.length) sheet.getRange(2, 1, rows.length, STOCK_MISMATCH_CHECKPOINT_COLS.length).setValues(rows);
 }
 
 // ----------------------------------------------------------------
@@ -3024,7 +3029,7 @@ function _setStockMismatchCheckpoint_(storeId, prdId, dateStr, qty) {
 // stera_realtime_today経由)」に拡張。従来は毎日連続入力(=通常運用)だと比較期間が空になり
 // 差異が常に0対0で通知が事実上機能しない問題があったため。
 // 2026-08-25: sinceDateの日が「前回入力した時刻〜24時」で打ち切られ実売上が取りこぼされる問題を
-// チェックポイント(上記_stockMismatchCarryOver_)で解消。
+// チェックポイント(上記_stockMismatchCarryOverFromRows_)で解消。
 const CHECKSHEET_STOCK_MISMATCH_THRESHOLD = 2;
 function checkChecksheetStockMismatch(storeId, product) {
   if (!storeId || !product) return { error: 'storeId/productは必須です' };
@@ -3064,10 +3069,16 @@ function checkChecksheetStockMismatch(storeId, product) {
     itemKeys.forEach(k => { inputQty += Number(allDays[dayKey][k]) || 0; });
   });
 
-  const carryOver = _stockMismatchCarryOver_(storeId, group.prdId, sinceDate);
+  const dailyRows = sheetRows(getSteraDailySheet_(), STERA_DAILY_COLS);
+  const checkpointRows = sheetRows(_getStockMismatchCheckpointSheet_(), STOCK_MISMATCH_CHECKPOINT_COLS);
+  const carryOver = _stockMismatchCarryOverFromRows_(dailyRows, checkpointRows, storeId, group.prdId, sinceDate);
+  const rangeQty = dailyRows
+    .filter(r => String(r.store_id) === String(storeId) && String(r.prd_id) === String(group.prdId) &&
+      String(r.date) > sinceDate && String(r.date) <= yesterday)
+    .reduce((sum, r) => sum + (Number(r.qty) || 0), 0);
   const todayRealtimeQty = _getSteraRealtimeTodayMap_(storeId)[group.prdId] || 0;
-  const steraQty = carryOver + getSteraDailyTotal_(storeId, group.prdId, sinceDate, yesterday) + todayRealtimeQty;
-  _setStockMismatchCheckpoint_(storeId, group.prdId, today, todayRealtimeQty);
+  const steraQty = carryOver + rangeQty + todayRealtimeQty;
+  _batchUpsertStockMismatchCheckpoints_(checkpointRows, [{ storeId, prdId: group.prdId, dateStr: today, qty: todayRealtimeQty }]);
   const diff = inputQty - steraQty;
   if (diff >= CHECKSHEET_STOCK_MISMATCH_THRESHOLD) {
     try {
