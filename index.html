@@ -3088,6 +3088,29 @@ async function loadChecksheetStockChecks(storeId) {
   try { _checksheetStockChecks = await gasGet('getChecksheetStockChecks', { storeId }) || {}; }
   catch (e) { console.error('getChecksheetStockChecks error:', e); _checksheetStockChecks = {}; }
 }
+
+// 「残り在庫」表示用：直近確定済み棚卸の期末在庫(=今期の期首在庫)だけを取得する。
+// 棚卸タブと同じgetInventoryHistory(GAS側で25秒キャッシュ済み)を使うため、チェックシートタブを
+// 開くたびに呼んでも軽い。棚卸表を一度も送信していない店舗/商品は行が無く、残り在庫は非表示のまま
+// (2026-08-27追加、_inventoryPrevRowCacheは棚卸タブのloadInventoryTabDataと共用)
+async function loadChecksheetOpeningStock(storeId) {
+  const prevLabel = _prevPeriodLabel(getInventoryPeriod().label);
+  try {
+    const rows = await gasGet('getInventoryHistory', { storeId, periodLabel: prevLabel }) || [];
+    if (!_inventoryPrevRowCache[storeId]) _inventoryPrevRowCache[storeId] = {};
+    const map = {};
+    rows.forEach(r => { map[r.product] = r; });
+    _inventoryPrevRowCache[storeId][prevLabel] = map;
+  } catch (e) { console.error('getInventoryHistory error:', e); }
+}
+// 残り在庫＝直近確定済み棚卸の期末在庫 − 今期のデイリーカウント累計。棚卸データが無い商品/店舗はnull
+function checksheetRemainingStock(productName) {
+  const period = getInventoryPeriod();
+  const openStock = getInventoryOpeningStock(storeTab, period.label, productName);
+  if (openStock === '' || openStock === null || openStock === undefined) return null;
+  const used = getInventoryDailyCount(storeTab, period.label, productName);
+  return Number(openStock) - (used === '' ? 0 : Number(used));
+}
 // 盗難検知①(通知)：saveChecksheetDataの保存フロー(_checksheetSyncChain)とは完全に独立した
 // 別のデバウンス用タイマーマップ。既存の保存の直列化には一切触らない——連続タップのたびに
 // 通知が連投されるのを防ぐためだけの目的で、データの保存タイミング・信頼性には影響を与えない
@@ -3114,7 +3137,17 @@ function updateChecksheetField(dayKey, itemKey, rawValue, type) {
   setChecksheetField(storeTab, period.label, dayKey, itemKey, value);
   _syncChecksheetToDb(storeTab, period.label);
   updateChecksheetTotals();
-  if (type === 'qty') _scheduleStockMismatchCheck(storeTab, itemKey);
+  if (type === 'qty') {
+    _scheduleStockMismatchCheck(storeTab, itemKey);
+    if (itemKey.startsWith('prod:')) _updateChecksheetRemainingNote(itemKey);
+  }
+}
+// 残り在庫の表示を、行全体を再描画せずその場で更新する(qtyボタン連打でも軽く保つため)
+function _updateChecksheetRemainingNote(itemKey) {
+  const el = document.getElementById('cs-remain-' + itemKey);
+  if (!el) return;
+  const remain = checksheetRemainingStock(itemKey.slice(5));
+  if (remain !== null) el.textContent = `残り在庫：${remain}個`;
 }
 // タップで数量をカウント（直接入力も併用可）
 function stepChecksheetQty(dayKey, itemId, delta) {
@@ -3237,7 +3270,12 @@ function renderChecksheetTodayForm(wrap, subgroups) {
         const checkNote = check
           ? `<br><small style="color:#888;font-weight:400">前回入力(${esc(check.sinceDate.slice(5))})以降の実売上:${esc(check.qty)}個</small>`
           : '';
-        return `<div class="checksheet-today-row"><span>${esc(col.name)}${checkNote}</span>${input}</div>`;
+        // 残り在庫（棚卸未着手の店舗/商品はnullのまま非表示＝現状の表示を維持）
+        const remain = col.id.startsWith('prod:') ? checksheetRemainingStock(col.id.slice(5)) : null;
+        const remainNote = remain !== null
+          ? `<br><small id="cs-remain-${col.id}" style="color:#22703d;font-weight:600">残り在庫：${esc(remain)}個</small>`
+          : '';
+        return `<div class="checksheet-today-row"><span>${esc(col.name)}${checkNote}${remainNote}</span>${input}</div>`;
       }).join('')}
     </div>`).join('');
 
@@ -3356,7 +3394,7 @@ async function switchPartnerTab(tab) {
   }
   if (tab === 'checklist') {
     renderChecksheet();
-    await Promise.all([loadChecksheetDataFromDb(storeTab), loadChecksheetStockChecks(storeTab)]);
+    await Promise.all([loadChecksheetDataFromDb(storeTab), loadChecksheetStockChecks(storeTab), loadChecksheetOpeningStock(storeTab)]);
     renderChecksheet();
   }
   if (tab === 'attendance') {
