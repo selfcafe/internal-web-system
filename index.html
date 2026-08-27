@@ -3388,7 +3388,11 @@ async function switchPartnerTab(tab) {
     renderLostItems();
   }
   if (tab === 'inventory') {
-    renderInventory(true); // ローディング表示（サーバー取得中に古い/空のデータが一瞬見えるのを防ぐ）
+    // 今回のセッションで一度もこの店舗のデータを取得していない(=表示すると空欄だらけになる)時だけ
+    // ローディング表示を出す。2回目以降のタブ切替は前回取得済みの数字をすぐ表示し、裏で最新化する
+    // （GAS呼び出し自体が1回3〜5秒かかるため、体感速度優先。2026-08-27追加）
+    const hasCachedInventoryData = !!(_inventoryPrevRowCache[storeTab] || _inventoryDeliveryCache[storeTab]);
+    renderInventory(!hasCachedInventoryData);
     // デイリーカウントはチェックシートの補充数量から算出するため、最新のチェックシートデータも合わせて取得する
     // （期首在庫/当月納品/チェックシートの4リクエストはGAS側の複合アクション1本にまとめている）
     await loadInventoryTabData(storeTab, getInventoryPeriod().label);
