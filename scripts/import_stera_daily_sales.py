@@ -105,13 +105,17 @@ def launch_cdp_chrome():
 
 def kill_cdp_chrome():
     """CDP接続を閉じてもchrome.exe本体は終了しない(playwright.chromium.connect_over_cdpの
-    既知の制約)ため、該当ポートで起動しているプロセスをOSレベルで終了させる。"""
+    既知の制約)ため、該当ポートで起動しているプロセスをOSレベルで終了させる。
+    2026-08-21、Task Scheduler経由の無人実行で、この呼び出しのたびに空のPowerShell
+    ウィンドウが一瞬(または残り続けて)表示される不具合が判明。capture_output=True
+    はI/Oをパイプするだけでコンソールウィンドウ自体の生成は防げないため、
+    CREATE_NO_WINDOWを明示的に指定する。"""
     subprocess.run([
         "powershell", "-Command",
         f"Get-CimInstance Win32_Process -Filter \"Name = 'chrome.exe'\" | "
         f"Where-Object {{ $_.CommandLine -match 'remote-debugging-port={CDP_PORT}' -and $_.CommandLine -notmatch '--type=' }} | "
         f"ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}"
-    ], capture_output=True)
+    ], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
 
 
 def login_if_needed(page, email, password):
@@ -400,7 +404,7 @@ def main():
             result = post_to_gas(gas_url, target_date, csv_path)
             print(f"GASへの取込み結果: {result}")
             if result.get("unmatchedStores"):
-                print(f"⚠️ 店舗名が一致しなかった行があります(stores.jsと表記が合っていない可能性): {result['unmatchedStores']}")
+                print(f"[警告] 店舗名が一致しなかった行があります(stores.jsと表記が合っていない可能性): {result['unmatchedStores']}")
             if result.get("error"):
                 raise RuntimeError(result["error"])
 
