@@ -3058,15 +3058,33 @@ function setChecksheetField(storeId, periodLabel, dayKey, itemKey, value) {
 // 店舗×年月ごとに直列化してGASへ保存し、Firebaseで他端末に即時通知する
 // （発注データの同期と同じパターン。自分自身の保存通知で自分を再取得しないよう_CLIENT_IDで除外する）
 const _checksheetSyncChain = {};
+// 保存(GAS呼び出し、実測1.5〜5秒)が完了する前にページをリロード/離脱すると、リロード後の
+// 取得(loadChecksheetDataFromDb)が保存前の古い値をサーバーから拾ってきてしまい、直前に入力した
+// 数字が古い値に巻き戻って見えるバグが大塚店で報告された(2026-08-28)。保存中はリロードに警告を
+// 出す(beforeunload)ことと、入力欄の近くに「保存中…」を表示することの2本立てで対策する
+let _checksheetPendingSyncCount = 0;
+function _updateChecksheetSavingIndicator() {
+  const el = document.getElementById('checksheet-saving-indicator');
+  if (el) el.style.display = _checksheetPendingSyncCount > 0 ? '' : 'none';
+}
+window.addEventListener('beforeunload', (e) => {
+  if (_checksheetPendingSyncCount > 0) { e.preventDefault(); e.returnValue = ''; }
+});
 function _syncChecksheetToDb(storeId, periodLabel) {
   const key = storeId + '|' + periodLabel;
   const prev = _checksheetSyncChain[key] || Promise.resolve();
+  _checksheetPendingSyncCount++;
+  _updateChecksheetSavingIndicator();
   const run = prev.catch(() => {}).then(async () => {
     try {
       const data = getChecksheetData(storeId, periodLabel);
       await gasPost('saveChecksheetData', { storeId, periodLabel, data });
       _fbDb.ref('checksheet_updated').set({ ts: Date.now(), by: _CLIENT_ID, storeId, periodLabel });
     } catch(e) { console.error('checksheet sync error:', e); }
+    finally {
+      _checksheetPendingSyncCount--;
+      _updateChecksheetSavingIndicator();
+    }
   });
   _checksheetSyncChain[key] = run;
   return run;
@@ -3282,8 +3300,11 @@ function renderChecksheetTodayForm(wrap, subgroups) {
     </div>`).join('');
 
   wrap.innerHTML = `
-    <div style="font-size:12px;color:#888;margin-bottom:8px">${fmtChecksheetDay(new Date())} の入力（${esc(period.label)}分）</div>
+    <div style="font-size:12px;color:#888;margin-bottom:8px">${fmtChecksheetDay(new Date())} の入力（${esc(period.label)}分）
+      <span id="checksheet-saving-indicator" style="display:none;color:#c98a1a;font-weight:600;margin-left:6px">保存中…（完了までリロードしないでください）</span>
+    </div>
     ${body}`;
+  _updateChecksheetSavingIndicator();
 }
 
 // 履歴表の見出しだけで使う短縮・改行表示（商品自体のlabelは変更しない）
