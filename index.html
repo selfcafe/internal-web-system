@@ -7445,13 +7445,20 @@ function renderAttendanceCfg() {
     </label>
 
     <div style="background:#fffef0;border-radius:8px;padding:12px 14px;margin-bottom:14px">
-      <div style="font-weight:600;font-size:12px;color:#888;margin-bottom:8px">基準座標（Googleマップで検索して緯度経度を貼り付け）</div>
+      <div style="font-weight:600;font-size:12px;color:#888;margin-bottom:8px">基準座標</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
+        <input id="attendance-geocode-query" type="text" placeholder="店舗名・住所で検索（例: 東京都渋谷区神南1-1）"
+          style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;flex:1;min-width:220px">
+        <button onclick="geocodeAttendanceStore('${esc(sid)}')" style="background:#3b82f6;color:white;padding:7px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap">検索して自動入力</button>
+      </div>
+      <div id="attendance-geocode-msg" style="font-size:11.5px;color:#666;min-height:16px;margin-bottom:6px"></div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
         <input id="attendance-lat-input" type="text" inputmode="decimal" placeholder="緯度（例: 35.6595）" value="${esc(coords.lat)}"
           style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:160px">
         <input id="attendance-lng-input" type="text" inputmode="decimal" placeholder="経度（例: 139.6989）" value="${esc(coords.lng)}"
           style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:160px">
         <button onclick="saveAttendanceCoords('${esc(sid)}')" style="background:#22703d;color:white;padding:7px 16px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">保存</button>
+        <a href="#" onclick="openAttendanceCoordsOnMap(); return false;" style="font-size:12px;color:#3b82f6;white-space:nowrap">📍地図で確認</a>
         <span id="attendance-coords-msg" style="font-size:12px;color:#22703d;min-height:18px"></span>
       </div>
     </div>
@@ -7596,6 +7603,40 @@ function saveAttendanceCoords(storeId) {
   msg.style.color = '#22703d';
   msg.textContent = '✓ 保存しました';
   setTimeout(() => { if (msg) msg.textContent = ''; }, 2500);
+}
+
+// 店舗名・住所の文字列からGoogleマップのジオコーディングで座標を自動取得し、緯度経度欄に入力する
+// （GAS側のMaps.newGeocoder()を使用、保存はまだしない＝保存前に必ず地図で確認する運用のため）
+async function geocodeAttendanceStore(storeId) {
+  const queryInput = document.getElementById('attendance-geocode-query');
+  const msg = document.getElementById('attendance-geocode-msg');
+  const query = (queryInput.value || '').trim();
+  if (!query) { msg.style.color = '#dc2626'; msg.textContent = '店舗名または住所を入力してください'; return; }
+  msg.style.color = '#666';
+  msg.textContent = '検索中…';
+  try {
+    const res = await gasGet('geocodeStoreAddress', { query });
+    if (res.error) {
+      msg.style.color = '#dc2626';
+      msg.textContent = res.error;
+      return;
+    }
+    document.getElementById('attendance-lat-input').value = res.lat;
+    document.getElementById('attendance-lng-input').value = res.lng;
+    msg.style.color = '#22703d';
+    msg.textContent = `✓ ${res.formattedAddress}（「📍地図で確認」で位置を確認してから保存してください）`;
+  } catch (e) {
+    console.error('geocodeStoreAddress error:', e);
+    msg.style.color = '#dc2626';
+    msg.textContent = '検索に失敗しました';
+  }
+}
+// 現在入力中(未保存でも可)の緯度経度をGoogleマップで開いて確認する
+function openAttendanceCoordsOnMap() {
+  const lat = document.getElementById('attendance-lat-input').value;
+  const lng = document.getElementById('attendance-lng-input').value;
+  if (!lat || !lng) return;
+  window.open(`https://www.google.com/maps?q=${encodeURIComponent(lat)},${encodeURIComponent(lng)}`, '_blank', 'noopener');
 }
 
 function toggleAttendanceHistoryGroup() {

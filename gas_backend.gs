@@ -361,6 +361,7 @@ function doGet(e) {
     else if (a === 'getInventoryDeliveryAuto') result = getInventoryDeliveryAuto(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'getInventoryDeliveryManual') result = getInventoryDeliveryManual(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'getInventoryTabData')       result = getInventoryTabData(e.parameter.storeId, e.parameter.periodLabel, e.parameter.prevPeriodLabel);
+    else if (a === 'geocodeStoreAddress')       result = geocodeStoreAddress(e.parameter.query);
     else if (a === 'getInvoiceLog')             result = getInvoiceLog();
     else if (a === 'migrateOrderColumns')       result = migrateOrderColumns();
     else if (a === 'migrateInventoryColumns')   result = migrateInventoryColumns();
@@ -1924,6 +1925,24 @@ function getInventoryTabData(storeId, periodLabel, prevPeriodLabel) {
   try { result.checksheet = getChecksheetData(storeId); }
   catch (e) { result.checksheetError = e.message; }
   return result;
+}
+
+// 業務開始管理の基準座標を、店舗名/住所の文字列からGoogleマップのジオコーディングで自動取得する。
+// Maps.geocode()はApps Script組み込みのMapsサービスで、別途Cloud APIの有効化やAPIキー発行は不要
+// (2026-08-28追加、店舗名だけだと施設内店舗などで候補がずれることがあるため、住所寄りの文言も
+// 入力できるようにクエリは自由記述にしている。座標は保存前に管理者が地図で確認する運用)
+function geocodeStoreAddress(query) {
+  if (!query) return { error: '店舗名または住所を入力してください' };
+  try {
+    const res = Maps.newGeocoder().setLanguage('ja').setRegion('jp').geocode(query);
+    if (res.status !== 'OK' || !res.results || !res.results.length) {
+      return { error: `座標が見つかりませんでした(${res.status})。住所をもう少し具体的にしてみてください` };
+    }
+    const loc = res.results[0].geometry.location;
+    return { lat: loc.lat, lng: loc.lng, formattedAddress: res.results[0].formatted_address };
+  } catch (e) {
+    return { error: e.message };
+  }
 }
 
 // label列(E列)の削除ワンショット移行。2026-07-28、product列(D列)と常に同値で重複していたため統合した。
