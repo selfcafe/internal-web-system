@@ -424,7 +424,8 @@ M.push({
         <div class="p-row"><span class="name">${s.view==='history' ? '（履歴タブに切り替わりました）' : '発注依頼一覧が表示されています'}</span></div>
       </div>
     </div>
-    <div class="note note-tip"><b>端末ごとのログイン保持</b>ログイン状態は端末（ブラウザ）ごとに保持されます。共有PCなど別の端末では改めてログインが必要になる点に注意してください。</div>`;
+    <div class="note note-tip"><b>端末ごとのログイン保持</b>ログイン状態は端末（ブラウザ）ごとに保持されます。共有PCなど別の端末では改めてログインが必要になる点に注意してください。</div>
+    <div class="note note-tip"><b>各店のパートナーポータルのパスワード</b>「設定」内の「店舗別パスワード設定」で確認・変更できます。「店舗管理」で新規店舗を追加すると、パスワードは連番（例：selfcafe56、selfcafe57…）で自動生成されます。</div>`;
   },
   steps:[
     { target:null, expect:null,
@@ -881,7 +882,8 @@ M.push({
     if (!isFinished) return `
     <div class="eyebrow">07 · Wrap-up</div>
     <h3 class="stage-h">まとめ</h3>
-    <p class="section-lede">ここまでの8モジュールで、管理者ポータルの日常業務(発注対応・棚卸表の確認)と設定業務(商品/チェックシート設定・店舗別設定・業務開始管理設定)をひと通り練習しました。次へ進むと修了画面です。</p>`;
+    <p class="section-lede">ここまでの8モジュールで、管理者ポータルの日常業務(発注対応・棚卸表の確認)と設定業務(商品/チェックシート設定・店舗別設定・業務開始管理設定)をひと通り練習しました。次へ進むと修了画面です。</p>
+    <div class="note note-tip"><b>「請求」ボタンについて</b>ヘッダーにある「請求」は実装予定の機能です（現時点では準備中）。</div>`;
     return `
     <div class="finish-hero">
       <div class="big">🥋</div>
