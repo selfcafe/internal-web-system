@@ -522,12 +522,12 @@ M.push({
 /* ============ MODULE 03: 棚卸表の確認 ============ */
 
 M.push({
-  id:'inventory', eyebrow:'Monthly closing', title:'棚卸表の確認', part:'ops',
+  id:'inventory', eyebrow:'Monthly closing', title:'棚卸表の確認（試験段階）', part:'ops',
   state:{ confirmOpen:false, submitted:false },
   render(s){
     return `
     <div class="eyebrow">03 · Monthly closing</div>
-    <h3 class="stage-h">棚卸表の確認</h3>
+    <h3 class="stage-h">棚卸表の確認（試験段階）</h3>
     <div class="note note-tip"><b>棚卸表は試験段階の機能です</b>今後も仕様が変わる可能性があります。</div>
     <div class="note note-tip"><b>締め日ルール</b>原則<b>月末</b>に棚卸作業を行います。月末が難しい場合は前日・前々日でも構いません。月内で完結させるルールで、翌月への持ち越しはありません。チェックシートのカレンダー月とは異なるので注意してください。</div>
     <div class="tbl-wrap">
