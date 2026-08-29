@@ -986,6 +986,20 @@ async function _gasSaveSetting(key, value) {
   _settingSyncChain[key] = run;
   return run;
 }
+// {店舗ID: 値}形式の設定を1店舗ぶんだけサーバー側でマージ保存する。_gasSaveSettingと違い
+// 端末側のlocalStorageキャッシュ全体は送らないため、そのキャッシュが古い/空でも他店舗の
+// 設定を巻き込んで消さない（2026-08-29、store_product_cfgが60店舗→1店舗に消えた事故への対応）
+async function _gasMergeSetting(key, patchObj) {
+  const prev = _settingSyncChain[key] || Promise.resolve();
+  const run = prev.catch(() => {}).then(async () => {
+    try {
+      const r = await gasPost('saveSettingMerge', { key, value: JSON.stringify(patchObj) });
+      return !r.error;
+    } catch(e) { console.error('GAS saveSettingMerge error:', e); return false; }
+  });
+  _settingSyncChain[key] = run;
+  return run;
+}
 function _syncStorePw() {
   _gasSaveSetting('store_passwords', localStorage.getItem(STORE_PW_KEY) || '{}');
 }
@@ -2960,7 +2974,7 @@ function setStoreChecksheetConfig(storeId, itemIds) {
   const cfg = JSON.parse(localStorage.getItem(STORE_CHECKSHEET_KEY) || '{}');
   cfg[storeId] = itemIds;
   localStorage.setItem(STORE_CHECKSHEET_KEY, JSON.stringify(cfg));
-  _syncStoreChecksheetCfg();
+  _gasMergeSetting('store_checksheet_cfg', { [storeId]: itemIds });
 }
 function _syncStoreChecksheetCfg() {
   _gasSaveSetting('store_checksheet_cfg', localStorage.getItem(STORE_CHECKSHEET_KEY) || '{}');
@@ -4317,7 +4331,7 @@ function setStoreProductConfig(storeId, productNames) {
   const cfg = JSON.parse(localStorage.getItem(STORE_PRODUCTS_KEY) || '{}');
   cfg[storeId] = productNames;
   localStorage.setItem(STORE_PRODUCTS_KEY, JSON.stringify(cfg));
-  _syncStoreProductCfg();
+  _gasMergeSetting('store_product_cfg', { [storeId]: productNames });
 }
 // cfgは「除外リスト」（その商品名に一致するものを非表示にする）。nullなら常に全商品を表示する。
 function getAvailableProducts(storeId) {
@@ -4348,7 +4362,7 @@ function setStoreOperationType(storeId, opType) {
   const cfg = JSON.parse(localStorage.getItem(STORE_OPERATION_KEY) || '{}');
   cfg[storeId] = opType;
   localStorage.setItem(STORE_OPERATION_KEY, JSON.stringify(cfg));
-  _syncStoreOperationCfg();
+  _gasMergeSetting('store_operation_type', { [storeId]: opType });
 }
 
 /* ===== 発注基準値設定(月初発注) ===== */
@@ -4364,7 +4378,7 @@ function setReorderTargets(storeId, targetsByCode) {
   const cfg = JSON.parse(localStorage.getItem(REORDER_TARGETS_KEY) || '{}');
   cfg[storeId] = targetsByCode;
   localStorage.setItem(REORDER_TARGETS_KEY, JSON.stringify(cfg));
-  _syncReorderTargets();
+  _gasMergeSetting('reorder_targets', { [storeId]: targetsByCode });
 }
 function _syncReorderTargets() {
   _gasSaveSetting('reorder_targets', localStorage.getItem(REORDER_TARGETS_KEY) || '{}');

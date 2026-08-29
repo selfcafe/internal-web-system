@@ -419,6 +419,7 @@ function doPost(e) {
     else if (b.action === 'upsertOrders')       result = upsertOrderRows(b.storeId, b.rows);
     else if (b.action === 'deleteOrders')       result = deleteOrderRows(b.ids);
     else if (b.action === 'saveSetting')        result = saveSetting(b.key, b.value);
+    else if (b.action === 'saveSettingMerge')   result = saveSettingMerge(b.key, b.value);
     else if (b.action === 'saveLostItem')       result = saveLostItem(b.item, b.imagesBase64, b.imageMime);
     else if (b.action === 'deleteLostItem')     result = deleteLostItem(b.id, b.imageUrl);
     else if (b.action === 'saveOrderImage')     result = saveOrderImage(b.imageBase64, b.imageMime, b.filename);
@@ -724,6 +725,36 @@ function saveSetting(key, value) {
   }
   _logSettingHistory(key, '');
   sheet.appendRow([key, value]);
+  _invalidateSettingsCache_();
+  return { ok: true };
+}
+
+// {店舗ID: 値, ...}形式の設定（store_product_cfg等）専用。saveSettingは端末側のlocalStorage
+// キャッシュ全体をそのまま上書き保存するため、そのキャッシュが古い/空だと他の全店舗ぶんの設定を
+// 消してしまう事故につながる(2026-08-29、store_product_cfgが60店舗→1店舗に消えた事故で発覚)。
+// この関数はシート側の最新値に対してpatchJsonの内容だけをマージしてから保存するので、
+// 呼び出し側が持つキャッシュが古くても他店舗のデータを巻き込まない
+function saveSettingMerge(key, patchJson) {
+  const sheet = getSheet(SHEET_SETTINGS);
+  ensureHeaders(sheet, ['key', 'value']);
+  const data = sheet.getDataRange().getValues();
+  const ki = data[0].indexOf('key'), vi = data[0].indexOf('value');
+  let patch = {};
+  try { patch = JSON.parse(patchJson || '{}'); } catch (e) {}
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][ki]) === String(key)) {
+      const oldValue = data[i][vi];
+      _logSettingHistory(key, oldValue);
+      let obj = {};
+      try { obj = JSON.parse(oldValue || '{}'); } catch (e) {}
+      Object.assign(obj, patch);
+      sheet.getRange(i + 1, vi + 1).setValue(JSON.stringify(obj));
+      _invalidateSettingsCache_();
+      return { ok: true };
+    }
+  }
+  _logSettingHistory(key, '');
+  sheet.appendRow([key, JSON.stringify(patch)]);
   _invalidateSettingsCache_();
   return { ok: true };
 }
