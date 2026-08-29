@@ -997,6 +997,9 @@ function _syncDeletedProducts() {
 function _syncStoreProductCfg() {
   _gasSaveSetting('store_product_cfg', localStorage.getItem(STORE_PRODUCTS_KEY) || '{}');
 }
+function _syncStoreOperationCfg() {
+  _gasSaveSetting('store_operation_type', localStorage.getItem(STORE_OPERATION_KEY) || '{}');
+}
 function _syncInvoiceStoreCfg() {
   _gasSaveSetting('invoice_store_cfg', localStorage.getItem(INVOICE_STORE_CFG_KEY) || '{}');
 }
@@ -1012,6 +1015,7 @@ async function syncAllStoreDataToGas() {
     _gasSaveSetting('deleted_stores',   localStorage.getItem(DELETED_STORES_KEY) || '[]'),
     _gasSaveSetting('store_regions',    localStorage.getItem(STORE_REGION_KEY) || '{}'),
     _gasSaveSetting('store_product_cfg',localStorage.getItem(STORE_PRODUCTS_KEY) || '{}'),
+    _gasSaveSetting('store_operation_type', localStorage.getItem(STORE_OPERATION_KEY) || '{}'),
     _gasSaveSetting('reorder_targets',  localStorage.getItem(REORDER_TARGETS_KEY) || '{}'),
     _gasSaveSetting('all_products',     localStorage.getItem(ALL_PRODUCTS_KEY)   || '[]'),
     _gasSaveSetting('vendor_config',    localStorage.getItem(VENDOR_CONFIG_KEY)  || '[]'),
@@ -1058,6 +1062,7 @@ async function initGas() {
       if (r.key === 'deleted_stores')    localStorage.setItem(DELETED_STORES_KEY,  clean(r.value));
       if (r.key === 'store_regions')     localStorage.setItem(STORE_REGION_KEY,    clean(r.value));
       if (r.key === 'store_product_cfg') localStorage.setItem(STORE_PRODUCTS_KEY,  clean(r.value));
+      if (r.key === 'store_operation_type') localStorage.setItem(STORE_OPERATION_KEY, clean(r.value));
       if (r.key === 'reorder_targets')   localStorage.setItem(REORDER_TARGETS_KEY, clean(r.value));
       if (r.key === 'all_products')      localStorage.setItem(ALL_PRODUCTS_KEY,    clean(r.value));
       if (r.key === 'deleted_products')  localStorage.setItem(DELETED_PRODUCTS_KEY, clean(r.value));
@@ -1086,6 +1091,7 @@ async function initGas() {
     if (!gasKeys.has('deleted_stores')    && localStorage.getItem(DELETED_STORES_KEY))  _syncDeletedStores();
     if (!gasKeys.has('store_regions')     && localStorage.getItem(STORE_REGION_KEY))    _syncStoreRegions();
     if (!gasKeys.has('store_product_cfg') && localStorage.getItem(STORE_PRODUCTS_KEY))  _syncStoreProductCfg();
+    if (!gasKeys.has('store_operation_type') && localStorage.getItem(STORE_OPERATION_KEY)) _syncStoreOperationCfg();
     if (!gasKeys.has('reorder_targets')   && localStorage.getItem(REORDER_TARGETS_KEY)) _syncReorderTargets();
     if (!gasKeys.has('all_products')      && localStorage.getItem(ALL_PRODUCTS_KEY))    _gasSaveSetting('all_products',  localStorage.getItem(ALL_PRODUCTS_KEY));
     if (!gasKeys.has('deleted_products')  && localStorage.getItem(DELETED_PRODUCTS_KEY)) _syncDeletedProducts();
@@ -1469,16 +1475,19 @@ const PAGE_SIZE = 10;
 const isMobile  = () => window.innerWidth < 640;
 
 /* マニュアル・資料メニューの中身。今後PDF等を追加する場合はここに1件ずつ足すだけでよい
-   （PDFファイル自体はこのリポジトリ直下に置き、urlをそのファイル名にする）。 */
+   （PDFファイル自体はこのリポジトリ直下に置き、urlをそのファイル名にする）。
+   urlは固定文字列でも、今の店舗(storeTab)を見て組み立てる関数でもよい
+   （パートナー操作ガイドは機種・運用方式をURLパラメータで渡して自動判定させる、2026-08-29）。 */
 const MANUAL_DOCS = [
-  { label: 'パートナー操作ガイド', url: 'guide.html' },
+  { label: 'パートナー操作ガイド', url: () => `guide.html?machine=${encodeURIComponent(getStoreMachineType(storeTab))}&op=${encodeURIComponent(getStoreOperationType(storeTab))}` },
 ];
 
 function buildManualMenu() {
   if (!MANUAL_DOCS.length) return '<div class="doc-menu-empty">資料はまだありません</div>';
-  return MANUAL_DOCS.map(d =>
-    `<a class="doc-menu-item" href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.label)}</a>`
-  ).join('');
+  return MANUAL_DOCS.map(d => {
+    const url = typeof d.url === 'function' ? d.url() : d.url;
+    return `<a class="doc-menu-item" href="${esc(url)}" target="_blank" rel="noopener">${esc(d.label)}</a>`;
+  }).join('');
 }
 
 function toggleManualMenu(suffix) {
@@ -4288,6 +4297,32 @@ function getAvailableProducts(storeId) {
   return cfg ? PRODUCTS.filter(p => !cfg.includes(p.name)) : PRODUCTS;
 }
 
+// 店舗の機種(アペックス／トーヨーベンディング)を、実際の取扱ベンダーから自動判定する
+// （パートナーガイドのマニュアル表示振り分け用、2026-08-29）。新しい管理項目は増やさず、
+// 既存の「店舗別取扱商品設定」の内容をそのまま使う。どちらも取り扱いが無い／両方取り扱って
+// いる店舗は判定不能として空文字を返し、guide.html側で機種を選ばせるフォールバックにする。
+function getStoreMachineType(storeId) {
+  const avail = getAvailableProducts(storeId);
+  const hasApex = avail.some(p => p.vendor === 'apex');
+  const hasToyo = avail.some(p => p.vendor === 'toyo');
+  if (hasApex && !hasToyo) return 'apex';
+  if (hasToyo && !hasApex) return 'toyo';
+  return '';
+}
+
+/* ===== 店舗別運用方式設定（セミオペ／フルオペ、パートナーガイドのマニュアル振り分け用） ===== */
+const STORE_OPERATION_KEY = 'store_operation_type';
+function getStoreOperationType(storeId) {
+  const cfg = JSON.parse(localStorage.getItem(STORE_OPERATION_KEY) || '{}');
+  return cfg[storeId] || 'semi'; // 未設定はセミオペ扱い（2026-08-29、ユーザー指定のデフォルト）
+}
+function setStoreOperationType(storeId, opType) {
+  const cfg = JSON.parse(localStorage.getItem(STORE_OPERATION_KEY) || '{}');
+  cfg[storeId] = opType;
+  localStorage.setItem(STORE_OPERATION_KEY, JSON.stringify(cfg));
+  _syncStoreOperationCfg();
+}
+
 /* ===== 発注基準値設定(月初発注) ===== */
 // 2026-08-23追加。{storeId: {商品コード: 基準値}}。商品コードが無い(またはここに未登録の)
 // 商品は月初発注の対象外——基準値を入れた商品コードだけがgas_backend.gsのbuildStoreInventorySheet/
@@ -6927,6 +6962,34 @@ function renderSettings() {
           </div>
         </div>
 
+        <!-- 店舗別運用方式設定(セミオペ／フルオペ、パートナーガイドのマニュアル振り分け用) -->
+        <div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid #e0ede5">
+          <div class="settings-accordion-hdr" onclick="toggleStoreOperationSettings()">
+            <span>運用方式設定(セミオペ／フルオペ)</span>
+            <span id="store-operation-settings-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
+          </div>
+          <div id="store-operation-settings-body" style="display:none">
+            <div class="settings-accordion-body">
+              <div style="font-size:12px;color:#888;margin-bottom:10px">店舗ごとにセミオペ(パートナー管理)／フルオペ(メーカー管理)を設定してください。未設定の場合は「セミオペ」扱いになります。パートナー操作ガイドの機種別マニュアルの出し分けに使われます。</div>
+              <div class="store-prod-cfg-wrap">
+                <input id="store-operation-cfg-search" type="text" placeholder="店舗名で検索..." oninput="filterStoreOperationCfgSelect()"
+                  style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:100%;margin-bottom:6px;box-sizing:border-box">
+                <select id="store-operation-cfg-sel" class="store-prod-cfg-store-sel"
+                  onchange="renderStoreOperationCfg()">
+                  ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}
+                </select>
+              </div>
+              <div id="store-operation-cfg-current" class="store-prod-cfg-current"></div>
+              <div id="store-operation-cfg-body" style="margin-top:12px"></div>
+              <div style="margin-top:10px;display:flex;gap:8px">
+                <button onclick="saveStoreOperationCfg()"
+                  style="background:#22703d;color:white;padding:8px 20px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">保存</button>
+                <span id="store-operation-cfg-msg" style="font-size:12px;color:#22703d;align-self:center;min-height:18px"></span>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <!-- 発注基準値設定(月初発注) -->
         <div>
           <div class="settings-accordion-hdr" onclick="toggleReorderTargetSettings()">
@@ -7147,6 +7210,58 @@ function toggleStoreProdSettings() {
   body.style.display = open ? 'block' : 'none';
   arrow.textContent  = open ? '▼ 閉じる' : '▶ タップして開く';
   if (open) renderStoreProdCfg();
+}
+
+function toggleStoreOperationSettings() {
+  const body  = document.getElementById('store-operation-settings-body');
+  const arrow = document.getElementById('store-operation-settings-arrow');
+  const open  = body.style.display === 'none';
+  body.style.display = open ? 'block' : 'none';
+  arrow.textContent  = open ? '▼ 閉じる' : '▶ タップして開く';
+  if (open) renderStoreOperationCfg();
+}
+function filterStoreOperationCfgSelect() {
+  const q = (document.getElementById('store-operation-cfg-search')?.value || '').trim().toLowerCase();
+  const sel = document.getElementById('store-operation-cfg-sel');
+  if (!sel) return;
+  const prevValue = sel.value;
+  sel.innerHTML = Object.entries(STORES)
+    .filter(([sid, sname]) => !q || sname.toLowerCase().includes(q) || sid.toLowerCase().includes(q))
+    .map(([sid, sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`)
+    .join('');
+  if ([...sel.options].some(o => o.value === prevValue)) sel.value = prevValue;
+  renderStoreOperationCfg();
+}
+function renderStoreOperationCfg() {
+  const sel = document.getElementById('store-operation-cfg-sel');
+  const container = document.getElementById('store-operation-cfg-body');
+  const currentLabel = document.getElementById('store-operation-cfg-current');
+  if (!sel || !container) return;
+  if (!sel.options.length) { container.innerHTML = '<div style="font-size:12px;color:#888">該当する店舗がありません</div>'; if (currentLabel) currentLabel.textContent = ''; return; }
+  const sid = sel.value;
+  if (currentLabel) currentLabel.textContent = STORES[sid] || sid;
+  const opType = getStoreOperationType(sid);
+  const machine = getStoreMachineType(sid);
+  const MACHINE_LABELS = { apex: 'アペックス', toyo: 'トーヨーベンディング', '': '判定不能(取扱商品から機種を特定できません)' };
+  container.innerHTML = `
+    <div style="font-size:12px;color:#888;margin-bottom:8px">現在の機種(自動判定・取扱商品から算出): <b style="color:#22703d">${esc(MACHINE_LABELS[machine])}</b></div>
+    <div style="display:flex;gap:16px">
+      <label style="display:flex;align-items:center;gap:6px;font-size:13px">
+        <input type="radio" name="store-operation-radio" value="semi" ${opType==='semi'?'checked':''}> セミオペ(パートナー管理)
+      </label>
+      <label style="display:flex;align-items:center;gap:6px;font-size:13px">
+        <input type="radio" name="store-operation-radio" value="full" ${opType==='full'?'checked':''}> フルオペ(メーカー管理)
+      </label>
+    </div>`;
+}
+function saveStoreOperationCfg() {
+  const sel = document.getElementById('store-operation-cfg-sel');
+  const msg = document.getElementById('store-operation-cfg-msg');
+  if (!sel || !sel.value) return;
+  const checked = document.querySelector('input[name="store-operation-radio"]:checked');
+  if (!checked) return;
+  setStoreOperationType(sel.value, checked.value);
+  if (msg) { msg.textContent = `✓ ${STORES[sel.value] || sel.value} に保存しました`; setTimeout(() => { if (msg) msg.textContent=''; }, 2500); }
 }
 
 function filterStoreProdCfgSelect() {

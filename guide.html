@@ -426,6 +426,15 @@
     }
     #img-lightbox.open { display:flex; }
     #img-lightbox img { max-width:96vw; max-height:96vh; object-fit:contain; border-radius:6px; }
+
+    /* 機種別マニュアルの切り替えボタン */
+    .mm-btn {
+      font-family: inherit; font-size: 14px; font-weight: 600; cursor: pointer;
+      padding: 9px 16px; border-radius: 8px; border: 1.5px solid var(--divider);
+      background: var(--surface); color: var(--text-muted); transition: border-color .15s, color .15s, background .15s;
+    }
+    .mm-btn:hover { border-color: var(--accent); color: var(--accent); }
+    .mm-btn.active { background: var(--accent); border-color: var(--accent); color: #fff; }
   </style>
 </head>
 <body>
@@ -459,7 +468,8 @@
       <li><a href="#lostitem"><span class="toc-num">4</span>忘れ物の登録方法</a></li>
       <li><a href="#checksheet"><span class="toc-num">5</span>チェックシートの記入方法・アルバム</a></li>
       <li><a href="#attendance"><span class="toc-num">6</span>業務管理（業務開始の打刻）</a></li>
-      <li><a href="#tips"><span class="toc-num">7</span>困ったときのポイント</a></li>
+      <li><a href="#machine-manual"><span class="toc-num">7</span>お使いの機種のマニュアル</a></li>
+      <li><a href="#tips"><span class="toc-num">8</span>困ったときのポイント</a></li>
     </ol>
   </nav>
 
@@ -1268,7 +1278,67 @@
 
   <hr class="divider">
 
-  <!-- Section 7: Tips -->
+  <!-- Section 7: Machine manual -->
+  <section class="section" id="machine-manual">
+    <div class="section-header">
+      <div class="section-icon">🛠️</div>
+      <h2>お使いの機種のマニュアル<small>店舗のコーヒーマシンに合わせて自動で表示されます</small></h2>
+    </div>
+
+    <p class="section-lede" style="margin:0 0 18px">このガイドを開いたリンク先の店舗設定から、機種（アペックス／トーヨーベンディング）と運用方式（セミオペ／フルオペ）を自動判定しています。もし違っていたら、下のボタンで切り替えてください。</p>
+
+    <div id="mm-chooser" style="display:flex;flex-wrap:wrap;gap:20px;margin-bottom:24px">
+      <div>
+        <div class="toc-title" style="margin-bottom:8px">機種</div>
+        <div style="display:flex;gap:8px">
+          <button type="button" class="mm-btn" data-mm-machine="apex" onclick="mmSetMachine('apex')">アペックス</button>
+          <button type="button" class="mm-btn" data-mm-machine="toyo" onclick="mmSetMachine('toyo')">トーヨーベンディング</button>
+        </div>
+      </div>
+      <div>
+        <div class="toc-title" style="margin-bottom:8px">運用方式</div>
+        <div style="display:flex;gap:8px">
+          <button type="button" class="mm-btn" data-mm-op="semi" onclick="mmSetOp('semi')">セミオペ（パートナー管理）</button>
+          <button type="button" class="mm-btn" data-mm-op="full" onclick="mmSetOp('full')">フルオペ（メーカー管理）</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="mm-ambiguous-note" class="notice" style="display:none;margin-bottom:20px">
+      <p class="notice-title">⚠ 機種を自動判定できませんでした</p>
+      <ul><li>上の「機種」ボタンから、お使いの機種を選んでください</li></ul>
+    </div>
+
+    <!-- 機種×運用方式の4パターン。中身は各社マニュアルの実データに差し替えてください。 -->
+    <div class="mm-content" data-mm-machine="apex" data-mm-op="semi">
+      <div class="rule-box">
+        <p class="rule-box-title">📋 アペックス × セミオペ</p>
+        <ul><li>このマニュアルは準備中です。フィルター交換・原料補充など、パートナーが行う日常メンテナンスの手順をここに追加してください。</li></ul>
+      </div>
+    </div>
+    <div class="mm-content" data-mm-machine="apex" data-mm-op="full">
+      <div class="rule-box">
+        <p class="rule-box-title">📋 アペックス × フルオペ</p>
+        <ul><li>このマニュアルは準備中です。フルオペ機はメーカー側で保守されるため、パートナーが行う範囲（清掃・簡単な確認等）だけをここに追加してください。</li></ul>
+      </div>
+    </div>
+    <div class="mm-content" data-mm-machine="toyo" data-mm-op="semi">
+      <div class="rule-box">
+        <p class="rule-box-title">📋 トーヨーベンディング × セミオペ</p>
+        <ul><li>このマニュアルは準備中です。フィルター交換・原料補充など、パートナーが行う日常メンテナンスの手順をここに追加してください。</li></ul>
+      </div>
+    </div>
+    <div class="mm-content" data-mm-machine="toyo" data-mm-op="full">
+      <div class="rule-box">
+        <p class="rule-box-title">📋 トーヨーベンディング × フルオペ</p>
+        <ul><li>このマニュアルは準備中です。フルオペ機はメーカー側で保守されるため、パートナーが行う範囲（清掃・簡単な確認等）だけをここに追加してください。</li></ul>
+      </div>
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- Section 8: Tips -->
   <section class="section" id="tips">
     <div class="section-header">
       <div class="section-icon">💡</div>
@@ -1383,6 +1453,29 @@ function closeImgLightbox() {
     }
     startY = null;
   });
+})();
+
+/* 機種別マニュアルの出し分け（?machine=apex|toyo & ?op=semi|full）。
+   ポータルのMANUAL_DOCS側で店舗の自動判定結果を付けてリンクしているが、
+   判定が無い/違う場合に備えてこのページ単体でも切り替えられるようにする。 */
+(function() {
+  const params = new URLSearchParams(location.search);
+  let machine = params.get('machine') || '';
+  let op = params.get('op') || 'semi'; // 未指定はセミオペ扱い（ポータル側のデフォルトと合わせる）
+  if (machine !== 'apex' && machine !== 'toyo') machine = '';
+  if (op !== 'semi' && op !== 'full') op = 'semi';
+
+  function render() {
+    document.querySelectorAll('.mm-btn[data-mm-machine]').forEach(b => b.classList.toggle('active', b.dataset.mmMachine === machine));
+    document.querySelectorAll('.mm-btn[data-mm-op]').forEach(b => b.classList.toggle('active', b.dataset.mmOp === op));
+    document.querySelectorAll('.mm-content').forEach(el => {
+      el.style.display = (el.dataset.mmMachine === machine && el.dataset.mmOp === op) ? '' : 'none';
+    });
+    document.getElementById('mm-ambiguous-note').style.display = machine ? 'none' : '';
+  }
+  window.mmSetMachine = function(m) { machine = m; render(); };
+  window.mmSetOp = function(o) { op = o; render(); };
+  render();
 })();
 </script>
 
