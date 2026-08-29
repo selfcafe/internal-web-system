@@ -3,12 +3,12 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>管理者ポータル道場</title>
+<title>テスト環境（練習用）</title>
 <style>
 /* このダッシュボードの配色・角丸・影・フォントは、実際の管理者ポータル(index.html)の
    ものにできる限り合わせている（濃緑#22703d系・クリーム背景#f8f4e7・ゴールド#dfc35a/#b6952f
    のアクセント・Segoe UI/Meiryoフォント）。実サイトはライトモード固定・ダーク対応が
-   無いため、この道場も同じくライトモード固定にしている（2026-08-29、ユーザー依頼）。
+   無いため、このテスト環境も同じくライトモード固定にしている（2026-08-29、ユーザー依頼）。
    ガイド役の「コーチ」層だけは、実サイトの既存アクセントであるゴールド（.sub-tab.active
    等で「選択中/アクティブ」を示す色として既に使われている）を流用し、model UIの緑と
    衝突しないようにしている。 */
@@ -266,7 +266,7 @@ button{ font-family:inherit; cursor:pointer; }
   <nav class="rail" id="rail"></nav>
   <div class="stagewrap">
     <div class="topbar">
-      <h2 id="topbar-title">管理者ポータル道場</h2>
+      <h2 id="topbar-title">テスト環境（練習用）</h2>
       <button class="pause-toggle" id="pauseToggle" onclick="Trainer.togglePause()">
         <span class="pause-dot"></span><span id="pauseLabel">ガイド中</span>
       </button>
@@ -283,7 +283,7 @@ button{ font-family:inherit; cursor:pointer; }
 
 <script>
 /* ============================================================
-   管理者ポータル道場 — ガイド付き練習用サンドボックス
+   テスト環境（練習用） — ガイド付き練習用サンドボックス
    実際の管理者ポータルの操作を、模擬データで安全に練習できる。
    ============================================================ */
 
@@ -1019,7 +1019,7 @@ const Trainer = {
     rail.innerHTML = `
       <div class="brand">
         <div class="brand-mark">🥋</div>
-        <div class="brand-text"><h1>管理者ポータル道場</h1><p>実際の操作を模擬データで練習</p></div>
+        <div class="brand-text"><h1>テスト環境（練習用）</h1><p>実際の操作を模擬データで練習</p></div>
       </div>
       <div class="rail-modules">${this._renderRailModules()}</div>
       <div class="rail-foot">
