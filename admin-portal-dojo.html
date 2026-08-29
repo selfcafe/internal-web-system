@@ -603,10 +603,8 @@ M.push({
 
 M.push({
   id:'products', eyebrow:'Master data', title:'商品設定と商品コード', part:'setup',
-  state:{ settingsOpen:false, accOpen:false, store:'', storeQuery:'', excluded:new Set(),
-           addStoreScoped:false, addStores:new Set() },
+  state:{ addStoreScoped:false, addStores:new Set() },
   render(s){
-    const filteredStores = STORE_SAMPLE.filter(st => st.name.includes(s.storeQuery));
     return `
     <div class="eyebrow">01 · Master data</div>
     <h3 class="stage-h">商品設定と商品コード</h3>
@@ -640,36 +638,7 @@ M.push({
         <button id="btnSaveNewItem" class="p-btn2" style="margin-top:10px" onclick="Trainer.act('save-new-item')">保存</button>` : ''}
       </div>
     </div>
-
-    ${!s.settingsOpen ? `
-    <div style="margin-top:26px;text-align:center">
-      <button id="open-settings-btn" class="p-btn2" onclick="Trainer.act('open-settings-products')">設定 → 店舗別取扱商品設定を開く</button>
-    </div>` : ''}
-
-    ${s.settingsOpen ? `
-    <div class="portal" style="margin-top:26px">
-      <div class="p-body">
-        <div class="acc ${s.accOpen?'open':''}">
-          <div class="acc-hd" onclick="Trainer.act('toggle-acc')"><span class="acc-chevron">▶</span>店舗別取扱商品設定<span class="care">タップして開閉</span></div>
-          <div class="acc-body">
-            <div class="p-field"><label>店舗を選択</label>
-              <input type="text" class="p-select" placeholder="店舗名で検索" value="${esc(s.storeQuery)}" oninput="Trainer.setStoreQuery(this.value)">
-              <select class="p-select" onchange="Trainer.selectStore(this.value)">
-                <option value="">選択してください</option>
-                ${filteredStores.map(st => `<option value="${st.id}" ${s.store===st.id?'selected':''}>${esc(st.name)}</option>`).join('')}
-              </select>
-            </div>
-            ${s.store ? `
-              <div class="chk-grid">${vendorChecklist('prod', s.excluded)}</div>
-              <div style="margin-top:12px;display:flex;gap:8px">
-                <button id="btnSaveStoreProd" class="p-btn2" onclick="Trainer.act('save-store-prod')">保存</button>
-                <button class="p-btn2 ghost" onclick="Trainer.act('reset-store-prod')">全商品に戻す</button>
-              </div>
-            ` : '<p style="font-size:12.5px;color:var(--ink-soft)">店舗を選ぶとベンダーごとの商品チェックリストが表示されます。</p>'}
-          </div>
-        </div>
-      </div>
-    </div>` : ''}
+    <div class="note note-tip" style="margin-top:22px"><b>店舗ごとの取扱商品の選択は「店舗別設定」で</b>個々の店舗が実際に何を取り扱うかは、この後のモジュールの「店舗別設定（統合）」でまとめて設定します。</div>
     `;
   },
   steps:[
@@ -680,26 +649,12 @@ M.push({
       msg:'「<b>特定の店舗だけに表示する</b>」のチェックボックスを<b>クリック</b>してみましょう。新商品の表示範囲をその場で絞れます。' },
     { target:'#btnSaveNewItem', expect:'save-new-item',
       msg:'店舗にチェックを入れたら「<b>保存</b>」を<b>クリック</b>。選ばなかった店舗は自動的に除外リストに入り、「店舗限定の商品」として分離表示されます。' },
-    { target:'#open-settings-btn', expect:'open-settings-products',
-      msg:'次は既存店舗の設定を変えてみましょう。「<b>設定 → 店舗別取扱商品設定を開く</b>」を<b>クリック</b>してください。' },
-    { target:'.acc-hd', expect:'toggle-acc',
-      msg:'「<b>店舗別取扱商品設定</b>」のアコーディオンを<b>クリック</b>して開きましょう。' },
-    { target:'.acc-body select', expect:'select-store',
-      msg:'店舗選択のプルダウンから「<b>渋谷神南</b>」を<b>選択</b>してみましょう。' },
-    { target:'.chk-vendor-hd input', expect:'toggle-vendor-all',
-      msg:'ベンダー見出し右の「<b>全選択</b>」チェックを<b>クリック</b>すると、そのベンダーの商品をまとめてON/OFFできます。試してみましょう。' },
-    { target:'#btnSaveStoreProd', expect:'save-store-prod',
-      msg:'変更が終わったら「<b>保存</b>」を<b>クリック</b>。チェックを外した商品だけがその店舗の除外リストとして保存されます。' },
   ],
   onAct(id, s){
     if (id === 'edit-code') toast('⚠ 商品コードを変更すると外部連携に影響します（本番では確認ダイアログが表示されます）');
     if (id === 'open-vis-modal') toast('「表示店舗」モーダルが開きます（現在表示中の店舗にあらかじめチェックが入った状態）');
     if (id === 'toggle-add-scoped') s.addStoreScoped = !s.addStoreScoped;
     if (id === 'save-new-item') { toast('✓ 新商品を保存しました（選んだ店舗にだけ表示されます）'); s.addStoreScoped=false; }
-    if (id === 'open-settings-products') s.settingsOpen = true;
-    if (id === 'toggle-acc') s.accOpen = !s.accOpen;
-    if (id === 'save-store-prod') toast(`✓ ${STORE_SAMPLE.find(st=>st.id===s.store)?.name || ''} に保存しました`);
-    if (id === 'reset-store-prod') { s.excluded = new Set(); toast('✓ 全商品表示に戻しました'); }
   },
 });
 
@@ -707,7 +662,7 @@ M.push({
 
 M.push({
   id:'checksheet', eyebrow:'Configuration', title:'チェックシートの設定', part:'setup',
-  state:{ csAccOpenIdx:-1, store:'', excluded:new Set() },
+  state:{ csAccOpenIdx:-1 },
   render(s){
     return `
     <div class="eyebrow">02 · Configuration</div>
@@ -734,63 +689,112 @@ M.push({
           <div class="acc-body"><div class="chk-grid">${c.items.map(it=>`<div class="chk-item">✓ ${esc(it)}</div>`).join('')}</div></div>
         </div>`).join('')}
     </div></div>
-
-    <h3 style="font-size:15px;margin:24px 0 10px">店舗別チェックシート項目設定の操作方法</h3>
-    <div class="portal" id="cs-store-portal"><div class="p-body">
-      <div class="p-field"><label>店舗を選択</label>
-        <select class="p-select" onchange="Trainer.selectCsStore(this.value)">
-          <option value="">選択してください</option>
-          ${STORE_SAMPLE.map(st=>`<option value="${st.id}" ${s.store===st.id?'selected':''}>${esc(st.name)}</option>`).join('')}
-        </select>
-      </div>
-      ${s.store ? `
-        <div class="chk-grid">${CS_CATEGORIES.map(c => `
-          <div class="chk-vendor">
-            <div class="chk-vendor-hd"><span>${esc(c.label)}</span>
-              <label style="display:flex;align-items:center;gap:5px;font-weight:600">
-                <input type="checkbox" checked onchange="Trainer.toggleCsAll('${c.key}', this.checked)"> 全選択
-              </label>
-            </div>
-            <div class="chk-grid">${c.items.map(it=>`
-              <label class="chk-item"><input type="checkbox" ${s.excluded.has(c.key+'|'+it)?'':'checked'}
-                onchange="Trainer.toggleCsItem('${c.key}','${esc(it)}', this.checked)">${esc(it)}</label>`).join('')}
-          </div>`).join('')}</div>
-        <div style="margin-top:12px;display:flex;gap:8px">
-          <button id="btnSaveStoreCs" class="p-btn2" onclick="Trainer.act('save-store-cs')">保存</button>
-          <button class="p-btn2 ghost" onclick="Trainer.act('reset-store-cs')">全項目に戻す</button>
-        </div>
-      ` : '<p style="font-size:12.5px;color:var(--ink-soft)">店舗を選ぶとカテゴリごとの項目チェックリストが表示されます。</p>'}
-    </div></div>
-    <div class="note note-tip" style="margin-top:16px"><b>店舗限定の項目</b>ちょうど1店舗だけに表示される項目は「店舗限定の項目」セクションに自動的に分離されます（例：渋谷神南店専用の「ゴミ出し」）。</div>
+    <div class="note note-tip" style="margin-top:16px"><b>店舗ごとの実施項目の選択は「店舗別設定」で</b>個々の店舗がどの項目を実施するかは、この後のモジュールの「店舗別設定（統合）」でまとめて設定します。</div>
     `;
   },
   steps:[
     { target:'.tbl', expect:null, msg:'デイリーカウントの対象商品はベンダー設定で自動的に決まります。個別登録は不要です。' },
     { target:'.acc-hd', expect:'toggle-cs-acc-0',
       msg:'「<b>サーバー・カウンター</b>」の見出しを<b>クリック</b>して開いてみましょう。' },
-    { target:'#cs-store-portal select', expect:'select-cs-store',
-      msg:'下の「店舗別チェックシート項目設定」で、店舗プルダウンから「<b>渋谷神南</b>」を<b>選択</b>してみましょう。' },
-    { target:'.chk-item input', expect:'toggle-cs-item',
-      msg:'この店舗で実施しない項目のチェックを<b>外して</b>みましょう。' },
-    { target:'#btnSaveStoreCs', expect:'save-store-cs',
-      msg:'「<b>保存</b>」を<b>クリック</b>。デイリーカウント（商品数量）はここでは設定できず、商品設定側の内容がそのまま使われる点に注意してください。' },
   ],
   onAct(id, s){
     const m = id.match(/^toggle-cs-acc-(\d)$/);
     if (m) s.csAccOpenIdx = s.csAccOpenIdx === +m[1] ? -1 : +m[1];
-    if (id === 'save-store-cs') toast(`✓ ${STORE_SAMPLE.find(st=>st.id===s.store)?.name || ''} に保存しました`);
-    if (id === 'reset-store-cs') { s.excluded = new Set(); toast('✓ 全項目表示に戻しました'); }
   },
 });
 
-/* ============ MODULE 07 (Part2-03): 業務開始管理の設定 ============ */
+/* ============ MODULE 07 (Part2-03): 店舗別設定（統合） ============ */
+M.push({
+  id:'store-settings', eyebrow:'Setup', title:'店舗別設定（統合）', part:'setup',
+  state:{ store:'', storeQuery:'', excluded:new Set(), opType:'semi', csExcluded:new Set() },
+  render(s){
+    const filteredStores = STORE_SAMPLE.filter(st => st.name.includes(s.storeQuery));
+    const currentName = STORE_SAMPLE.find(st=>st.id===s.store)?.name || '';
+    return `
+    <div class="eyebrow">03 · Setup</div>
+    <h3 class="stage-h">店舗別設定（統合）</h3>
+    <p class="section-lede">以前は「取扱商品設定」「運用方式設定」「発注基準値設定」「チェックシート項目設定」がそれぞれ別々の店舗セレクターを持っていましたが、今は<b>店舗を1回選ぶだけ</b>で4つとも続けて確認・変更できます(2026-08-29〜)。</p>
+    <div class="portal"><div class="p-body">
+      <div class="p-field"><label>店舗を選択</label>
+        <input type="text" class="p-select" placeholder="店舗名で検索" value="${esc(s.storeQuery)}" oninput="Trainer.setSSQuery(this.value)">
+        <select class="p-select" onchange="Trainer.selectSSStore(this.value)">
+          <option value="">選択してください</option>
+          ${filteredStores.map(st => `<option value="${st.id}" ${s.store===st.id?'selected':''}>${esc(st.name)}</option>`).join('')}
+        </select>
+      </div>
+      ${s.store ? `
+        <div style="font-size:13px;font-weight:700;color:var(--product-ink);background:var(--product-soft);border-radius:8px;padding:8px 12px;margin:12px 0">編集中の店舗　${esc(currentName)}</div>
+
+        <div>
+          <div style="font-weight:700;font-size:13px;margin-bottom:8px">① 取扱商品設定</div>
+          <div class="chk-grid">${vendorChecklist('ss', s.excluded)}</div>
+          <div style="margin-top:10px"><button id="btnSaveSSProd" class="p-btn2" onclick="Trainer.act('save-ss-prod')">保存</button></div>
+        </div>
+
+        <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--line)">
+          <div style="font-weight:700;font-size:13px;margin-bottom:8px">② 運用方式設定（セミオペ／フルオペ）</div>
+          <div style="display:flex;gap:16px">
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="radio" name="ss-op" ${s.opType==='semi'?'checked':''} onchange="Trainer.setSSOp('semi')">セミオペ（パートナー管理）</label>
+            <label style="display:flex;align-items:center;gap:6px;font-size:13px"><input type="radio" name="ss-op" ${s.opType==='full'?'checked':''} onchange="Trainer.setSSOp('full')">フルオペ（メーカー管理）</label>
+          </div>
+          <div style="margin-top:10px"><button id="btnSaveSSOp" class="p-btn2" onclick="Trainer.act('save-ss-op')">保存</button></div>
+        </div>
+
+        <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--line)">
+          <div style="font-weight:700;font-size:13px;margin-bottom:4px">③ 発注基準値設定（月初発注）</div>
+          <div style="font-size:11.5px;color:var(--ink-soft)">同じ画面にそのまま続けて表示されます。棚卸完了時、ここで設定した基準値(目標在庫数)と期末在庫の差から発注数を自動算出します。</div>
+        </div>
+
+        <div style="margin-top:20px;padding-top:16px;border-top:1px solid var(--line)">
+          <div style="font-weight:700;font-size:13px;margin-bottom:8px">④ チェックシート項目設定</div>
+          <div class="chk-grid">${CS_CATEGORIES.map(c => `
+            <div class="chk-vendor">
+              <div class="chk-vendor-hd"><span>${esc(c.label)}</span>
+                <label style="display:flex;align-items:center;gap:5px;font-weight:600">
+                  <input type="checkbox" checked onchange="Trainer.toggleSSCsAll('${c.key}', this.checked)"> 全選択
+                </label>
+              </div>
+              <div class="chk-grid">${c.items.map(it=>`
+                <label class="chk-item"><input type="checkbox" ${s.csExcluded.has(c.key+'|'+it)?'':'checked'}
+                  onchange="Trainer.toggleSSCsItem('${c.key}','${esc(it)}', this.checked)">${esc(it)}</label>`).join('')}
+            </div>`).join('')}</div>
+          <div style="margin-top:10px"><button id="btnSaveSSCs" class="p-btn2" onclick="Trainer.act('save-ss-cs')">保存</button></div>
+        </div>
+      ` : '<p style="font-size:12.5px;color:var(--ink-soft)">店舗を選ぶと4つの設定が続けて表示されます。</p>'}
+    </div></div>
+    <div class="note note-tip" style="margin-top:16px"><b>店舗限定の商品・項目</b>ちょうど1店舗だけに表示される商品・チェック項目は、それぞれ「店舗限定の商品」「店舗限定の項目」セクションに自動的に分離されます。</div>
+    `;
+  },
+  steps:[
+    { target:null, expect:null, msg:'まずはこの画面の狙いを確認しましょう。以前は4つの設定がバラバラの店舗セレクターを持っていましたが、今は1つに統合されています。' },
+    { target:'.portal select', expect:'select-ss-store',
+      msg:'店舗選択のプルダウンから「<b>渋谷神南</b>」を<b>選択</b>してみましょう。' },
+    { target:'.chk-vendor-hd input', expect:'toggle-ss-vendor-all',
+      msg:'①「取扱商品設定」で、ベンダー見出し右の「<b>全選択</b>」を<b>クリック</b>してみましょう。' },
+    { target:'#btnSaveSSProd', expect:'save-ss-prod',
+      msg:'①の「<b>保存</b>」を<b>クリック</b>しましょう。' },
+    { target:'input[name=ss-op]', expect:'toggle-ss-op',
+      msg:'②「運用方式設定」で、<b>フルオペ</b>を<b>選択</b>してみましょう。' },
+    { target:'#btnSaveSSOp', expect:'save-ss-op',
+      msg:'②の「<b>保存</b>」を<b>クリック</b>しましょう。③「発注基準値設定」も同じ画面にそのまま続けて表示されます。' },
+    { target:'#btnSaveSSCs', expect:'save-ss-cs',
+      msg:'一番下の④「チェックシート項目設定」の「<b>保存</b>」を<b>クリック</b>して完了です。' },
+  ],
+  onAct(id, s){
+    if (id === 'save-ss-prod') toast(`✓ ${STORE_SAMPLE.find(st=>st.id===s.store)?.name || ''} の取扱商品設定を保存しました`);
+    if (id === 'save-ss-op') toast(`✓ ${STORE_SAMPLE.find(st=>st.id===s.store)?.name || ''} の運用方式を保存しました`);
+    if (id === 'save-ss-cs') toast(`✓ ${STORE_SAMPLE.find(st=>st.id===s.store)?.name || ''} のチェックシート項目設定を保存しました`);
+  },
+});
+
+/* ============ MODULE 08 (Part2-04): 業務開始管理の設定 ============ */
 
 M.push({
   id:'attendance', eyebrow:'Setup', title:'業務開始管理（勤怠打刻）の設定', part:'setup',
   state:{ attOpen:false, store:'', enabled:false, staff:[], newName:'', schedType:'interval' },
   render(s){
     return `
-    <div class="eyebrow">03 · Setup</div>
+    <div class="eyebrow">04 · Setup</div>
     <h3 class="stage-h">業務開始管理（勤怠打刻）の設定</h3>
     <p class="section-lede">「業務管理」ボタンから入る、店舗ごとの出勤打刻機能の設定です。有効化・基準座標・スタッフ登録・勤務スケジュールをここで行います。</p>
 
@@ -868,7 +872,7 @@ M.push({
   },
 });
 
-/* ============ MODULE 08: まとめ ============ */
+/* ============ MODULE 09: まとめ ============ */
 
 M.push({
   id:'todo', eyebrow:'Wrap-up', title:'まとめ', part:'wrap',
@@ -877,7 +881,7 @@ M.push({
     if (!isFinished) return `
     <div class="eyebrow">07 · Wrap-up</div>
     <h3 class="stage-h">まとめ</h3>
-    <p class="section-lede">ここまでの6モジュールで、管理者ポータルの日常業務(発注対応・商品/チェックシート設定・棚卸表の確認・業務開始管理)をひと通り練習しました。次へ進むと修了画面です。</p>`;
+    <p class="section-lede">ここまでの8モジュールで、管理者ポータルの日常業務(発注対応・棚卸表の確認)と設定業務(商品/チェックシート設定・店舗別設定・業務開始管理設定)をひと通り練習しました。次へ進むと修了画面です。</p>`;
     return `
     <div class="finish-hero">
       <div class="big">🥋</div>
@@ -923,30 +927,34 @@ const Trainer = {
   setOrderDate(id, v){ const r = byId('orders').state.rows.find(x=>x.id==id); r.orderDate = v; this.rerenderStage(); },
   setActualQty(id, v){ const r = byId('orders').state.rows.find(x=>x.id==id); r.actualQty = v; this.rerenderStage(); },
 
-  setStoreQuery(v){ byId('products').state.storeQuery = v; this.rerenderStage(); },
-  selectStore(v){ const s = byId('products').state; s.store = v; s.excluded = new Set(); this.act('select-store'); },
   toggleAddStore(id, checked){ const s = byId('products').state; checked ? s.addStores.add(id) : s.addStores.delete(id); this.rerenderStage(); },
   toggleVendorAll(prefix, vendorKey, checked){
-    const s = byId('products').state;
+    const s = byId('store-settings').state;
     VENDORS.find(v=>v.key===vendorKey).items.forEach(it => { const k=vendorKey+'|'+it; checked?s.excluded.delete(k):s.excluded.add(k); });
-    this.act('toggle-vendor-all');
+    this.act('toggle-ss-vendor-all');
   },
   toggleVendorItem(prefix, vendorKey, item, checked){
-    const s = byId('products').state;
+    const s = byId('store-settings').state;
     const k = vendorKey+'|'+item;
     checked ? s.excluded.delete(k) : s.excluded.add(k);
-    this.act('toggle-vendor-item');
+    this.act('toggle-ss-vendor-item');
   },
 
-  selectCsStore(v){ byId('checksheet').state.store = v; this.act('select-cs-store'); },
-  toggleCsItem(key, item, checked){
-    const s = byId('checksheet').state; const k = key+'|'+item;
-    checked ? s.excluded.delete(k) : s.excluded.add(k);
-    this.act('toggle-cs-item');
+  selectSSStore(v){
+    const s = byId('store-settings').state;
+    s.store = v; s.excluded = new Set(); s.csExcluded = new Set();
+    this.act('select-ss-store');
   },
-  toggleCsAll(key, checked){
-    const s = byId('checksheet').state;
-    CS_CATEGORIES.find(c=>c.key===key).items.forEach(it => { const k=key+'|'+it; checked?s.excluded.delete(k):s.excluded.add(k); });
+  setSSQuery(v){ byId('store-settings').state.storeQuery = v; this.rerenderStage(); },
+  setSSOp(v){ byId('store-settings').state.opType = v; this.act('toggle-ss-op'); },
+  toggleSSCsItem(key, item, checked){
+    const s = byId('store-settings').state; const k = key+'|'+item;
+    checked ? s.csExcluded.delete(k) : s.csExcluded.add(k);
+    this.act('toggle-ss-cs-item');
+  },
+  toggleSSCsAll(key, checked){
+    const s = byId('store-settings').state;
+    CS_CATEGORIES.find(c=>c.key===key).items.forEach(it => { const k=key+'|'+it; checked?s.csExcluded.delete(k):s.csExcluded.add(k); });
     this.rerenderStage();
   },
 
