@@ -792,7 +792,7 @@ M.push({
 
 M.push({
   id:'attendance', eyebrow:'Setup', title:'業務開始管理（勤怠打刻）の設定', part:'setup',
-  state:{ attOpen:false, store:'', enabled:false, staff:[], newName:'', schedType:'interval' },
+  state:{ attOpen:false, store:'', enabled:false, staff:[], newName:'', schedType:'interval', geoQuery:'', lat:'', lng:'' },
   render(s){
     return `
     <div class="eyebrow">04 · Setup</div>
@@ -814,10 +814,19 @@ M.push({
               <input type="checkbox" ${s.enabled?'checked':''} onchange="Trainer.act('toggle-att-enable')"> この店舗で業務開始機能を有効にする
             </label>
             ${s.enabled ? `
+            <div style="background:#fffef0;border-radius:8px;padding:12px 14px;margin-bottom:14px">
+              <div style="font-weight:600;font-size:12px;color:#888;margin-bottom:8px">基準座標</div>
+              <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
+                <input type="text" class="p-select" style="flex:1;min-width:220px" placeholder="店舗名・住所で検索（例: セルフカフェささしまライブ店 / 東京都渋谷区神南1-1）" value="${esc(s.geoQuery)}" oninput="Trainer.setAttGeoQuery(this.value)">
+                <button id="btnGeocodeAtt" class="p-btn2" onclick="Trainer.act('geocode-att')">検索して自動入力</button>
+              </div>
+              ${s.lat ? `<div style="font-size:12px;color:#22703d">緯度: ${esc(s.lat)} / 経度: ${esc(s.lng)}　<a href="#" onclick="return false" style="color:#3b82f6">📍地図で確認</a></div>`
+                     : `<div style="font-size:11.5px;color:var(--ink-soft)">店舗名や住所を入力して「検索して自動入力」を押すと緯度経度が自動入力されます。店舗名だけで見つからない場合は住所で試してください。</div>`}
+            </div>
             <div style="margin-top:10px">
               <div class="p-field"><label>スタッフを追加</label>
                 <div style="display:flex;gap:8px">
-                  <input type="text" class="p-select" placeholder="スタッフ名" value="${esc(s.newName)}" oninput="Trainer.setNewName(this.value)">
+                  <input id="attStaffNameInput" type="text" class="p-select" placeholder="スタッフ名" value="${esc(s.newName)}" oninput="Trainer.setNewName(this.value)">
                   <button class="p-btn2" onclick="Trainer.act('add-staff')">追加</button>
                 </div>
               </div>
@@ -858,7 +867,9 @@ M.push({
       msg:'店舗を「<b>渋谷神南</b>」に<b>選択</b>しましょう。' },
     { target:'.acc-body label input', expect:'toggle-att-enable',
       msg:'「<b>この店舗で業務開始機能を有効にする</b>」に<b>チェック</b>を入れましょう。' },
-    { target:'.p-field input[type=text]', expect:'add-staff',
+    { target:'#btnGeocodeAtt', expect:'geocode-att',
+      msg:'「<b>基準座標</b>」欄に店舗名や住所を入力し、「<b>検索して自動入力</b>」を<b>クリック</b>しましょう。ここで設定した座標から300m以内での打刻だけが「OK」判定になります。' },
+    { target:'#attStaffNameInput', expect:'add-staff',
       msg:'スタッフ名を入力して「<b>追加</b>」を<b>クリック</b>してみましょう。' },
     { target:'#btnSaveAttendance', expect:'save-attendance',
       msg:'勤務スケジュール（間隔指定／曜日指定）を選び、「<b>保存</b>」を<b>クリック</b>。この設定が未打刻通知（翌朝8:30）の基準になります。' },
@@ -866,6 +877,7 @@ M.push({
   onAct(id, s){
     if (id === 'toggle-att-acc') s.attOpen = !s.attOpen;
     if (id === 'toggle-att-enable') s.enabled = !s.enabled;
+    if (id === 'geocode-att') { s.lat = '35.170000'; s.lng = '136.881000'; toast('✓ 座標を自動入力しました（実際の画面ではGoogle Apps Script組み込みのジオコーディングで取得します）'); }
     if (id === 'add-staff' && s.newName.trim()) { s.staff.push(s.newName.trim()); s.newName=''; }
     if (id === 'sched-interval') s.schedType = 'interval';
     if (id === 'sched-weekday') s.schedType = 'weekday';
@@ -961,6 +973,7 @@ const Trainer = {
   },
 
   selectAttStore(v){ byId('attendance').state.store = v; this.act('select-att-store'); },
+  setAttGeoQuery(v){ byId('attendance').state.geoQuery = v; this.rerenderStage(); },
   setNewName(v){ byId('attendance').state.newName = v; this.rerenderStage(); },
   advanceStep(auto){
     const mod = this.mod;
