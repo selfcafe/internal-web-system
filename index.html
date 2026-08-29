@@ -3149,12 +3149,18 @@ async function loadChecksheetOpeningStock(storeId) {
   } catch (e) { console.error('getInventoryHistory error:', e); }
 }
 // 残り在庫＝直近確定済み棚卸の期末在庫 − 今期のデイリーカウント累計。棚卸データが無い商品/店舗はnull
+// （2026-08-29修正）getInventoryOpeningStock()は「送信直後でまだサーバーに反映されていない」
+// ケースを救うためローカルの未送信下書きにフォールバックするが、その下書きが実際には
+// 一度も送信されないまま放置されているだけのケースでも同じように拾ってしまい、棚卸を
+// 一度も送信していない店舗で「残り在庫」が表示される不具合があった（大塚駅南口で発生）。
+// ここではサーバーに確定送信済みの行(_getInventoryPrevRow)だけを見て、無ければ必ずnullにする。
 function checksheetRemainingStock(productName) {
   const period = getInventoryPeriod();
-  const openStock = getInventoryOpeningStock(storeTab, period.label, productName);
-  if (openStock === '' || openStock === null || openStock === undefined) return null;
+  const row = _getInventoryPrevRow(storeTab, period.label, productName);
+  if (!row || row.end_stock === undefined || row.end_stock === null || row.end_stock === '') return null;
+  const openStock = Number(row.end_stock);
   const used = getInventoryDailyCount(storeTab, period.label, productName);
-  return Number(openStock) - (used === '' ? 0 : Number(used));
+  return openStock - (used === '' ? 0 : Number(used));
 }
 // 盗難検知①(通知)：saveChecksheetDataの保存フロー(_checksheetSyncChain)とは完全に独立した
 // 別のデバウンス用タイマーマップ。既存の保存の直列化には一切触らない——連続タップのたびに
