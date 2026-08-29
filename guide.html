@@ -462,18 +462,106 @@
   <nav class="toc" aria-label="目次">
     <p class="toc-title">目次</p>
     <ol>
-      <li><a href="#login"><span class="toc-num">1</span>ポータルを開く・ログイン</a></li>
-      <li><a href="#homescreen"><span class="toc-num">2</span>ホーム画面にアイコンを追加する</a></li>
-      <li><a href="#order"><span class="toc-num">3</span>発注依頼の送り方・取り消し方</a></li>
-      <li><a href="#lostitem"><span class="toc-num">4</span>忘れ物の登録方法</a></li>
-      <li><a href="#checksheet"><span class="toc-num">5</span>チェックシートの記入方法・アルバム</a></li>
-      <li><a href="#attendance"><span class="toc-num">6</span>業務管理（業務開始の打刻）</a></li>
+      <li><a href="#attendance"><span class="toc-num">1</span>業務管理（業務開始の打刻）</a></li>
+      <li><a href="#login"><span class="toc-num">2</span>ポータルを開く・ログイン</a></li>
+      <li><a href="#homescreen"><span class="toc-num">3</span>ホーム画面にアイコンを追加する</a></li>
+      <li><a href="#order"><span class="toc-num">4</span>発注依頼の送り方・取り消し方</a></li>
+      <li><a href="#lostitem"><span class="toc-num">5</span>忘れ物の登録方法</a></li>
+      <li><a href="#checksheet"><span class="toc-num">6</span>チェックシートの記入方法・アルバム</a></li>
       <li><a href="#machine-manual"><span class="toc-num">7</span>お使いの機種のマニュアル</a></li>
       <li><a href="#tips"><span class="toc-num">8</span>困ったときのポイント</a></li>
     </ol>
   </nav>
 
   <!-- Section 1: Login -->
+  <section class="section" id="attendance">
+    <div class="section-header">
+      <div class="section-icon">📍</div>
+      <h2>業務管理（業務開始の打刻）<small>出勤時に位置情報つきで打刻します（試験導入・店舗ごとON/OFF）</small></h2>
+    </div>
+
+    <div class="notice" style="margin-bottom:20px">
+      <p class="notice-title">⚠ 業務管理はご自身の責任で行ってください</p>
+      <ul>
+        <li>打刻の押し忘れ・通信エラー・サイトの不具合などにより、正しく記録されない場合があります</li>
+        <li>本部側でその責任は負いかねますので、実際の勤怠は<strong>別途ご自身で管理し、請求書に記載</strong>してください</li>
+      </ul>
+    </div>
+
+    <div class="rule-box">
+      <p class="rule-box-title">📋 業務管理のルール（必ずご確認ください）</p>
+      <ul>
+        <li>現在は<b>試験導入</b>の機能で、管理者が有効にした店舗のみ利用できます。画面に<b>「業務管理」ボタン</b>が無い場合は、その店舗ではまだ有効になっていません</li>
+        <li>打刻には<b>位置情報（GPS）の許可が必須</b>です。許可しないと打刻できません</li>
+        <li>店舗の基準座標から<b>300m以内</b>での打刻のみ「OK」判定になります。離れた場所からでも打刻自体は記録されますが、離れた場所での打刻として残ります</li>
+        <li>位置情報の取得・送信中は、<b>ページを閉じたり更新したりしない</b>でください（保存が完了しないまま中断されます）</li>
+      </ul>
+    </div>
+
+    <div class="steps">
+
+      <article class="step">
+        <div class="step-num-col"><span class="step-num">1</span></div>
+        <div class="step-body">
+          <p class="step-action">「業務管理」ボタンをタップする</p>
+          <p class="step-desc">画面上部（PCは右上、スマホは丸いボタン）の<b>「業務管理」</b>をタップすると、業務開始の打刻画面が開きます。</p>
+        </div>
+      </article>
+
+      <article class="step">
+        <div class="step-num-col"><span class="step-num">2</span></div>
+        <div class="step-body">
+          <p class="step-action">スタッフが複数登録されている店舗は名前を選ぶ</p>
+          <p class="step-desc">スタッフが1名だけ登録されている店舗は名前選択が省略され、ボタンのみが表示されます。複数名いる店舗は<b>ドロップダウンから自分の名前</b>を選んでください。</p>
+        </div>
+        <div class="phone-wrap">
+          <div class="phone">
+            <div class="phone-screen">
+              <div class="phone-content">
+                <div class="phone-field active" style="justify-content:space-between;">
+                  <span>お名前</span>
+                  <span>選択してください ▾</span>
+                </div>
+                <span class="tap-hint">👆 名前を選択</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="step">
+        <div class="step-num-col"><span class="step-num">3</span></div>
+        <div class="step-body">
+          <p class="step-action">「業務開始」ボタンを押す</p>
+          <p class="step-desc">緑色の<b>「業務開始」ボタン</b>をタップします。位置情報の許可ダイアログが出た場合は<b>「許可」</b>を選んでください。取得が終わるまで数秒かかることがあります。</p>
+        </div>
+        <div class="phone-wrap">
+          <div class="phone">
+            <div class="phone-screen">
+              <div class="phone-content">
+                <div class="phone-btn">業務開始</div>
+                <span class="tap-hint" style="margin-top:6px;">👆 位置情報を許可してタップ</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+    </div>
+
+    <div class="notice" style="margin-top:20px;">
+      <p class="notice-title">✅ 打刻結果の見方</p>
+      <ul>
+        <li><b>「〇〇さん、業務開始を記録しました（時刻）」</b>（緑）＝店舗の近くで正常に打刻できました</li>
+        <li><b>「打刻しましたが、店舗から離れた場所での打刻として記録されました。」</b>（赤）＝打刻自体は記録済みですが、店舗の基準座標から300mより離れた場所からの打刻です</li>
+        <li>「業務開始履歴（自店舗）」で自分の打刻履歴、当月・先月の記録日数を確認できます</li>
+        <li>その日まだ打刻していない場合、ポータルを開くとリマインドのポップアップが表示されます。「業務開始」ボタンからそのまま打刻画面に移動できます</li>
+      </ul>
+    </div>
+  </section>
+
+  <hr class="divider">
+
   <section class="section" id="login">
     <div class="section-header">
       <div class="section-icon">🔐</div>
@@ -1198,85 +1286,7 @@
   <hr class="divider">
 
   <!-- Section 6: Attendance (業務管理) -->
-  <section class="section" id="attendance">
-    <div class="section-header">
-      <div class="section-icon">📍</div>
-      <h2>業務管理（業務開始の打刻）<small>出勤時に位置情報つきで打刻します（試験導入・店舗ごとON/OFF）</small></h2>
-    </div>
-
-    <div class="rule-box">
-      <p class="rule-box-title">📋 業務管理のルール（必ずご確認ください）</p>
-      <ul>
-        <li>現在は<b>試験導入</b>の機能で、管理者が有効にした店舗のみ利用できます。画面に<b>「業務管理」ボタン</b>が無い場合は、その店舗ではまだ有効になっていません</li>
-        <li>打刻には<b>位置情報（GPS）の許可が必須</b>です。許可しないと打刻できません</li>
-        <li>店舗の基準座標から<b>300m以内</b>での打刻のみ「OK」判定になります。離れた場所からでも打刻自体は記録されますが、離れた場所での打刻として残ります</li>
-        <li>位置情報の取得・送信中は、<b>ページを閉じたり更新したりしない</b>でください（保存が完了しないまま中断されます）</li>
-      </ul>
-    </div>
-
-    <div class="steps">
-
-      <article class="step">
-        <div class="step-num-col"><span class="step-num">1</span></div>
-        <div class="step-body">
-          <p class="step-action">「業務管理」ボタンをタップする</p>
-          <p class="step-desc">画面上部（PCは右上、スマホは丸いボタン）の<b>「業務管理」</b>をタップすると、業務開始の打刻画面が開きます。</p>
-        </div>
-      </article>
-
-      <article class="step">
-        <div class="step-num-col"><span class="step-num">2</span></div>
-        <div class="step-body">
-          <p class="step-action">スタッフが複数登録されている店舗は名前を選ぶ</p>
-          <p class="step-desc">スタッフが1名だけ登録されている店舗は名前選択が省略され、ボタンのみが表示されます。複数名いる店舗は<b>ドロップダウンから自分の名前</b>を選んでください。</p>
-        </div>
-        <div class="phone-wrap">
-          <div class="phone">
-            <div class="phone-screen">
-              <div class="phone-content">
-                <div class="phone-field active" style="justify-content:space-between;">
-                  <span>お名前</span>
-                  <span>選択してください ▾</span>
-                </div>
-                <span class="tap-hint">👆 名前を選択</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </article>
-
-      <article class="step">
-        <div class="step-num-col"><span class="step-num">3</span></div>
-        <div class="step-body">
-          <p class="step-action">「業務開始」ボタンを押す</p>
-          <p class="step-desc">緑色の<b>「業務開始」ボタン</b>をタップします。位置情報の許可ダイアログが出た場合は<b>「許可」</b>を選んでください。取得が終わるまで数秒かかることがあります。</p>
-        </div>
-        <div class="phone-wrap">
-          <div class="phone">
-            <div class="phone-screen">
-              <div class="phone-content">
-                <div class="phone-btn">業務開始</div>
-                <span class="tap-hint" style="margin-top:6px;">👆 位置情報を許可してタップ</span>
-              </div>
-            </div>
-          </div>
-        </div>
-      </article>
-
-    </div>
-
-    <div class="notice" style="margin-top:20px;">
-      <p class="notice-title">✅ 打刻結果の見方</p>
-      <ul>
-        <li><b>「〇〇さん、業務開始を記録しました（時刻）」</b>（緑）＝店舗の近くで正常に打刻できました</li>
-        <li><b>「打刻しましたが、店舗から離れた場所での打刻として記録されました。」</b>（赤）＝打刻自体は記録済みですが、店舗の基準座標から300mより離れた場所からの打刻です</li>
-        <li>「業務開始履歴（自店舗）」で自分の打刻履歴、当月・先月の記録日数を確認できます</li>
-        <li>その日まだ打刻していない場合、ポータルを開くとリマインドのポップアップが表示されます。「業務開始」ボタンからそのまま打刻画面に移動できます</li>
-      </ul>
-    </div>
-  </section>
-
-  <hr class="divider">
+  
 
   <!-- Section 7: Machine manual -->
   <section class="section" id="machine-manual">
