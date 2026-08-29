@@ -713,7 +713,7 @@ M.push({
     return `
     <div class="eyebrow">03 · Setup</div>
     <h3 class="stage-h">店舗別設定（統合）</h3>
-    <p class="section-lede">以前は「取扱商品設定」「運用方式設定」「発注基準値設定」「チェックシート項目設定」がそれぞれ別々の店舗セレクターを持っていましたが、今は<b>店舗を1回選ぶだけ</b>で4つとも続けて確認・変更できます(2026-08-29〜)。</p>
+    <p class="section-lede">「取扱商品設定」「運用方式設定」「発注基準値設定」「チェックシート項目設定」は、<b>店舗を1回選ぶだけ</b>で4つとも続けて確認・変更できます。</p>
     <div class="portal"><div class="p-body">
       <div class="p-field"><label>店舗を選択</label>
         <input type="text" class="p-select" placeholder="店舗名で検索" value="${esc(s.storeQuery)}" oninput="Trainer.setSSQuery(this.value)">
@@ -766,7 +766,7 @@ M.push({
     `;
   },
   steps:[
-    { target:null, expect:null, msg:'まずはこの画面の狙いを確認しましょう。以前は4つの設定がバラバラの店舗セレクターを持っていましたが、今は1つに統合されています。' },
+    { target:null, expect:null, msg:'まずはこの画面の狙いを確認しましょう。取扱商品・運用方式・発注基準値・チェックシート項目の4つの設定が、1つの店舗選択にまとまっています。' },
     { target:'.portal select', expect:'select-ss-store',
       msg:'店舗選択のプルダウンから「<b>渋谷神南</b>」を<b>選択</b>してみましょう。' },
     { target:'.chk-vendor-hd input', expect:'toggle-ss-vendor-all',
