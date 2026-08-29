@@ -993,12 +993,13 @@ const Trainer = {
     this.positionSpotlight();
   },
   _renderRailModules(){
-    const PART_LABELS = { ops:'操作説明', setup:'管理者が設定する項目' };
+    const PART_LABELS = { ops:'操作説明', setup:'各店の担当者が設定する項目' };
     let lastPart = null, partCounter = 0;
     return M.map((m,i) => {
       let header = '';
       if (m.part !== lastPart && PART_LABELS[m.part]) {
-        header = `<div class="rail-part-hdr">${esc(PART_LABELS[m.part])}</div>`;
+        const hdrStyle = m.part === 'setup' ? ' style="color:#dc2626"' : '';
+        header = `<div class="rail-part-hdr"${hdrStyle}>${esc(PART_LABELS[m.part])}</div>`;
         partCounter = 0;
       }
       lastPart = m.part;
