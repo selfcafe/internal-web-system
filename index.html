@@ -549,7 +549,7 @@
       </div>
       <div class="partner-hdr-cell" style="display:flex;gap:6px">
         <div class="doc-menu-wrap">
-          <button onclick="toggleManualMenu('pc')" style="background:transparent;color:#22703d;padding:7px 13px;font-size:13px;font-weight:600;border-radius:6px;border:1px solid #22703d;cursor:pointer;font-family:inherit;flex-shrink:0">マニュアル</button>
+          <button onclick="toggleManualMenu('pc', MANUAL_DOCS)" style="background:transparent;color:#22703d;padding:7px 13px;font-size:13px;font-weight:600;border-radius:6px;border:1px solid #22703d;cursor:pointer;font-family:inherit;flex-shrink:0">マニュアル</button>
           <div class="doc-menu-dd" id="manual-dd-pc"></div>
         </div>
       </div>
@@ -560,7 +560,7 @@
         <div class="phw-piece phw-tl" id="phw-empty"></div>
         <button class="phw-piece phw-tr" onclick="siteLogout()"><span>ログ<br>アウト</span></button>
         <button id="ptab-attendance-sp" class="phw-piece phw-bl" onclick="if(isAttendanceEnabled(storeTab))switchPartnerTab('attendance')"><span>業務<br>管理</span></button>
-        <button class="phw-piece phw-br manual-menu-btn" onclick="toggleManualMenu('sp')"><span>マニュアル</span></button>
+        <button class="phw-piece phw-br manual-menu-btn" onclick="toggleManualMenu('sp', MANUAL_DOCS)"><span>マニュアル</span></button>
       </div>
       <div class="doc-menu-dd" id="manual-dd-sp" style="position:absolute;top:134px;right:0"></div>
       <div class="store-name-wrap" style="display:flex;align-items:baseline;align-self:stretch;gap:4px 12px">
@@ -742,18 +742,22 @@
     <img src="logo-horizontal.png" class="portal-logo" alt="セルフカフェ">
     <div class="admin-hdr-btns">
       <button class="admin-attendance-btn" onclick="switchAdminView('attendance')" style="background:#22703d;color:white;padding:9px 14px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">業務管理</button>
-      <button onclick="window.open('admin-guide.html','_blank')" style="background:transparent;color:#22703d;padding:8px 13px;font-size:13px;font-weight:600;border-radius:8px;border:1px solid #22703d;cursor:pointer;font-family:inherit">マニュアル</button>
+      <div class="doc-menu-wrap">
+        <button onclick="toggleManualMenu('admin-pc', ADMIN_MANUAL_DOCS)" style="background:transparent;color:#22703d;padding:8px 13px;font-size:13px;font-weight:600;border-radius:8px;border:1px solid #22703d;cursor:pointer;font-family:inherit">マニュアル</button>
+        <div class="doc-menu-dd" id="manual-dd-admin-pc"></div>
+      </div>
       <button onclick="location.href='invoice.html'" style="background:#8a8f7e;color:white;padding:9px 14px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">請求</button>
       <button onclick="adminLogout()" style="background:#6b7280;color:white;padding:9px 14px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">ログアウト</button>
     </div>
     <div class="admin-title-row" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <h1>管理者ポータル</h1>
       <div class="partner-hdr-pinwheel">
-        <button class="phw-piece phw-tl" onclick="window.open('admin-guide.html','_blank')"><span>マニュ<br>アル</span></button>
+        <button class="phw-piece phw-tl manual-menu-btn" onclick="toggleManualMenu('admin-sp', ADMIN_MANUAL_DOCS)"><span>マニュ<br>アル</span></button>
         <button class="phw-piece phw-tr" onclick="adminLogout()"><span>ログ<br>アウト</span></button>
         <button class="phw-piece phw-bl" onclick="switchAdminView('attendance')"><span>業務<br>管理</span></button>
         <button class="phw-piece phw-br" onclick="location.href='invoice.html'">請求</button>
       </div>
+      <div class="doc-menu-dd" id="manual-dd-admin-sp" style="position:absolute;top:134px;right:0"></div>
       <div class="admin-menu-wrap">
         <button class="admin-menu-btn" onclick="toggleAdminMenu()" title="メニュー">☰<span class="menu-label">メニュー</span></button>
         <div class="admin-menu-dd" id="admin-menu-dd">
@@ -1482,19 +1486,27 @@ const MANUAL_DOCS = [
   { label: 'パートナー操作ガイド', url: () => `guide.html?machine=${encodeURIComponent(getStoreMachineType(storeTab))}&op=${encodeURIComponent(getStoreOperationType(storeTab))}` },
 ];
 
-function buildManualMenu() {
-  if (!MANUAL_DOCS.length) return '<div class="doc-menu-empty">資料はまだありません</div>';
-  return MANUAL_DOCS.map(d => {
+// 管理者向けマニュアルメニューの中身。「管理者ポータル道場」は外部（Claude Artifacts）で
+// ホストされている練習用サンドボックスで、社外の人が見ることもあるため個別リンクで
+// 案内するのではなくここに正式な項目として並べる（2026-08-29、ユーザー依頼）。
+const ADMIN_MANUAL_DOCS = [
+  { label: '管理者ガイド', url: 'admin-guide.html' },
+  { label: '管理者ポータル道場（練習用）', url: 'https://claude.ai/code/artifact/64c839e1-a2ac-4b64-8aa8-4b2a6ed60a1d' },
+];
+
+function buildManualMenu(docs) {
+  if (!docs.length) return '<div class="doc-menu-empty">資料はまだありません</div>';
+  return docs.map(d => {
     const url = typeof d.url === 'function' ? d.url() : d.url;
     return `<a class="doc-menu-item" href="${esc(url)}" target="_blank" rel="noopener">${esc(d.label)}</a>`;
   }).join('');
 }
 
-function toggleManualMenu(suffix) {
+function toggleManualMenu(suffix, docs) {
   const dd = document.getElementById('manual-dd-' + suffix);
   const wasOpen = dd.classList.contains('open');
   document.querySelectorAll('.doc-menu-dd.open').forEach(el => el.classList.remove('open'));
-  if (!wasOpen) { dd.innerHTML = buildManualMenu(); dd.classList.add('open'); }
+  if (!wasOpen) { dd.innerHTML = buildManualMenu(docs); dd.classList.add('open'); }
 }
 
 /* items配列を持つ旧形式 → フラット行に変換、groupId を付与 */
