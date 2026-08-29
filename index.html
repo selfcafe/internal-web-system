@@ -549,7 +549,7 @@
       </div>
       <div class="partner-hdr-cell" style="display:flex;gap:6px">
         <div class="doc-menu-wrap">
-          <button onclick="toggleManualMenu('pc', MANUAL_DOCS)" style="background:transparent;color:#22703d;padding:7px 13px;font-size:13px;font-weight:600;border-radius:6px;border:1px solid #22703d;cursor:pointer;font-family:inherit;flex-shrink:0">マニュアル</button>
+          <button onclick="toggleManualMenu('pc', getManualDocs())" style="background:transparent;color:#22703d;padding:7px 13px;font-size:13px;font-weight:600;border-radius:6px;border:1px solid #22703d;cursor:pointer;font-family:inherit;flex-shrink:0">マニュアル</button>
           <div class="doc-menu-dd" id="manual-dd-pc"></div>
         </div>
       </div>
@@ -560,7 +560,7 @@
         <div class="phw-piece phw-tl" id="phw-empty"></div>
         <button class="phw-piece phw-tr" onclick="siteLogout()"><span>ログ<br>アウト</span></button>
         <button id="ptab-attendance-sp" class="phw-piece phw-bl" onclick="if(isAttendanceEnabled(storeTab))switchPartnerTab('attendance')"><span>業務<br>管理</span></button>
-        <button class="phw-piece phw-br manual-menu-btn" onclick="toggleManualMenu('sp', MANUAL_DOCS)"><span>マニュアル</span></button>
+        <button class="phw-piece phw-br manual-menu-btn" onclick="toggleManualMenu('sp', getManualDocs())"><span>マニュアル</span></button>
       </div>
       <div class="doc-menu-dd" id="manual-dd-sp" style="position:absolute;top:134px;right:0"></div>
       <div class="store-name-wrap" style="display:flex;align-items:baseline;align-self:stretch;gap:4px 12px">
@@ -1499,9 +1499,25 @@ const isMobile  = () => window.innerWidth < 640;
    （PDFファイル自体はこのリポジトリ直下に置き、urlをそのファイル名にする）。
    urlは固定文字列でも、今の店舗(storeTab)を見て組み立てる関数でもよい
    （パートナー操作ガイドは機種・運用方式をURLパラメータで渡して自動判定させる、2026-08-29）。 */
-const MANUAL_DOCS = [
-  { label: 'パートナー操作ガイド', url: () => `guide.html?machine=${encodeURIComponent(getStoreMachineType(storeTab))}&op=${encodeURIComponent(getStoreOperationType(storeTab))}` },
-];
+// マシンのメンテナンス資料は機種(アペックス／トーヨーベンディング)によって出し分ける。
+// フルオペ(メーカー管理)店舗はパートナーが行う作業ではないため対象外（2026-08-29）。
+// 機種が判定できない店舗はどちらの資料か決められないため、念のため両方とも表示する。
+function getManualDocs() {
+  const docs = [
+    { label: 'パートナー操作ガイド', url: () => `guide.html?machine=${encodeURIComponent(getStoreMachineType(storeTab))}&op=${encodeURIComponent(getStoreOperationType(storeTab))}` },
+  ];
+  if (getStoreOperationType(storeTab) !== 'full') {
+    const machine = getStoreMachineType(storeTab);
+    if (machine === 'apex' || machine === '') {
+      docs.push({ label: 'アペックス100RS メンテナンス方法', url: 'manuals/manual-apex100rs-maintenance.pdf' });
+    }
+    if (machine === 'toyo' || machine === '') {
+      docs.push({ label: 'トーヨーベンディング JCC故障対応マニュアル', url: 'manuals/manual-toyo-jcc-troubleshooting.pdf' });
+      docs.push({ label: 'トーヨーベンディング BIB交換資料', url: 'manuals/manual-toyo-bib-replacement.pdf' });
+    }
+  }
+  return docs;
+}
 
 // 管理者向けマニュアルメニューの中身。「テスト環境（練習用）」は元々Claude Artifactsで
 // 公開していたが、共有範囲を「リンクを知っている全員」にできなかったため、
