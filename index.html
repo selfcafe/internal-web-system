@@ -2968,7 +2968,10 @@ function _syncStoreChecksheetCfg() {
 // cfgは「除外リスト」（そのIDに一致する項目を非表示にする）。nullなら常に全項目を表示する。
 function getAvailableChecksheetItems(storeId) {
   const cfg = getStoreChecksheetConfig(storeId);
-  return cfg ? CHECKSHEET_ITEMS.filter(it => !cfg.includes(it.id)) : CHECKSHEET_ITEMS;
+  let items = cfg ? CHECKSHEET_ITEMS.filter(it => !cfg.includes(it.id)) : CHECKSHEET_ITEMS;
+  // フルオペ（メーカー管理）店舗はマシン清掃(100rs_clean)をパートナーが行わないため対象外にする
+  if (getStoreOperationType(storeId) === 'full') items = items.filter(it => it.category !== '100rs_clean');
+  return items;
 }
 
 /* ===== 業務開始（試験導入・店舗ごとON/OFF） ===== */
@@ -7433,6 +7436,8 @@ function renderChecksheetCfg() {
   const cfg = getStoreChecksheetConfig(sid);
   // cfgは「除外リスト」。excludedに入っていない（＝cfgがnull、またはそのIDが含まれない）項目はチェック済み＝表示する
   const excluded = cfg ? new Set(cfg) : null;
+  // フルオペ（メーカー管理）店舗はマシン清掃(100rs_clean)をパートナーが行わないため選択不可にする
+  const isFullOpe = getStoreOperationType(sid) === 'full';
 
   const byCategory = {};
   CHECKSHEET_ITEMS.forEach(it => { (byCategory[it.category] ||= []).push(it); });
@@ -7441,17 +7446,19 @@ function renderChecksheetCfg() {
     CHECKSHEET_CATEGORIES.map(c => {
       const items = byCategory[c.key] || [];
       if (!items.length) return '';
+      const locked = isFullOpe && c.key === '100rs_clean';
       return `<div class="store-prod-vendor-hdr" style="display:flex;align-items:center;justify-content:space-between">
           <span>${esc(c.label)}</span>
           <label style="font-weight:normal;font-size:11px;display:flex;align-items:center;gap:4px;cursor:pointer;margin-left:8px">
-            <input type="checkbox" data-cat-all="${esc(c.key)}" onchange="toggleChecksheetCatAll('${esc(c.key)}',this.checked)" style="width:13px;height:13px;accent-color:#22703d;flex-shrink:0">全選択
+            <input type="checkbox" data-cat-all="${esc(c.key)}" onchange="toggleChecksheetCatAll('${esc(c.key)}',this.checked)" style="width:13px;height:13px;accent-color:#22703d;flex-shrink:0" ${locked ? 'disabled' : ''}>全選択
           </label>
         </div>
+        ${locked ? `<div style="font-size:11px;color:#888;margin:2px 0 6px">フルオペ（メーカー管理）の店舗のため、マシン清掃項目は選択できません。</div>` : ''}
         <div class="store-prod-vendor-grid">` +
         items.map(it => {
-          const checked = excluded === null || !excluded.has(it.id) ? 'checked' : '';
+          const checked = !locked && (excluded === null || !excluded.has(it.id)) ? 'checked' : '';
           const typeLabel = it.type === 'qty' ? '数量' : 'チェック';
-          return `<label><input type="checkbox" value="${esc(it.id)}" data-cat="${esc(c.key)}" onchange="updateChecksheetCatAllCheck('${esc(c.key)}')" ${checked}>${esc(it.name)}<span style="color:#aaa;font-size:11px;margin-left:2px">（${typeLabel}）</span></label>`;
+          return `<label><input type="checkbox" value="${esc(it.id)}" data-cat="${esc(c.key)}" onchange="updateChecksheetCatAllCheck('${esc(c.key)}')" ${checked} ${locked ? 'disabled' : ''}>${esc(it.name)}<span style="color:#aaa;font-size:11px;margin-left:2px">（${typeLabel}）</span></label>`;
         }).join('') +
         `</div>`;
     }).join('') +
