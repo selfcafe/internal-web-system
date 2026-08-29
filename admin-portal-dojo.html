@@ -817,7 +817,7 @@ M.push({
             <div style="background:#fffef0;border-radius:8px;padding:12px 14px;margin-bottom:14px">
               <div style="font-weight:600;font-size:12px;color:#888;margin-bottom:8px">基準座標</div>
               <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:6px">
-                <input type="text" class="p-select" style="flex:1;min-width:220px" placeholder="店舗名・住所で検索（例: セルフカフェささしまライブ店 / 東京都渋谷区神南1-1）" value="${esc(s.geoQuery)}" oninput="Trainer.setAttGeoQuery(this.value)">
+                <input type="text" class="p-select" style="flex:1;min-width:220px" placeholder="店舗名・住所で検索（例: セルフカフェささしまライブ店 / 愛知県名古屋市中村区平池町４丁目６０−１４）" value="${esc(s.geoQuery)}" oninput="Trainer.setAttGeoQuery(this.value)">
                 <button id="btnGeocodeAtt" class="p-btn2" onclick="Trainer.act('geocode-att')">検索して自動入力</button>
               </div>
               ${s.lat ? `<div style="font-size:12px;color:#22703d">緯度: ${esc(s.lat)} / 経度: ${esc(s.lng)}　<a href="#" onclick="return false" style="color:#3b82f6">📍地図で確認</a></div>`
