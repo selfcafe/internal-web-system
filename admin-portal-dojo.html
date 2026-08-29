@@ -74,6 +74,11 @@ button{ font-family:inherit; cursor:pointer; }
 .brand-text p{ margin:2px 0 0; font-size:11.5px; color:var(--ink-soft); font-weight:500; }
 
 .rail-modules{ display:flex; flex-direction:column; gap:4px; }
+.rail-part-hdr{
+  font-size:10.5px; font-weight:800; letter-spacing:.08em; text-transform:uppercase;
+  color:var(--ink-soft); padding:14px 10px 4px;
+}
+.rail-part-hdr:first-child{ padding-top:2px; }
 .mod-btn{
   display:flex; align-items:center; gap:11px; width:100%; text-align:left;
   background:transparent; border:1px solid transparent; border-radius:11px; padding:9px 10px;
@@ -379,8 +384,47 @@ function renderMockHeader(s){
 }
 
 /* ============ MODULE 01: ログインと画面構成 ============ */
+
+
+/* ============ MODULE 02: 発注依頼への対応 ============ */
+
+
+/* ============ MODULE 03: 商品設定と商品コード ============ */
+function vendorChecklist(prefix, excluded){
+  return VENDORS.map(v => `
+    <div class="chk-vendor">
+      <div class="chk-vendor-hd"><span>${esc(v.label)}</span>
+        <label style="display:flex;align-items:center;gap:5px;font-weight:600">
+          <input type="checkbox" ${v.items.every(it=>!excluded.has(v.key+'|'+it))?'checked':''}
+            onchange="Trainer.toggleVendorAll('${prefix}','${v.key}', this.checked)"> 全選択
+        </label>
+      </div>
+      <div class="chk-grid">
+        ${v.items.map(it => `
+          <label class="chk-item"><input type="checkbox" ${excluded.has(v.key+'|'+it)?'':'checked'}
+            onchange="Trainer.toggleVendorItem('${prefix}','${v.key}','${esc(it)}', this.checked)">${esc(it)}</label>`).join('')}
+      </div>
+    </div>`).join('');
+}
+
+
+/* ============ MODULE 04: チェックシートの設定 ============ */
+
+
+/* ============ MODULE 05: 棚卸表の確認 ============ */
+
+
+/* ============ MODULE 06: その他の機能 ============ */
+
+
+/* ============ MODULE 07: まとめ ============ */
+
+
+
+/* ============ MODULE 01: ログインと画面構成 ============ */
+
 M.push({
-  id:'login', eyebrow:'Basics', title:'ログインと画面構成',
+  id:'login', eyebrow:'Basics', title:'ログインと画面構成', part:'ops',
   state:{ menuOpen:false, view:'overview' },
   render(s){
     return `
@@ -415,8 +459,9 @@ M.push({
 });
 
 /* ============ MODULE 02: 発注依頼への対応 ============ */
+
 M.push({
-  id:'orders', eyebrow:'Daily operation', title:'発注依頼への対応',
+  id:'orders', eyebrow:'Daily operation', title:'発注依頼への対応', part:'ops',
   state:{ rows:[
     {id:1, store:'渋谷神南', item:'ブレンドコーヒー豆', qty:'2ケース', status:'確認中', open:false, orderDate:'', actualQty:'2', unit:'ケース'},
     {id:2, store:'ささしまライブ', item:'紅茶（粉末）', qty:'1ケース', status:'確認中', open:false, orderDate:'', actualQty:'1', unit:'ケース'},
@@ -486,31 +531,95 @@ M.push({
   },
 });
 
-/* ============ MODULE 03: 商品設定と商品コード ============ */
-function vendorChecklist(prefix, excluded){
-  return VENDORS.map(v => `
-    <div class="chk-vendor">
-      <div class="chk-vendor-hd"><span>${esc(v.label)}</span>
-        <label style="display:flex;align-items:center;gap:5px;font-weight:600">
-          <input type="checkbox" ${v.items.every(it=>!excluded.has(v.key+'|'+it))?'checked':''}
-            onchange="Trainer.toggleVendorAll('${prefix}','${v.key}', this.checked)"> 全選択
-        </label>
-      </div>
-      <div class="chk-grid">
-        ${v.items.map(it => `
-          <label class="chk-item"><input type="checkbox" ${excluded.has(v.key+'|'+it)?'':'checked'}
-            onchange="Trainer.toggleVendorItem('${prefix}','${v.key}','${esc(it)}', this.checked)">${esc(it)}</label>`).join('')}
-      </div>
-    </div>`).join('');
-}
+/* ============ MODULE 03: 棚卸表の確認 ============ */
+
 M.push({
-  id:'products', eyebrow:'Master data', title:'商品設定と商品コード',
+  id:'inventory', eyebrow:'Monthly closing', title:'棚卸表の確認', part:'ops',
+  state:{ confirmOpen:false, submitted:false },
+  render(s){
+    return `
+    <div class="eyebrow">03 · Monthly closing</div>
+    <h3 class="stage-h">棚卸表の確認</h3>
+    <div class="note note-tip"><b>締め日ルール(試験段階)</b>原則<b>月末</b>に棚卸作業を行います。月末が難しい場合は前日・前々日でも構いません。月内で完結させるルールで、翌月への持ち越しはありません。チェックシートのカレンダー月とは異なるので注意してください。</div>
+    <div class="tbl-wrap">
+      <table class="tbl">
+        <thead><tr><th>項目</th><th>内容</th></tr></thead>
+        <tbody>
+          <tr><td>期首在庫</td><td>前月の期末在庫を自動で引き継ぎ</td></tr>
+          <tr><td>当月納品</td><td>「納品済み」の自動集計＋本部の手動入力の合計</td></tr>
+          <tr><td>期末在庫</td><td>パートナーが直接入力</td></tr>
+          <tr><td>消費量</td><td>期首在庫＋当月納品−期末在庫（計算値）</td></tr>
+          <tr><td>処分数量</td><td>消費期限切れ等の処分数（任意入力）</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div class="portal" style="margin-top:20px"><div class="p-body">
+      <div class="p-row">
+        <span class="name">渋谷神南店 — 2026年8月分</span>
+        <span class="pill pill-wait">${s.submitted ? '送信済み' : '未送信'}</span>
+        <button class="p-btn2" ${s.submitted?'disabled':''} onclick="Trainer.act('click-complete')">棚卸完了</button>
+      </div>
+      <div class="note" style="background:var(--surface-2);border:1px solid var(--line)">デイリーカウントの合計と消費量に差がありますが、これは<b>あくまで参考表示</b>で送信をブロックしません。</div>
+    </div></div>
+    <div class="note note-tip"><b>盗難検知機能（管理者専用）</b>ステラの実売上数量と棚卸ベースの消費量を突き合わせます。対象は「販売品」（お菓子・アイス等の単品購入）のみで、ドリンク類（会員消費）は対象外です。</div>
+    <div class="note"><b>店舗間の在庫移動があった場合</b>移動元は棚卸完了時の「処分数量」に含めて入力。移動先は本部が「当月納品（手動）」のスプレッドシートへ1行追加します。</div>
+    ${s.confirmOpen ? `
+    <div class="modal-scrim" onclick="if(event.target===this)Trainer.act('cancel-complete')">
+      <div class="modal">
+        <h4>⚠ 期限切れの商品があります</h4>
+        <p style="font-size:13px;color:var(--ink-soft)">期限切れの商品が含まれていますが、棚卸完了は常に押せます。このまま送信しますか？</p>
+        <div class="modal-actions">
+          <button class="p-btn2 ghost" onclick="Trainer.act('cancel-complete')">キャンセル</button>
+          <button class="p-btn2" onclick="Trainer.act('confirm-complete')">送信する</button>
+        </div>
+      </div>
+    </div>` : ''}
+    `;
+  },
+  steps:[
+    { target:'.tbl-wrap', expect:null, msg:'棚卸表の各項目の意味を確認しましょう。「消費量」は計算値で、パートナーが直接入力する項目ではありません。' },
+    { target:'.p-btn2', expect:'click-complete',
+      msg:'期限切れ商品がある状態の「<b>棚卸完了</b>」を<b>クリック</b>してみましょう。確認ダイアログが出ます。' },
+    { target:'.modal .p-btn2:not(.ghost)', expect:'confirm-complete',
+      msg:'ダイアログの「<b>送信する</b>」を<b>クリック</b>。デイリーカウントとの不一致は参考表示なので、送信はブロックされません。' },
+  ],
+  onAct(id, s){
+    if (id === 'click-complete') s.confirmOpen = true;
+    if (id === 'cancel-complete') s.confirmOpen = false;
+    if (id === 'confirm-complete') { s.confirmOpen = false; s.submitted = true; toast('✓ 棚卸表を送信しました'); }
+  },
+});
+
+/* ============ MODULE 04: 忘れ物一覧・請求書の確認 ============ */
+
+M.push({
+  id:'other-view', eyebrow:'Status', title:'忘れ物一覧・請求書の確認', part:'ops',
+  state:{},
+  render(s){
+    return `
+    <div class="eyebrow">04 · Status</div>
+    <h3 class="stage-h">忘れ物一覧・請求書の確認</h3>
+    <ul style="font-size:13.5px;line-height:2;color:var(--ink-soft);padding-left:20px">
+      <li><b style="color:var(--ink)">忘れ物一覧</b> — 店舗からの忘れ物登録を一覧で確認できます。</li>
+      <li><b style="color:var(--ink)">請求書（本番稼働中）</b> — ヘッダーの「請求」ボタンから、請求一覧・請求設定の2タブに入れます。</li>
+    </ul>`;
+  },
+  steps:[
+    { target:null, expect:null, msg:'忘れ物一覧・請求書はどちらも閲覧が中心の機能です。特別な設定は不要です。' },
+  ],
+  onAct(){}
+});
+
+/* ============ MODULE 05 (Part2-01): 商品設定と商品コード ============ */
+
+M.push({
+  id:'products', eyebrow:'Master data', title:'商品設定と商品コード', part:'setup',
   state:{ settingsOpen:false, accOpen:false, store:'', storeQuery:'', excluded:new Set(),
            addStoreScoped:false, addStores:new Set() },
   render(s){
     const filteredStores = STORE_SAMPLE.filter(st => st.name.includes(s.storeQuery));
     return `
-    <div class="eyebrow">03 · Master data</div>
+    <div class="eyebrow">01 · Master data</div>
     <h3 class="stage-h">商品設定と商品コード</h3>
     <p class="section-lede">「商品設定」では取引先（ベンダー）ごとに商品を管理し、商品名・単価・並び順・<b>商品コード</b>を編集します。商品コードはパートナー画面には出ませんが、外部スプレッドシート連携で商品を一意に識別する重要な値です。</p>
 
@@ -605,13 +714,14 @@ M.push({
   },
 });
 
-/* ============ MODULE 04: チェックシートの設定 ============ */
+/* ============ MODULE 06 (Part2-02): チェックシートの設定 ============ */
+
 M.push({
-  id:'checksheet', eyebrow:'Configuration', title:'チェックシートの設定',
+  id:'checksheet', eyebrow:'Configuration', title:'チェックシートの設定', part:'setup',
   state:{ csAccOpenIdx:-1, store:'', excluded:new Set() },
   render(s){
     return `
-    <div class="eyebrow">04 · Configuration</div>
+    <div class="eyebrow">02 · Configuration</div>
     <h3 class="stage-h">チェックシートの設定</h3>
     <p class="section-lede">チェックシートは「デイリーカウント（数量記録）」と「清掃・点検（チェック項目）」の2種類。まずデイリーカウントの対象はベンダー設定と自動連動する点を押さえましょう。</p>
     <div class="tbl-wrap">
@@ -684,78 +794,17 @@ M.push({
   },
 });
 
-/* ============ MODULE 05: 棚卸表の確認 ============ */
-M.push({
-  id:'inventory', eyebrow:'Monthly closing', title:'棚卸表の確認',
-  state:{ confirmOpen:false, submitted:false },
-  render(s){
-    return `
-    <div class="eyebrow">05 · Monthly closing</div>
-    <h3 class="stage-h">棚卸表の確認</h3>
-    <div class="note note-tip"><b>締め日ルール(試験段階)</b>原則<b>月末</b>に棚卸作業を行います。月末が難しい場合は前日・前々日でも構いません。月内で完結させるルールで、翌月への持ち越しはありません。チェックシートのカレンダー月とは異なるので注意してください。</div>
-    <div class="tbl-wrap">
-      <table class="tbl">
-        <thead><tr><th>項目</th><th>内容</th></tr></thead>
-        <tbody>
-          <tr><td>期首在庫</td><td>前月の期末在庫を自動で引き継ぎ</td></tr>
-          <tr><td>当月納品</td><td>「納品済み」の自動集計＋本部の手動入力の合計</td></tr>
-          <tr><td>期末在庫</td><td>パートナーが直接入力</td></tr>
-          <tr><td>消費量</td><td>期首在庫＋当月納品−期末在庫（計算値）</td></tr>
-          <tr><td>処分数量</td><td>消費期限切れ等の処分数（任意入力）</td></tr>
-        </tbody>
-      </table>
-    </div>
-    <div class="portal" style="margin-top:20px"><div class="p-body">
-      <div class="p-row">
-        <span class="name">渋谷神南店 — 2026年8月分</span>
-        <span class="pill pill-wait">${s.submitted ? '送信済み' : '未送信'}</span>
-        <button class="p-btn2" ${s.submitted?'disabled':''} onclick="Trainer.act('click-complete')">棚卸完了</button>
-      </div>
-      <div class="note" style="background:var(--surface-2);border:1px solid var(--line)">デイリーカウントの合計と消費量に差がありますが、これは<b>あくまで参考表示</b>で送信をブロックしません。</div>
-    </div></div>
-    <div class="note note-tip"><b>盗難検知機能（管理者専用）</b>ステラの実売上数量と棚卸ベースの消費量を突き合わせます。対象は「販売品」（お菓子・アイス等の単品購入）のみで、ドリンク類（会員消費）は対象外です。</div>
-    <div class="note"><b>店舗間の在庫移動があった場合</b>移動元は棚卸完了時の「処分数量」に含めて入力。移動先は本部が「当月納品（手動）」のスプレッドシートへ1行追加します。</div>
-    ${s.confirmOpen ? `
-    <div class="modal-scrim" onclick="if(event.target===this)Trainer.act('cancel-complete')">
-      <div class="modal">
-        <h4>⚠ 期限切れの商品があります</h4>
-        <p style="font-size:13px;color:var(--ink-soft)">期限切れの商品が含まれていますが、棚卸完了は常に押せます。このまま送信しますか？</p>
-        <div class="modal-actions">
-          <button class="p-btn2 ghost" onclick="Trainer.act('cancel-complete')">キャンセル</button>
-          <button class="p-btn2" onclick="Trainer.act('confirm-complete')">送信する</button>
-        </div>
-      </div>
-    </div>` : ''}
-    `;
-  },
-  steps:[
-    { target:'.tbl-wrap', expect:null, msg:'棚卸表の各項目の意味を確認しましょう。「消費量」は計算値で、パートナーが直接入力する項目ではありません。' },
-    { target:'.p-btn2', expect:'click-complete',
-      msg:'期限切れ商品がある状態の「<b>棚卸完了</b>」を<b>クリック</b>してみましょう。確認ダイアログが出ます。' },
-    { target:'.modal .p-btn2:not(.ghost)', expect:'confirm-complete',
-      msg:'ダイアログの「<b>送信する</b>」を<b>クリック</b>。デイリーカウントとの不一致は参考表示なので、送信はブロックされません。' },
-  ],
-  onAct(id, s){
-    if (id === 'click-complete') s.confirmOpen = true;
-    if (id === 'cancel-complete') s.confirmOpen = false;
-    if (id === 'confirm-complete') { s.confirmOpen = false; s.submitted = true; toast('✓ 棚卸表を送信しました'); }
-  },
-});
+/* ============ MODULE 07 (Part2-03): 業務開始管理の設定 ============ */
 
-/* ============ MODULE 06: その他の機能 ============ */
 M.push({
-  id:'other', eyebrow:'Status', title:'その他の機能',
+  id:'attendance', eyebrow:'Setup', title:'業務開始管理（勤怠打刻）の設定', part:'setup',
   state:{ attOpen:false, store:'', enabled:false, staff:[], newName:'', schedType:'interval' },
   render(s){
     return `
-    <div class="eyebrow">06 · Status</div>
-    <h3 class="stage-h">その他の機能</h3>
-    <ul style="font-size:13.5px;line-height:2;color:var(--ink-soft);padding-left:20px">
-      <li><b style="color:var(--ink)">忘れ物一覧</b> — 店舗からの忘れ物登録を一覧で確認できます。</li>
-      <li><b style="color:var(--ink)">請求書（本番稼働中）</b> — ヘッダーの「請求」ボタンから、請求一覧・請求設定の2タブに入れます。</li>
-    </ul>
+    <div class="eyebrow">03 · Setup</div>
+    <h3 class="stage-h">業務開始管理（勤怠打刻）の設定</h3>
+    <p class="section-lede">「業務管理」ボタンから入る、店舗ごとの出勤打刻機能の設定です。有効化・基準座標・スタッフ登録・勤務スケジュールをここで行います。</p>
 
-    <h3 style="font-size:15px;margin:22px 0 10px">業務開始管理（試験導入）の設定手順</h3>
     <div class="portal"><div class="p-body">
       <div class="acc ${s.attOpen?'open':''}">
         <div class="acc-hd" onclick="Trainer.act('toggle-att-acc')"><span class="acc-chevron">▶</span>業務開始管理（試験導入）</div>
@@ -830,9 +879,10 @@ M.push({
   },
 });
 
-/* ============ MODULE 07: まとめ ============ */
+/* ============ MODULE 08: まとめ ============ */
+
 M.push({
-  id:'todo', eyebrow:'Wrap-up', title:'まとめ',
+  id:'todo', eyebrow:'Wrap-up', title:'まとめ', part:'wrap',
   state:{},
   render(s, isFinished){
     if (!isFinished) return `
@@ -911,8 +961,8 @@ const Trainer = {
     this.rerenderStage();
   },
 
-  selectAttStore(v){ byId('other').state.store = v; this.act('select-att-store'); },
-  setNewName(v){ byId('other').state.newName = v; this.rerenderStage(); },
+  selectAttStore(v){ byId('attendance').state.store = v; this.act('select-att-store'); },
+  setNewName(v){ byId('attendance').state.newName = v; this.rerenderStage(); },
   advanceStep(auto){
     const mod = this.mod;
     if (T.stepIndex < mod.steps.length - 1) {
@@ -945,6 +995,28 @@ const Trainer = {
     document.getElementById('stage').innerHTML = mod.render(mod.state, finished);
     this.positionSpotlight();
   },
+  _renderRailModules(){
+    const PART_LABELS = { ops:'操作説明', setup:'管理者が設定する項目' };
+    let lastPart = null, partCounter = 0;
+    return M.map((m,i) => {
+      let header = '';
+      if (m.part !== lastPart && PART_LABELS[m.part]) {
+        header = `<div class="rail-part-hdr">${esc(PART_LABELS[m.part])}</div>`;
+        partCounter = 0;
+      }
+      lastPart = m.part;
+      const numLabel = PART_LABELS[m.part] ? String(++partCounter).padStart(2,'0') : '🏁';
+      return `${header}
+        <button class="mod-btn ${i===T.moduleIndex?'active':''} ${T.completed.has(m.id)?'done':''}" onclick="Trainer.gotoModule(${i})">
+          <span class="mod-num">${numLabel}</span>
+          <span style="display:flex;flex-direction:column">
+            <span class="mod-eyebrow">${esc(m.eyebrow)}</span>
+            <span class="mod-title">${esc(m.title)}</span>
+          </span>
+          ${i===T.moduleIndex ? `<span class="mod-progress">${T.stepIndex+1}/${m.steps.length}</span>` : ''}
+        </button>`;
+    }).join('');
+  },
   renderRail(){
     const rail = document.getElementById('rail');
     rail.innerHTML = `
@@ -952,17 +1024,7 @@ const Trainer = {
         <div class="brand-mark">🥋</div>
         <div class="brand-text"><h1>管理者ポータル道場</h1><p>実際の操作を模擬データで練習</p></div>
       </div>
-      <div class="rail-modules">
-        ${M.map((m,i) => `
-          <button class="mod-btn ${i===T.moduleIndex?'active':''} ${T.completed.has(m.id)?'done':''}" onclick="Trainer.gotoModule(${i})">
-            <span class="mod-num">${String(i+1).padStart(2,'0')}</span>
-            <span style="display:flex;flex-direction:column">
-              <span class="mod-eyebrow">${esc(m.eyebrow)}</span>
-              <span class="mod-title">${esc(m.title)}</span>
-            </span>
-            ${i===T.moduleIndex ? `<span class="mod-progress">${T.stepIndex+1}/${m.steps.length}</span>` : ''}
-          </button>`).join('')}
-      </div>
+      <div class="rail-modules">${this._renderRailModules()}</div>
       <div class="rail-foot">
         <button class="rail-btn" onclick="Trainer.resetAll()">🔁 進捗をリセット</button>
       </div>`;
