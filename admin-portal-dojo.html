@@ -126,14 +126,25 @@ button{ font-family:inherit; cursor:pointer; }
 
 /* ----- mock "real product" chrome (its own green identity) ----- */
 .portal{ background:var(--surface); border:1px solid var(--line); border-radius:10px; box-shadow:var(--shadow); }
-.portal-hd{ background:var(--product); color:#fff; padding:14px 18px; display:flex; align-items:center; gap:10px; flex-wrap:wrap; border-radius:9px 9px 0 0; }
-.portal-hd .p-logo{ font-weight:900; font-size:14px; letter-spacing:.02em; margin-right:auto; }
+/* 実サイトのヘッダーはカード状ではなく、クリーム背景に直接ロゴ・ボタン・タイトルが
+   並ぶフラットな構造（ボタンごとに色が違う: 業務管理=緑実線／マニュアル=緑線／
+   請求=グレー／ログアウト=濃グレー／メニュー・設定=濃緑）。2026-08-29、実サイトの
+   レイアウトに合わせて.portal-hd(色付きバー)方式から作り直した。 */
+.mock-header{ padding:2px 4px 0; }
+.mock-header-row{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px; }
+.mock-header-row.top{ justify-content:space-between; }
+.mock-header-row h1{ font-size:21px; color:var(--product); font-weight:700; margin:0; }
+.mock-logo{ height:24px; width:auto; display:block; }
 .p-btn{
-  background:rgba(255,255,255,.14); color:#fff; border:1px solid rgba(255,255,255,.5); border-radius:8px;
-  padding:7px 12px; font-size:12px; font-weight:700; white-space:nowrap;
+  background:var(--product); color:#fff; border:none; border-radius:8px;
+  padding:9px 13px; font-size:12.5px; font-weight:700; white-space:nowrap;
 }
-.p-btn:hover{ background:rgba(255,255,255,.24); }
-.p-btn.solid{ background:#fff; color:var(--product-deep); border-color:#fff; }
+.p-btn:hover{ filter:brightness(1.08); }
+.p-btn.ghost{ background:transparent; color:var(--product); border:1px solid var(--product); }
+.p-btn.gray{ background:#8a8f7e; }
+.p-btn.graydark{ background:#6b7280; }
+.p-btn.solid{ background:#1a5c30; font-size:15px; padding:9px 13px; }
+.p-region-tabs{ display:flex; gap:4px; padding:8px 10px 0; flex-wrap:wrap; background:linear-gradient(180deg,#dfc35a,#b6952f); border-radius:9px 9px 0 0; }
 .p-menu-wrap{ position:relative; }
 .p-menu-dd{
   position:absolute; top:calc(100% + 8px); left:0; background:var(--surface); color:var(--ink);
@@ -335,27 +346,43 @@ function closeModal(){ document.getElementById('activeModal')?.remove(); }
 
 const M = []; // モジュール配列（あとで push）
 
-/* ---------- ヘッダー（モジュール1・7で使う簡易ヘッダー） ---------- */
+/* ---------- ヘッダー（モジュール1で使う簡易ヘッダー） ----------
+   実サイト(index.html)のpage-header/sub-nav-wrapの構造・配色に合わせている:
+   ロゴ＋ボタン列 → タイトル＋メニュー＋設定 → エリアタブ(ゴールド帯) → 表示タブ(濃緑帯)。
+   カード状の色付きバーではなく、クリーム背景に直接乗るフラットな見た目。 */
 function renderMockHeader(s){
   const menuOpen = s.menuOpen ? 'open' : '';
   return `
-  <div class="portal-hd">
-    <div class="p-logo">Self Cafe 管理者ポータル</div>
-    <div class="p-menu-wrap">
-      <button class="p-btn" onclick="Trainer.act('open-menu')">☰ メニュー</button>
-      <div class="p-menu-dd ${menuOpen}">
-        <div class="p-menu-sec">エリア</div>
-        <div class="p-menu-item">東海</div><div class="p-menu-item">関西</div><div class="p-menu-item">関東</div>
-        <div class="p-menu-sec">表示</div>
-        <div class="p-menu-item" onclick="event.stopPropagation();Trainer.act('menu-view-overview')">発注依頼一覧</div>
-        <div class="p-menu-item" id="menu-item-history" onclick="event.stopPropagation();Trainer.act('menu-view-history')">履歴</div>
-        <div class="p-menu-item">忘れ物一覧</div>
+  <div class="mock-header">
+    <div class="mock-header-row top">
+      <img class="mock-logo" src="logo-horizontal.png" alt="セルフカフェ">
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="p-btn" onclick="Trainer.act('open-attendance')">業務管理</button>
+        <button class="p-btn ghost" onclick="Trainer.act('open-manual')">マニュアル</button>
+        <button class="p-btn gray">請求</button>
+        <button class="p-btn graydark">ログアウト</button>
       </div>
     </div>
-    <button class="p-btn" onclick="Trainer.act('open-attendance')">業務管理</button>
-    <button class="p-btn solid" onclick="Trainer.act('open-settings')">設定</button>
-    <button class="p-btn">請求</button>
-    <button class="p-btn">ログアウト</button>
+    <div class="mock-header-row">
+      <h1>管理者ポータル</h1>
+      <div class="p-menu-wrap" style="margin-left:auto">
+        <button class="p-btn" onclick="Trainer.act('open-menu')">☰ メニュー</button>
+        <div class="p-menu-dd ${menuOpen}">
+          <div class="p-menu-sec">エリア</div>
+          <div class="p-menu-item">東海</div><div class="p-menu-item">関西</div><div class="p-menu-item">関東</div>
+          <div class="p-menu-sec">表示</div>
+          <div class="p-menu-item" onclick="event.stopPropagation();Trainer.act('menu-view-overview')">発注依頼一覧</div>
+          <div class="p-menu-item" id="menu-item-history" onclick="event.stopPropagation();Trainer.act('menu-view-history')">履歴</div>
+          <div class="p-menu-item">忘れ物一覧</div>
+        </div>
+      </div>
+      <button class="p-btn solid" onclick="Trainer.act('open-settings')">設定</button>
+    </div>
+  </div>
+  <div class="p-region-tabs">
+    <button class="p-tab active">東海</button>
+    <button class="p-tab">関西</button>
+    <button class="p-tab">関東</button>
   </div>
   <div class="p-tabs">
     <button class="p-tab ${s.view==='overview'?'active':''}">発注依頼一覧</button>
@@ -364,13 +391,6 @@ function renderMockHeader(s){
   </div>`;
 }
 
-/* ============ MODULE 01: ログインと画面構成 ============ */
-
-
-/* ============ MODULE 02: 発注依頼への対応 ============ */
-
-
-/* ============ MODULE 03: 商品設定と商品コード ============ */
 function vendorChecklist(prefix, excluded){
   return VENDORS.map(v => `
     <div class="chk-vendor">
@@ -389,21 +409,7 @@ function vendorChecklist(prefix, excluded){
 }
 
 
-/* ============ MODULE 04: チェックシートの設定 ============ */
-
-
-/* ============ MODULE 05: 棚卸表の確認 ============ */
-
-
-/* ============ MODULE 06: その他の機能 ============ */
-
-
-/* ============ MODULE 07: まとめ ============ */
-
-
-
 /* ============ MODULE 01: ログインと画面構成 ============ */
-
 M.push({
   id:'login', eyebrow:'Basics', title:'ログインと画面構成', part:'ops',
   state:{ menuOpen:false, view:'overview' },
@@ -412,7 +418,8 @@ M.push({
     <div class="eyebrow">01 · Basics</div>
     <h3 class="stage-h">ログインと画面構成</h3>
     <p class="section-lede">管理者ポータルはパートナー用ポータルとは別画面です。まずは上部メニューの並びを確認しましょう。「メニュー」でエリア・表示の切替、右側で設定や業務管理に入れます。</p>
-    <div class="portal">${renderMockHeader(s)}
+    ${renderMockHeader(s)}
+    <div class="portal" style="margin-top:14px">
       <div class="p-body">
         <div class="p-row"><span class="name">${s.view==='history' ? '（履歴タブに切り替わりました）' : '発注依頼一覧が表示されています'}</span></div>
       </div>
