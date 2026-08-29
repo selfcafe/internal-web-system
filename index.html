@@ -1486,12 +1486,12 @@ const MANUAL_DOCS = [
   { label: 'パートナー操作ガイド', url: () => `guide.html?machine=${encodeURIComponent(getStoreMachineType(storeTab))}&op=${encodeURIComponent(getStoreOperationType(storeTab))}` },
 ];
 
-// 管理者向けマニュアルメニューの中身。「管理者ポータル道場」は外部（Claude Artifacts）で
-// ホストされている練習用サンドボックスで、社外の人が見ることもあるため個別リンクで
-// 案内するのではなくここに正式な項目として並べる（2026-08-29、ユーザー依頼）。
+// 管理者向けマニュアルメニューの中身。「管理者ポータル道場」は元々Claude Artifactsで
+// 公開していたが、共有範囲を「リンクを知っている全員」にできなかったため、
+// このリポジトリ内のファイル（GitHub Pages配信）に移した（2026-08-29、ユーザー依頼）。
 const ADMIN_MANUAL_DOCS = [
   { label: '管理者ガイド', url: 'admin-guide.html' },
-  { label: '管理者ポータル道場（練習用）', url: 'https://claude.ai/code/artifact/64c839e1-a2ac-4b64-8aa8-4b2a6ed60a1d' },
+  { label: '管理者ポータル道場（練習用）', url: 'admin-portal-dojo.html' },
 ];
 
 function buildManualMenu(docs) {
