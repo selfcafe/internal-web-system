@@ -1842,17 +1842,19 @@ function updateInventoryField(idx, field, value) {
 const INVENTORY_EXPIRED_NOTICE = '期限切れの商品があります。確認してください。処分の際は期末在庫を処分後の数字に修正し、処分数量欄に処分した個数を入力してください';
 const INVENTORY_NEARING_NOTICE = '消費期限が近付いています。期限までに消費しきれない場合はスタッフに連絡してください。';
 
-// 締め日ルール：当月6日〜翌月5日の入力はすべて当月分として扱う
+// 締め日ルール（2026-08-29改定・試験段階）：月末締め。翌月への持ち越しは無くし、月内で完結させる。
+// 月末での実施が難しい場合は前日・前々日でもよいという運用上の許容であり、
+// 「当月分」と判定する対象月自体は常にその日が属するカレンダー月そのもの（旧ルールの
+// 「当月6日〜翌月5日を当月分とする」というシフトは廃止）。
 function getInventoryPeriod(baseDate) {
   const d = baseDate || new Date();
-  const shifted = d.getDate() <= 5 ? new Date(d.getFullYear(), d.getMonth() - 1, 1) : new Date(d.getFullYear(), d.getMonth(), 1);
-  const label = `${shifted.getFullYear()}-${String(shifted.getMonth() + 1).padStart(2, '0')}`;
-  const monthEnd = new Date(shifted.getFullYear(), shifted.getMonth() + 1, 0);
-  const deadline = new Date(shifted.getFullYear(), shifted.getMonth() + 1, 5);
+  const label = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+  const monthEnd = new Date(d.getFullYear(), d.getMonth() + 1, 0);
+  const earliestClose = new Date(monthEnd.getFullYear(), monthEnd.getMonth(), monthEnd.getDate() - 2);
   return {
-    label, year: shifted.getFullYear(), month: shifted.getMonth() + 1,
-    startLabel: `${monthEnd.getMonth() + 1}/${monthEnd.getDate()}`,
-    deadlineLabel: `${deadline.getMonth() + 1}/${deadline.getDate()}`,
+    label, year: d.getFullYear(), month: d.getMonth() + 1,
+    startLabel: `${earliestClose.getMonth() + 1}/${earliestClose.getDate()}`,
+    deadlineLabel: `${monthEnd.getMonth() + 1}/${monthEnd.getDate()}`,
   };
 }
 function _prevPeriodLabel(label) {
@@ -2262,13 +2264,13 @@ function renderInventoryInputScreen(wrap, allProducts, period, periodData) {
 
   wrap.innerHTML = `
     <div style="font-size:12px;color:#6b7263;background:#f1f3ea;border-radius:6px;padding:6px 10px;margin-bottom:10px;display:inline-block">
-      🗓 締め日ルール：原則<b>当月末から翌月5日まで</b>に棚卸作業を行ってください。（例：7/1〜7/5の入力も6月分）
+      🗓 締め日ルール：原則<b>月末</b>に棚卸作業を行ってください。月末が難しい場合は前日・前々日でも構いません（試験段階のルールです）。
     </div>
     <div style="font-size:12px;color:#6b7263;background:#f1f3ea;border-radius:6px;padding:6px 10px;margin-bottom:10px;display:inline-block">
       📦 発注タブで<b>納品済みボタンを押してから</b>棚卸完了をするようにしてください。
     </div>
     <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
-      <span style="font-size:12px;color:#6b7263">${period.year}年${period.month}月分（入力受付: ${esc(period.startLabel)}〜${esc(period.deadlineLabel)}）</span>
+      <span style="font-size:12px;color:#6b7263">${period.year}年${period.month}月分（締め日の目安: ${esc(period.startLabel)}〜${esc(period.deadlineLabel)}）</span>
     </div>
     ${expiredBanner}
     ${nearingBanner}
