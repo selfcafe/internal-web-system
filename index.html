@@ -3128,9 +3128,26 @@ const _checksheetSyncChain = {};
 // 数字が古い値に巻き戻って見えるバグが大塚店で報告された(2026-08-28)。保存中はリロードに警告を
 // 出す(beforeunload)ことと、入力欄の近くに「保存中…」を表示することの2本立てで対策する
 let _checksheetPendingSyncCount = 0;
-function _updateChecksheetSavingIndicator() {
+let _checksheetSavingIndicatorHideTimer = null;
+// okが未指定(=通常の再描画時など)なら保存中でない限り黙って非表示にするだけ。okが指定された
+// 呼び出し(_syncChecksheetToDb完了時)は、他に保存待ちが残っていなければ「保存しました/失敗しました」
+// を数秒表示してから消す。最後に入力した項目の保存が終わったことが分かるようにするため(2026-08-30)
+function _updateChecksheetSavingIndicator(ok) {
   const el = document.getElementById('checksheet-saving-indicator');
-  if (el) el.style.display = _checksheetPendingSyncCount > 0 ? '' : 'none';
+  if (!el) return;
+  clearTimeout(_checksheetSavingIndicatorHideTimer);
+  if (_checksheetPendingSyncCount > 0) {
+    el.style.display = '';
+    el.style.color = '#c98a1a';
+    el.textContent = '保存中…（完了までリロードしないでください）';
+  } else if (ok !== undefined) {
+    el.style.display = '';
+    el.style.color = ok ? '#22703d' : '#c0392b';
+    el.textContent = ok ? '✓ 保存しました' : '⚠ 保存に失敗しました。もう一度お試しください';
+    _checksheetSavingIndicatorHideTimer = setTimeout(() => { el.style.display = 'none'; }, 2500);
+  } else {
+    el.style.display = 'none';
+  }
 }
 window.addEventListener('beforeunload', (e) => {
   if (_checksheetPendingSyncCount > 0) { e.preventDefault(); e.returnValue = ''; }
@@ -3141,14 +3158,15 @@ function _syncChecksheetToDb(storeId, periodLabel) {
   _checksheetPendingSyncCount++;
   _updateChecksheetSavingIndicator();
   const run = prev.catch(() => {}).then(async () => {
+    let ok = true;
     try {
       const data = getChecksheetData(storeId, periodLabel);
       await gasPost('saveChecksheetData', { storeId, periodLabel, data });
       _fbDb.ref('checksheet_updated').set({ ts: Date.now(), by: _CLIENT_ID, storeId, periodLabel });
-    } catch(e) { console.error('checksheet sync error:', e); }
+    } catch(e) { console.error('checksheet sync error:', e); ok = false; }
     finally {
       _checksheetPendingSyncCount--;
-      _updateChecksheetSavingIndicator();
+      _updateChecksheetSavingIndicator(ok);
     }
   });
   _checksheetSyncChain[key] = run;
