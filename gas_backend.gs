@@ -2724,7 +2724,15 @@ const STERA_DAILY_COLS = ['date', 'store_id', 'prd_id', 'qty'];
 
 function getSteraDailySheet_() {
   const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
-  const sheet = ss.getSheetByName(SHEET_STERA_DAILY) || ss.insertSheet(SHEET_STERA_DAILY);
+  let sheet = ss.getSheetByName(SHEET_STERA_DAILY);
+  if (!sheet) {
+    try {
+      sheet = ss.insertSheet(SHEET_STERA_DAILY);
+    } catch (e) {
+      sheet = ss.getSheetByName(SHEET_STERA_DAILY);
+      if (!sheet) throw e;
+    }
+  }
   ensureHeaders(sheet, STERA_DAILY_COLS);
   return sheet;
 }
@@ -2774,25 +2782,28 @@ function importSteraDailySales(dateStr, csvText) {
   }
 
   const sheet = getSteraDailySheet_();
-  // 同じdateStrの既存行を全削除してから書き直す(取り直し対応、他日には一切触れない)
-  if (sheet.getLastRow() > 1) {
-    const values = sheet.getDataRange().getValues();
-    const dIdx = STERA_DAILY_COLS.indexOf('date');
-    const toDel = [];
-    for (let i = 1; i < values.length; i++) {
-      if (String(values[i][dIdx]) === String(dateStr)) toDel.push(i + 1);
-    }
-    for (let i = toDel.length - 1; i >= 0; i--) sheet.deleteRow(toDel[i]);
-  }
+  const dIdx = STERA_DAILY_COLS.indexOf('date');
+  // 同じdateStrの既存行を除いた残り行を求め、一括clear+一括書き直しで置き換える(取り直し対応、
+  // 他日には一切触れない)。以前はdeleteRowを該当行数ぶん1件ずつ呼んでいたが、蓄積データが
+  // 増えるとAPI呼び出し回数が数百に達し、Spreadsheetサービスのタイムアウトを起こしていた
+  // (2026-09-01、月初の複数店舗同時実行で発覚)。読み取り→フィルタ→一括書き込みの3回の
+  // API呼び出しだけで完結させ、削除件数に関わらず一定時間で終わるようにする。
+  const lastRow = sheet.getLastRow();
+  const keptRows = lastRow > 1
+    ? sheet.getRange(2, 1, lastRow - 1, STERA_DAILY_COLS.length).getValues()
+        .filter(row => String(row[dIdx]) !== String(dateStr))
+    : [];
 
   const newRows = Object.keys(totals).map(key => {
     const parts = key.split('|');
     return [dateStr, parts[0], parts[1], totals[key]];
   });
-  if (newRows.length) {
-    const startRow = sheet.getLastRow() + 1;
-    sheet.getRange(startRow, STERA_DAILY_COLS.indexOf('date') + 1, newRows.length, 1).setNumberFormat('@');
-    sheet.getRange(startRow, 1, newRows.length, STERA_DAILY_COLS.length).setValues(newRows);
+
+  if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, STERA_DAILY_COLS.length).clearContent();
+  const allRows = keptRows.concat(newRows);
+  if (allRows.length) {
+    sheet.getRange(2, dIdx + 1, allRows.length, 1).setNumberFormat('@');
+    sheet.getRange(2, 1, allRows.length, STERA_DAILY_COLS.length).setValues(allRows);
   }
   return { ok: true, date: dateStr, rows: newRows.length, unmatchedStores: Object.keys(unmatchedStores) };
 }
