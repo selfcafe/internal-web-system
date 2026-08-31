@@ -2377,7 +2377,20 @@ function buildStoreInventorySheet(storeId, periodLabel) {
 
   const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
   const sheetName = _storeNames_()[storeId] || storeId;
-  const sheet = ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
+  // 新規店舗の初回棚卸送信時、saveInventorySnapshotから並行して発火する複数のGETリクエスト
+  // (buildStoreInventorySheet等)が同時にこの店舗のタブをまだ「無い」と判定し、両方が
+  // insertSheetを試みて片方が「シート名は既に存在しています」で失敗する事故があった
+  // (2026-08-31、巣鴨駅南口の初回送信で発生)。getSheetByNameで再確認してから使う
+  // フォールバックを入れ、既存店舗と同じく後勝ちで安全に処理を継続できるようにする。
+  let sheet = ss.getSheetByName(sheetName);
+  if (!sheet) {
+    try {
+      sheet = ss.insertSheet(sheetName);
+    } catch (e) {
+      sheet = ss.getSheetByName(sheetName);
+      if (!sheet) throw e;
+    }
+  }
   // エリア別の色分け・正準な並び順(新しい店舗ほど後ろ)への反映(2026-08-01追加)。
   // このシートが今回新規作成された場合も含め、毎回のbuildStoreInventorySheet実行時に揃え直す
   _applyStoreTabOrderAndColors_(ss);
@@ -3176,7 +3189,17 @@ function buildStockCheckMonthly(storeId, periodLabel) {
 
   const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
   const storeName = _storeNames_()[storeId] || storeId;
-  const sheet = ss.getSheetByName(storeName) || ss.insertSheet(storeName);
+  // buildStoreInventorySheetと同じ理由(新規店舗の初回送信時、saveInventorySnapshotから並行
+  // 発火する複数リクエストがタブ作成で競合しうる)でここも同じフォールバックを入れる。
+  let sheet = ss.getSheetByName(storeName);
+  if (!sheet) {
+    try {
+      sheet = ss.insertSheet(storeName);
+    } catch (e) {
+      sheet = ss.getSheetByName(storeName);
+      if (!sheet) throw e;
+    }
+  }
   const statusCol = STOCK_CHECK_START_COL + STOCK_CHECK_HEADERS.length - 1;
   // 確認状況は管理者が手入力するメモなので、再実行のたびに消してしまわないよう既存値を読んでおき、
   // 新しい行にもそのまま引き継ぐ(他の2列=ステラ数量・差異は毎回の再計算値で上書きしてよい)
