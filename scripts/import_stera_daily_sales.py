@@ -224,16 +224,39 @@ def set_date_range(page, target_date):
     start_input.click()
     time.sleep(0.5)
 
-    # 対象月がカレンダーの左パネルに表示されていることを前提とする(前日/当日ならまず成立する)。
     left_panel = page.locator(".ant-calendar-range-left")
-    cells = left_panel.locator("td.ant-calendar-cell")
+
+    # 左パネルの表示月が対象月と一致するまで「前月」を押して合わせる(2026-09-01判明:
+    # 月をまたいだ過去日をバックフィル指定すると、左パネルは今日を含む月をデフォルト表示
+    # したままなので、対象日と同じ「日番号」が今月側の別の日にマッチしてしまう事故があった
+    # 。例: 9/1に8/26を指定すると9月26日を誤って選んでしまう。ここで対象月まで確実に
+    # ナビゲートしてから、下のセル検索でも今月以外(前月/翌月の余白セル)を除外する)
+    month_select = left_panel.locator(".ant-calendar-month-select")
+    year_select = left_panel.locator(".ant-calendar-year-select")
+    prev_month_btn = left_panel.locator(".ant-calendar-prev-month-btn")
+    for _ in range(36):  # 安全のため最大36ヶ月ぶんだけ遡る(通常は0〜1回で終わる)
+        cur_month = int(month_select.inner_text().replace("月", "").strip())
+        cur_year = int(year_select.inner_text().replace("年", "").strip())
+        if cur_year == target.year and cur_month == target.month:
+            break
+        prev_month_btn.click()
+        time.sleep(0.2)
+    else:
+        raise RuntimeError(f"カレンダーを{target.year}年{target.month}月まで移動できませんでした")
+
+    # 前月/翌月の余白セル(ant-calendar-last-month-cell / ant-calendar-next-month-btn-day)は
+    # 除外し、表示中の月に実在する日だけを対象にする(上のナビゲートと合わせて日番号の
+    # 誤マッチを防ぐ)
+    cells = left_panel.locator(
+        "td.ant-calendar-cell:not(.ant-calendar-last-month-cell):not(.ant-calendar-next-month-btn-day)"
+    )
     target_cell = None
     for i in range(cells.count()):
         if cells.nth(i).inner_text().strip() == day_str:
             target_cell = cells.nth(i)
             break
     if target_cell is None:
-        raise RuntimeError(f"カレンダーに{day_str}日のセルが見つかりません(月をまたぐ場合は要対応)")
+        raise RuntimeError(f"カレンダーに{day_str}日のセルが見つかりません")
 
     target_cell.click()
     time.sleep(0.3)
