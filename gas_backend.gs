@@ -2690,7 +2690,17 @@ function buildSalesCategoryCostRatio(storeId, periodLabel) {
   });
 
   const sheetName = storeName;
-  const sheet = ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
+  // buildStoreInventorySheet/buildStockCheckMonthlyと同じ理由(新規店舗の初回実行時の競合)
+  // でここも同じフォールバックを入れる(2026-08-31、他機能での実例を受けて予防的に適用)。
+  let sheet = ss.getSheetByName(sheetName);
+  if (!sheet) {
+    try {
+      sheet = ss.insertSheet(sheetName);
+    } catch (e) {
+      sheet = ss.getSheetByName(sheetName);
+      if (!sheet) throw e;
+    }
+  }
   const startCol = 16; // P列(既存のO列=在庫僅少より右に間隔を空ける。vendor:'other'の在庫消費率とは別集計)
   const headerRow = [`販売品類原価率(ステラ実売上ベース・${periodLabel})`, '消費額(原価)', 'ステラ売上', '原価率'];
   sheet.getRange(1, startCol, 1, headerRow.length).setValues([headerRow]);
