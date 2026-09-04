@@ -46,17 +46,24 @@ def _launch_chrome():
 
 def _close_chrome():
     """CDP接続を閉じるだけではchrome.exe自体は終了しないため、該当ポートを持つ
-    非rendererプロセスをtasklist/wmicで探してkillする([[project_kaihipay_pipeline_architecture]]と同じやり方)。"""
+    非rendererプロセスをtasklist/wmicで探してkillする([[project_kaihipay_pipeline_architecture]]と同じやり方)。
+
+    2026-09-04追記: import_stera_daily_sales.pyのkill_cdp_chrome()で2026-08-21に
+    修正済みだった「Task Scheduler経由の無人実行で空のPowerShell/コマンドプロンプト窓が
+    表示される」不具合が、このファイルには移植されていなかった。wmic/taskkillは
+    どちらもコンソールアプリのため、capture_output=Trueだけでは窓の生成自体は防げず、
+    CREATE_NO_WINDOWの明示指定が必要。"""
+    no_window = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
     try:
         result = subprocess.run(
             ["wmic", "process", "where", f"CommandLine like '%remote-debugging-port={CDP_PORT}%' and not CommandLine like '%--type=%'",
              "get", "ProcessId"],
-            capture_output=True, text=True, timeout=15,
+            capture_output=True, text=True, timeout=15, creationflags=no_window,
         )
         for line in result.stdout.splitlines():
             line = line.strip()
             if line.isdigit():
-                subprocess.run(["taskkill", "/F", "/PID", line], capture_output=True, timeout=10)
+                subprocess.run(["taskkill", "/F", "/PID", line], capture_output=True, timeout=10, creationflags=no_window)
     except Exception:
         pass
 
