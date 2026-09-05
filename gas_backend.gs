@@ -2439,7 +2439,13 @@ function _computeReorderQty_(reorderTarget, endStock, consumption, info) {
     reorderQty = Math.max(0, effectiveTarget - Number(endStock));
   }
   if (reorderQty !== '' && info.caseOnly && info.casePieces) {
-    reorderQty = Math.round(reorderQty / info.casePieces) * info.casePieces;
+    let cases = Math.round(reorderQty / info.casePieces);
+    // ケースサイズが大きく回転が遅い商品だと、期末在庫が0(売り切れ)でも端数が0.5ケースに
+    // 届かず0ケースに丸められてしまい、「在庫切れなのに発注数0」と表示される事故が起きる
+    // (2026-09-05、渋谷神南のアイス(ケース36個)で実際に発生・発覚)。丸め結果が0でも、
+    // 元の計算値(reorderQty)が0より大きく、かつ期末在庫が実際に0の場合だけ最低1ケースにする。
+    if (cases === 0 && reorderQty > 0 && Number(endStock) === 0) cases = 1;
+    reorderQty = cases * info.casePieces;
   }
   return reorderQty;
 }
@@ -2453,7 +2459,9 @@ function _reorderQtyFormulaStr_(targetCol, endStockCol, consumptionCol, caseOnly
         d = `${caseOnlyCol}${row}`, k = `${caseSizeCol}${row}`;
   const effectiveTarget = `IF(${t}<>"",${t},IF(${c}<>"",${c}*1.2,""))`;
   const base = `IF(AND(${effectiveTarget}<>"",${e}<>""),MAX(0,${effectiveTarget}-${e}),"")`;
-  return `=IFERROR(IF(AND(${d}="はい",${k}<>"",${base}<>""),ROUND(${base}/${k},0)*${k},${base}),"")`;
+  const roundedCases = `ROUND(${base}/${k},0)`;
+  const finalCases = `IF(AND(${roundedCases}=0,${base}>0,${e}=0),1,${roundedCases})`;
+  return `=IFERROR(IF(AND(${d}="はい",${k}<>"",${base}<>""),${finalCases}*${k},${base}),"")`;
 }
 
 function buildStoreInventorySheet(storeId, periodLabel) {
