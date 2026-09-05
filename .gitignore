@@ -2,5 +2,7 @@ export_*.json
 .env
 scripts/_downloads/
 .chrome_stera_profile/
+.chrome_portal_admin_profile/
 _stera_*.png
 scripts/__pycache__/
+scripts/logs/

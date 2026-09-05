@@ -47,7 +47,7 @@ from pathlib import Path
 
 import requests
 from dotenv import load_dotenv
-from playwright.sync_api import sync_playwright
+from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
 STERA_BASE_URL = "https://dashboard.sterasmartone.com"
 SCRIPT_DIR = Path(__file__).parent
@@ -95,35 +95,62 @@ def launch_cdp_chrome():
         try:
             requests.get(f"http://localhost:{CDP_PORT}/json/version", timeout=2)
             return
-        except requests.exceptions.ConnectionError:
+        except requests.exceptions.RequestException:
+            # ConnectionErrorだけでなくReadTimeout等も含めて待ち続ける
+            # (2026-08-18、ReadTimeoutが未捕捉のまま伝播しスクリプト全体が
+            # 失敗していた不具合を修正)
             time.sleep(1)
     raise RuntimeError(f"CDPポート{CDP_PORT}が起動しませんでした")
 
 
 def kill_cdp_chrome():
     """CDP接続を閉じてもchrome.exe本体は終了しない(playwright.chromium.connect_over_cdpの
-    既知の制約)ため、該当ポートで起動しているプロセスをOSレベルで終了させる。"""
+    既知の制約)ため、該当ポートで起動しているプロセスをOSレベルで終了させる。
+    2026-08-21、Task Scheduler経由の無人実行で、この呼び出しのたびに空のPowerShell
+    ウィンドウが一瞬(または残り続けて)表示される不具合が判明。capture_output=True
+    はI/Oをパイプするだけでコンソールウィンドウ自体の生成は防げないため、
+    CREATE_NO_WINDOWを明示的に指定する。"""
     subprocess.run([
         "powershell", "-Command",
         f"Get-CimInstance Win32_Process -Filter \"Name = 'chrome.exe'\" | "
         f"Where-Object {{ $_.CommandLine -match 'remote-debugging-port={CDP_PORT}' -and $_.CommandLine -notmatch '--type=' }} | "
         f"ForEach-Object {{ Stop-Process -Id $_.ProcessId -Force }}"
-    ], capture_output=True)
+    ], capture_output=True, creationflags=subprocess.CREATE_NO_WINDOW if os.name == 'nt' else 0)
 
 
 def login_if_needed(page, email, password):
+    # トップページ(/)は未ログインでもuser/loginへリダイレクトされず表示されるため、
+    # URLではなくログインフォーム(メールアドレス入力欄)の有無で判定する
+    # (2026-08-08、GitHub Actionsの初回セッション=Chromeプロファイルが空の環境で
+    # URL判定だと常に「既にログイン済み」と誤判定することが判明。ローカルPCでは
+    # プロファイルに既存セッションが残っていたため表面化していなかった)。
     page.goto(STERA_BASE_URL + "/")
     page.wait_for_load_state("domcontentloaded")
-    time.sleep(1)
-    if "user/login" not in page.url:
+    # SPAのため即座には描画されない。入力欄が出現するまで待ち、出現しなければ
+    # (タイムアウトしたら)本当にログイン済みとみなす(2026-08-08、固定sleep(1)では
+    # GitHub Actions実行環境でレンダリングに間に合わず誤判定するケースがあったため)
+    email_input = page.get_by_placeholder("メールアドレス")
+    try:
+        email_input.wait_for(state="visible", timeout=8000)
+    except PlaywrightTimeoutError:
         print("既にログイン済み:", page.url)
         return
-    page.get_by_placeholder("メールアドレス").fill(email)
+    email_input.fill(email)
     page.get_by_placeholder("パスワード").fill(password)
     page.get_by_role("button", name="ログイン").click()
-    page.wait_for_load_state("domcontentloaded")
-    time.sleep(2)
-    if "user/login" in page.url:
+    # ここも固定sleep(2)+即時判定だと、CI環境の遷移遅延で誤って「失敗」と判定しうる
+    # (2026-08-08判明)。ログインフォームがDOMから消える(=ページ遷移が完了する)まで
+    # 明示的に待ち、それでも消えなければ本当に失敗(CAPTCHA等)とみなす
+    try:
+        page.get_by_placeholder("メールアドレス").wait_for(state="detached", timeout=15000)
+    except PlaywrightTimeoutError:
+        # 実際に何が表示されているか(CAPTCHAかどうか)を後から目視確認できるよう保存する
+        DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        shot_path = DOWNLOAD_DIR / "login_failure.png"
+        try:
+            page.screenshot(path=str(shot_path))
+        except Exception:
+            pass
         raise RuntimeError(
             "ログインに失敗しました(CAPTCHA等の可能性)。--keep-openで起動し、"
             ".chrome_stera_profileのブラウザ画面を直接確認してください。"
@@ -131,13 +158,53 @@ def login_if_needed(page, email, password):
     print("ログイン完了:", page.url)
 
 
-def resolve_orders_url(page):
+def resolve_orders_url(page, max_attempts=3):
     """SaaSサービスのapp_idはアカウント固有のためハードコードせず、
-    アプリ一覧からリンクを辿って実際のURLを解決する。"""
-    page.goto(STERA_BASE_URL + "/business/apps/")
-    page.wait_for_load_state("domcontentloaded")
-    time.sleep(1)
-    page.get_by_text("SaaSサービス", exact=True).click()
+    アプリ一覧からリンクを辿って実際のURLを解決する。
+
+    2026-08-19〜20、1回きりの判定(固定sleep(1)後に即click、失敗即エラー)で
+    複数回失敗した(スクリーンショットで確認すると実際には「SaaSサービス」が
+    正しく表示されており、その日だけ描画が遅かっただけと推測される。同日、
+    page.goto自体もタイムアウトした回もあり、stera側がその日によって
+    遅いことがある模様)。kaihipay-downloaderのe-MOSS従業員一覧対応と同様、
+    goto自体のタイムアウトを延長し、要素が見つからない場合はページを
+    作り直して複数回リトライするようにした。
+
+    2026-08-21、3回リトライしても失敗した回のスクリーンショットを確認したところ、
+    エラー画面やCAPTCHAではなく「アプリ一覧」ページ中央にローディングスピナーが
+    出たままだった(=アプリ一覧を非同期取得するAPI呼び出しがまだ完了していない状態)。
+    domcontentloadedはHTML解析完了時点で発火し、この非同期取得の完了を待たないため、
+    このAPI応答が遅い日は毎回のリトライで同じ「まだ読み込み中」を捉えてタイムアウト
+    していたと考えられる。networkidle(500ms通信が無い状態)を追加で待つことで、
+    この非同期取得の完了を待てるようにする(networkidle自体がタイムアウトしても
+    致命的にはせず、そのままクリックを試す——待っても改善しない場合の保険)。"""
+    last_error = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            page.goto(STERA_BASE_URL + "/business/apps/", timeout=60000)
+            page.wait_for_load_state("domcontentloaded")
+            try:
+                page.wait_for_load_state("networkidle", timeout=15000)
+            except PlaywrightTimeoutError:
+                pass
+            page.get_by_text("SaaSサービス", exact=True).click(timeout=20000)
+            break
+        except PlaywrightTimeoutError as e:
+            last_error = e
+            print(f"「SaaSサービス」リンクが見つかりません({attempt}/{max_attempts})。再試行します。")
+            time.sleep(3)
+    else:
+        # 2026-08-19、原因不明のまま(画面が実際どうなっていたか分からず)失敗した回が
+        # あったため、ログイン失敗時と同じくスクリーンショットを残して次回の診断に使う
+        DOWNLOAD_DIR.mkdir(parents=True, exist_ok=True)
+        shot_path = DOWNLOAD_DIR / "resolve_orders_url_failure.png"
+        try:
+            page.screenshot(path=str(shot_path))
+        except Exception:
+            pass
+        raise RuntimeError(
+            f"「SaaSサービス」リンクが見つかりませんでした(画面状態を{shot_path}に保存): {last_error}"
+        )
     page.wait_for_url(re.compile(r"/apps/app_"), timeout=15000)
     page.wait_for_load_state("domcontentloaded")
     time.sleep(1)
@@ -157,16 +224,39 @@ def set_date_range(page, target_date):
     start_input.click()
     time.sleep(0.5)
 
-    # 対象月がカレンダーの左パネルに表示されていることを前提とする(前日/当日ならまず成立する)。
     left_panel = page.locator(".ant-calendar-range-left")
-    cells = left_panel.locator("td.ant-calendar-cell")
+
+    # 左パネルの表示月が対象月と一致するまで「前月」を押して合わせる(2026-09-01判明:
+    # 月をまたいだ過去日をバックフィル指定すると、左パネルは今日を含む月をデフォルト表示
+    # したままなので、対象日と同じ「日番号」が今月側の別の日にマッチしてしまう事故があった
+    # 。例: 9/1に8/26を指定すると9月26日を誤って選んでしまう。ここで対象月まで確実に
+    # ナビゲートしてから、下のセル検索でも今月以外(前月/翌月の余白セル)を除外する)
+    month_select = left_panel.locator(".ant-calendar-month-select")
+    year_select = left_panel.locator(".ant-calendar-year-select")
+    prev_month_btn = left_panel.locator(".ant-calendar-prev-month-btn")
+    for _ in range(36):  # 安全のため最大36ヶ月ぶんだけ遡る(通常は0〜1回で終わる)
+        cur_month = int(month_select.inner_text().replace("月", "").strip())
+        cur_year = int(year_select.inner_text().replace("年", "").strip())
+        if cur_year == target.year and cur_month == target.month:
+            break
+        prev_month_btn.click()
+        time.sleep(0.2)
+    else:
+        raise RuntimeError(f"カレンダーを{target.year}年{target.month}月まで移動できませんでした")
+
+    # 前月/翌月の余白セル(ant-calendar-last-month-cell / ant-calendar-next-month-btn-day)は
+    # 除外し、表示中の月に実在する日だけを対象にする(上のナビゲートと合わせて日番号の
+    # 誤マッチを防ぐ)
+    cells = left_panel.locator(
+        "td.ant-calendar-cell:not(.ant-calendar-last-month-cell):not(.ant-calendar-next-month-btn-day)"
+    )
     target_cell = None
     for i in range(cells.count()):
         if cells.nth(i).inner_text().strip() == day_str:
             target_cell = cells.nth(i)
             break
     if target_cell is None:
-        raise RuntimeError(f"カレンダーに{day_str}日のセルが見つかりません(月をまたぐ場合は要対応)")
+        raise RuntimeError(f"カレンダーに{day_str}日のセルが見つかりません")
 
     target_cell.click()
     time.sleep(0.3)
@@ -221,13 +311,22 @@ def wait_and_download(page, remark, timeout_sec=120):
     while time.time() < deadline:
         page.reload()
         page.wait_for_load_state("domcontentloaded")
-        time.sleep(2)
+        # domcontentloadedはAnt Designの一覧テーブルが非同期取得される前に発火するため、
+        # 直後に判定すると常に0件になる(2026-08-13実地検証: CSVはサーバ側で数秒で準備完了
+        # していたにもかかわらず、120秒間ずっとテーブルが空判定のままタイムアウトしていた)。
+        # このダッシュボードは常時ポーリングしておりnetworkidleには到達しないため、
+        # テーブル行の出現そのものを(タイムアウトしても無視して)個別に待つ。
+        try:
+            page.wait_for_selector("table tbody tr", timeout=10000)
+        except PlaywrightTimeoutError:
+            continue
         candidate = page.locator("tr", has_text=remark).filter(has_text="注文詳細一覧")
         if candidate.count():
             text = candidate.first.inner_text()
             if "処理完了" in text or "ダウンロード済み" in text:
                 row = candidate.first
                 break
+        time.sleep(1)
     if row is None:
         raise RuntimeError("タイムアウト: 注文詳細CSVの生成が完了しませんでした")
 
@@ -254,6 +353,44 @@ def post_to_gas(gas_url, target_date, csv_path):
     return resp.json()
 
 
+def notify_failure(script_name, error):
+    """Task Scheduler経由の無人実行だと失敗に誰も気づけないため、LINE WORKSへ通知する
+    (2026-08-15追加、GAS側のreportScriptFailureが1時間に1通へスロットリングする)。
+    通知自体が失敗しても、元のエラー(呼び出し元でraiseし直す)を握りつぶさないよう、
+    ここでは例外を外に出さずログに残すだけにする。"""
+    gas_url = os.environ.get("GAS_URL")
+    if not gas_url:
+        return
+    try:
+        requests.post(gas_url, json={
+            "action": "reportScriptFailure",
+            "message": f"{script_name}が失敗しました: {error}",
+            "key": script_name,
+        }, timeout=15)
+    except Exception as notify_err:
+        print(f"失敗通知の送信にも失敗しました: {notify_err}")
+
+
+def run_with_retry(fn, script_name, attempts=2):
+    """ここ数日の失敗はいずれも原因が毎回違う一過性のもの(404、ソケット未接続、CDP接続
+    タイムアウト、UI要素待ちタイムアウト)で、手動再実行では即成功していた。CDP Chromeを
+    起動し直して最初からやり直す1回だけの自動リトライを挟み、それでも失敗した場合だけ
+    LINE WORKSへ通知する(2026-08-19追加)。"""
+    last_err = None
+    for attempt in range(1, attempts + 1):
+        try:
+            fn()
+            return
+        except Exception as e:
+            last_err = e
+            print(f"試行{attempt}/{attempts}回目が失敗しました: {e}")
+            kill_cdp_chrome()
+            if attempt < attempts:
+                time.sleep(3)
+    notify_failure(script_name, last_err)
+    raise last_err
+
+
 def main():
     args = parse_args()
     gas_url = os.environ.get("GAS_URL")
@@ -267,8 +404,8 @@ def main():
     target_date = resolve_target_date(args.date)
     print(f"対象日: {target_date}")
 
-    launch_cdp_chrome()
-    try:
+    def _attempt():
+        launch_cdp_chrome()
         with sync_playwright() as p:
             browser = p.chromium.connect_over_cdp(f"http://localhost:{CDP_PORT}")
             context = browser.contexts[0]
@@ -290,9 +427,12 @@ def main():
             result = post_to_gas(gas_url, target_date, csv_path)
             print(f"GASへの取込み結果: {result}")
             if result.get("unmatchedStores"):
-                print(f"⚠️ 店舗名が一致しなかった行があります(stores.jsと表記が合っていない可能性): {result['unmatchedStores']}")
+                print(f"[警告] 店舗名が一致しなかった行があります(stores.jsと表記が合っていない可能性): {result['unmatchedStores']}")
             if result.get("error"):
-                sys.exit(f"エラー: {result['error']}")
+                raise RuntimeError(result["error"])
+
+    try:
+        run_with_retry(_attempt, "import_stera_daily_sales.py")
     finally:
         if not args.keep_open:
             kill_cdp_chrome()

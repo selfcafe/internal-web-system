@@ -1,0 +1,47 @@
+name: stera daily sales import
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: "対象日(YYYY-MM-DD)。省略時は前日。手動での再取込み・バックフィル用"
+        required: false
+  # scheduleトリガーは2026-08-15に削除。理由: このPC自身のタスクスケジューラ
+  # (SteraDailySalesImport、毎朝06:03)に一本化したため(kaihipay_pipeline.ymlで
+  # 既に判明していた「GitHub Actionsのscheduleは遅延・未発火が起きて信頼できない」
+  # という前例に合わせた。project_selfhosted_runner_migration.md参照)。
+  # 両方を併用すると同じPC上で同じChromeプロファイル・同じCDPポートを取り合い競合するため、
+  # 定期実行はタスクスケジューラ側だけに任せる。workflow_dispatchは手動実行用に残す。
+
+jobs:
+  import:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+
+      # このランナー(セルフホスト)には既にPythonがインストール済みのため、
+      # actions/setup-pythonは使わない(PowerShellのスクリプト実行ポリシーで
+      # インストーラーがブロックされるため、2026-08-08判明)
+      - name: Install dependencies
+        run: python -m pip install --quiet playwright requests python-dotenv
+
+      - name: Run stera import script
+        env:
+          STERA_EMAIL: ${{ secrets.STERA_EMAIL }}
+          STERA_PASSWORD: ${{ secrets.STERA_PASSWORD }}
+          GAS_URL: ${{ secrets.GAS_URL }}
+          PYTHONUTF8: "1"
+        run: |
+          if ("${{ github.event.inputs.date }}" -ne "") {
+            python scripts/import_stera_daily_sales.py --date "${{ github.event.inputs.date }}"
+          } else {
+            python scripts/import_stera_daily_sales.py
+          }
+
+      - name: Upload failure screenshot
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: login-failure-screenshot
+          path: scripts/_downloads/login_failure.png
+          if-no-files-found: ignore

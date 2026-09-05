@@ -6,7 +6,11 @@
 // 実IDは絶対にここへコミットしない。実IDはApps Scriptエディタ側（本番デプロイ環境）にのみ設定する。
 // 【設定】デプロイ前に以下2行を入力してください
 const SHEET_ID        = '';  // GoogleスプレッドシートのID
-const IMAGE_FOLDER_ID = '1adg7TQIYXSkWIo19ohVo93raDY2HsTW_';  // 画像保存用DriveフォルダのID
+// 画像保存用DriveフォルダのID。フォルダ自体の共有設定を「リンクを知っている全員：閲覧者」に
+// している（2026-08-12）ため、このフォルダ内に新しく作るファイルは何もしなくても
+// リンクで閲覧可能になる。請求書PDF等、非公開にしたいファイルは絶対にこのフォルダへ
+// 保存しないこと（別フォルダを使う。buildInvoiceReceiptPdf等が使うfolderは別物なので問題ない）
+const IMAGE_FOLDER_ID = '1adg7TQIYXSkWIo19ohVo93raDY2HsTW_';
 // 棚卸完了の送信先（別Driveの「棚卸集計」スプレッドシート、この実行アカウントに編集権限で共有しておくこと）
 const INVENTORY_SHEET_ID = '';  // 棚卸集計スプレッドシートのID
 // 月初納品分など、アプリを通さず本部が直接手配・受領した納品を本部が手入力するスプレッドシート
@@ -42,6 +46,11 @@ const ORDER_COLS = [
   'delivery_date','created_at','denied','image_url','actual_unit_mode'
 ];
 const LOST_COLS = ['id','store_id','found_date','note','image_url','added_at'];
+// マシン庫内点検写真（5カテゴリ：フィルター正面/カップ庫内/原料タンク/庫内全体/フィルター残り）。
+// 店舗によってマシン台数が異なり(1台〜複数台)、カテゴリごとに台数分の写真が必要なため、
+// 固定列ではなくphotos_json列に{カテゴリキー:[url,...]}のJSONで可変枚数を保持する
+const SHEET_MACHINE_PHOTOS = 'machine_photos';
+const MACHINE_PHOTO_COLS = ['id','store_id','machine_index','uploaded_at','photos_json'];
 // 発注を「納品済み」にした際のログ。1回の操作で1行追加（append-onlyのログシート、
 // ordersのような全件削除→再送信はしない。自動削除もしない——消えては困る記録のため）
 const SHEET_DELIVERY_HISTORY = 'delivery_history';
@@ -80,21 +89,144 @@ const ATTENDANCE_LEAVE_COLS = ['id','store_id','name','leave_date','submitted_at
 // 参照)の方が優先される——このデフォルト自体は基本的に変わらないため、_areaForStore_を通さない
 // 単純な用途(通知グループ振り分け以外)ではこのまま直接参照してよい）
 const AREA_STORES = {
-  '東海': ['sasashima','chikusa','gokiso','tsuruma','kamisawa','nakamura_nisseki','midori_kofubutsu','sakurayama','akatsuka','shin_moriyama','tokoname','hamamatsu','sakae','rokubanchou','nonami','seto_iwayadou','nagakute','meieki_nishi','nadia_sakae','shinmizuhashi','eisei','hotei','kamejima','nakamura_torii','taikodori','kouta','hibino','hoshigaoka','ikeshita','toyota','hara','fujigaoka','gifu_kitagata','narumi'],
-  '関西': ['tenma','higashiosaka','aikawa','minami_morimachi','abeno','tanimachi9','moriguchi','taishibashi','kyobashi_kita','shinsaibashi','kishi','umeda','kami_shinjyo','osaka_hirano','hikone','aeon_higashiosaka','gamo4'],
-  '関東': ['inzai','otsuka','sugamo','umejima','shibuya','shinjuku_fc','kamisato']
+  '東海': ['sasashima','chikusa','gokiso','tsurumai','kamisawa','nakamura_nisseki','midori_kofubutsu','sakurayama','akatsuka','shin_moriyama','tokoname','hamamatsu','sakae','rokubanchou','nonami','seto_iwayadou','nagakute','meieki_nishi','nadia_sakae','aratamabashi','sako','hotei','kamejima','nakamura_torii','taikodori','kouta','hibino','hoshigaoka','ikeshita','toyota','hara','fujigaoka','gifu_kitagata','narumiyamashita','kisomisaki'],
+  '関西': ['tenma','higashiosaka','aikawa','minami_morimachi','abeno','tanimachi9','moriguchi','taishibashi','kyobashi_kita','shinsaibashi','kishi','umeda','kami_shinjyo','osaka_hirano','hikone','aeon_higashiosaka','gamo4','tenmabashi_kita'],
+  '関東': ['inzai','otsuka','sugamo','umejima','shibuya','kamisato'],
+  // 2026-08-24追加。関東セルフ・FC・業務委託は、既存の東海/関西/関東とは別の新規カテゴリ
+  // (関東セルフは既存の「関東」とは別物——リネームではない、ユーザー明示)。フロントのREGIONS定数と
+  // 同じ内容(詳細はそちら側のコメント参照)。新宿西口店(shinjuku_fc)は関東からFCへ移動。
+  // 千歳烏山はメニュー表記が「ニッカ関東セルフカフェデフォルト」のため関東セルフへ、天満橋北(大阪)は
+  // 関西へ、盛岡駅前・盛岡大通(岩手、地理的にはどのエリアにも属さない)はFCとして追加
+  '関東セルフ': ['chitose_karasuyama', 'waseda'],
+  'FC': ['shinjuku_fc', 'morioka_ekimae', 'morioka_odori', 'gamagori', 'kariya', 'tottori_ekimae'],
+  '業務委託': []
 };
-// フロントのREGIONS定数のid('tokai'/'kansai'/'kanto')→日本語ラベルの対応（store_regions設定の値はid形式のため）
-const REGION_ID_LABEL_ = { tokai: '東海', kansai: '関西', kanto: '関東' };
+// フロントのREGIONS定数のid('tokai'/'kansai'/'kanto'/'kanto_self'/'fc'/'gyomu_itaku')→日本語ラベルの対応
+// （store_regions設定の値はid形式のため）
+const REGION_ID_LABEL_ = { tokai: '東海', kansai: '関西', kanto: '関東', kanto_self: '関東セルフ', fc: 'FC', gyomu_itaku: '業務委託' };
 
 // 店舗ID改名の後方互換エイリアス(旧ID→新ID)。2026-08-04、御器所の店舗IDを
 // 誤読み"gokaiso"から正しい"gokiso"へ改名した際に追加。各シートに既に書き込み済みの
 // 過去データ(store_id列)は書き換えていないため、旧IDのまま残っている行を新IDと
 // 同一店舗として扱えるよう、sheetRows()で読み込む際にstore_id列をここで正規化する。
-const STORE_ID_ALIASES = { gokaiso: 'gokiso' };
+// 2026-08-18、新瑞橋・栄生・鶴舞・鳴海山下の誤読みIDも同様に改名したため追加
+// (migrateStoreIdRenames()で既存データ自体も新IDへ書き換え済みだが、旧IDを覚えている
+// 端末のキャッシュ・ブックマーク等からの送信に備えてエイリアスは残す)。
+const STORE_ID_ALIASES = {
+  gokaiso: 'gokiso',
+  shinmizuhashi: 'aratamabashi',
+  eisei: 'sako',
+  tsuruma: 'tsurumai',
+  narumi: 'narumiyamashita',
+};
 function _normalizeStoreId_(id) {
   const key = String(id);
   return Object.prototype.hasOwnProperty.call(STORE_ID_ALIASES, key) ? STORE_ID_ALIASES[key] : id;
+}
+
+// STORE_ID_ALIASESに登録した旧ID→新IDの改名を、既存データ(店舗ID改名前に書き込まれた行)
+// 自体にも反映するワンショット移行関数(2026-08-18)。メインスプレッドシート(SHEET_ID)と
+// 棚卸集計スプレッドシート(INVENTORY_SHEET_ID)の両方について、全シートを走査し「store_id」
+// という見出しの列を持つシートだけを対象に、値がSTORE_ID_ALIASESのキーと一致するセルを
+// 新IDへ書き換える。個別の関数(saveOrders/saveChecksheetData/inventory_log関連等)を
+// 1つずつ直すのではなく、シート側のデータを新IDに揃えてしまうことで、店舗IDで生の文字列
+// 比較をしている箇所すべてを一括で正しく動くようにする狙い。store_id列自体を縦結合(merge)
+// しているシートは今のところ無いことを確認済み(結合されているのはremarks/updated_at/期間列)。
+// 何度実行しても安全(既に新IDになっている行は変更されない)。
+// ?action=migrateStoreIdRenames で実行。
+function migrateStoreIdRenames() {
+  // store_id列を持ちうる全スプレッドシートを対象にする(MANUAL_DELIVERY_SHEET_IDは
+  // 現状未設定=空文字のため、設定済みのIDだけに絞る)
+  const spreadsheetIds = [SHEET_ID, INVENTORY_SHEET_ID, DELIVERY_HISTORY_SHEET_ID, MANUAL_DELIVERY_SHEET_ID].filter(Boolean);
+  const summary = [];
+  spreadsheetIds.forEach(ssId => {
+    const ss = SpreadsheetApp.openById(ssId);
+    ss.getSheets().forEach(sheet => {
+      const lastRow = sheet.getLastRow(), lastCol = sheet.getLastColumn();
+      if (lastRow < 2 || lastCol < 1) return;
+      const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(String);
+      const sidCol = headers.indexOf('store_id') + 1; // 1-based、無ければ0
+      if (sidCol < 1) return;
+      const range = sheet.getRange(2, sidCol, lastRow - 1, 1);
+      const values = range.getValues();
+      let changed = 0;
+      const newValues = values.map(row => {
+        const v = String(row[0]);
+        if (Object.prototype.hasOwnProperty.call(STORE_ID_ALIASES, v)) { changed++; return [STORE_ID_ALIASES[v]]; }
+        return row;
+      });
+      if (changed > 0) {
+        range.setValues(newValues);
+        summary.push({ spreadsheetId: ssId, sheet: sheet.getName(), changed });
+      }
+    });
+  });
+  summary.push(..._migrateStoreIdAliasesInSettings_());
+  return { ok: true, summary };
+}
+
+// シートのstore_id列だけでなく、app_settingsに保存されたstoreIdキーのJSON設定
+// (店舗ごとにdict/arrayでキー・値を持つもの)にも旧ID→新IDの改名を反映する(2026-08-24追加)。
+// 2026-08-18の改名時にこちらを見落としていたため、対象5店舗の店舗ログインパスワード
+// (store_passwords)をはじめ複数の設定が長期間旧IDのまま参照できなくなっていた
+// (パスワード欄には旧IDの値が残るが、実際のログイン照合は新IDで行われないため
+// 「パスワードが違う」「間違った店舗にログインする」といった形で表面化する)。
+// dict形式は新IDに既に値があれば新IDを優先して残し(上書きしない)、無ければ旧IDの値を
+// 新IDへ移す。array形式は旧IDを新IDに置き換えて重複を除く。何度実行しても安全。
+const STORE_KEYED_SETTINGS_DICT_ = [
+  'store_passwords', 'store_regions', 'store_product_cfg', 'store_checksheet_cfg',
+  'machine_photo_machine_counts', 'reorder_targets', 'attendance_staff_list',
+  'attendance_staff_schedule', 'attendance_store_coords', 'attendance_store_default_schedule',
+  'invoice_store_cfg',
+];
+const STORE_KEYED_SETTINGS_ARRAY_ = [
+  'machine_photo_disabled_stores', 'attendance_enabled_stores', 'deleted_stores',
+];
+function _migrateStoreIdAliasesInSettings_() {
+  const rows = getSettings();
+  const byKey = {};
+  rows.forEach(r => byKey[r.key] = r.value);
+  const summary = [];
+
+  STORE_KEYED_SETTINGS_DICT_.forEach(key => {
+    const raw = byKey[key];
+    if (!raw) return;
+    let obj;
+    try { obj = JSON.parse(raw); } catch (e) { return; }
+    if (!obj || typeof obj !== 'object' || Array.isArray(obj)) return;
+    let changed = 0;
+    Object.keys(STORE_ID_ALIASES).forEach(oldId => {
+      if (!Object.prototype.hasOwnProperty.call(obj, oldId)) return;
+      const newId = STORE_ID_ALIASES[oldId];
+      if (!Object.prototype.hasOwnProperty.call(obj, newId)) obj[newId] = obj[oldId];
+      delete obj[oldId];
+      changed++;
+    });
+    if (changed > 0) {
+      saveSetting(key, JSON.stringify(obj));
+      summary.push({ setting: key, renamed: changed });
+    }
+  });
+
+  STORE_KEYED_SETTINGS_ARRAY_.forEach(key => {
+    const raw = byKey[key];
+    if (!raw) return;
+    let arr;
+    try { arr = JSON.parse(raw); } catch (e) { return; }
+    if (!Array.isArray(arr)) return;
+    let changed = 0;
+    const mapped = arr.map(v => {
+      if (Object.prototype.hasOwnProperty.call(STORE_ID_ALIASES, v)) { changed++; return STORE_ID_ALIASES[v]; }
+      return v;
+    });
+    const deduped = [...new Set(mapped)];
+    if (changed > 0 || deduped.length !== arr.length) {
+      saveSetting(key, JSON.stringify(deduped));
+      summary.push({ setting: key, renamed: changed });
+    }
+  });
+
+  return summary;
 }
 
 // 棚卸集計スプレッドシート内の店舗タブ(例:「渋谷神南」)を、エリアごとに色分け・グループ化して
@@ -102,9 +234,11 @@ function _normalizeStoreId_(id) {
 // ほしい」と依頼を受け追加)。AREA_STORESの並び順(東海→関西→関東、各エリア内は追加された順)を
 // そのままタブの正準な並び順として使う——stores.js自体が新規店舗をエリアごとの末尾に追記していく
 // 運用のため、この並び順が自然と「新しい店舗ほど後ろ」になる。
-const AREA_TAB_COLORS = { '東海': '#93c47d', '関西': '#6fa8dc', '関東': '#f6b26b' }; // 緑/青/オレンジ
+// 2026-08-24、関東セルフ/FC/業務委託を新規カテゴリとして追加(いずれも現時点で0〜1店舗)。
+// 色分けの都合上ここに含めるが、実際の並び順・色付けは各エリアの店舗数に応じて自然に反映される
+const AREA_TAB_COLORS = { '東海': '#93c47d', '関西': '#6fa8dc', '関東': '#f6b26b', '関東セルフ': '#f1c232', 'FC': '#c27ba0', '業務委託': '#8e7cc3' }; // 緑/青/オレンジ/黄/ピンク/紫
 function _storeTabCanonicalOrder_() {
-  return [].concat(AREA_STORES['東海'], AREA_STORES['関西'], AREA_STORES['関東']);
+  return [].concat(AREA_STORES['東海'], AREA_STORES['関西'], AREA_STORES['関東'], AREA_STORES['関東セルフ'], AREA_STORES['FC'], AREA_STORES['業務委託']);
 }
 // タブの色分け専用の軽量エリア判定。_areaForStore_()とは意図的に別実装——_areaForStore_()は
 // 店舗管理画面でのエリア上書き(_storeRegionOverrides_→getSettings())を反映するため、無関係な
@@ -162,19 +296,27 @@ function reorderStoreTabs() {
 
 // 店舗名マスタ。手動複製で二重管理にせず、GitHub Pagesで公開されているstores.js(フロントの
 // 共有ファイル)を都度UrlFetchAppで取得・パースして使う——stores.js側を直せば自動的に反映される。
-// 1回の実行(doGet/doPost/トリガー呼び出し)内でのみキャッシュし、同じ実行内で何度呼ばれても
-// 取得は1回だけにする（実行をまたいだキャッシュはしない＝毎回最新を取りに行く）。
+// 1回の実行(doGet/doPost/トリガー呼び出し)内ではメモリ変数でキャッシュし、何度呼ばれても
+// 取得は1回だけにする。さらに実行をまたいだ分はCacheServiceで60秒だけ共有する
+// （2026-08-12、getMachinePhotoStatus等が同時アクセスの多いタイミングで毎回GitHub Pagesへ
+// 外部fetchし直しており、遅延・失敗の一因になっていたため追加。新規店舗追加の反映が
+// 最大60秒遅れる可能性はあるが、頻度が低いため許容——60秒より長いとズレが気になるとの判断）。
 // 取得・パースに失敗した場合（GitHub Pagesの一時的な障害等）は店舗名なし(IDのみ)にフォールバック
 // し、通知自体は従来通り送る（名前解決の失敗で通知が止まらないようにする）
 const STORES_JS_URL = 'https://selfcafe.github.io/internal-web-system/stores.js';
+const STORE_NAMES_CACHE_KEY = 'store_names_v1';
 let _cachedStoreNames = null;
 function _storeNames_() {
   if (_cachedStoreNames) return _cachedStoreNames;
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(STORE_NAMES_CACHE_KEY);
+  if (cached) { try { _cachedStoreNames = JSON.parse(cached); return _cachedStoreNames; } catch (e) {} }
   try {
     const text = UrlFetchApp.fetch(STORES_JS_URL, { muteHttpExceptions: true }).getContentText();
     // stores.jsは "const STORES = {...};" という単純なJS定義のみのファイル（信頼できる自リポジトリ）
     // なので、Functionコンストラクタでその場限りの関数スコープとして実行しSTORESだけを取り出す
     _cachedStoreNames = new Function(text + '; return STORES;')();
+    try { cache.put(STORE_NAMES_CACHE_KEY, JSON.stringify(_cachedStoreNames), 60); } catch (e) {}
   } catch (e) {
     console.error('stores.js取得に失敗、店舗名なしで通知します:', e.message);
     _cachedStoreNames = {};
@@ -188,13 +330,13 @@ function _storeIdLabel_(storeId) {
   return nm ? storeId + '（' + nm + '）' : String(storeId);
 }
 // FC(フランチャイズ)店舗かどうかの判定（2026-07-25、棚卸集計スプレッドシートのstore_type列用）。
-// stores.js上の表示名が「FC 」で始まるという既存の命名規則を正とする。stores.js取得に失敗した場合や
-// custom_storesで追加され表示名が引けない店舗は、store_id自体の末尾"_fc"規則にフォールバックする
-// （現行の唯一のFC店舗shinjuku_fcはid・表示名どちらの規則にも合致する）。該当なしは直営扱い。
+// 2026-08-24、AREA_STORES['FC']への所属で判定するよう変更(店舗管理のFC区分が正になったため)。
+// 以前は表示名が「FC 」で始まるか/店舗IDが"_fc"で終わるかという命名規則で判定していたが、
+// FC区分に店舗が増えた際(盛岡駅前・クラスポ蒲郡等、名前にもIDにも"FC"を含まない)に
+// 判定漏れするため廃止した。店舗のエリア上書き(store_regions)でFCへ移した場合も正しく判定される
+// よう_areaForStore_と同じ考え方(上書き優先)にする。該当なしは直営扱い。
 function _isFcStore_(storeId) {
-  const nm = _storeNames_()[storeId];
-  if (nm) return nm.indexOf('FC ') === 0;
-  return /_fc$/.test(String(storeId));
+  return _areaForStore_(storeId) === 'FC';
 }
 
 // ----------------------------------------------------------------
@@ -204,6 +346,8 @@ function _isFcStore_(storeId) {
 function doGet(e) {
   try {
     const a = e.parameter.action;
+    // doPost側と同じ理由で、GET経由のstoreIdも旧ID→新IDへ正規化する(STORE_ID_ALIASES参照)
+    if (e.parameter.storeId) e.parameter.storeId = _normalizeStoreId_(e.parameter.storeId);
     let result;
     if      (a === '_peekMainSheetTabByGid') result = _peekMainSheetTabByGid_(Number(e.parameter.gid), Number(e.parameter.rows) || 5);
     else if (a === '_provisionDeliveryHistorySheet') result = _provisionDeliveryHistorySheet_();
@@ -213,15 +357,19 @@ function doGet(e) {
     else if (a === 'getChecksheetData') result = getChecksheetData(e.parameter.storeId);
     else if (a === 'getChecksheetStockChecks') result = getChecksheetStockChecks(e.parameter.storeId);
     else if (a === 'getInventoryHistory') result = getInventoryHistory(e.parameter.storeId, e.parameter.periodLabel);
+    else if (a === 'getLatestConsumptionByCode') result = getLatestConsumptionByCode(e.parameter.storeId);
     else if (a === 'getInventoryDeliveryAuto') result = getInventoryDeliveryAuto(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'getInventoryDeliveryManual') result = getInventoryDeliveryManual(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'getInventoryTabData')       result = getInventoryTabData(e.parameter.storeId, e.parameter.periodLabel, e.parameter.prevPeriodLabel);
+    else if (a === 'geocodeStoreAddress')       result = geocodeStoreAddress(e.parameter.query);
     else if (a === 'getInvoiceLog')             result = getInvoiceLog();
     else if (a === 'migrateOrderColumns')       result = migrateOrderColumns();
     else if (a === 'migrateInventoryColumns')   result = migrateInventoryColumns();
+    else if (a === 'migrateStoreIdRenames')     result = migrateStoreIdRenames();
     else if (a === 'setupInventoryDisposedHighlight') result = setupInventoryDisposedHighlight();
     else if (a === 'buildInventoryRollup')      result = buildInventoryRollup(e.parameter.periodLabel);
     else if (a === 'buildStoreInventorySheet')  result = buildStoreInventorySheet(e.parameter.storeId, e.parameter.periodLabel);
+    else if (a === 'processMonthlyReorder')     result = processMonthlyReorder(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'reorderStoreTabs')          result = reorderStoreTabs();
     else if (a === 'removeInventoryLabelColumn') result = removeInventoryLabelColumn();
     else if (a === 'pruneBlankStoreInventoryRows') result = pruneBlankStoreInventoryRows(e.parameter.storeId);
@@ -234,6 +382,11 @@ function doGet(e) {
     else if (a === 'getLeaveRequests')          result = getLeaveRequests(e.parameter.storeId);
     else if (a === 'getAttendanceTabData')      result = getAttendanceTabData(e.parameter.storeId);
     else if (a === 'getDeliveryHistory')        result = getDeliveryHistory(e.parameter.storeId, e.parameter.month);
+    else if (a === 'getMachinePhotoStatus')     result = getMachinePhotoStatus();
+    else if (a === 'getMachinePhotoHistory')    result = getMachinePhotoHistory(e.parameter.storeId);
+    else if (a === 'migrateMachinePhotoColumns') result = migrateMachinePhotoColumns();
+    else if (a === 'checkNewStoresFromMasterSheet') result = checkNewStoresFromMasterSheet();
+    else if (a === 'setNewStoreCheckTrigger')   { setNewStoreCheckTrigger(); result = { ok: true }; }
     else result = { error: 'Unknown action: ' + a };
     return json(result);
   } catch(err) {
@@ -243,10 +396,20 @@ function doGet(e) {
 
 function doPost(e) {
   const lock = LockService.getScriptLock();
+  // ロック待ち時間を計測してログに残す（2026-08-12、doPostが同時に何件も来た時に
+  // 「ロック待ちで詰まっている」のか「処理自体が遅い」のかを次回切り分けられるようにするため）
+  const _lockWaitStart = Date.now();
   lock.waitLock(30000);
+  const _lockWaitMs = Date.now() - _lockWaitStart;
   let result;
   try {
     const b = JSON.parse(e.postData.contents);
+    // 店舗ID改名の後方互換: 旧IDを覚えたままの端末が送ってきても新IDとして扱う
+    // (STORE_ID_ALIASES参照。sheetRows()経由の読み取りだけでなく、生のgetValues()で
+    // store_id列を直接比較しているsaveOrders/saveChecksheetData等の書き込み系関数も
+    // ここで一括して救済する)
+    if (b && b.storeId) b.storeId = _normalizeStoreId_(b.storeId);
+    console.log('doPost action=' + (b.action || '(lineworks/kaihipay callback)') + ' storeId=' + (b.storeId || '') + ' lockWaitMs=' + _lockWaitMs);
     const isKaihipayBotCallback_ = !!(e.parameter && e.parameter.bot === 'kaihipay');
     if      (isKaihipayBotCallback_ && isLineWorksCallback_(b)) result = handleKaihipayApprovalTextReply_(b);
     else if (isLineWorksCallback_(b))           result = handleLineWorksStockInquiry_(b);
@@ -256,6 +419,7 @@ function doPost(e) {
     else if (b.action === 'upsertOrders')       result = upsertOrderRows(b.storeId, b.rows);
     else if (b.action === 'deleteOrders')       result = deleteOrderRows(b.ids);
     else if (b.action === 'saveSetting')        result = saveSetting(b.key, b.value);
+    else if (b.action === 'saveSettingMerge')   result = saveSettingMerge(b.key, b.value);
     else if (b.action === 'saveLostItem')       result = saveLostItem(b.item, b.imagesBase64, b.imageMime);
     else if (b.action === 'deleteLostItem')     result = deleteLostItem(b.id, b.imageUrl);
     else if (b.action === 'saveOrderImage')     result = saveOrderImage(b.imageBase64, b.imageMime, b.filename);
@@ -264,6 +428,9 @@ function doPost(e) {
     else if (b.action === 'recordInventoryDelivery') result = recordInventoryDelivery(b.storeId, b.periodLabel, b.product, b.qty);
     else if (b.action === 'importSteraOrdersCsv') result = importSteraOrdersCsv(b.csvText);
     else if (b.action === 'importSteraDailySales') result = importSteraDailySales(b.dateStr, b.csvText);
+    else if (b.action === 'updateSteraRealtimeToday') result = updateSteraRealtimeToday(b.dateStr, b.rows);
+    else if (b.action === 'checkSteraRefunds') result = checkSteraRefunds(b.dateStr, b.refunds);
+    else if (b.action === 'reportScriptFailure') result = reportScriptFailure(b.message, b.key);
     else if (b.action === 'checkChecksheetStockMismatch') result = checkChecksheetStockMismatch(b.storeId, b.product);
     else if (b.action === 'submitInvoice')       result = submitInvoice(b.payload);
     else if (b.action === 'saveInvoiceReceiptImage') result = saveInvoiceReceiptImage(b.imageBase64, b.imageMime, b.filename);
@@ -272,6 +439,7 @@ function doPost(e) {
     else if (b.action === 'deleteLeaveRequest')  result = deleteLeaveRequest(b.id);
     else if (b.action === 'saveDeliveryHistory') result = saveDeliveryHistory(b.storeId, b.row);
     else if (b.action === 'clearDeliveryHistory') result = clearDeliveryHistory(b.storeId);
+    else if (b.action === 'saveMachinePhotoSet') result = saveMachinePhotoSet(b.storeId, b.machineIndex, b.imagesByCategory, b.imageMime);
     else result = { error: 'Unknown action: ' + b.action };
   } catch(err) {
     result = { error: err.message };
@@ -522,12 +690,25 @@ function deleteOrderRows(ids) {
 // app_settings
 // ----------------------------------------------------------------
 
+// ログイン時・getMachinePhotoStatus内の台数設定取得等、複数箇所から毎回シート全体を
+// 読み直していたため60秒だけCacheServiceで共有する（2026-08-12、同時アクセスが多い時の
+// 負荷軽減のため追加。設定はsaveSetting経由の変更なら即キャッシュ破棄されるので、
+// 反映漏れは最大60秒のみ）
+const SETTINGS_CACHE_KEY = 'settings_rows_v1';
 function getSettings() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(SETTINGS_CACHE_KEY);
+  if (cached) { try { return JSON.parse(cached); } catch (e) {} }
   const sheet = getSheet(SHEET_SETTINGS);
   if (sheet.getLastRow() <= 1) return [];
   const data = sheet.getDataRange().getValues();
   const ki = data[0].indexOf('key'), vi = data[0].indexOf('value');
-  return data.slice(1).map(r => ({ key: r[ki], value: r[vi] }));
+  const rows = data.slice(1).map(r => ({ key: r[ki], value: r[vi] }));
+  try { cache.put(SETTINGS_CACHE_KEY, JSON.stringify(rows), 60); } catch (e) {}
+  return rows;
+}
+function _invalidateSettingsCache_() {
+  try { CacheService.getScriptCache().remove(SETTINGS_CACHE_KEY); } catch (e) {}
 }
 
 function saveSetting(key, value) {
@@ -539,11 +720,43 @@ function saveSetting(key, value) {
     if (String(data[i][ki]) === String(key)) {
       _logSettingHistory(key, data[i][vi]);
       sheet.getRange(i + 1, vi + 1).setValue(value);
+      _invalidateSettingsCache_();
       return { ok: true };
     }
   }
   _logSettingHistory(key, '');
   sheet.appendRow([key, value]);
+  _invalidateSettingsCache_();
+  return { ok: true };
+}
+
+// {店舗ID: 値, ...}形式の設定（store_product_cfg等）専用。saveSettingは端末側のlocalStorage
+// キャッシュ全体をそのまま上書き保存するため、そのキャッシュが古い/空だと他の全店舗ぶんの設定を
+// 消してしまう事故につながる(2026-08-29、store_product_cfgが60店舗→1店舗に消えた事故で発覚)。
+// この関数はシート側の最新値に対してpatchJsonの内容だけをマージしてから保存するので、
+// 呼び出し側が持つキャッシュが古くても他店舗のデータを巻き込まない
+function saveSettingMerge(key, patchJson) {
+  const sheet = getSheet(SHEET_SETTINGS);
+  ensureHeaders(sheet, ['key', 'value']);
+  const data = sheet.getDataRange().getValues();
+  const ki = data[0].indexOf('key'), vi = data[0].indexOf('value');
+  let patch = {};
+  try { patch = JSON.parse(patchJson || '{}'); } catch (e) {}
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][ki]) === String(key)) {
+      const oldValue = data[i][vi];
+      _logSettingHistory(key, oldValue);
+      let obj = {};
+      try { obj = JSON.parse(oldValue || '{}'); } catch (e) {}
+      Object.assign(obj, patch);
+      sheet.getRange(i + 1, vi + 1).setValue(JSON.stringify(obj));
+      _invalidateSettingsCache_();
+      return { ok: true };
+    }
+  }
+  _logSettingHistory(key, '');
+  sheet.appendRow([key, JSON.stringify(patch)]);
+  _invalidateSettingsCache_();
   return { ok: true };
 }
 
@@ -673,17 +886,196 @@ function _trashDriveImages(imageUrlList) {
 }
 
 // ----------------------------------------------------------------
+// machine_photos（マシン庫内点検写真、毎月5/10/15/20/25/30日を目安に
+// パートナーが5点セットをアップロードし、フィルター/材料/カップ切れ等を早期発見する）
+// ----------------------------------------------------------------
+
+const MACHINE_PHOTOS_CACHE_KEY = 'machine_photos_rows_v3';
+function _machinePhotosRowsCached_() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(MACHINE_PHOTOS_CACHE_KEY);
+  if (cached) return JSON.parse(cached);
+  const rows = sheetRows(getSheet(SHEET_MACHINE_PHOTOS), MACHINE_PHOTO_COLS)
+    .map(r => ({
+      ...r,
+      uploaded_at: _dateTimeStr(r.uploaded_at),
+      photosByCategory: (() => { try { return JSON.parse(r.photos_json || '{}'); } catch (e) { return {}; } })(),
+    }));
+  try { cache.put(MACHINE_PHOTOS_CACHE_KEY, JSON.stringify(rows), 25); } catch (e) {}
+  return rows;
+}
+function _invalidateMachinePhotosCache_() {
+  try { CacheService.getScriptCache().remove(MACHINE_PHOTOS_CACHE_KEY); } catch (e) {}
+}
+
+// ワンショット移行用（2026-08-12）。2026-08-11に「1行=1店舗×1マシン」化した際、
+// appendRowは[id,store_id,machine_index,uploaded_at,photos_json]の5値を書くようになったが、
+// ヘッダー行は旧4列[id,store_id,uploaded_at,photos_json]のまま更新されておらず、
+// C列以降が1列ずつズレて読めていなかった（machine_indexが常にnull、photos_jsonが
+// 日時文字列を指してJSON.parse失敗→{}になる不具合）。8/11より前の旧形式行（4値のみ）は
+// C列に日時が入っているので、これだけC列を空にしてD,Eへ1列右にずらし、ヘッダーを
+// 正しい5列に直す。新形式行（C列が数値のmachine_index）はデータ位置はそのままでよい。
+function migrateMachinePhotoColumns() {
+  const sheet = getSheet(SHEET_MACHINE_PHOTOS);
+  if (sheet.getLastRow() <= 1) { ensureHeaders(sheet, MACHINE_PHOTO_COLS); return { ok: true, fixedOldFormatRows: 0, totalRows: 0 }; }
+  const data = sheet.getDataRange().getValues();
+  let fixedCount = 0;
+  const fixedRows = data.slice(1).map(row => {
+    const c = row[2];
+    const looksLikeDate = (c instanceof Date) || (typeof c === 'string' && /^\d{4}-\d{2}-\d{2}/.test(c));
+    if (looksLikeDate) {
+      fixedCount++;
+      return [row[0], row[1], '', row[2], row[3]];
+    }
+    return [row[0], row[1], row[2], row[3], row[4] === undefined ? '' : row[4]];
+  });
+  sheet.getRange(1, 1, 1, MACHINE_PHOTO_COLS.length).setValues([MACHINE_PHOTO_COLS]);
+  if (fixedRows.length) sheet.getRange(2, 1, fixedRows.length, 5).setValues(fixedRows);
+  _invalidateMachinePhotosCache_();
+  return { ok: true, fixedOldFormatRows: fixedCount, totalRows: fixedRows.length };
+}
+
+// 店舗ごとのマシン台数設定（app_settingsの'machine_photo_machine_counts'、{storeId:count}のJSON）。
+// フロント側のデフォルト値(3台)と合わせておく
+function _machinePhotoMachineCounts_() {
+  try {
+    const s = getSettings().find(x => x.key === 'machine_photo_machine_counts');
+    return s ? JSON.parse(s.value || '{}') : {};
+  } catch (e) { return {}; }
+}
+function _machinePhotoMachineCount_(storeId, counts) {
+  const n = (counts || _machinePhotoMachineCounts_())[storeId];
+  return (n && n >= 1) ? n : 3;
+}
+
+// マシン1台単位で1回のアップロード。imagesByCategory: { カテゴリキー: base64 }（1カテゴリ1枚）。
+// 台数が違う店舗でも「入力を終えたマシンだけ」個別に送信できるようにするため、
+// 以前の「1回の提出=店舗の全マシン分」という単位をやめ、1行=1店舗×1マシン×1回の点検にした
+// （2026-08-11、3台無い店舗が全マシン分埋めないと送信できなかった問題への対応。
+// 副次効果として1回の送信で扱う画像が最大15枚→5枚に減り、アップロード時間も短縮される）
+function saveMachinePhotoSet(storeId, machineIndex, imagesByCategory, imageMime) {
+  const sheet = getSheet(SHEET_MACHINE_PHOTOS);
+  ensureHeaders(sheet, MACHINE_PHOTO_COLS);
+  const id = Utilities.getUuid();
+  const uploadedAt = Utilities.formatDate(new Date(), _sheetTz(), 'yyyy-MM-dd HH:mm:ss');
+  const urlsByCategory = {};
+  Object.keys(imagesByCategory || {}).forEach(catKey => {
+    const b64 = imagesByCategory[catKey];
+    urlsByCategory[catKey] = b64
+      ? saveImageToDrive(b64, imageMime || 'image/jpeg', 'machine_' + storeId + '_' + machineIndex + '_' + id + '_' + catKey)
+      : '';
+  });
+  sheet.appendRow([id, storeId, machineIndex, uploadedAt, JSON.stringify(urlsByCategory)]);
+  _invalidateMachinePhotosCache_();
+  return { ok: true, urlsByCategory, uploadedAt };
+}
+
+// 管理者一覧用：店舗×マシンごとに最新の1回分を返す（そのマシンが一度も提出されていなければ
+// uploadedAt=nullの「未提出」行として返す）。台数は_machinePhotoMachineCounts_の設定に従う
+function getMachinePhotoStatus() {
+  const rows = _machinePhotosRowsCached_();
+  const latestByStoreMachine = {};
+  rows.forEach(r => {
+    const key = r.store_id + '|' + r.machine_index;
+    const prev = latestByStoreMachine[key];
+    if (!prev || String(r.uploaded_at) > String(prev.uploaded_at)) latestByStoreMachine[key] = r;
+  });
+  const machineCounts = _machinePhotoMachineCounts_();
+  const todayStr = Utilities.formatDate(new Date(), _sheetTz(), 'yyyy-MM-dd');
+  const result = [];
+  Object.keys(_storeNames_()).forEach(storeId => {
+    const count = _machinePhotoMachineCount_(storeId, machineCounts);
+    for (let m = 0; m < count; m++) {
+      const r = latestByStoreMachine[storeId + '|' + m];
+      if (!r) { result.push({ storeId, machineIndex: m, uploadedAt: null, daysSince: null, photoUrls: [] }); continue; }
+      const uploadedDate = String(r.uploaded_at).slice(0, 10);
+      const daysSince = Math.round((new Date(todayStr) - new Date(uploadedDate)) / (24 * 60 * 60 * 1000));
+      result.push({
+        storeId,
+        machineIndex: m,
+        uploadedAt: r.uploaded_at,
+        daysSince,
+        photoUrls: Object.values(r.photosByCategory || {}).filter(Boolean),
+      });
+    }
+  });
+  return result;
+}
+
+// パートナー側「前回提出日」表示用：自店舗の過去アップロード履歴（マシンごとに新しい順で使う）
+function getMachinePhotoHistory(storeId) {
+  return _machinePhotosRowsCached_()
+    .filter(r => String(r.store_id) === String(storeId))
+    .map(r => ({ id: r.id, store_id: r.store_id, machine_index: r.machine_index, uploaded_at: r.uploaded_at, photosByCategory: r.photosByCategory }))
+    .sort((a, b) => String(b.uploaded_at).localeCompare(String(a.uploaded_at)));
+}
+
+// アップロードから30日経過したセットを自動削除（found_dateではなくuploaded_at基準。
+// 忘れ物のpurgeOldLostItemsと同じ形だが、判定列だけ異なる）
+function purgeOldMachinePhotos() {
+  const sheet = getSheet(SHEET_MACHINE_PHOTOS);
+  if (sheet.getLastRow() <= 1) return;
+  const limitStr = Utilities.formatDate(new Date(Date.now() - 30 * 24 * 60 * 60 * 1000), _sheetTz(), 'yyyy-MM-dd HH:mm:ss');
+  const data = sheet.getDataRange().getValues();
+  const hdrs = data[0].map(String);
+  const uploadedIdx = hdrs.indexOf('uploaded_at');
+  const jsonIdx = hdrs.indexOf('photos_json');
+  if (uploadedIdx < 0) return;
+  for (let i = data.length - 1; i >= 1; i--) {
+    const uploadedAt = _dateTimeStr(data[i][uploadedIdx]);
+    if (!uploadedAt || uploadedAt >= limitStr) continue;
+    let urls = '';
+    try {
+      const photosByCategory = JSON.parse((jsonIdx >= 0 ? data[i][jsonIdx] : '') || '{}');
+      urls = Object.values(photosByCategory).filter(Boolean).join(',');
+    } catch (e) {}
+    _trashDriveImages(urls);
+    sheet.deleteRow(i + 1);
+  }
+  _invalidateMachinePhotosCache_();
+}
+
+// 店舗ごとの提出タイミングがずれるため、店舗別の未提出督促はせず、6日おき(6/12/18/24/30日)に
+// セルフカフェ社員（全国）グループへ「管理者ポータルで確認してください」と定期的に知らせるだけに留める
+// （2026-08-11、ユーザー要望により店舗別・エリア別の督促ロジックから変更）
+const MACHINE_PHOTO_CHANNEL_PROP_ = 'LW_CHANNEL_ID_MACHINEPHOTO'; // セルフカフェ社員（全国）グループのチャンネルID。Script Propertiesに設定すること
+function _machinePhotoChannel_() {
+  var props = PropertiesService.getScriptProperties();
+  return props.getProperty(MACHINE_PHOTO_CHANNEL_PROP_) || props.getProperty('LW_CHANNEL_ID');
+}
+
+function sendMachinePhotoReminder() {
+  if (new Date().getDate() % 6 !== 0) return; // 6,12,18,24,30日のみ送信
+  sendLineWorksNotification('管理者ポータル内にてマシン点検画像を確認してください', _machinePhotoChannel_());
+}
+
+// ----------------------------------------------------------------
 // checksheet_data（チェックシートの日別入力）
 // ----------------------------------------------------------------
 
-function getChecksheetData(storeId) {
-  let rows = sheetRows(getSheet(SHEET_CHECKSHEET), CHECKSHEET_COLS);
-  if (storeId) rows = rows.filter(r => String(r.store_id) === String(storeId));
-  return rows.map(r => ({
+// チェックシート・アルバムタブを開くたびに（getChecksheetStockChecks経由でも二重に）
+// シート全体を読み直していたため、忘れ物/勤怠と同じ25秒キャッシュを追加する
+// （2026-08-12、同時アクセスが多い時の負荷軽減のため）
+const CHECKSHEET_DATA_CACHE_KEY = 'checksheet_data_rows_v1';
+function _checksheetDataRowsCached_() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(CHECKSHEET_DATA_CACHE_KEY);
+  if (cached) return JSON.parse(cached);
+  const rows = sheetRows(getSheet(SHEET_CHECKSHEET), CHECKSHEET_COLS).map(r => ({
     store_id: r.store_id,
     period_label: _monthLabelStr(r.period_label),
     data: r.data ? JSON.parse(r.data) : {},
   }));
+  try { cache.put(CHECKSHEET_DATA_CACHE_KEY, JSON.stringify(rows), 25); } catch (e) {}
+  return rows;
+}
+function _invalidateChecksheetDataCache_() {
+  try { CacheService.getScriptCache().remove(CHECKSHEET_DATA_CACHE_KEY); } catch (e) {}
+}
+function getChecksheetData(storeId) {
+  let rows = _checksheetDataRowsCached_();
+  if (storeId) rows = rows.filter(r => String(r.store_id) === String(storeId));
+  return rows;
 }
 
 // "2026-07"のような年月文字列を書き込むと、Sheetsが日付型セルへ自動変換し、
@@ -733,6 +1125,7 @@ function saveChecksheetData(storeId, periodLabel, data) {
         const merged = _stampChecksheetEntryTimes_(oldData, data || {});
         sheet.getRange(i + 1, dataIdx + 1).setValue(JSON.stringify(merged));
         sheet.getRange(i + 1, updIdx + 1).setValue(now);
+        _invalidateChecksheetDataCache_();
         return { ok: true };
       }
     }
@@ -742,6 +1135,7 @@ function saveChecksheetData(storeId, periodLabel, data) {
   sheet.getRange(startRow, CHECKSHEET_COLS.indexOf('period_label') + 1).setNumberFormat('@');
   const merged = _stampChecksheetEntryTimes_({}, data || {});
   sheet.appendRow([storeId, periodLabel, JSON.stringify(merged), now]);
+  _invalidateChecksheetDataCache_();
   return { ok: true };
 }
 
@@ -1160,6 +1554,7 @@ function compactChecksheetData() {
     cell.setNumberFormat('@').setValue(clean);
   });
   Logger.log('重複削除: %s行削除、%s件のユニークな店舗×年月が残りました', toDelete.length, Object.keys(keep).length);
+  _invalidateChecksheetDataCache_();
 }
 
 // ----------------------------------------------------------------
@@ -1228,6 +1623,38 @@ function getInventoryHistory(storeId, periodLabel) {
     (!storeId || String(r.store_id) === String(storeId)) &&
     (!periodLabel || r.period_label === String(periodLabel))
   );
+}
+
+// 発注タブでの発注数量の初期提案に使う(2026-08-11追加)。指定店舗について商品コードごとに
+// 直近(period_labelが最も新しい)棚卸の消費量を返す。商品名ではなく商品コードをキーにするのは、
+// 発注側のPRODUCTS(商品名)と棚卸側のinventory_log(商品名+商品コード)を突き合わせる際、
+// 表記ゆれではなく一意な商品コードで結びつけたいというユーザー要望による。
+// 消費量が空欄(未入力)や0以下の行は候補から除外する(発注数量の提案としては意味を持たないため)。
+function getLatestConsumptionByCode(storeId) {
+  const data = _inventoryLogRowsCached_();
+  const result = {};
+  if (data.length <= 1) return result;
+  const codeIdx   = INVENTORY_COLS.indexOf('code');
+  const sidIdx     = INVENTORY_COLS.indexOf('store_id');
+  const periodIdx  = INVENTORY_COLS.indexOf('period_label');
+  const consIdx    = INVENTORY_COLS.indexOf('consumption');
+  const latestPeriodByCode = {};
+  for (let i = 1; i < data.length; i++) {
+    const row = data[i];
+    if (String(row[sidIdx]) !== String(storeId)) continue;
+    const code = row[codeIdx];
+    if (!code) continue;
+    const consumption = row[consIdx];
+    if (consumption === '' || consumption === null || consumption === undefined) continue;
+    const n = Number(consumption);
+    if (!(n > 0)) continue;
+    const period = _invMonthLabelStr(row[periodIdx]);
+    if (!latestPeriodByCode[code] || period > latestPeriodByCode[code]) {
+      latestPeriodByCode[code] = period;
+      result[code] = n;
+    }
+  }
+  return result;
 }
 
 // 同じ店舗×年月の既存行を全て削除してから送信内容を書き直す（当月分は何度でも上書き修正できる）。
@@ -1328,6 +1755,10 @@ function saveInventorySnapshot(storeId, periodLabel, rows, remarks) {
     if (newRows.length > 1) {
       const remarksCol = INVENTORY_COLS.indexOf('remarks') + 1;
       sheet.getRange(startRow, remarksCol, newRows.length, 1).setVerticalAlignment('middle').merge();
+      // 更新日時(M列)も備考と同じ理由(見た目の重複感を減らす)で縦結合する(2026-08-11、ユーザー指摘)。
+      // 全商品行に同じnowを書き込む処理自体は変えず、表示だけ月ブロック先頭行の1か所にまとめる
+      const updatedAtCol = INVENTORY_COLS.indexOf('updated_at') + 1;
+      sheet.getRange(startRow, updatedAtCol, newRows.length, 1).setVerticalAlignment('middle').merge();
     }
     // 渋谷神南タブへの自動反映(buildStoreInventorySheet)はここでは呼ばない——doPostは同期実行のため
     // ここで呼ぶと「棚卸完了」ボタンの応答がその処理時間分遅くなり、送信中の表示が長引く原因になった
@@ -1402,25 +1833,42 @@ function recordInventoryDelivery(storeId, periodLabel, product, qty) {
   // period_labelが"YYYY-MM"のまま日付型に自動変換されないよう固定
   sheet.getRange(startRow, DELIVERY_AUTO_COLS.indexOf('period_label') + 1, 1, 1).setNumberFormat('@');
   sheet.getRange(startRow, 1, 1, DELIVERY_AUTO_COLS.length).setValues([row]);
+  _invalidateDeliveryAutoCache_();
   return { ok: true };
 }
 
 // 店舗×期間の当月納品（自動）を商品名ごとに合計して返す
-function getInventoryDeliveryAuto(storeId, periodLabel) {
+// 棚卸表タブを開くたびにinventory_delivery_autoシート全体を読み直していたため、
+// 忘れ物/勤怠と同じ25秒キャッシュを追加する（2026-08-12、同時アクセスが多い時の負荷軽減）
+const DELIVERY_AUTO_CACHE_KEY = 'delivery_auto_rows_v1';
+function _deliveryAutoRowsCached_() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(DELIVERY_AUTO_CACHE_KEY);
+  if (cached) return JSON.parse(cached);
   const sheet = getDeliveryAutoSheet();
-  if (sheet.getLastRow() <= 1) return {};
-  const data = sheet.getDataRange().getValues();
-  const hdrs = data[0].map(String);
-  const pIdx = hdrs.indexOf('period_label'), sIdx = hdrs.indexOf('store_id'),
-        prIdx = hdrs.indexOf('product'), qIdx = hdrs.indexOf('qty');
-  const totals = {};
-  for (let i = 1; i < data.length; i++) {
-    const row = data[i];
-    if (String(row[sIdx]) !== String(storeId)) continue;
-    if (_invMonthLabelStr(row[pIdx]) !== String(periodLabel)) continue;
-    const product = row[prIdx];
-    totals[product] = (totals[product] || 0) + Number(row[qIdx] || 0);
+  let rows = [];
+  if (sheet.getLastRow() > 1) {
+    const data = sheet.getDataRange().getValues();
+    const hdrs = data[0].map(String);
+    const pIdx = hdrs.indexOf('period_label'), sIdx = hdrs.indexOf('store_id'),
+          prIdx = hdrs.indexOf('product'), qIdx = hdrs.indexOf('qty');
+    rows = data.slice(1).map(row => ({
+      period_label: _invMonthLabelStr(row[pIdx]), store_id: row[sIdx], product: row[prIdx], qty: Number(row[qIdx] || 0),
+    }));
   }
+  try { cache.put(DELIVERY_AUTO_CACHE_KEY, JSON.stringify(rows), 25); } catch (e) {}
+  return rows;
+}
+function _invalidateDeliveryAutoCache_() {
+  try { CacheService.getScriptCache().remove(DELIVERY_AUTO_CACHE_KEY); } catch (e) {}
+}
+function getInventoryDeliveryAuto(storeId, periodLabel) {
+  const totals = {};
+  _deliveryAutoRowsCached_().forEach(row => {
+    if (String(row.store_id) !== String(storeId)) return;
+    if (row.period_label !== String(periodLabel)) return;
+    totals[row.product] = (totals[row.product] || 0) + row.qty;
+  });
   return totals;
 }
 
@@ -1460,28 +1908,47 @@ function getProductCodeMap() {
   return map;
 }
 
+// 棚卸表タブを開くたびに手動納品シート（本部が直接編集する外部スプレッドシート）
+// 全体を読み直していたため、25秒キャッシュを追加する（2026-08-12、同時アクセスが多い時の
+// 負荷軽減。appは書き込まない読み取り専用シートのため、無効化のトリガーは無く時間経過のみで
+// 失効する——本部の編集が反映されるまで最大25秒のズレは許容）
+const DELIVERY_MANUAL_CACHE_KEY = 'delivery_manual_rows_v1';
+function _deliveryManualRowsCached_() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(DELIVERY_MANUAL_CACHE_KEY);
+  if (cached) return JSON.parse(cached);
+  let rows = [];
+  if (MANUAL_DELIVERY_SHEET_ID) {
+    const sheet = getDeliveryManualSheet();
+    if (sheet.getLastRow() > 1) {
+      const data = sheet.getDataRange().getValues();
+      const hdrs = data[0].map(String);
+      const pIdx = hdrs.indexOf('期間ラベル'), sIdx = hdrs.indexOf('店舗ID'),
+            cIdx = hdrs.indexOf('商品コード'), qIdx = hdrs.indexOf('数量');
+      rows = data.slice(1).map((row, i) => ({
+        sheetRow: i + 2, period_label: _manualDeliveryMonthLabelStr(row[pIdx]),
+        store_id: row[sIdx], code: String(row[cIdx]), qty: Number(row[qIdx] || 0),
+      }));
+    }
+  }
+  try { cache.put(DELIVERY_MANUAL_CACHE_KEY, JSON.stringify(rows), 25); } catch (e) {}
+  return rows;
+}
+
 // 店舗×期間の当月納品（手動）を商品名ごとに合計して返す。商品コードが商品設定の
 // どれとも一致しない行はskippedへ積んで返す（サイレントに数量を捨てない）
 function getInventoryDeliveryManual(storeId, periodLabel) {
   if (!MANUAL_DELIVERY_SHEET_ID) return { totals: {}, skipped: [] };
-  const sheet = getDeliveryManualSheet();
-  if (sheet.getLastRow() <= 1) return { totals: {}, skipped: [] };
-  const data = sheet.getDataRange().getValues();
-  const hdrs = data[0].map(String);
-  const pIdx = hdrs.indexOf('期間ラベル'), sIdx = hdrs.indexOf('店舗ID'),
-        cIdx = hdrs.indexOf('商品コード'), qIdx = hdrs.indexOf('数量');
   const codeToName = getProductCodeMap();
   const totals = {};
   const skipped = [];
-  for (let i = 1; i < data.length; i++) {
-    const row = data[i];
-    if (String(row[sIdx]) !== String(storeId)) continue;
-    if (_manualDeliveryMonthLabelStr(row[pIdx]) !== String(periodLabel)) continue;
-    const code = String(row[cIdx]);
-    const name = codeToName[code];
-    if (!name) { skipped.push({ sheetRow: i + 1, code: code, qty: row[qIdx] }); continue; }
-    totals[name] = (totals[name] || 0) + Number(row[qIdx] || 0);
-  }
+  _deliveryManualRowsCached_().forEach(row => {
+    if (String(row.store_id) !== String(storeId)) return;
+    if (row.period_label !== String(periodLabel)) return;
+    const name = codeToName[row.code];
+    if (!name) { skipped.push({ sheetRow: row.sheetRow, code: row.code, qty: row.qty }); return; }
+    totals[name] = (totals[name] || 0) + row.qty;
+  });
   return { totals, skipped };
 }
 
@@ -1505,6 +1972,24 @@ function getInventoryTabData(storeId, periodLabel, prevPeriodLabel) {
   try { result.checksheet = getChecksheetData(storeId); }
   catch (e) { result.checksheetError = e.message; }
   return result;
+}
+
+// 業務開始管理の基準座標を、店舗名/住所の文字列からGoogleマップのジオコーディングで自動取得する。
+// Maps.geocode()はApps Script組み込みのMapsサービスで、別途Cloud APIの有効化やAPIキー発行は不要
+// (2026-08-28追加、店舗名だけだと施設内店舗などで候補がずれることがあるため、住所寄りの文言も
+// 入力できるようにクエリは自由記述にしている。座標は保存前に管理者が地図で確認する運用)
+function geocodeStoreAddress(query) {
+  if (!query) return { error: '店舗名または住所を入力してください' };
+  try {
+    const res = Maps.newGeocoder().setLanguage('ja').setRegion('jp').geocode(query);
+    if (res.status !== 'OK' || !res.results || !res.results.length) {
+      return { error: `座標が見つかりませんでした(${res.status})。住所をもう少し具体的にしてみてください` };
+    }
+    const loc = res.results[0].geometry.location;
+    return { lat: loc.lat, lng: loc.lng, formattedAddress: res.results[0].formatted_address };
+  } catch (e) {
+    return { error: e.message };
+  }
 }
 
 // label列(E列)の削除ワンショット移行。2026-07-28、product列(D列)と常に同値で重複していたため統合した。
@@ -1589,11 +2074,43 @@ function setupInventoryDisposedHighlight() {
 // ----------------------------------------------------------------
 const SHEET_INVENTORY_ROLLUP = '全店舗棚卸集計';
 const SHEET_INVENTORY_MISSING = '棚卸未提出店舗';
-const INVENTORY_ROLLUP_COLS = ['period_label','store_type','store_name','store_id','product_code','product','open_stock','delivery','end_stock','consumption','disposed_qty','low_stock'];
+// 2026-08-20、店舗×商品ごとの生データ一覧(商品の内訳は各店舗タブで見られるため)から、
+// 店舗×カテゴリの原価金額サマリーに変更(ユーザー要望。このシート自体は未使用だったため
+// 置き換えで問題ないと確認済み)。カテゴリはvendor(仕入先)ベースで、sales(販売品)だけは
+// 「水」「アイス」(レディーボーデン各種)「お菓子」(それ以外+tokai_snack)にさらに分ける。
+// other(消耗品)・vcmr4g507w(清掃用品)は原価率の話ではないため対象外。
+const ROLLUP_CATEGORIES = ['アペックス', 'トーベン', 'CS3', '水', 'お菓子', 'アイス'];
+const ROLLUP_METRIC_SUFFIXES = ['opening_amount', 'closing_amount', 'consumption_amount', 'cost_rate'];
+const ROLLUP_METRIC_HEADERS_JA = ['期首在庫額', '期末在庫額', '消費額', '原価率'];
+// 2026-08-21、ユーザー要望で東海/関西/関東のエリアごとにまとめて表示するよう変更(FC店舗は対象外に
+// なったため意味が無くなったstore_type(FC/直営)列は廃止し、代わりにエリア列を持たせる)
+const INVENTORY_ROLLUP_COLS = ['period_label', 'area', 'store_name', 'store_id']
+  .concat(ROLLUP_CATEGORIES.flatMap(cat => ROLLUP_METRIC_SUFFIXES.map(suf => `${cat}_${suf}`)));
 // シート上の見出し表示専用（英語キーのINVENTORY_ROLLUP_COLSとは順序を揃えるだけの対応関係）。
 // 内部の列参照(indexOf等)は引き続き上のCOLSキーで行い、書き込み時の1行目だけこちらに差し替える
-const INVENTORY_ROLLUP_HEADERS_JA = ['期間','店舗区分','店舗名','店舗ID','商品コード','商品名','期首在庫','当月納品','期末在庫','消費量','処分数量','在庫僅少'];
+const INVENTORY_ROLLUP_HEADERS_JA = ['期間', 'エリア', '店舗名', '店舗ID']
+  .concat(ROLLUP_CATEGORIES.flatMap(cat => ROLLUP_METRIC_HEADERS_JA.map(h => `${cat}${h}`)));
+// _areaForStore_()の返り値をこの順で並べる。既存のAREA_STORES反復順に合わせている。
+// エリア未設定の店舗(store_regions上書きもAREA_STORES登録も無い)は末尾にまとめる。
+// FCは_isFcStore_()で別途対象外にしているため(下記continue参照)ここには含めない
+const ROLLUP_AREA_ORDER = ['東海', '関西', '関東', '関東セルフ', '業務委託', '(エリア未設定)'];
 const INVENTORY_MISSING_HEADERS_JA = ['期間','店舗ID','店舗名'];
+
+// 商品名からROLLUP_CATEGORIESのどれに属するか判定する。vendorはmeta(_productMeta_)経由。
+// 対象外(other・vcmr4g507w等)はnullを返す。
+function _rollupCategoryForProduct_(product, meta) {
+  const vendor = (meta[product] && meta[product].vendor) || '';
+  if (vendor === 'apex') return 'アペックス';
+  if (vendor === 'toyo') return 'トーベン';
+  if (vendor === 'cs3') return 'CS3';
+  if (vendor === 'tokai_snack') return 'お菓子'; // 東海限定お菓子は「お菓子」に合流(ユーザー確認済み)
+  if (vendor === 'sales') {
+    if (product === '水') return '水';
+    if (product.indexOf('アイス') >= 0) return 'アイス'; // レディーボーデン各種
+    return 'お菓子';
+  }
+  return null; // other・vcmr4g507w(消耗品)は原価率集計の対象外
+}
 
 // 全店舗ID一覧（stores.js＋custom_stores、deleted_storesを除外）。「棚卸未提出店舗」の
 // 判定に必要——inventory_logは提出があった店舗の行しか持たないため、提出そのものが
@@ -1640,20 +2157,13 @@ function _productCaseInfo_() {
 // スナップショットで古くなりうるため、ロールアップでは常にこちらの生ログから集計し直す
 // （ユーザー要望：「納品済みボタン押されたら自動的にこのシート側で納品カウントもする」に対応）
 function _deliveryAutoTotalsForPeriod_(periodLabel) {
-  const sheet = getDeliveryAutoSheet();
   const totals = {};
-  if (sheet.getLastRow() <= 1) return totals;
-  const data = sheet.getDataRange().getValues();
-  const hdrs = data[0].map(String);
-  const pIdx = hdrs.indexOf('period_label'), sIdx = hdrs.indexOf('store_id'),
-        prIdx = hdrs.indexOf('product'), qIdx = hdrs.indexOf('qty');
-  for (let i = 1; i < data.length; i++) {
-    const row = data[i];
-    if (_invMonthLabelStr(row[pIdx]) !== String(periodLabel)) continue;
-    const sid = String(row[sIdx]), prod = String(row[prIdx]);
+  _deliveryAutoRowsCached_().forEach(row => {
+    if (row.period_label !== String(periodLabel)) return;
+    const sid = String(row.store_id), prod = String(row.product);
     if (!totals[sid]) totals[sid] = {};
-    totals[sid][prod] = (totals[sid][prod] || 0) + Number(row[qIdx] || 0);
-  }
+    totals[sid][prod] = (totals[sid][prod] || 0) + row.qty;
+  });
   return totals;
 }
 
@@ -1666,38 +2176,71 @@ function buildInventoryRollup(periodLabel) {
   INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
 
   const storeNames = _storeNames_();
-  const deliveryTotals = _deliveryAutoTotalsForPeriod_(periodLabel);
-  const caseInfo = _productCaseInfo_();
+  const meta = _productMeta_();
 
+  // 店舗ID -> カテゴリ -> {opening, closing}(円)の合計
+  const totalsByStore = {};
   const submitted = {};
-  const outRows = [];
   if (hasData) {
     for (let i = 1; i < data.length; i++) {
       const r = data[i];
       if (_invMonthLabelStr(r[idx.period_label]) !== String(periodLabel)) continue;
       const storeId = String(r[idx.store_id]);
       submitted[storeId] = true;
+      // FC店舗は全店舗棚卸集計(このシート)の対象外(ユーザー要望、2026-08-21)。
+      // 「棚卸未提出店舗」判定は従来通りFCも含めるため、上のsubmittedへの記録はスキップしない
+      if (_isFcStore_(storeId)) continue;
       const product = r[idx.product];
+      const category = _rollupCategoryForProduct_(product, meta);
+      if (!category) continue; // other・vcmr4g507w(消耗品)は対象外
+      const price = Number(r[idx.price]) || 0;
+      const openStock = r[idx.open_stock];
       const endStock = r[idx.end_stock];
-      const liveDelivery = (deliveryTotals[storeId] && deliveryTotals[storeId][product]) || 0;
-      const info = caseInfo[product] || {};
-      const low = !!(info.caseOnly && info.casePieces && endStock !== '' && endStock !== null && Number(endStock) <= info.casePieces);
-      outRows.push([
-        periodLabel,
-        _isFcStore_(storeId) ? 'FC' : '直営',
-        storeNames[storeId] || storeId,
-        storeId,
-        r[idx.code],
-        product,
-        r[idx.open_stock],
-        liveDelivery,
-        endStock,
-        r[idx.consumption],
-        r[idx.disposed_qty],
-        low ? '要確認' : ''
-      ]);
+      if (!totalsByStore[storeId]) totalsByStore[storeId] = {};
+      if (!totalsByStore[storeId][category]) totalsByStore[storeId][category] = { opening: 0, closing: 0 };
+      if (openStock !== '' && openStock !== null) totalsByStore[storeId][category].opening += price * Number(openStock);
+      if (endStock !== '' && endStock !== null) totalsByStore[storeId][category].closing += price * Number(endStock);
     }
   }
+
+  // 東海→関西→関東の順にまとめ、各エリアの末尾に「エリア小計」行を挟む(ユーザー要望、2026-08-21)。
+  // 小計はエリア内の店舗を先に円換算で合算してから消費額・原価率を出す(店舗ごとの原価率の単純平均ではない)
+  const rowsByArea = {};
+  Object.keys(totalsByStore).forEach(storeId => {
+    const area = _areaForStore_(storeId) || '(エリア未設定)';
+    if (!rowsByArea[area]) rowsByArea[area] = [];
+    rowsByArea[area].push(storeId);
+  });
+
+  const subtotalRowIdxs = []; // 書き込み後に太字にする行番号(1始まり、ヘッダー分+1込み)を集める
+  const outRows = [];
+  ROLLUP_AREA_ORDER.filter(area => rowsByArea[area]).forEach(area => {
+    const areaTotals = {};
+    rowsByArea[area].sort().forEach(storeId => {
+      const row = [periodLabel, area, storeNames[storeId] || storeId, storeId];
+      ROLLUP_CATEGORIES.forEach(cat => {
+        const t = totalsByStore[storeId][cat];
+        if (!t) { row.push('', '', '', ''); return; }
+        const consumption = t.opening - t.closing;
+        const costRate = t.opening > 0 ? consumption / t.opening : '';
+        row.push(Math.round(t.opening), Math.round(t.closing), Math.round(consumption), costRate);
+        if (!areaTotals[cat]) areaTotals[cat] = { opening: 0, closing: 0 };
+        areaTotals[cat].opening += t.opening;
+        areaTotals[cat].closing += t.closing;
+      });
+      outRows.push(row);
+    });
+    const subtotalRow = [periodLabel, area, area + ' 小計', ''];
+    ROLLUP_CATEGORIES.forEach(cat => {
+      const t = areaTotals[cat];
+      if (!t) { subtotalRow.push('', '', '', ''); return; }
+      const consumption = t.opening - t.closing;
+      const costRate = t.opening > 0 ? consumption / t.opening : '';
+      subtotalRow.push(Math.round(t.opening), Math.round(t.closing), Math.round(consumption), costRate);
+    });
+    outRows.push(subtotalRow);
+    subtotalRowIdxs.push(outRows.length + 1); // +1: ヘッダー行の分
+  });
 
   const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
   const sheet = ss.getSheetByName(SHEET_INVENTORY_ROLLUP) || ss.insertSheet(SHEET_INVENTORY_ROLLUP);
@@ -1706,16 +2249,17 @@ function buildInventoryRollup(periodLabel) {
   sheet.getRange(1, 1, 1, INVENTORY_ROLLUP_COLS.length).setValues([INVENTORY_ROLLUP_HEADERS_JA]);
   if (outRows.length) {
     sheet.getRange(2, 1, outRows.length, INVENTORY_ROLLUP_COLS.length).setValues(outRows);
-    const lowColIdx = INVENTORY_ROLLUP_COLS.indexOf('low_stock') + 1;
-    const lowColLetter = String.fromCharCode(64 + lowColIdx);
-    const range = sheet.getRange(2, 1, outRows.length, INVENTORY_ROLLUP_COLS.length);
-    sheet.setConditionalFormatRules([
-      SpreadsheetApp.newConditionalFormatRule()
-        .whenFormulaSatisfied('=$' + lowColLetter + '2="要確認"')
-        .setBackground('#ffcdd2')
-        .setRanges([range])
-        .build()
-    ]);
+    ROLLUP_CATEGORIES.forEach(cat => {
+      ['opening_amount', 'closing_amount', 'consumption_amount'].forEach(suf => {
+        const col = INVENTORY_ROLLUP_COLS.indexOf(`${cat}_${suf}`) + 1;
+        sheet.getRange(2, col, outRows.length, 1).setNumberFormat(INVOICE_YEN_FORMAT);
+      });
+      const rateCol = INVENTORY_ROLLUP_COLS.indexOf(`${cat}_cost_rate`) + 1;
+      sheet.getRange(2, rateCol, outRows.length, 1).setNumberFormat('0.0%');
+    });
+    subtotalRowIdxs.forEach(rowIdx => {
+      sheet.getRange(rowIdx, 1, 1, INVENTORY_ROLLUP_COLS.length).setFontWeight('bold');
+    });
   }
 
   const allIds = _allStoreIds_();
@@ -1768,8 +2312,10 @@ function _productMeta_() {
 // 2026-08-01、ユーザーがシート上で単価をD列付近へ手動移動 → 最終的に「単価はD列に固定してほしい」と
 // 指示を受け、コード側の並び順もD列(4番目)に変更した。列数は変わらず16列のまま(A〜P)なので、
 // この後ろに続くステラ関連ブロック(STOCK_CHECK_START_COL等)の列位置には影響しない。
-const STORE_INVENTORY_COLS = ['period_label','code','product','price','opening_amount','closing_amount','consumption_amount','cost_rate','open_stock','end_stock','delivery','consumption','disposed_qty','daily_count','count_diff','low_stock'];
-const STORE_INVENTORY_HEADERS_JA = ['期間','商品コード','商品名','単価','期首在庫額','期末在庫額','月消費額','原価率','期首在庫','期末在庫','当月納品','消費量','処分数量','デイリーカウント','差異(消費量-デイリーカウント)','在庫僅少'];
+// 2026-08-23、末尾に基準値・発注数の2列を追加(月初発注機能、[[reorder_targets設定]]参照)。
+// 既存ルール通り新規列は必ず末尾に追加する(途中挿入すると過去期間の既存データ行が列ズレする)
+const STORE_INVENTORY_COLS = ['period_label','code','product','price','opening_amount','closing_amount','consumption_amount','cost_rate','open_stock','end_stock','delivery','consumption','disposed_qty','daily_count','count_diff','low_stock','reorder_target','reorder_qty'];
+const STORE_INVENTORY_HEADERS_JA = ['期間','商品コード','商品名','単価','期首在庫額','期末在庫額','月消費額','原価率','期首在庫','期末在庫','当月納品','消費量','処分数量','デイリーカウント','差異(消費量-デイリーカウント)','在庫僅少','基準値','発注数'];
 // 列名→列文字(A,B,C...)の変換ヘルパー。STORE_INVENTORY_COLSの並び順を単一の情報源として、
 // 数式内のセル参照(例:$P2)を組み立てる際に使う——列順を変える場合はSTORE_INVENTORY_COLSを直すだけでよい
 function _storeInvColLetter_(name) {
@@ -1794,6 +2340,32 @@ function _storeInvColLetter_(name) {
 // 計算自体はエリア別販売価格と無関係で、アペックス/トーヨーでも問題なく出せるとユーザー指摘で判明
 // (エリア別価格が問題になるのは売上ベースの真の原価率(buildSalesCategoryCostRatio側)の話であり、
 // この在庫消費率とは無関係)。
+// ステラ管理外(自主管理)の商品のうち、フレーバー違いを原価率算出の単位でグループ化したい
+// もの(2026-08-19追加)。STERA_SALES_MAPPINGと発想は同じ(発注時は個別コードのまま区別し、
+// 原価率だけまとめる)だが、こちらはステラの実売上データが無いため、棚卸ベースの期首/期末
+// 在庫額を商品名でグループ合算する。フレーバー単体だと動きが小さく原価率がブレやすい商品が
+// 増えたら、ここに追記していく。
+const SELF_MANAGED_COST_GROUPS = [
+  { label: 'じゃがりこ各種', products: ['カルビー じゃがりこ サラダ57g', 'カルビー じゃがりこ チーズ55g', 'カルビー じゃがりこ じゃがバター55g'] },
+];
+function _selfManagedCostGroupMembers_(product) {
+  const group = SELF_MANAGED_COST_GROUPS.find(g => g.products.includes(product));
+  return group ? group.products : null;
+}
+
+// ----------------------------------------------------------------
+// 月初発注(基準値ベースの発注数自動算出) 2026-08-23
+// ----------------------------------------------------------------
+// 設定キー'reorder_targets'(管理者ポータル「発注基準値設定」画面で編集)。
+// 形式: {storeId: {商品コード: 基準値(目標在庫数)}}。店舗×商品コードの組み合わせに
+// エントリが無い商品は月初発注の対象外(通常通り随時発注のみ)。
+const REORDER_TARGETS_KEY = 'reorder_targets';
+function _getReorderTargets_() {
+  const entry = getSettings().find(s => s.key === REORDER_TARGETS_KEY);
+  if (!entry || !entry.value) return {};
+  try { return JSON.parse(entry.value); } catch (e) { return {}; }
+}
+
 function buildStoreInventorySheet(storeId, periodLabel) {
   if (!storeId) return { error: 'storeIdは必須です' };
   if (!periodLabel) return { error: 'periodLabelは必須です（例: 2026-07）' };
@@ -1806,6 +2378,7 @@ function buildStoreInventorySheet(storeId, periodLabel) {
 
   const deliveryTotals = (_deliveryAutoTotalsForPeriod_(periodLabel)[storeId]) || {};
   const meta = _productMeta_();
+  const reorderTargets = _getReorderTargets_()[storeId] || {};
 
   const curRows = {}; // product -> この期間の行
   for (let i = 1; i < data.length; i++) {
@@ -1820,7 +2393,20 @@ function buildStoreInventorySheet(storeId, periodLabel) {
 
   const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
   const sheetName = _storeNames_()[storeId] || storeId;
-  const sheet = ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
+  // 新規店舗の初回棚卸送信時、saveInventorySnapshotから並行して発火する複数のGETリクエスト
+  // (buildStoreInventorySheet等)が同時にこの店舗のタブをまだ「無い」と判定し、両方が
+  // insertSheetを試みて片方が「シート名は既に存在しています」で失敗する事故があった
+  // (2026-08-31、巣鴨駅南口の初回送信で発生)。getSheetByNameで再確認してから使う
+  // フォールバックを入れ、既存店舗と同じく後勝ちで安全に処理を継続できるようにする。
+  let sheet = ss.getSheetByName(sheetName);
+  if (!sheet) {
+    try {
+      sheet = ss.insertSheet(sheetName);
+    } catch (e) {
+      sheet = ss.getSheetByName(sheetName);
+      if (!sheet) throw e;
+    }
+  }
   // エリア別の色分け・正準な並び順(新しい店舗ほど後ろ)への反映(2026-08-01追加)。
   // このシートが今回新規作成された場合も含め、毎回のbuildStoreInventorySheet実行時に揃え直す
   _applyStoreTabOrderAndColors_(ss);
@@ -1853,15 +2439,31 @@ function buildStoreInventorySheet(storeId, periodLabel) {
     .sort((a, b) => b.startIdx - a.startIdx) // 末尾側から消して行番号ズレを避ける
     .forEach(b => sheet.deleteRows(b.startIdx + 2, b.endIdx - b.startIdx + 1));
 
+  // 新しい期間ほど上に来るよう、末尾追記ではなくヘッダー直下(2行目)に挿入する
+  // (2026-08-18、ユーザー要望。既存ブロックはinsertRowsBeforeで自動的に下へ押し出され、
+  // 各ブロックの数式は自己参照のみのためGoogle Sheetsの行挿入時のセル参照自動調整で崩れない)。
   // 期首在庫額等を実セル参照の数式にするため、書き込み先の絶対行番号を先に確定させる
-  // (削除処理より後で確定させないと、数式が指す行番号が実際の書き込み位置とズレる)
-  const startRow = sheet.getLastRow() + 1;
+  // (削除処理より後で確定させないと、数式が指す行番号が実際の書き込み位置とズレる)。
+  // 2026-08-23判明・修正: ここで`outRows.length`を参照していたが、outRowsはこの後ろで
+  // 定義される(const宣言のtemporal dead zone)ため、実行するたびに必ず
+  // "Cannot access 'outRows' before initialization"で失敗していた(2026-08-18の本変更導入時から)。
+  // outRows.length は products.length と常に同じ(1:1のmapのため)なので、既に確定している
+  // products.length を使う
+  sheet.insertRowsBefore(2, products.length);
+  const startRow = 2;
   const colOpening = _storeInvColLetter_('opening_amount');
   const colClosing = _storeInvColLetter_('closing_amount');
   const colConsumption = _storeInvColLetter_('consumption_amount');
   const colOpenStock = _storeInvColLetter_('open_stock');
   const colEndStock = _storeInvColLetter_('end_stock');
   const colPrice = _storeInvColLetter_('price');
+
+  // ステラ対象外(自主管理)のフレーバー違い商品は、フレーバー単体だと動きが小さく原価率が
+  // ブレやすいため、SELF_MANAGED_COST_GROUPSで定義したグループ単位の合算値を使う
+  // (2026-08-19追加)。行番号はこの後のmapでの並び順(products配列の順)で確定するため、
+  // 数式生成時に他フレーバーの行を参照できるよう先にproduct→rowNumの対応を作っておく。
+  const rowNumByProduct = {};
+  products.forEach((p, i) => { rowNumByProduct[p] = startRow + i; });
 
   const outRows = products.map((product, i) => {
     const r = curRows[product];
@@ -1879,8 +2481,18 @@ function buildStoreInventorySheet(storeId, periodLabel) {
     // 期首在庫/期末在庫セル自体が空欄(初月・記入漏れ等)の場合はIF()で空文字を返し、0除算も回避する。
     let openingAmount = '', closingAmount = '', consumptionAmount = '', costRate = '';
     if (product !== 'その他') {
-      openingAmount = `=IF($${colOpenStock}${rowNum}="","",$${colPrice}${rowNum}*$${colOpenStock}${rowNum})`;
-      closingAmount = `=IF($${colEndStock}${rowNum}="","",$${colPrice}${rowNum}*$${colEndStock}${rowNum})`;
+      const groupProducts = _selfManagedCostGroupMembers_(product);
+      const groupRows = groupProducts && groupProducts
+        .map(p => rowNumByProduct[p])
+        .filter(rn => rn !== undefined);
+      if (groupRows && groupRows.length > 1) {
+        // グループ内の各行のIFERROR(単価×在庫,0)を合算する(空欄行は0扱いで合算から除外)
+        openingAmount = '=' + groupRows.map(rn => `IFERROR($${colPrice}${rn}*$${colOpenStock}${rn},0)`).join('+');
+        closingAmount = '=' + groupRows.map(rn => `IFERROR($${colPrice}${rn}*$${colEndStock}${rn},0)`).join('+');
+      } else {
+        openingAmount = `=IF($${colOpenStock}${rowNum}="","",$${colPrice}${rowNum}*$${colOpenStock}${rowNum})`;
+        closingAmount = `=IF($${colEndStock}${rowNum}="","",$${colPrice}${rowNum}*$${colEndStock}${rowNum})`;
+      }
       consumptionAmount = `=IF(OR($${colOpening}${rowNum}="",$${colClosing}${rowNum}=""),"",$${colOpening}${rowNum}-$${colClosing}${rowNum})`;
       costRate = `=IF(OR($${colOpening}${rowNum}="",$${colOpening}${rowNum}=0),"",$${colConsumption}${rowNum}/$${colOpening}${rowNum})`;
     }
@@ -1892,13 +2504,20 @@ function buildStoreInventorySheet(storeId, periodLabel) {
     const countDiff = (consumption !== '' && consumption !== null && dailyCount !== '' && dailyCount !== null)
       ? Number(consumption) - Number(dailyCount) : '';
 
+    // 基準値(目標在庫数)が設定されている商品コードだけ発注数(max(0,基準値-期末在庫))を出す。
+    // 未設定の商品コード、または期末在庫が未入力の場合は両列とも空欄(月初発注の対象外)
+    const reorderTarget = reorderTargets[String(r[idx.code])];
+    const reorderQty = (reorderTarget !== undefined && endStock !== '' && endStock !== null)
+      ? Math.max(0, Number(reorderTarget) - Number(endStock)) : '';
+
     return [
       _periodLabelJa_(periodLabel), r[idx.code], product,
       price,
       openingAmount, closingAmount, consumptionAmount, costRate,
       r[idx.open_stock], endStock, liveDelivery, consumption, r[idx.disposed_qty],
       dailyCount, countDiff,
-      low ? '要確認' : ''
+      low ? '要確認' : '',
+      reorderTarget !== undefined ? Number(reorderTarget) : '', reorderQty
     ];
   });
 
@@ -1918,6 +2537,73 @@ function buildStoreInventorySheet(storeId, periodLabel) {
   });
 
   return { ok: true, store: sheetName, period: periodLabel, rows: outRows.length };
+}
+
+// アペックス発注書の送付先(2026-08-23、スモールスタートとして渋谷神南のみ対応。
+// 大塚駅南口はトーヨーベンディングの機械のため発注書自体を作らず、店舗タブの発注数列
+// (buildStoreInventorySheetのreorder_qty)を見て人が判断する運用でよいとユーザー確認済み)。
+// 対象店舗を増やす場合はここに追記する。
+const APEX_REORDER_RECIPIENTS = {
+  shibuya: { to: 'mb218@apex-co.co.jp', cc: 'selfcafe001@gmail.com' },
+};
+
+// 棚卸完了(index.htmlの_submitInventoryInner)からbuildStoreInventorySheetと同じタイミングで
+// 呼ばれる「月初発注」処理(2026-08-23追加)。基準値(reorder_targets)が設定されている商品コード
+// について発注数(max(0,基準値-期末在庫))を計算し、1件以上発注が必要でAPEX_REORDER_RECIPIENTSに
+// 送付先が設定されている店舗なら、簡易な表形式PDFを生成してGmail下書きを自動作成する
+// (人が内容を確認して送信ボタンを押す運用、山崎さんのorder-automationシステムに倣った)。
+// 発注数の算出結果自体はbuildStoreInventorySheet側が店舗タブに書き込むため、この関数の役割は
+// 「PDF+Gmail下書き作成が必要な店舗だけ、それを行う」ことに絞られる——基準値未設定の店舗や
+// 送付先未設定の店舗(例: 大塚駅南口)では何もせず正常終了する。
+function processMonthlyReorder(storeId, periodLabel) {
+  const targets = _getReorderTargets_()[storeId];
+  if (!targets || !Object.keys(targets).length) return { ok: true, skipped: 'no_targets_configured' };
+
+  const recipient = APEX_REORDER_RECIPIENTS[storeId];
+  if (!recipient) return { ok: true, skipped: 'no_recipient_configured' };
+
+  const data = _inventoryLogRowsCached_();
+  const idx = {};
+  INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
+
+  const items = [];
+  for (let i = 1; i < data.length; i++) {
+    const r = data[i];
+    if (String(r[idx.store_id]) !== String(storeId)) continue;
+    if (_invMonthLabelStr(r[idx.period_label]) !== String(periodLabel)) continue;
+    const code = String(r[idx.code]);
+    if (!(code in targets)) continue;
+    const endStock = r[idx.end_stock];
+    if (endStock === '' || endStock === null) continue;
+    const qty = Math.max(0, Number(targets[code]) - Number(endStock));
+    if (qty > 0) items.push({ code, product: r[idx.product], qty });
+  }
+  if (!items.length) return { ok: true, skipped: 'no_reorder_needed' };
+
+  const storeName = _storeNames_()[storeId] || storeId;
+  const periodJa = _periodLabelJa_(periodLabel);
+  const fileBaseName = `${storeName}_発注書_${periodLabel}`;
+
+  const doc = DocumentApp.create(fileBaseName + '_作業用');
+  const body = doc.getBody();
+  body.appendParagraph(`${storeName}　発注書（${periodJa}分棚卸に基づく）`).setHeading(DocumentApp.ParagraphHeading.HEADING2);
+  const tableRows = [['商品コード', '商品名', '発注数']].concat(items.map(it => [it.code, it.product, String(it.qty)]));
+  const table = body.appendTable(tableRows);
+  table.getRow(0).editAsText().setBold(true);
+  doc.saveAndClose();
+
+  const docFile = DriveApp.getFileById(doc.getId());
+  const pdfBlob = docFile.getAs('application/pdf').setName(fileBaseName + '.pdf');
+  docFile.setTrashed(true);
+
+  GmailApp.createDraft(
+    recipient.to,
+    `${storeName}　${periodJa}分　発注書`,
+    `いつもお世話になっております。\n${storeName}の${periodJa}分棚卸に基づく発注書を添付いたします。\nご確認のほど、よろしくお願いいたします。`,
+    { cc: recipient.cc, attachments: [pdfBlob] }
+  );
+
+  return { ok: true, items: items.length, draftCreated: true };
 }
 
 // ----------------------------------------------------------------
@@ -2020,7 +2706,17 @@ function buildSalesCategoryCostRatio(storeId, periodLabel) {
   });
 
   const sheetName = storeName;
-  const sheet = ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
+  // buildStoreInventorySheet/buildStockCheckMonthlyと同じ理由(新規店舗の初回実行時の競合)
+  // でここも同じフォールバックを入れる(2026-08-31、他機能での実例を受けて予防的に適用)。
+  let sheet = ss.getSheetByName(sheetName);
+  if (!sheet) {
+    try {
+      sheet = ss.insertSheet(sheetName);
+    } catch (e) {
+      sheet = ss.getSheetByName(sheetName);
+      if (!sheet) throw e;
+    }
+  }
   const startCol = 16; // P列(既存のO列=在庫僅少より右に間隔を空ける。vendor:'other'の在庫消費率とは別集計)
   const headerRow = [`販売品類原価率(ステラ実売上ベース・${periodLabel})`, '消費額(原価)', 'ステラ売上', '原価率'];
   sheet.getRange(1, startCol, 1, headerRow.length).setValues([headerRow]);
@@ -2044,7 +2740,15 @@ const STERA_DAILY_COLS = ['date', 'store_id', 'prd_id', 'qty'];
 
 function getSteraDailySheet_() {
   const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
-  const sheet = ss.getSheetByName(SHEET_STERA_DAILY) || ss.insertSheet(SHEET_STERA_DAILY);
+  let sheet = ss.getSheetByName(SHEET_STERA_DAILY);
+  if (!sheet) {
+    try {
+      sheet = ss.insertSheet(SHEET_STERA_DAILY);
+    } catch (e) {
+      sheet = ss.getSheetByName(SHEET_STERA_DAILY);
+      if (!sheet) throw e;
+    }
+  }
   ensureHeaders(sheet, STERA_DAILY_COLS);
   return sheet;
 }
@@ -2094,25 +2798,28 @@ function importSteraDailySales(dateStr, csvText) {
   }
 
   const sheet = getSteraDailySheet_();
-  // 同じdateStrの既存行を全削除してから書き直す(取り直し対応、他日には一切触れない)
-  if (sheet.getLastRow() > 1) {
-    const values = sheet.getDataRange().getValues();
-    const dIdx = STERA_DAILY_COLS.indexOf('date');
-    const toDel = [];
-    for (let i = 1; i < values.length; i++) {
-      if (String(values[i][dIdx]) === String(dateStr)) toDel.push(i + 1);
-    }
-    for (let i = toDel.length - 1; i >= 0; i--) sheet.deleteRow(toDel[i]);
-  }
+  const dIdx = STERA_DAILY_COLS.indexOf('date');
+  // 同じdateStrの既存行を除いた残り行を求め、一括clear+一括書き直しで置き換える(取り直し対応、
+  // 他日には一切触れない)。以前はdeleteRowを該当行数ぶん1件ずつ呼んでいたが、蓄積データが
+  // 増えるとAPI呼び出し回数が数百に達し、Spreadsheetサービスのタイムアウトを起こしていた
+  // (2026-09-01、月初の複数店舗同時実行で発覚)。読み取り→フィルタ→一括書き込みの3回の
+  // API呼び出しだけで完結させ、削除件数に関わらず一定時間で終わるようにする。
+  const lastRow = sheet.getLastRow();
+  const keptRows = lastRow > 1
+    ? sheet.getRange(2, 1, lastRow - 1, STERA_DAILY_COLS.length).getValues()
+        .filter(row => String(row[dIdx]) !== String(dateStr))
+    : [];
 
   const newRows = Object.keys(totals).map(key => {
     const parts = key.split('|');
     return [dateStr, parts[0], parts[1], totals[key]];
   });
-  if (newRows.length) {
-    const startRow = sheet.getLastRow() + 1;
-    sheet.getRange(startRow, STERA_DAILY_COLS.indexOf('date') + 1, newRows.length, 1).setNumberFormat('@');
-    sheet.getRange(startRow, 1, newRows.length, STERA_DAILY_COLS.length).setValues(newRows);
+
+  if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, STERA_DAILY_COLS.length).clearContent();
+  const allRows = keptRows.concat(newRows);
+  if (allRows.length) {
+    sheet.getRange(2, dIdx + 1, allRows.length, 1).setNumberFormat('@');
+    sheet.getRange(2, 1, allRows.length, STERA_DAILY_COLS.length).setValues(allRows);
   }
   return { ok: true, date: dateStr, rows: newRows.length, unmatchedStores: Object.keys(unmatchedStores) };
 }
@@ -2134,13 +2841,173 @@ function getSteraDailyTotal_(storeId, prdId, fromDateExclusive, toDateInclusive)
 }
 
 // ----------------------------------------------------------------
-// 盗難検知①: チェックシート入力欄の「前回入力からの実売上」表示(読み取り専用) 2026-07-31
+// ステラ当日リアルタイム売上(表示の当日ラグ解消) 2026-08-15
+// ----------------------------------------------------------------
+// stera_daily_salesは「前日分までしか無い」のが仕様(CSVエクスポート由来)だが、そのせいで
+// チェックシートの「前回入力からの実売上」が当日分を一切拾わず、水のように当日でも普通に売れる
+// 商品ですら「実売上0」と表示され続けパートナーが混乱する問題があった。ステラの公式APIには
+// 商品別・店舗別の売上数量を取れるエンドポイントが無いが、管理画面(dashboard.sterasmartone.com)
+// 自身が使っている内部集計API(admin-api.elepay.io、非公開・無保証のエンドポイント)を
+// scripts/poll_stera_realtime_sales.pyが数分おきにポーリングし、その結果をここに書き込む。
+// stera_daily_salesとは意図的に別シート・別関数にする(「前日分までは確定値」という既存の前提を
+// 壊さないため、当日分は上書きされ続ける速報値として明確に分離する)。
+const SHEET_STERA_REALTIME = 'stera_realtime_today';
+const STERA_REALTIME_COLS = ['date', 'store_id', 'prd_id', 'qty', 'updated_at'];
+
+function getSteraRealtimeSheet_() {
+  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const sheet = ss.getSheetByName(SHEET_STERA_REALTIME) || ss.insertSheet(SHEET_STERA_REALTIME);
+  ensureHeaders(sheet, STERA_REALTIME_COLS);
+  return sheet;
+}
+
+// poll_stera_realtime_sales.pyから数分おきに呼ばれる想定。rowsは[{storeId, prdId, qty}, ...]で、
+// 差分ではなく「その時点での本日分の累計」を毎回まるごと送る前提。このシートは常に「today」1日分
+// だけを保持する(importSteraDailySalesの「同じdateStrの行だけ削除」とは意図的に条件を変えている
+// ——日付が変わった直後の実行で前日分の残骸が残らないよう、dateStrに関わらず既存行は全削除する)。
+// 2026-08-25: SteraRealtimeSalesPollは10分おき・24時間365日稼働(業務時間限定の条件は無し)なので、
+// 削除前の既存行(=前日の最後のポーリング時点での確定寸前の合計)を捨てずにstera_daily_salesへ
+// 速報値として書き込む(_seedSteraDailyFromRealtimeRollover_)。これにより「確定値(CSV取込み、
+// 毎朝06:03)待ち」の空白が最大約6時間→最大10分(次のポーリングまでの間隔)に縮まる
+// (_stockMismatchCarryOver_参照)。06:03の本チャンネルCSV取込みが来れば同dateの行は削除されて
+// 正確な値に置き換わるので、速報値はあくまで暫定として上書きされる前提。
+// ?action=updateSteraRealtimeToday(POST、{dateStr, rows})で実行。
+function updateSteraRealtimeToday(dateStr, rows) {
+  if (!dateStr) return { error: 'dateStrは必須です(例: 2026-08-15)' };
+  if (!Array.isArray(rows)) return { error: 'rowsは配列で指定してください' };
+  const sheet = getSteraRealtimeSheet_();
+  if (sheet.getLastRow() > 1) {
+    const existing = sheet.getRange(2, 1, sheet.getLastRow() - 1, STERA_REALTIME_COLS.length).getValues();
+    const outgoingDate = existing.length ? String(existing[0][STERA_REALTIME_COLS.indexOf('date')]) : null;
+    if (outgoingDate && outgoingDate !== String(dateStr)) {
+      _seedSteraDailyFromRealtimeRollover_(outgoingDate, existing);
+    }
+    sheet.deleteRows(2, sheet.getLastRow() - 1);
+  }
+  if (!rows.length) return { ok: true, rows: 0 };
+  const now = Utilities.formatDate(new Date(), _invSheetTz(), 'yyyy-MM-dd HH:mm:ss');
+  const newRows = rows.map(r => [dateStr, r.storeId, r.prdId, Number(r.qty) || 0, now]);
+  const startRow = sheet.getLastRow() + 1;
+  sheet.getRange(startRow, STERA_REALTIME_COLS.indexOf('date') + 1, newRows.length, 1).setNumberFormat('@');
+  sheet.getRange(startRow, 1, newRows.length, STERA_REALTIME_COLS.length).setValues(newRows);
+  return { ok: true, rows: newRows.length };
+}
+
+// 日付ロールオーバーで消される直前のstera_realtime_today(前日の最終ポーリング値)を、
+// stera_daily_salesへ速報値として書き込む。既にその日付の確定行がある場合は何もしない
+// (06:03のCSV取込みが既に走っていた場合等、確定済みデータを速報値で上書きしないための保険)。
+function _seedSteraDailyFromRealtimeRollover_(dateStr, existingRealtimeRows) {
+  if (_hasSteraDailyDataForDate_(dateStr)) return;
+  const idx = {};
+  STERA_REALTIME_COLS.forEach((c, i) => { idx[c] = i; });
+  const newRows = existingRealtimeRows
+    .filter(r => (Number(r[idx.qty]) || 0) > 0)
+    .map(r => [dateStr, r[idx.store_id], r[idx.prd_id], Number(r[idx.qty]) || 0]);
+  if (!newRows.length) return;
+  const sheet = getSteraDailySheet_();
+  const startRow = sheet.getLastRow() + 1;
+  sheet.getRange(startRow, STERA_DAILY_COLS.indexOf('date') + 1, newRows.length, 1).setNumberFormat('@');
+  sheet.getRange(startRow, 1, newRows.length, STERA_DAILY_COLS.length).setValues(newRows);
+}
+
+// getChecksheetStockChecks専用: 当該storeIdの{prd_id: qty}をまとめて返す。dateStrが今日と
+// 一致しない行(ポーリングが日付跨ぎ後まだ走っていない間の残骸)は無視して古い数字を出し続けない
+// ようにする。STERA_SALES_MAPPINGの商品数分(8件)呼ばれてもシートは1回しか開かない設計にする
+// こと(N+1回避、theft-detection-notes.mdの既存方針と同じ——呼び出し側で1回だけ呼ぶこと)
+function _getSteraRealtimeTodayMap_(storeId) {
+  const today = Utilities.formatDate(new Date(), _invSheetTz(), 'yyyy-MM-dd');
+  const rows = sheetRows(getSteraRealtimeSheet_(), STERA_REALTIME_COLS);
+  const map = {};
+  rows.forEach(r => {
+    if (String(r.date) !== today) return;
+    if (String(r.store_id) !== String(storeId)) return;
+    map[r.prd_id] = (map[r.prd_id] || 0) + (Number(r.qty) || 0);
+  });
+  return map;
+}
+
+// ----------------------------------------------------------------
+// ステラ返金の検知通知 2026-08-16
+// ----------------------------------------------------------------
+// 「ステラ注文詳細」タブは返金金額・最終返金日時をCSVから読んではいるが、原価率計算に使うだけで
+// 返金の発生自体を検知・通知する仕組みがこれまで一切無かった(エラーにもならず誰も気づけない)。
+// poll_stera_realtime_sales.pyが当日分のrefundedQuantityを送ってくるたびに、前回通知済みの
+// 数量と比較し、増えていれば差分をLINE WORKSへ通知する。ステラの当日集計は累計値のため、
+// 差分ではなく毎回「本日の返金個数合計」が送られてくる想定——同じ返金を10分おきに何度も
+// 通知しないよう、stera_refund_notifiedシートに「その日・店舗・商品について直近何個まで
+// 通知済みか」を記録し、増分がある時だけ通知する。
+const SHEET_STERA_REFUND_NOTIFIED = 'stera_refund_notified';
+const STERA_REFUND_NOTIFIED_COLS = ['date', 'store_id', 'prd_id', 'notified_qty'];
+
+function getSteraRefundNotifiedSheet_() {
+  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const sheet = ss.getSheetByName(SHEET_STERA_REFUND_NOTIFIED) || ss.insertSheet(SHEET_STERA_REFUND_NOTIFIED);
+  ensureHeaders(sheet, STERA_REFUND_NOTIFIED_COLS);
+  return sheet;
+}
+
+// ?action=checkSteraRefunds(POST、{dateStr, refunds: [{storeId, prdId, label, refundedQuantity, refundedAmount}]})
+// で実行。refundsは呼び出し側(poll_stera_realtime_sales.py)がrefundedQuantity>0の行だけに
+// 絞って渡す想定。このシートは「today」1日分の通知済み状態だけを保持する(呼び出しのたびに
+// dateStr以外の残骸も含めて全削除→書き直し、stera_realtime_todayと同じ設計)。
+function checkSteraRefunds(dateStr, refunds) {
+  if (!dateStr) return { error: 'dateStrは必須です' };
+  if (!Array.isArray(refunds)) return { error: 'refundsは配列で指定してください' };
+
+  const sheet = getSteraRefundNotifiedSheet_();
+  const existingRows = sheetRows(sheet, STERA_REFUND_NOTIFIED_COLS);
+  const notifiedMap = {}; // `storeId|prdId` -> notified_qty(dateStrが一致する行のみ採用)
+  existingRows.forEach(r => {
+    if (String(r.date) !== String(dateStr)) return;
+    notifiedMap[r.store_id + '|' + r.prd_id] = Number(r.notified_qty) || 0;
+  });
+
+  let notifiedCount = 0;
+  refunds.forEach(r => {
+    const key = r.storeId + '|' + r.prdId;
+    const prevNotified = notifiedMap[key] || 0;
+    const currentQty = Number(r.refundedQuantity) || 0;
+    if (currentQty > prevNotified) {
+      const delta = currentQty - prevNotified;
+      try {
+        sendStockBotNotification_(
+          '【返金検知】' + _storeIdLabel_(r.storeId) + '・' + (r.label || r.prdId) +
+          'で返金' + delta + '個(本日累計' + currentQty + '個' +
+          (r.refundedAmount ? '、' + r.refundedAmount + '円' : '') + ')を検知しました。'
+        );
+        notifiedCount++;
+      } catch (e) { console.error('返金通知エラー:', e.message); }
+    }
+    notifiedMap[key] = currentQty;
+  });
+
+  if (sheet.getLastRow() > 1) sheet.deleteRows(2, sheet.getLastRow() - 1);
+  const newRows = Object.keys(notifiedMap).map(key => {
+    const parts = key.split('|');
+    return [dateStr, parts[0], parts[1], notifiedMap[key]];
+  });
+  if (newRows.length) {
+    sheet.getRange(2, STERA_REFUND_NOTIFIED_COLS.indexOf('date') + 1, newRows.length, 1).setNumberFormat('@');
+    sheet.getRange(2, 1, newRows.length, STERA_REFUND_NOTIFIED_COLS.length).setValues(newRows);
+  }
+  return { ok: true, notified: notifiedCount };
+}
+
+// ----------------------------------------------------------------
+// 盗難検知①: チェックシート入力欄の「前回入力からの実売上」表示 2026-07-31
 // ----------------------------------------------------------------
 // STERA_SALES_MAPPINGに載っている商品(販売品類の一部)について、グループ(ourProducts)内のどれかの
-// 商品に最後に入力があった日を基準に、その翌日から今日までの実売上数量を返す。表示専用で通知は
+// 商品に最後に入力があった日を基準に、その翌日から今日までの実売上数量を返す。通知(LINE WORKS)は
 // 一切行わない(通知はcheckChecksheetStockMismatch側で別途行う)。チェックシートタブを開くたびに
 // 1回まとめて呼ぶ想定(タップごとに毎回呼ばない)。?action=getChecksheetStockChecks&storeId=... で実行。
 // 戻り値は{商品名: {label, sinceDate, qty} または null(まだ前回入力が無い商品)}
+// 2026-08-26: 「前回入力"時刻"〜次回入力"時刻"の実売上を過不足なく見せてほしい」という要望を受け、
+// checkChecksheetStockMismatch側と同じチェックポイント方式(_stockMismatchCarryOverFromRows_)で
+// sinceDateの日の取りこぼしを解消。通知は送らないが、チェックポイントシートへの書き込みは行う
+// (チェックシート保存フロー自体には一切触れないので、上記の「通知は一切行わない」という既存方針とは
+// 矛盾しない)。stera_daily_salesは蓄積型で行数が増え続けるため、8商品分をループする前に1回だけ
+// 全件読み込んでメモリ上で使い回す(N+1回避。商品ごとに読み直すと、タブを開くたびのロードが
+// データが増えるほど遅くなってしまうため——2026-08-26、パフォーマンス改善)。
 function getChecksheetStockChecks(storeId) {
   if (!storeId) return { error: 'storeIdは必須です' };
   const periods = getChecksheetData(storeId);
@@ -2153,8 +3020,13 @@ function getChecksheetStockChecks(storeId) {
   const today = Utilities.formatDate(new Date(), _invSheetTz(), 'yyyy-MM-dd');
   const yesterday = Utilities.formatDate(new Date(Date.now() - 86400000), _invSheetTz(), 'yyyy-MM-dd');
   const priorDays = Object.keys(allDays).filter(d => d < today).sort().reverse();
+  // 以下3つは全商品分のループに入る前に1回だけ読み込む(N+1回避)
+  const realtimeToday = _getSteraRealtimeTodayMap_(storeId);
+  const checkpointRows = sheetRows(_getStockMismatchCheckpointSheet_(), STOCK_MISMATCH_CHECKPOINT_COLS);
+  const dailyRows = sheetRows(getSteraDailySheet_(), STERA_DAILY_COLS);
 
   const result = {};
+  const checkpointUpdates = [];
   STERA_SALES_MAPPING.forEach(m => {
     const itemKeys = m.ourProducts.map(name => 'prod:' + name);
     let sinceDate = null;
@@ -2165,14 +3037,81 @@ function getChecksheetStockChecks(storeId) {
         break;
       }
     }
-    // steraQtyはstera_daily_salesに取り込み済みの前日分までで揃える(当日分はまだ取込み前で
-    // 必ず0のため、todayを上限にすると「前日まで確定」の補充量比較が崩れる。2026-08-04発覚)
-    const entry = sinceDate
-      ? { label: m.label, sinceDate, qty: getSteraDailyTotal_(storeId, m.prdId, sinceDate, yesterday) }
-      : null;
+    // qtyは「sinceDate(除く)〜前日(含む)」の確定分(stera_daily_sales)に、carryOver(sinceDateの日の
+    // 打ち切られた残り)と当日分の速報値(stera_realtime_today)を加算する(2026-08-15、パートナーが
+    // 「当日の実売上が常に0と表示され混乱する」との指摘を受けて当日分を追加。2026-08-26、carryOverを
+    // 追加してsinceDateの日の取りこぼしも解消)。
+    let entry = null;
+    if (sinceDate) {
+      const carryOver = _stockMismatchCarryOverFromRows_(dailyRows, checkpointRows, storeId, m.prdId, sinceDate);
+      const rangeQty = dailyRows
+        .filter(r => String(r.store_id) === String(storeId) && String(r.prd_id) === String(m.prdId) &&
+          String(r.date) > sinceDate && String(r.date) <= yesterday)
+        .reduce((sum, r) => sum + (Number(r.qty) || 0), 0);
+      const todayQty = realtimeToday[m.prdId] || 0;
+      entry = { label: m.label, sinceDate, qty: carryOver + rangeQty + todayQty };
+      checkpointUpdates.push({ storeId, prdId: m.prdId, dateStr: today, qty: todayQty });
+    }
     m.ourProducts.forEach(name => { result[name] = entry; });
   });
+  if (checkpointUpdates.length) _batchUpsertStockMismatchCheckpoints_(checkpointRows, checkpointUpdates);
   return result;
+}
+
+// ----------------------------------------------------------------
+// 盗難検知①-補助: 日またぎ取りこぼし対策のチェックポイント 2026-08-25
+// ----------------------------------------------------------------
+// 従来はsinceDate(前回入力日)を比較期間から除外していたため、「前回入力した"時刻"〜その日の24時」の
+// 実売上がどのチェックにも一度も含まれない空白になっていた(前回入力時のチェックはその時点までの
+// 実売上しか見えず、翌日以降のチェックはsinceDateの日をまるごと比較範囲外にしてしまうため)。
+// 対策: チェックのたびに「その日の実売上をどこまで数えたか(=stera_realtime_todayの累計値)」を
+// チェックポイントとして記録しておく。翌日以降のチェックで、前回のsinceDateが確定値
+// (stera_daily_sales、CSV取込み後)になっていたら、その日の確定合計からチェックポイントを
+// 差し引いた「取りこぼし分」をcarryOverとして繰り越して回収する。
+// 確定値がまだ来ていない(CSV未取込み、深夜〜早朝の稀なケース)場合は今回はcarryOver=0のまま
+// チェックポイントを進める(その回だけ取りこぼしを許容する——毎日必ず取りこぼす従来の状態からの
+// 大幅な改善であり、これ以上の完全解決は複雑さに見合わないと判断)。
+const SHEET_STOCK_MISMATCH_CHECKPOINT = 'stock_mismatch_checkpoint';
+const STOCK_MISMATCH_CHECKPOINT_COLS = ['store_id', 'prd_id', 'checkpoint_date', 'checkpoint_qty'];
+
+function _getStockMismatchCheckpointSheet_() {
+  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const sheet = ss.getSheetByName(SHEET_STOCK_MISMATCH_CHECKPOINT) || ss.insertSheet(SHEET_STOCK_MISMATCH_CHECKPOINT);
+  ensureHeaders(sheet, STOCK_MISMATCH_CHECKPOINT_COLS);
+  return sheet;
+}
+
+// sinceDateの「打ち切られた残り」を確定値から回収するcarryOverを計算する。dailyRows/checkpointRowsは
+// 呼び出し側で事前に全件取得済みの配列を渡すこと(N+1回避。stera_daily_salesは蓄積型で行数が
+// 増え続けるため、商品ごとに読み直すとタブを開くたびのロードがデータが増えるほど遅くなってしまう)。
+function _stockMismatchCarryOverFromRows_(dailyRows, checkpointRows, storeId, prdId, sinceDate) {
+  const checkpoint = checkpointRows.find(r => String(r.store_id) === String(storeId) && String(r.prd_id) === String(prdId));
+  if (!checkpoint || String(checkpoint.checkpoint_date) !== sinceDate) return 0;
+  const sinceDateRows = dailyRows.filter(r => String(r.date) === sinceDate);
+  if (!sinceDateRows.length) return 0; // まだCSV未取込み(確定していない)。次回以降に回収する
+  const fullQty = sinceDateRows
+    .filter(r => String(r.store_id) === String(storeId) && String(r.prd_id) === String(prdId))
+    .reduce((sum, r) => sum + (Number(r.qty) || 0), 0);
+  return Math.max(0, fullQty - Number(checkpoint.checkpoint_qty || 0));
+}
+
+// stera_daily_salesにdateStr当日の行が1件でもあれば、その日はCSV取込み済み(確定)とみなす
+// (_seedSteraDailyFromRealtimeRollover_専用、日付ロールオーバー時に1回だけ呼ばれる低頻度パスなので
+// 都度シートを読んでも問題ない)
+function _hasSteraDailyDataForDate_(dateStr) {
+  return sheetRows(getSteraDailySheet_(), STERA_DAILY_COLS).some(r => String(r.date) === dateStr);
+}
+
+// 複数商品分のチェックポイント更新をまとめて1回のシート書き込みで反映する(N+1回避)。
+// existingRowsは呼び出し側で事前に取得済みのチェックポイント全行(getChecksheetStockChecks等参照)。
+function _batchUpsertStockMismatchCheckpoints_(existingRows, updates) {
+  const map = {};
+  existingRows.forEach(r => { map[r.store_id + '|' + r.prd_id] = [r.store_id, r.prd_id, r.checkpoint_date, r.checkpoint_qty]; });
+  updates.forEach(u => { map[u.storeId + '|' + u.prdId] = [u.storeId, u.prdId, u.dateStr, u.qty]; });
+  const rows = Object.keys(map).map(k => map[k]);
+  const sheet = _getStockMismatchCheckpointSheet_();
+  if (sheet.getLastRow() > 1) sheet.deleteRows(2, sheet.getLastRow() - 1);
+  if (rows.length) sheet.getRange(2, 1, rows.length, STOCK_MISMATCH_CHECKPOINT_COLS.length).setValues(rows);
 }
 
 // ----------------------------------------------------------------
@@ -2186,6 +3125,11 @@ function getChecksheetStockChecks(storeId) {
 // 「社内ポータル通知」の既定チャンネル、2026-07-31時点でテスト運用としてこの形。
 // channelIdOverride省略で既定チャンネルへ送る)。通知文言は断定しない中立表現にする
 // (パートナーの数え間違い・処分・店舗間移動等でも同じ差異が出るため、盗難と決めつけない)
+// 2026-08-16: 比較期間を「sinceDate(除く)〜前日(含む)」から「sinceDate(除く)〜当日(含む、
+// stera_realtime_today経由)」に拡張。従来は毎日連続入力(=通常運用)だと比較期間が空になり
+// 差異が常に0対0で通知が事実上機能しない問題があったため。
+// 2026-08-25: sinceDateの日が「前回入力した時刻〜24時」で打ち切られ実売上が取りこぼされる問題を
+// チェックポイント(上記_stockMismatchCarryOverFromRows_)で解消。
 const CHECKSHEET_STOCK_MISMATCH_THRESHOLD = 2;
 function checkChecksheetStockMismatch(storeId, product) {
   if (!storeId || !product) return { error: 'storeId/productは必須です' };
@@ -2212,17 +3156,29 @@ function checkChecksheetStockMismatch(storeId, product) {
   }
   if (!sinceDate) return { ok: true, skipped: 'no_prior_entry' }; // 今回が初回入力、比較対象が無い
 
-  // 補充量(inputQty)とステラ実売上(steraQty)を同じ「sinceDate(除く)〜前日(含む)」の期間で揃える。
-  // stera_daily_salesは前日分までしか取り込まれていない(SteraDailySalesImportが毎日06:00に
-  // 前日分を取込む設計)ため、上限をtodayにすると当日分の補充だけが一方的に加算され、ラグ由来の
-  // 見せかけの差異が出てしまう(2026-08-04発覚)。当日分の補充入力は次回の比較サイクルへ自然に繰り越す。
+  // 補充量(inputQty)とステラ実売上(steraQty)を同じ「sinceDate(除く)〜当日(含む)」の期間で揃える。
+  // 2026-08-04時点ではstera_daily_salesが前日分までしか無かったため当日分を除外していたが
+  // (当日分の補充だけ一方的に加算されラグ由来の見せかけの差異が出る問題があった)、
+  // 2026-08-16にstera_realtime_today(当日分のリアルタイム売上)を追加したことで当日分も
+  // 正しく比較できるようになったため含めるよう変更。これにより「前回入力の翌日〜前回入力当日」
+  // の間隔が1日(=毎日連続入力)の時は比較期間が空になり差異検知が事実上機能しない、という
+  // 見落としも解消される(毎日連続入力が通常運用のため、これが直らないと①の通知はほぼ発火しない)。
   let inputQty = 0;
   Object.keys(allDays).forEach(dayKey => {
-    if (!(dayKey > sinceDate && dayKey <= yesterday)) return;
+    if (!(dayKey > sinceDate && dayKey <= today)) return;
     itemKeys.forEach(k => { inputQty += Number(allDays[dayKey][k]) || 0; });
   });
 
-  const steraQty = getSteraDailyTotal_(storeId, group.prdId, sinceDate, yesterday);
+  const dailyRows = sheetRows(getSteraDailySheet_(), STERA_DAILY_COLS);
+  const checkpointRows = sheetRows(_getStockMismatchCheckpointSheet_(), STOCK_MISMATCH_CHECKPOINT_COLS);
+  const carryOver = _stockMismatchCarryOverFromRows_(dailyRows, checkpointRows, storeId, group.prdId, sinceDate);
+  const rangeQty = dailyRows
+    .filter(r => String(r.store_id) === String(storeId) && String(r.prd_id) === String(group.prdId) &&
+      String(r.date) > sinceDate && String(r.date) <= yesterday)
+    .reduce((sum, r) => sum + (Number(r.qty) || 0), 0);
+  const todayRealtimeQty = _getSteraRealtimeTodayMap_(storeId)[group.prdId] || 0;
+  const steraQty = carryOver + rangeQty + todayRealtimeQty;
+  _batchUpsertStockMismatchCheckpoints_(checkpointRows, [{ storeId, prdId: group.prdId, dateStr: today, qty: todayRealtimeQty }]);
   const diff = inputQty - steraQty;
   if (diff >= CHECKSHEET_STOCK_MISMATCH_THRESHOLD) {
     try {
@@ -2230,11 +3186,11 @@ function checkChecksheetStockMismatch(storeId, product) {
       sendStockBotNotification_(
         '【在庫差異検知】' + _storeIdLabel_(storeId) + '・' + group.label +
         'で在庫差異(補充' + inputQty + '個／ステラ実売上' + steraQty + '個、差' + diff + '個)を検知しました。ご確認ください。' +
-        '(' + sinceDate + '〜' + yesterday + '分)'
+        '(' + sinceDate + '〜本日分)'
       );
     } catch (e) { console.error('LINE WORKS通知エラー(在庫差異検知):', e.message); }
   }
-  return { ok: true, sinceDate, throughDate: yesterday, inputQty, steraQty, diff };
+  return { ok: true, sinceDate, throughDate: today, inputQty, steraQty, diff, carryOver };
 }
 
 // ----------------------------------------------------------------
@@ -2270,7 +3226,17 @@ function buildStockCheckMonthly(storeId, periodLabel) {
 
   const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
   const storeName = _storeNames_()[storeId] || storeId;
-  const sheet = ss.getSheetByName(storeName) || ss.insertSheet(storeName);
+  // buildStoreInventorySheetと同じ理由(新規店舗の初回送信時、saveInventorySnapshotから並行
+  // 発火する複数リクエストがタブ作成で競合しうる)でここも同じフォールバックを入れる。
+  let sheet = ss.getSheetByName(storeName);
+  if (!sheet) {
+    try {
+      sheet = ss.insertSheet(storeName);
+    } catch (e) {
+      sheet = ss.getSheetByName(storeName);
+      if (!sheet) throw e;
+    }
+  }
   const statusCol = STOCK_CHECK_START_COL + STOCK_CHECK_HEADERS.length - 1;
   // 確認状況は管理者が手入力するメモなので、再実行のたびに消してしまわないよう既存値を読んでおき、
   // 新しい行にもそのまま引き継ぐ(他の2列=ステラ数量・差異は毎回の再計算値で上書きしてよい)
@@ -2335,16 +3301,18 @@ function saveInvoiceReceiptImage(imageBase64, imageMime, filename) {
   if (!IMAGE_FOLDER_ID) return { error: 'IMAGE_FOLDER_IDが設定されていません' };
   const folder = DriveApp.getFolderById(IMAGE_FOLDER_ID);
   const blob = Utilities.newBlob(Utilities.base64Decode(imageBase64), imageMime || 'image/jpeg', (filename || 'invoice_receipt') + '.jpg');
+  // IMAGE_FOLDER_ID自体が「リンクを知っている全員：閲覧者」共有のため、ファイル個別のsetSharingは不要
+  // （2026-08-12、Drive API呼び出しを1枚あたり2回→1回に削減。IMAGE_FOLDER_IDのコメント参照）
   const file = folder.createFile(blob);
-  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
   return { ok: true, image_url: 'https://drive.google.com/thumbnail?id=' + file.getId() + '&sz=w800', file_id: file.getId() };
 }
 
 function saveImageToDrive(base64, mimeType, filename) {
   const folder = DriveApp.getFolderById(IMAGE_FOLDER_ID);
   const blob   = Utilities.newBlob(Utilities.base64Decode(base64), mimeType, filename + '.jpg');
+  // IMAGE_FOLDER_ID自体が「リンクを知っている全員：閲覧者」共有のため、ファイル個別のsetSharingは不要
+  // （2026-08-12、Drive API呼び出しを1枚あたり2回→1回に削減。IMAGE_FOLDER_IDのコメント参照）
   const file   = folder.createFile(blob);
-  file.setSharing(DriveApp.Access.ANYONE_WITH_LINK, DriveApp.Permission.VIEW);
   return 'https://drive.google.com/thumbnail?id=' + file.getId() + '&sz=w800';
 }
 
@@ -2526,6 +3494,36 @@ function sendStockBotNotification_(message, userIdOverride) {
       payload: body
     });
   }
+}
+
+// ----------------------------------------------------------------
+// スクリプト(Task Scheduler経由)の失敗通知 2026-08-15
+// ----------------------------------------------------------------
+// poll_stera_realtime_sales.py・import_stera_daily_sales.pyはこのPC上でTask Scheduler経由で
+// 無人実行されるため、失敗してもスクリプト自身がコンソールにエラーを出すだけで誰も気づけない
+// (実際に当日表示が「翌日まで0」に静かに戻ってしまう問題があった)。失敗時にLINE WORKSへ
+// 通知するための汎用アクション。keyごとに直近の通知時刻をScript Propertiesへ記録し、
+// SCRIPT_FAILURE_NOTIFY_THROTTLE_MIN以内の再通知はスキップする(10分おきに動くポーリングが
+// 壊れたままだと10分ごとに通知が来て埋もれてしまうため、スクリプトごとに最大1時間に1通に絞る)。
+// ?action=reportScriptFailure(POST、{message, key})で実行。
+const SCRIPT_FAILURE_NOTIFY_THROTTLE_MIN = 60;
+function reportScriptFailure(message, key) {
+  if (!message) return { error: 'messageは必須です' };
+  const props = PropertiesService.getScriptProperties();
+  const throttleKey = 'scriptFailureNotifiedAt_' + (key || 'default');
+  const lastNotified = Number(props.getProperty(throttleKey) || 0);
+  const now = Date.now();
+  if (now - lastNotified < SCRIPT_FAILURE_NOTIFY_THROTTLE_MIN * 60 * 1000) {
+    return { ok: true, skipped: 'throttled' };
+  }
+  try {
+    sendStockBotNotification_('【スクリプト失敗】' + message);
+    props.setProperty(throttleKey, String(now));
+  } catch (e) {
+    console.error('reportScriptFailureの通知送信エラー:', e.message);
+    return { error: '通知送信自体に失敗: ' + e.message };
+  }
+  return { ok: true };
 }
 
 function testStockBotNotification() {
@@ -2869,6 +3867,8 @@ function sendDailyOrderNotification() {
   // 未設定のうちはSpreadsheetApp.openByIdが例外を投げるため、それで発注の日次通知自体が
   // 止まってしまわないようtry/catchで囲む
   try { purgeOldDeliveryHistory(); } catch (e) { console.error('purgeOldDeliveryHistory error:', e.message); }
+  try { purgeOldMachinePhotos(); } catch (e) { console.error('purgeOldMachinePhotos error:', e.message); }
+  try { sendMachinePhotoReminder(); } catch (e) { console.error('sendMachinePhotoReminder error:', e.message); }
   var ss = SpreadsheetApp.openById(SHEET_ID);
   var sheet = ss.getSheetByName(SHEET_ORDERS);
   if (!sheet || sheet.getLastRow() <= 1) return;
@@ -3483,4 +4483,76 @@ function setMonthlyAttendanceTrigger() {
     }
   }
   ScriptApp.newTrigger('sendMonthlyAttendanceCheck').timeBased().onMonthDay(1).atHour(9).inTimezone('Asia/Tokyo').create();
+}
+
+// ----------------------------------------------------------------
+// 新規店舗検知(2026-08-24追加)。店舗マスタ管理用の別スプレッドシート(gid=0、B列=店舗名、
+// F列=営業状況「営業中」/「閉店」)を毎日読み、F列が「営業中」かつポータル(stores.js)に
+// 未登録の店舗名をLINE WORKSへ通知する。実際の追加(stores.js編集+エリア/パスワード設定等)は
+// 人が管理者ポータル「店舗管理→新規追加」画面で行う想定——エリア判定・パスワード発行など
+// 人の判断が要る項目が多く全自動追加はリスクが高いため、検知・通知のみに留める(ユーザー確認済み)。
+// ヘッダー行・列位置は固定の行番号/列番号で決め打ちせず、「店舗名」というセルを持つ行を
+// 動的に探して求める(手動運用のシートのため行・列がズレる可能性に備える)。
+// ----------------------------------------------------------------
+const STORE_MASTER_SHEET_ID = '1EL61iL_TZouB1xDLlUl7e3k1FJOLxwIApvV9RYAi36Q';
+function checkNewStoresFromMasterSheet() {
+  const ss = SpreadsheetApp.openById(STORE_MASTER_SHEET_ID);
+  const sheet = ss.getSheets()[0]; // gid=0(スプレッドシート内の最初のシート)
+  const data = sheet.getDataRange().getValues();
+
+  let headerRow = -1, nameCol = -1;
+  for (let r = 0; r < Math.min(data.length, 10); r++) {
+    const idx = data[r].indexOf('店舗名');
+    if (idx >= 0) { headerRow = r; nameCol = idx; break; }
+  }
+  if (headerRow < 0) return { error: '店舗マスタシートのヘッダー行(店舗名)が見つかりません' };
+  const statusCol = data[headerRow].indexOf('閉店日'); // このシートでは営業中/閉店のステータス欄として使われている
+
+  const sheetStoreNames = [];
+  for (let r = headerRow + 1; r < data.length; r++) {
+    const name = String(data[r][nameCol] || '').trim();
+    if (!name) continue;
+    const status = statusCol >= 0 ? String(data[r][statusCol] || '').trim() : '';
+    if (status === '営業中') sheetStoreNames.push(name);
+  }
+
+  // 完全一致のみで判定する(部分一致だと「天満橋北」が既存店舗「天満」に誤って
+  // マッチしてしまう等、無関係な店舗名の部分文字列衝突で見逃す方が危険なため)。
+  // シート側とポータル側で表記が異なることが分かっている店舗だけ、個別に別名を登録する
+  const KNOWN_NAME_ALIASES = { // シート表記 -> ポータル表記
+    'ドンキ栄': '栄',
+    '大阪平野西': '平野西',
+  };
+  const portalNames = new Set(Object.values(_storeNames_()));
+  const isKnown = sheetName => portalNames.has(sheetName) || portalNames.has(KNOWN_NAME_ALIASES[sheetName]);
+  const missing = sheetStoreNames.filter(n => !isKnown(n));
+
+  return { ok: true, checkedCount: sheetStoreNames.length, missing };
+}
+
+function sendNewStoreCheckNotification() {
+  const channelId = PropertiesService.getScriptProperties().getProperty('LW_CHANNEL_ID_NEWSTORES');
+  let result;
+  try {
+    result = checkNewStoresFromMasterSheet();
+  } catch (e) {
+    sendLineWorksNotification('【店舗マスタチェック】エラー: ' + e.message, channelId);
+    return;
+  }
+  if (result.error) { sendLineWorksNotification('【店舗マスタチェック】エラー: ' + result.error, channelId); return; }
+  if (!result.missing.length) return; // 差分なしの日は通知しない(毎日ノイズになるため)
+  const msg = '【店舗マスタチェック】ポータル未登録の店舗があります(営業中のみ):\n'
+    + result.missing.map(n => '・' + n).join('\n')
+    + '\n\n管理者ポータルの「店舗管理→新規追加」から登録してください。';
+  sendLineWorksNotification(msg, channelId);
+}
+
+// デプロイ後、Apps Scriptエディタ（またはclasp run、doGet ?action=setNewStoreCheckTrigger）で
+// 一度だけ手動実行すること（setDailyTrigger等と同じ運用。push/deployだけではトリガーは登録されない）
+function setNewStoreCheckTrigger() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === 'sendNewStoreCheckNotification') ScriptApp.deleteTrigger(triggers[i]);
+  }
+  ScriptApp.newTrigger('sendNewStoreCheckNotification').timeBased().atHour(9).nearMinute(0).everyDays(1).inTimezone('Asia/Tokyo').create();
 }
