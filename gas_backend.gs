@@ -2610,7 +2610,7 @@ function buildReorderTestPlaySheet() {
     ['A〜E列(黄色背景)の数値・文字を書き換えると、F列の発注数が数式で自動的に再計算されます。'],
     ['基準値を空欄にすると「未設定」扱いになり、消費量×1.2倍で計算されます(基準値を入れると max(0,基準値-期末在庫) に切り替わります)。'],
     ['ケース単価必須を「はい」にすると、結果がケースサイズの倍数に丸められます(0.5ケース以上は切り上げ)。'],
-    []
+    ['']
   ];
   sheet.getRange(1, 1, note.length, 1).setValues(note);
   sheet.getRange(1, 1, 4, 1).setFontStyle('italic').setFontColor('#666666');
