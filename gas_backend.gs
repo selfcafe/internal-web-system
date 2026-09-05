@@ -442,6 +442,7 @@ function doPost(e) {
     else if (b.action === 'saveAttendance')      result = saveAttendance(b.storeId, b.name, b.lat, b.lng);
     else if (b.action === 'saveLeaveRequest')    result = saveLeaveRequest(b.storeId, b.name, b.leaveDate);
     else if (b.action === 'deleteLeaveRequest')  result = deleteLeaveRequest(b.id);
+    else if (b.action === 'deleteAttendance')    result = deleteAttendance(b.id);
     else if (b.action === 'saveDeliveryHistory') result = saveDeliveryHistory(b.storeId, b.row);
     else if (b.action === 'clearDeliveryHistory') result = clearDeliveryHistory(b.storeId);
     else if (b.action === 'saveMachinePhotoSet') result = saveMachinePhotoSet(b.storeId, b.machineIndex, b.imagesByCategory, b.imageMime);
@@ -1266,6 +1267,28 @@ function saveAttendance(storeId, name, lat, lng) {
   const result = { ok: true, withinRange, updated: updatedExisting };
   if (withinRange === false) result._notify = { type: 'attendanceGpsIssue', storeId, name };
   return result;
+}
+
+// 業務開始履歴の取り消し(2026-09-05追加)。パートナーが休みの日に誤って(社員が代わりに等)
+// 打刻ボタンを押してしまった場合の管理者側修正用。deleteLeaveRequestと同じパターンで
+// id列だけ先に絞り込んでから該当行を削除する。打刻はもともと「出勤のみ・退勤なし」で
+// 取り消し(退勤)という概念が無い機能のため、通知は送らずサイレントに削除する。
+function deleteAttendance(id) {
+  const sheet = getSheet(SHEET_ATTENDANCE);
+  if (sheet.getLastRow() <= 1) return { ok: true };
+  const hdrs = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
+  const idIdx = hdrs.indexOf('id');
+  const idVals = sheet.getRange(2, idIdx + 1, sheet.getLastRow() - 1, 1).getValues();
+  let matchRow = -1;
+  for (let i = 0; i < idVals.length; i++) {
+    if (String(idVals[i][0]) === String(id)) { matchRow = i + 2; break; }
+  }
+  if (matchRow > 0) {
+    sheet.deleteRow(matchRow);
+    _invalidateAttendanceCache_();
+    return { ok: true, deleted: true };
+  }
+  return { ok: true, deleted: false };
 }
 
 // GPS要確認（基準座標から離れた場所での打刻）は翌朝のバッチを待たずその場で通知する
