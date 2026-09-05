@@ -390,6 +390,11 @@ function doGet(e) {
     else result = { error: 'Unknown action: ' + a };
     return json(result);
   } catch(err) {
+    try {
+      sendStockBotNotification_('【システムエラー】doGet action=' + (e.parameter && e.parameter.action || '不明') + '\n' + err.message);
+    } catch (notifyErr) {
+      console.error('システムエラー通知失敗:', notifyErr.message);
+    }
     return json({ error: err.message });
   }
 }
@@ -402,6 +407,8 @@ function doPost(e) {
   lock.waitLock(30000);
   const _lockWaitMs = Date.now() - _lockWaitStart;
   let result;
+  let actionForErrorNotify_ = null;
+  let exceptionCaught_ = false;
   try {
     const b = JSON.parse(e.postData.contents);
     // 店舗ID改名の後方互換: 旧IDを覚えたままの端末が送ってきても新IDとして扱う
@@ -409,12 +416,9 @@ function doPost(e) {
     // store_id列を直接比較しているsaveOrders/saveChecksheetData等の書き込み系関数も
     // ここで一括して救済する)
     if (b && b.storeId) b.storeId = _normalizeStoreId_(b.storeId);
-    console.log('doPost action=' + (b.action || '(lineworks/kaihipay callback)') + ' storeId=' + (b.storeId || '') + ' lockWaitMs=' + _lockWaitMs);
-    const isKaihipayBotCallback_ = !!(e.parameter && e.parameter.bot === 'kaihipay');
-    if      (isKaihipayBotCallback_ && isLineWorksCallback_(b)) result = handleKaihipayApprovalTextReply_(b);
-    else if (isLineWorksCallback_(b))           result = handleLineWorksStockInquiry_(b);
-    else if (b.action === 'kaihipayRequestApproval') result = kaihipayRequestApproval(b.requestId, b.message);
-    else if (b.action === 'kaihipayCheckApproval')   result = kaihipayCheckApproval(b.requestId);
+    actionForErrorNotify_ = b && b.action;
+    console.log('doPost action=' + (actionForErrorNotify_ || '(lineworks callback)') + ' storeId=' + (b.storeId || '') + ' lockWaitMs=' + _lockWaitMs);
+    if      (isLineWorksCallback_(b))           result = handleLineWorksStockInquiry_(b);
     else if (b.action === 'saveOrders')         result = saveOrders(b.storeId, b.rows);
     else if (b.action === 'upsertOrders')       result = upsertOrderRows(b.storeId, b.rows);
     else if (b.action === 'deleteOrders')       result = deleteOrderRows(b.ids);
@@ -443,8 +447,21 @@ function doPost(e) {
     else result = { error: 'Unknown action: ' + b.action };
   } catch(err) {
     result = { error: err.message };
+    exceptionCaught_ = true;
   } finally {
     lock.releaseLock();
+  }
+  // 実行時例外はここで既にresult.errorに入っている。開発者が気付けるよう佐藤テストBotへ
+  // 1:1で即時通知する（2026-08-09、忘れ物画像保存がDrive API未有効化で失敗した際に誰も
+  // 気付けなかったことを受けて追加。ロック解放後に送るので保存処理自体の速度には影響しない）。
+  // 「Unknown action」（クライアント側のtypo等、例外ではない通常のエラー応答）はノイズになる
+  // だけなので対象外——exceptionCaught_で実際にcatchされた場合のみに絞る
+  if (result && result.error && exceptionCaught_) {
+    try {
+      sendStockBotNotification_('【システムエラー】doPost action=' + (actionForErrorNotify_ || '不明') + '\n' + result.error);
+    } catch (notifyErr) {
+      console.error('システムエラー通知失敗:', notifyErr.message);
+    }
   }
   // LINE WORKS通知はシートの読み書きと競合しないため、ロック解放後に送る（2026-07-24、
   // 打刻・休み申請の保存処理がロックを保持する時間を通知の通信時間分だけ短縮する狙い。
@@ -458,7 +475,6 @@ function doPost(e) {
       else if (n.type === 'leaveRequestToday')     notifyLeaveRequestToday_(n.storeId, n.name, n.leaveDate);
       else if (n.type === 'leaveRequestCancelled') notifyLeaveRequestCancelled_(n.storeId, n.name, n.leaveDate);
       else if (n.type === 'stockInquiryReply')     sendStockBotNotification_(n.message, n.userId);
-      else if (n.type === 'kaihipayApprovalAck')   sendKaihipayApprovalNotification_(n.message, n.userId);
     } catch (e) {
       console.error('LINE WORKS通知エラー(ロック解放後):', e.message);
     }
@@ -3531,157 +3547,11 @@ function testStockBotNotification() {
 }
 
 // ----------------------------------------------------------------
-// 会費ペイ承認Bot（2026-08-05、[[project_kaihipay_remote_approval_design]]参照）
-// ----------------------------------------------------------------
-// 認証情報一式(Client ID/Secret/Service Account/秘密鍵)は在庫差異検知Bot「佐藤テスト」と同じApp
-// (OAuth Scope: bot)を共有しているため、getStockBotAccessToken_()をそのまま再利用する。
-// このBot専用に必要なScript Propertiesは LW_BOT_ID_KAIHIPAY と LW_USER_ID_KAIHIPAY の2つ(必須)。
-// 値自体は在庫差異検知Bot側のLW_USER_ID_STOCKと同じ人物(Bot作成者本人)になる想定だが、
-// 用途(内容)が全く異なるため意図的にプロパティを分離している——フォールバックは行わない。
-// LW_BOT_SECRET_KAIHIPAYは現状未使用（GAS doPost(e)はカスタムHTTPヘッダーを読めないため
-// X-WORKS-Signatureでの署名検証ができず、Bot Secretを使う場面が無い。将来の拡張用に保存だけしておく）。
-//
-// 承認フローは「ボタン(承認/拒否)=最速の確定判定」「自由テキスト返信=例外の余地」のハイブリッド。
-// ボタンはtype:'message'アクション(button_templateはtype:'postback'未対応——2026-08-05実機で
-// "content.actions[0].postback is not supported"と判明)にし、タップ時にlabelと同じテキストが
-// 通常のメッセージとして送られてくるため、テキスト返信(handleKaihipayApprovalTextReply_)と
-// 全く同じ経路で処理される(専用のpostbackハンドラは無し)。
-// Callback URL自体を ?bot=kaihipay 付きでDeveloper Consoleに登録し、doPost側でこのBotからの
-// 返信だと判別する(メッセージ受信イベントにBot識別フィールドが無いため)。
-// テキスト返信は「承認/はい/OK」「拒否/いいえ/NG」の決まった語のみ実行トリガーとして扱い、
-// それ以外の自由文は「未承認のまま保留」として記録するだけで、自由文の意味解釈は行わない
-// ([[project_kaihipay_remote_approval_design]]の合意方針そのまま)。
-
-function _kaihipayApprovalPropKey_(requestId) {
-  return 'KAIHIPAY_APPROVAL_' + requestId;
-}
-
-function _setKaihipayApprovalState_(requestId, status, message, note) {
-  var props = PropertiesService.getScriptProperties();
-  var existing = _getKaihipayApprovalState_(requestId) || {};
-  var state = {
-    status: status,
-    message: message !== undefined ? message : (existing.message || null),
-    note: note !== undefined ? note : (existing.note || null),
-    createdAt: existing.createdAt || new Date().toISOString(),
-    respondedAt: (status === 'approved' || status === 'rejected') ? new Date().toISOString() : (existing.respondedAt || null)
-  };
-  props.setProperty(_kaihipayApprovalPropKey_(requestId), JSON.stringify(state));
-  return state;
-}
-
-function _getKaihipayApprovalState_(requestId) {
-  var raw = PropertiesService.getScriptProperties().getProperty(_kaihipayApprovalPropKey_(requestId));
-  return raw ? JSON.parse(raw) : null;
-}
-
-// 自由テキスト返信はrequestIdを含まないため、現在pending状態の中で最新の1件を対象にする
-// (テスト段階のシンプル実装——同時に複数件pendingになる運用が始まったら見直しが必要)
-function _findPendingKaihipayApprovalRequestId_() {
-  var props = PropertiesService.getScriptProperties().getProperties();
-  var latestId = null, latestCreatedAt = null;
-  Object.keys(props).forEach(function (key) {
-    if (key.indexOf('KAIHIPAY_APPROVAL_') !== 0) return;
-    var state;
-    try { state = JSON.parse(props[key]); } catch (e) { return; }
-    if (state.status !== 'pending') return;
-    if (!latestCreatedAt || state.createdAt > latestCreatedAt) {
-      latestCreatedAt = state.createdAt;
-      latestId = key.substring('KAIHIPAY_APPROVAL_'.length);
-    }
-  });
-  return latestId;
-}
-
-// デバッグ用に最後の送信結果(ステータスコード・レスポンス本文)を保持する(2026-08-05、
-// 「届いていない」原因調査用の一時的な措置。原因判明後は消してよい)
-function _postKaihipayBotMessage_(contentObj, userIdOverride) {
-  var props = PropertiesService.getScriptProperties();
-  var botId  = props.getProperty('LW_BOT_ID_KAIHIPAY');
-  var userId = userIdOverride || props.getProperty('LW_USER_ID_KAIHIPAY');
-  var url = 'https://www.worksapis.com/v1.0/bots/' + botId + '/users/' + userId + '/messages';
-  var body = JSON.stringify({ content: contentObj });
-  var token = getStockBotAccessToken_();
-  var res = UrlFetchApp.fetch(url, {
-    method: 'POST',
-    headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-    payload: body,
-    muteHttpExceptions: true
-  });
-  var debugInfo = { botId: botId, userId: userId, code: res.getResponseCode(), responseText: res.getContentText() };
-  if (res.getResponseCode() === 401) {
-    token = getStockBotAccessToken_(true);
-    var res2 = UrlFetchApp.fetch(url, {
-      method: 'POST',
-      headers: { 'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json' },
-      payload: body,
-      muteHttpExceptions: true
-    });
-    debugInfo.retryCode = res2.getResponseCode();
-    debugInfo.retryResponseText = res2.getContentText();
-  }
-  return debugInfo;
-}
-
-// button_templateのactionsはtype:'postback'に対応していない(2026-08-05、実機で
-// "content.actions[0].postback is not supported"と判明——ドキュメント上は存在するtypeだが
-// このcontent typeでは使えない)。type:'message'にするとタップ時にlabelと同じ内容が
-// 通常のテキストメッセージとして送られてくるため、テキスト返信(handleKaihipayApprovalTextReply_)
-// と全く同じ経路で処理できる——postback用の別ハンドラは不要。
-function sendKaihipayApprovalRequest_(requestId, message, userIdOverride) {
-  _setKaihipayApprovalState_(requestId, 'pending', message);
-  return _postKaihipayBotMessage_({
-    type: 'button_template',
-    contentText: message,
-    actions: [
-      { type: 'message', label: '承認', text: '承認' },
-      { type: 'message', label: '拒否', text: '拒否' }
-    ]
-  }, userIdOverride);
-}
-
-function sendKaihipayApprovalNotification_(message, userIdOverride) {
-  _postKaihipayBotMessage_({ type: 'text', text: message }, userIdOverride);
-}
-
-function handleKaihipayApprovalTextReply_(body) {
-  const userId = body.source && body.source.userId;
-  const text = (body.content && body.content.text || '').trim();
-  const requestId = _findPendingKaihipayApprovalRequestId_();
-  if (!requestId) return { ok: true, skipped: 'no_pending_request' };
-
-  if (/^(承認|はい|OK)$/i.test(text)) {
-    _setKaihipayApprovalState_(requestId, 'approved');
-    return { ok: true, requestId, decision: 'approved',
-      _notify: { type: 'kaihipayApprovalAck', userId, message: '承認しました。(ID: ' + requestId + ')' } };
-  }
-  if (/^(拒否|いいえ|NG)$/i.test(text)) {
-    _setKaihipayApprovalState_(requestId, 'rejected');
-    return { ok: true, requestId, decision: 'rejected',
-      _notify: { type: 'kaihipayApprovalAck', userId, message: '拒否しました。(ID: ' + requestId + ')' } };
-  }
-  // 決まった語以外の自由文は、承認/拒否を確定させず「保留中の一言」として記録するだけ
-  _setKaihipayApprovalState_(requestId, 'pending', undefined, text);
-  return { ok: true, requestId, held: true };
-}
-
-// Python側(kaihipayパイプライン)からこのWeb Appへ {action:'kaihipayRequestApproval', requestId, message}
-// をPOSTすると承認依頼が送信される。ポーリングは {action:'kaihipayCheckApproval', requestId} で行う。
-function kaihipayRequestApproval(requestId, message) {
-  var debugInfo = sendKaihipayApprovalRequest_(requestId, message);
-  return { ok: true, requestId: requestId, status: 'pending', debug: debugInfo };
-}
-
-function kaihipayCheckApproval(requestId) {
-  var state = _getKaihipayApprovalState_(requestId);
-  return state
-    ? Object.assign({ ok: true, requestId: requestId }, state)
-    : { ok: true, requestId: requestId, status: 'unknown' };
-}
-
-function testKaihipayApprovalBot() {
-  sendKaihipayApprovalRequest_('test-' + new Date().getTime(), '【テスト】会費ペイ承認Botの接続テストです。承認/拒否を押してください。');
-}
+// 会費ペイ承認Bot・GBP投稿承認Botは2026-08-10、独立したGASプロジェクト
+// kaihipay-gbp-approval-bot(scriptId: 11GALYwtFNU3lp8Gi7rAZyA6wm3L__ltS4IkBDkGMgz403H_YLFTvgb1P)
+// に移設した。ここには存在しない。Callback URL・kaihipay-downloader/.envの
+// KAIHIPAY_APPROVAL_WEBHOOK_URL・gbp-poster/.envのGBP_APPROVAL_WEBHOOK_URLは、
+// いずれも新プロジェクトのWebアプリexec URLに更新済み。
 
 // ----------------------------------------------------------------
 // 在庫差異検知Bot: LINE WORKSからの返信を受けて任意の期間を再調査する機能（2026-08-04、シンプル版）
