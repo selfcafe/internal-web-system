@@ -369,6 +369,7 @@ function doGet(e) {
     else if (a === 'setupInventoryDisposedHighlight') result = setupInventoryDisposedHighlight();
     else if (a === 'buildInventoryRollup')      result = buildInventoryRollup(e.parameter.periodLabel);
     else if (a === 'buildStoreInventorySheet')  result = buildStoreInventorySheet(e.parameter.storeId, e.parameter.periodLabel);
+    else if (a === 'buildReorderTestPlaySheet') result = buildReorderTestPlaySheet();
     else if (a === 'processMonthlyReorder')     result = processMonthlyReorder(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'reorderStoreTabs')          result = reorderStoreTabs();
     else if (a === 'removeInventoryLabelColumn') result = removeInventoryLabelColumn();
@@ -2382,6 +2383,27 @@ function _getReorderTargets_() {
   try { return JSON.parse(entry.value); } catch (e) { return {}; }
 }
 
+// 発注数の計算ロジック(2026-09-05)。基準値(目標在庫数)が設定されている商品コードは
+// max(0,基準値-期末在庫)を出す。未設定の商品コード(店舗ごと基準値が一切無い店舗も含む)は、
+// 月初発注の自動対象外という位置づけ自体は変えず、代わりに消費量×1.2を発注数の目安として
+// 使う(1.2倍は安全在庫分のバッファ)。ケース単価必須(caseOnly)の商品は、どちらの計算結果も
+// ケースサイズ(casePieces)の倍数に丸める(0.5ケース以上は切り上げ、四捨五入)——実際の発注は
+// ケース単位でしかできないため、端数のままでは発注数として使えない。
+// buildStoreInventorySheetとbuildReorderTestPlaySheet(テストプレイ用シート)の両方から呼ぶ
+// 共通ロジック——ロジックの二重管理・食い違いを避けるため必ずここを経由させる。
+function _computeReorderQty_(reorderTarget, endStock, consumption, info) {
+  let reorderQty = '';
+  if (reorderTarget !== undefined && endStock !== '' && endStock !== null) {
+    reorderQty = Math.max(0, Number(reorderTarget) - Number(endStock));
+  } else if (consumption !== '' && consumption !== null) {
+    reorderQty = Number(consumption) * 1.2;
+  }
+  if (reorderQty !== '' && info.caseOnly && info.casePieces) {
+    reorderQty = Math.round(reorderQty / info.casePieces) * info.casePieces;
+  }
+  return reorderQty;
+}
+
 function buildStoreInventorySheet(storeId, periodLabel) {
   if (!storeId) return { error: 'storeIdは必須です' };
   if (!periodLabel) return { error: 'periodLabelは必須です（例: 2026-07）' };
@@ -2520,25 +2542,8 @@ function buildStoreInventorySheet(storeId, periodLabel) {
     const countDiff = (consumption !== '' && consumption !== null && dailyCount !== '' && dailyCount !== null)
       ? Number(consumption) - Number(dailyCount) : '';
 
-    // 基準値(目標在庫数)が設定されている商品コードは発注数(max(0,基準値-期末在庫))を出す。
-    // 未設定の商品コード(店舗ごと基準値が一切無い店舗も含む)は、月初発注の自動対象外という
-    // 位置づけ自体は変えず、代わりに消費量×1.2を発注数の目安として表示する(2026-09-05、
-    // ユーザー要望——基準値未設定の店舗・商品でも店舗タブの発注数列だけ見れば判断材料になる。
-    // 1.2倍は安全在庫分のバッファ)。基準値列(reorder_target)は引き続き未設定なら空欄のまま
-    // (区別できるようにする)。
-    // ケース単価必須(caseOnly)の商品は、上記どちらの計算結果もケースサイズ(casePieces)の
-    // 倍数に丸める(0.5ケース以上は切り上げ、四捨五入)——実際の発注はケース単位でしかできない
-    // ため、端数のままでは発注数として使えない。
     const reorderTarget = reorderTargets[String(r[idx.code])];
-    let reorderQty = '';
-    if (reorderTarget !== undefined && endStock !== '' && endStock !== null) {
-      reorderQty = Math.max(0, Number(reorderTarget) - Number(endStock));
-    } else if (consumption !== '' && consumption !== null) {
-      reorderQty = Number(consumption) * 1.2;
-    }
-    if (reorderQty !== '' && info.caseOnly && info.casePieces) {
-      reorderQty = Math.round(reorderQty / info.casePieces) * info.casePieces;
-    }
+    const reorderQty = _computeReorderQty_(reorderTarget, endStock, consumption, info);
 
     return [
       _periodLabelJa_(periodLabel), r[idx.code], product,
@@ -2567,6 +2572,81 @@ function buildStoreInventorySheet(storeId, periodLabel) {
   });
 
   return { ok: true, store: sheetName, period: periodLabel, rows: outRows.length };
+}
+
+// 発注数ロジックのテストプレイ用シート(2026-09-05追加)。本番のinventory_log・店舗タブ
+// (INVENTORY_SHEET_ID)には一切書き込まず、専用の使い捨てスプレッドシートを新規作成し
+// (初回実行時のみ。2回目以降はScript Propertiesに保存したIDを使い回して同じシートを更新)、
+// 基準値・期末在庫・消費量・ケース単価必須・ケースサイズをセルに直接入力すると、発注数が
+// 数式でその場で再計算される「本物のGoogle Sheets」を作る。ロジックは_computeReorderQty_の
+// JS実装をそのままSheets数式に翻訳したもの(下記IFERROR式)——両者の計算結果が食い違わないよう、
+// このシートの数式は_computeReorderQty_の分岐をそのまま踏襲している。不要になったら
+// このスプレッドシートごと削除すればよく、本番データへの影響は一切無い。
+function buildReorderTestPlaySheet() {
+  const props = PropertiesService.getScriptProperties();
+  let ss = null;
+  const savedId = props.getProperty('REORDER_TEST_PLAY_SHEET_ID');
+  if (savedId) {
+    try { ss = SpreadsheetApp.openById(savedId); } catch (e) { ss = null; }
+  }
+  if (!ss) {
+    ss = SpreadsheetApp.create('棚卸表テストプレイ(発注数ロジック確認用・本番データ非連動)');
+    props.setProperty('REORDER_TEST_PLAY_SHEET_ID', ss.getId());
+  }
+
+  // 実際の商品マスタからケース単価必須の商品を1つ拾い、サンプル行の参考値に使う
+  // (実在のケースサイズで試せるように。見つからなければ24をそのまま使う)
+  const meta = _productMeta_();
+  const caseOnlyEntry = Object.keys(meta).find(p => meta[p].caseOnly && meta[p].casePieces);
+  const sampleCaseSize = (caseOnlyEntry && meta[caseOnlyEntry].casePieces) || 24;
+  const sampleCaseName = caseOnlyEntry || '水(サンプル)';
+
+  const sheet = ss.getSheetByName('発注数テスト') || ss.insertSheet('発注数テスト');
+  sheet.clearContents();
+  sheet.clearFormats();
+
+  const note = [
+    ['このシートは棚卸表の「発注数」ロジックを試すための実験用です。本番データとは無関係、いつ消しても構いません。'],
+    ['A〜E列(黄色背景)の数値・文字を書き換えると、F列の発注数が数式で自動的に再計算されます。'],
+    ['基準値を空欄にすると「未設定」扱いになり、消費量×1.2倍で計算されます(基準値を入れると max(0,基準値-期末在庫) に切り替わります)。'],
+    ['ケース単価必須を「はい」にすると、結果がケースサイズの倍数に丸められます(0.5ケース以上は切り上げ)。'],
+    []
+  ];
+  sheet.getRange(1, 1, note.length, 1).setValues(note);
+  sheet.getRange(1, 1, 4, 1).setFontStyle('italic').setFontColor('#666666');
+
+  const headerRow = note.length + 1;
+  const headers = ['基準値(空欄=未設定)', '期末在庫', '消費量', 'ケース単価必須(はい/いいえ)', 'ケースサイズ', '発注数(自動計算)'];
+  sheet.getRange(headerRow, 1, 1, headers.length).setValues([headers]);
+  sheet.getRange(headerRow, 1, 1, headers.length).setFontWeight('bold').setBackground('#eeeeee');
+
+  // サンプル行(編集して自由に試せる。何行足しても6列目の数式をコピーすれば同じ挙動になる)
+  const sampleRows = [
+    ['', 10, 30, 'はい', sampleCaseSize, ''],           // 基準値なし・ケース単価必須 → 消費30×1.2=36→ケース丸め
+    [50, 20, 30, 'はい', sampleCaseSize, ''],           // 基準値50・在庫20・ケース単価必須 → max(0,30)→ケース丸め
+    ['', 3, 12, 'いいえ', '', ''],                       // 基準値なし・通常商品 → 消費12×1.2=14.4
+    [20, 5, 12, 'いいえ', '', ''],                       // 基準値20・在庫5・通常商品 → max(0,15)
+    ['', '', '', 'いいえ', '', ''],                      // 空欄行(自由入力用)
+  ];
+  const dataStartRow = headerRow + 1;
+  sheet.getRange(dataStartRow, 1, sampleRows.length, headers.length).setValues(sampleRows);
+  sheet.getRange(dataStartRow, 1, sampleRows.length, 5).setBackground('#fff9c4'); // 入力列は黄色背景
+
+  // F列(発注数)は数式——_computeReorderQty_のJS分岐をそのままSheets数式に翻訳したもの:
+  //   基準値(A)が入力されていればmax(0,A-B)、無ければ消費量(C)×1.2
+  //   ケース単価必須(D="はい")かつケースサイズ(E)があれば、結果をEの倍数に丸める(ROUNDは四捨五入=0.5以上切り上げ)
+  for (let i = 0; i < 20; i++) {
+    const row = dataStartRow + i;
+    const base = `IF(A${row}<>"",MAX(0,A${row}-B${row}),IF(C${row}<>"",C${row}*1.2,""))`;
+    const formula = `=IFERROR(IF(AND(D${row}="はい",E${row}<>""),ROUND((${base})/E${row},0)*E${row},${base}),"")`;
+    sheet.getRange(row, 6).setFormula(formula);
+  }
+
+  sheet.autoResizeColumns(1, headers.length);
+  sheet.setColumnWidth(1, 140);
+  SpreadsheetApp.flush();
+
+  return { ok: true, url: ss.getUrl() };
 }
 
 // アペックス発注書の送付先(2026-08-23、スモールスタートとして渋谷神南のみ対応。
