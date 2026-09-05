@@ -2417,25 +2417,43 @@ function _getReorderTargets_() {
   try { return JSON.parse(entry.value); } catch (e) { return {}; }
 }
 
-// 発注数の計算ロジック(2026-09-05)。基準値(目標在庫数)が設定されている商品コードは
-// max(0,基準値-期末在庫)を出す。未設定の商品コード(店舗ごと基準値が一切無い店舗も含む)は、
-// 月初発注の自動対象外という位置づけ自体は変えず、代わりに消費量×1.2を発注数の目安として
-// 使う(1.2倍は安全在庫分のバッファ)。ケース単価必須(caseOnly)の商品は、どちらの計算結果も
-// ケースサイズ(casePieces)の倍数に丸める(0.5ケース以上は切り上げ、四捨五入)——実際の発注は
-// ケース単位でしかできないため、端数のままでは発注数として使えない。
+// 発注数の計算ロジック(2026-09-05、2026-09-05に消費量ベースもmax(0,目標-期末在庫)の形に統一)。
+// 基準値(目標在庫数)が設定されている商品コードはその基準値を、未設定の商品コード(店舗ごと
+// 基準値が一切無い店舗も含む)は消費量×1.2(安全在庫分のバッファ)を「実質的な目標在庫数」とみなし、
+// どちらの場合もmax(0,目標在庫数-期末在庫)を発注数とする——基準値の有無に関わらず、既にある
+// 在庫は必ず差し引く。ケース単価必須(caseOnly)の商品は、結果をケースサイズ(casePieces)の
+// 倍数に丸める(0.5ケース以上は切り上げ、四捨五入)——実際の発注はケース単位でしかできないため、
+// 端数のままでは発注数として使えない。
 // buildStoreInventorySheetとbuildReorderTestPlaySheet(テストプレイ用シート)の両方から呼ぶ
 // 共通ロジック——ロジックの二重管理・食い違いを避けるため必ずここを経由させる。
 function _computeReorderQty_(reorderTarget, endStock, consumption, info) {
-  let reorderQty = '';
-  if (reorderTarget !== undefined && endStock !== '' && endStock !== null) {
-    reorderQty = Math.max(0, Number(reorderTarget) - Number(endStock));
+  let effectiveTarget;
+  if (reorderTarget !== undefined) {
+    effectiveTarget = Number(reorderTarget);
   } else if (consumption !== '' && consumption !== null) {
-    reorderQty = Number(consumption) * 1.2;
+    effectiveTarget = Number(consumption) * 1.2;
+  }
+
+  let reorderQty = '';
+  if (effectiveTarget !== undefined && endStock !== '' && endStock !== null) {
+    reorderQty = Math.max(0, effectiveTarget - Number(endStock));
   }
   if (reorderQty !== '' && info.caseOnly && info.casePieces) {
     reorderQty = Math.round(reorderQty / info.casePieces) * info.casePieces;
   }
   return reorderQty;
+}
+
+// _computeReorderQty_のJS実装をそのままSheets数式に翻訳したもの(buildReorderTestPlaySheet専用)。
+// targetCol=基準値セル列, endStockCol=期末在庫列, consumptionCol=消費量列,
+// caseOnlyCol=ケース単価必須列("はい"/"いいえ"), caseSizeCol=ケースサイズ列。両者の計算結果が
+// 食い違わないよう、_computeReorderQty_を変更したら必ずこちらも合わせて変更すること。
+function _reorderQtyFormulaStr_(targetCol, endStockCol, consumptionCol, caseOnlyCol, caseSizeCol, row) {
+  const t = `${targetCol}${row}`, e = `${endStockCol}${row}`, c = `${consumptionCol}${row}`,
+        d = `${caseOnlyCol}${row}`, k = `${caseSizeCol}${row}`;
+  const effectiveTarget = `IF(${t}<>"",${t},IF(${c}<>"",${c}*1.2,""))`;
+  const base = `IF(AND(${effectiveTarget}<>"",${e}<>""),MAX(0,${effectiveTarget}-${e}),"")`;
+  return `=IFERROR(IF(AND(${d}="はい",${k}<>"",${base}<>""),ROUND(${base}/${k},0)*${k},${base}),"")`;
 }
 
 function buildStoreInventorySheet(storeId, periodLabel) {
@@ -2666,14 +2684,12 @@ function buildReorderTestPlaySheet(storeId) {
   sheet.getRange(dataStartRow, 1, sampleRows.length, headers.length).setValues(sampleRows);
   sheet.getRange(dataStartRow, 1, sampleRows.length, 5).setBackground('#fff9c4'); // 入力列は黄色背景
 
-  // F列(発注数)は数式——_computeReorderQty_のJS分岐をそのままSheets数式に翻訳したもの:
-  //   基準値(A)が入力されていればmax(0,A-B)、無ければ消費量(C)×1.2
+  // F列(発注数)は数式——_reorderQtyFormulaStr_(_computeReorderQty_のSheets数式版)を使う:
+  //   基準値(A)があればそれを、無ければ消費量(C)×1.2を「目標在庫数」とみなし、max(0,目標-期末在庫(B))
   //   ケース単価必須(D="はい")かつケースサイズ(E)があれば、結果をEの倍数に丸める(ROUNDは四捨五入=0.5以上切り上げ)
   for (let i = 0; i < 20; i++) {
     const row = dataStartRow + i;
-    const base = `IF(A${row}<>"",MAX(0,A${row}-B${row}),IF(C${row}<>"",C${row}*1.2,""))`;
-    const formula = `=IFERROR(IF(AND(D${row}="はい",E${row}<>""),ROUND((${base})/E${row},0)*E${row},${base}),"")`;
-    sheet.getRange(row, 6).setFormula(formula);
+    sheet.getRange(row, 6).setFormula(_reorderQtyFormulaStr_('A', 'B', 'C', 'D', 'E', row));
   }
 
   // 実データ参考セクション(2026-09-05追加)。storeIdを渡すと、その店舗の直近棚卸データ
@@ -2732,9 +2748,7 @@ function buildReorderTestPlaySheet(storeId) {
         sheet.getRange(realDataStartRow, 1, realRows.length, realHeaders.length).setValues(realRows);
         realRows.forEach((_, i) => {
           const row = realDataStartRow + i;
-          const base = `IF(C${row}<>"",MAX(0,C${row}-D${row}),IF(E${row}<>"",E${row}*1.2,""))`;
-          const formula = `=IFERROR(IF(AND(F${row}="はい",G${row}<>""),ROUND((${base})/G${row},0)*G${row},${base}),"")`;
-          sheet.getRange(row, 8).setFormula(formula);
+          sheet.getRange(row, 8).setFormula(_reorderQtyFormulaStr_('C', 'D', 'E', 'F', 'G', row));
         });
       }
       nextRow = realDataStartRow + realRows.length;
