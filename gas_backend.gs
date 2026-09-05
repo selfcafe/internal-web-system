@@ -3515,7 +3515,13 @@ function checkChecksheetStockMismatch(storeId, product) {
 // を読むが、こちらは蓄積型のstera_daily_salesを月間分合計する(①の日次照会と同じ関数を再利用)。
 // ?action=buildStockCheckMonthly&storeId=shibuya&periodLabel=2026-07 で実行。
 const STOCK_CHECK_START_COL = 21; // U列(P〜S列=販売品類原価率ブロックの右に間隔を空ける、別ブロックとして分離)
-const STOCK_CHECK_HEADERS = ['ステラ数量(月間)', '差異(消費量-処分数量-ステラ数量)', '確認状況(手入力可)'];
+// 先頭に商品グループ名(m.label)の列を追加(2026-09-05)。この一覧はSTERA_SALES_MAPPING単位
+// (販売品類のみ8グループ)の独立した小さな表で、隣接するA〜Q列のメイン商品一覧(全ベンダー・
+// 全商品、行数も並び順も別)とは行番号がたまたま重なっているだけで対応していない
+// (buildSalesCategoryCostRatioのP列ブロックと同じ設計)。ラベルが無いと「同じ行に写っている
+// アペックスの原料の数量か？」と誤解されるため(2026-09-05、ユーザー指摘で発覚)、
+// buildSalesCategoryCostRatioに合わせてラベル列を追加した。
+const STOCK_CHECK_HEADERS = ['商品(ステラ突合対象)', 'ステラ数量(月間)', '差異(消費量-処分数量-ステラ数量)', '確認状況(手入力可)'];
 function buildStockCheckMonthly(storeId, periodLabel) {
   if (!storeId) return { error: 'storeIdは必須です' };
   if (!periodLabel) return { error: 'periodLabelは必須です（例: 2026-07）' };
@@ -3549,11 +3555,16 @@ function buildStockCheckMonthly(storeId, periodLabel) {
       if (!sheet) throw e;
     }
   }
-  const statusCol = STOCK_CHECK_START_COL + STOCK_CHECK_HEADERS.length - 1;
   // 確認状況は管理者が手入力するメモなので、再実行のたびに消してしまわないよう既存値を読んでおき、
-  // 新しい行にもそのまま引き継ぐ(他の2列=ステラ数量・差異は毎回の再計算値で上書きしてよい)
-  const existingStatus = sheet.getLastRow() >= 2
-    ? sheet.getRange(2, statusCol, STERA_SALES_MAPPING.length, 1).getValues().map(r => r[0])
+  // 新しい行にもそのまま引き継ぐ(他の3列=ラベル・ステラ数量・差異は毎回の再計算値で上書きしてよい)。
+  // 列番号を固定せず、既存の見出し行から「確認状況(手入力可)」列を毎回探す(2026-09-05、
+  // ラベル列追加でこの列の位置が1つ右にズレたため——固定列番号のままだと、この変更の直後に
+  // 実行した回だけ既存メモを見失って消してしまうところだった)。
+  const existingHeaderRow = sheet.getLastRow() >= 1 && sheet.getLastColumn() >= 1
+    ? sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0] : [];
+  const existingStatusColIdx = existingHeaderRow.indexOf('確認状況(手入力可)'); // 0-based、無ければ-1
+  const existingStatus = (existingStatusColIdx >= 0 && sheet.getLastRow() >= 2)
+    ? sheet.getRange(2, existingStatusColIdx + 1, STERA_SALES_MAPPING.length, 1).getValues().map(r => r[0])
     : [];
 
   const outRows = STERA_SALES_MAPPING.map((m, i) => {
@@ -3562,7 +3573,7 @@ function buildStockCheckMonthly(storeId, periodLabel) {
       sum + (consumptionByProduct[name] || 0) - (disposedByProduct[name] || 0), 0);
     const steraQty = getSteraDailyTotal_(storeId, m.prdId, fromDateExclusive, toDateInclusive);
     const diff = hasConsumption ? netConsumption - steraQty : '';
-    return [steraQty, diff, existingStatus[i] || ''];
+    return [m.label, steraQty, diff, existingStatus[i] || ''];
   });
 
   sheet.getRange(1, STOCK_CHECK_START_COL, 1, STOCK_CHECK_HEADERS.length).setValues([STOCK_CHECK_HEADERS]);
