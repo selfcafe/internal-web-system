@@ -2520,11 +2520,25 @@ function buildStoreInventorySheet(storeId, periodLabel) {
     const countDiff = (consumption !== '' && consumption !== null && dailyCount !== '' && dailyCount !== null)
       ? Number(consumption) - Number(dailyCount) : '';
 
-    // 基準値(目標在庫数)が設定されている商品コードだけ発注数(max(0,基準値-期末在庫))を出す。
-    // 未設定の商品コード、または期末在庫が未入力の場合は両列とも空欄(月初発注の対象外)
+    // 基準値(目標在庫数)が設定されている商品コードは発注数(max(0,基準値-期末在庫))を出す。
+    // 未設定の商品コード(店舗ごと基準値が一切無い店舗も含む)は、月初発注の自動対象外という
+    // 位置づけ自体は変えず、代わりに消費量×1.2を発注数の目安として表示する(2026-09-05、
+    // ユーザー要望——基準値未設定の店舗・商品でも店舗タブの発注数列だけ見れば判断材料になる。
+    // 1.2倍は安全在庫分のバッファ)。基準値列(reorder_target)は引き続き未設定なら空欄のまま
+    // (区別できるようにする)。
+    // ケース単価必須(caseOnly)の商品は、上記どちらの計算結果もケースサイズ(casePieces)の
+    // 倍数に丸める(0.5ケース以上は切り上げ、四捨五入)——実際の発注はケース単位でしかできない
+    // ため、端数のままでは発注数として使えない。
     const reorderTarget = reorderTargets[String(r[idx.code])];
-    const reorderQty = (reorderTarget !== undefined && endStock !== '' && endStock !== null)
-      ? Math.max(0, Number(reorderTarget) - Number(endStock)) : '';
+    let reorderQty = '';
+    if (reorderTarget !== undefined && endStock !== '' && endStock !== null) {
+      reorderQty = Math.max(0, Number(reorderTarget) - Number(endStock));
+    } else if (consumption !== '' && consumption !== null) {
+      reorderQty = Number(consumption) * 1.2;
+    }
+    if (reorderQty !== '' && info.caseOnly && info.casePieces) {
+      reorderQty = Math.round(reorderQty / info.casePieces) * info.casePieces;
+    }
 
     return [
       _periodLabelJa_(periodLabel), r[idx.code], product,
