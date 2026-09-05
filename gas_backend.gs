@@ -350,6 +350,7 @@ function doGet(e) {
     if (e.parameter.storeId) e.parameter.storeId = _normalizeStoreId_(e.parameter.storeId);
     let result;
     if      (a === '_peekMainSheetTabByGid') result = _peekMainSheetTabByGid_(Number(e.parameter.gid), Number(e.parameter.rows) || 5);
+    else if (a === '_listTriggers') result = _listTriggers_();
     else if (a === '_provisionDeliveryHistorySheet') result = _provisionDeliveryHistorySheet_();
     else if (a === 'getOrders')         result = getOrders();
     else if (a === 'getSettings')       result = getSettings();
@@ -549,6 +550,17 @@ function _peekMainSheetTabByGid_(gid, numRows) {
   const lastCol = sheet.getLastColumn();
   const values = lastRow > 0 ? sheet.getRange(1, 1, lastRow, lastCol).getValues() : [];
   return { name: sheet.getName(), totalRows: sheet.getLastRow(), totalCols: lastCol, sample: values };
+}
+
+// デバッグ用: 現在登録されているタイムベーストリガー一覧を返す(2026-09-06追加)。
+// clasp runがこのプロジェクトでは使えず、Apps Scriptエディタを開かずにトリガー登録状況を
+// 確認する手段が無かったため。読み取り専用。
+function _listTriggers_() {
+  return ScriptApp.getProjectTriggers().map(t => ({
+    handlerFunction: t.getHandlerFunction(),
+    eventType: String(t.getEventType()),
+    triggerSource: String(t.getTriggerSource())
+  }));
 }
 
 function ensureHeaders(sheet, cols) {
