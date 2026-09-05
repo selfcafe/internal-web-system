@@ -385,6 +385,13 @@ function doGet(e) {
       try { result = deleteAttendance(e.parameter.id); }
       finally { _delLock.releaseLock(); }
     }
+    else if (a === 'setProductStockCap') {
+      // 同上の理由(doGet経由の一時的な管理者操作)でここだけ個別にロックを取る
+      const _capLock = LockService.getScriptLock();
+      _capLock.waitLock(30000);
+      try { result = setProductStockCap(e.parameter.code, e.parameter.capCases); }
+      finally { _capLock.releaseLock(); }
+    }
     else if (a === 'mergeInventoryLogRemarksBlocks') result = mergeInventoryLogRemarksBlocks();
     else if (a === 'getSettingHistory')         result = getSettingHistory(e.parameter.key, e.parameter.limit);
     else if (a === 'getAttendance')             result = getAttendance(e.parameter.storeId);
@@ -2349,9 +2356,33 @@ function _productMeta_() {
       const m = String(p.caseUnit).match(/\d+/);
       if (m) casePieces = Number(m[0]);
     }
-    map[p.name] = { vendor: p.vendor || '', order: i, caseOnly: !!p.caseOnly, casePieces: casePieces };
+    // stockCapCases(2026-09-05追加): 冷凍庫等スペースの都合で保管できる上限をケース数で
+    // 指定する任意項目(未設定なら上限なし)。アイスのように「売り切れたら1ケース発注」だけでは
+    // 収納スペースを超えてしまう商品に、発注数の追加上限として使う([[_computeReorderQty_]]参照)。
+    const stockCapCases = Number(p.stockCapCases) || null;
+    map[p.name] = { vendor: p.vendor || '', order: i, caseOnly: !!p.caseOnly, casePieces: casePieces, stockCapCases: stockCapCases };
   });
   return map;
+}
+
+// 商品マスタ(all_products)の1商品にだけstockCapCases(保管上限、[[_computeReorderQty_]]参照)を
+// ピンポイントで設定する(2026-09-05追加)。まだ専用の管理画面が無いため、商品コード指定の
+// 一回限りの管理者操作として用意した(all_products全体を丸ごと書き換えるリスクを避けるため、
+// 該当商品のこのフィールドだけを差分更新する)。capCasesを空文字/未指定にすると上限を解除する。
+function setProductStockCap(code, capCases) {
+  const entry = getSettings().find(s => s.key === 'all_products');
+  if (!entry || !entry.value) return { error: 'all_products設定が見つかりません' };
+  let products;
+  try { products = JSON.parse(entry.value); } catch (e) { return { error: 'all_productsのJSON解析に失敗しました: ' + e.message }; }
+  const idx = products.findIndex(p => String(p.code) === String(code));
+  if (idx < 0) return { error: '商品コード' + code + 'が見つかりません' };
+  if (capCases === '' || capCases === undefined || capCases === null) {
+    delete products[idx].stockCapCases;
+  } else {
+    products[idx].stockCapCases = Number(capCases);
+  }
+  saveSetting('all_products', JSON.stringify(products));
+  return { ok: true, code: String(code), name: products[idx].name, stockCapCases: products[idx].stockCapCases || null };
 }
 
 // 2026-07-28、デイリーカウント・差異列を追加(ユーザーが先に手動でデイリーカウント列を渋谷神南タブに
@@ -2445,6 +2476,16 @@ function _computeReorderQty_(reorderTarget, endStock, consumption, info) {
     // (2026-09-05、渋谷神南のアイス(ケース36個)で実際に発生・発覚)。丸め結果が0でも、
     // 元の計算値(reorderQty)が0より大きく、かつ期末在庫が実際に0の場合だけ最低1ケースにする。
     if (cases === 0 && reorderQty > 0 && Number(endStock) === 0) cases = 1;
+    // stockCapCases(保管上限、2026-09-05追加): 冷凍庫等の収納スペースの都合で「期末在庫+発注数」の
+    // 合計がこのケース数を超えないよう、発注ケース数の上限を追加でかける(アイスは冷凍庫の都合で
+    // 1ケース分しか置けないため上限1、というのが最初の適用例)。既に上限付近まで在庫がある場合、
+    // 1ケースも発注できない(0ケース)こともある——「ケース単位でしか発注できない」制約を保ったまま
+    // 収納上限を守るための調整であり、端数(半端な個数)での発注はしない。
+    if (info.stockCapCases) {
+      const capUnits = info.stockCapCases * info.casePieces;
+      const maxAdditionalCases = Math.max(0, Math.floor((capUnits - Number(endStock)) / info.casePieces));
+      cases = Math.min(cases, maxAdditionalCases);
+    }
     reorderQty = cases * info.casePieces;
   }
   return reorderQty;
@@ -2452,15 +2493,18 @@ function _computeReorderQty_(reorderTarget, endStock, consumption, info) {
 
 // _computeReorderQty_のJS実装をそのままSheets数式に翻訳したもの(buildReorderTestPlaySheet専用)。
 // targetCol=基準値セル列, endStockCol=期末在庫列, consumptionCol=消費量列,
-// caseOnlyCol=ケース単価必須列("はい"/"いいえ"), caseSizeCol=ケースサイズ列。両者の計算結果が
-// 食い違わないよう、_computeReorderQty_を変更したら必ずこちらも合わせて変更すること。
-function _reorderQtyFormulaStr_(targetCol, endStockCol, consumptionCol, caseOnlyCol, caseSizeCol, row) {
+// caseOnlyCol=ケース単価必須列("はい"/"いいえ"), caseSizeCol=ケースサイズ列,
+// capCasesCol=保管上限(ケース数、空欄なら上限なし)列。両者の計算結果が食い違わないよう、
+// _computeReorderQty_を変更したら必ずこちらも合わせて変更すること。
+function _reorderQtyFormulaStr_(targetCol, endStockCol, consumptionCol, caseOnlyCol, caseSizeCol, capCasesCol, row) {
   const t = `${targetCol}${row}`, e = `${endStockCol}${row}`, c = `${consumptionCol}${row}`,
-        d = `${caseOnlyCol}${row}`, k = `${caseSizeCol}${row}`;
+        d = `${caseOnlyCol}${row}`, k = `${caseSizeCol}${row}`, cap = `${capCasesCol}${row}`;
   const effectiveTarget = `IF(${t}<>"",${t},IF(${c}<>"",${c}*1.2,""))`;
   const base = `IF(AND(${effectiveTarget}<>"",${e}<>""),MAX(0,${effectiveTarget}-${e}),"")`;
   const roundedCases = `ROUND(${base}/${k},0)`;
-  const finalCases = `IF(AND(${roundedCases}=0,${base}>0,${e}=0),1,${roundedCases})`;
+  const casesAfterZeroFix = `IF(AND(${roundedCases}=0,${base}>0,${e}=0),1,${roundedCases})`;
+  const maxAdditionalCases = `MAX(0,FLOOR((${cap}*${k}-${e})/${k}))`;
+  const finalCases = `IF(${cap}<>"",MIN(${casesAfterZeroFix},${maxAdditionalCases}),${casesAfterZeroFix})`;
   return `=IFERROR(IF(AND(${d}="はい",${k}<>"",${base}<>""),${finalCases}*${k},${base}),"")`;
 }
 
@@ -2667,37 +2711,40 @@ function buildReorderTestPlaySheet(storeId) {
 
   const note = [
     ['このシートは棚卸表の「発注数」ロジックを試すための実験用です。本番データとは無関係、いつ消しても構いません。'],
-    ['A〜E列(黄色背景)の数値・文字を書き換えると、F列の発注数が数式で自動的に再計算されます。'],
+    ['A〜F列(黄色背景)の数値・文字を書き換えると、G列の発注数が数式で自動的に再計算されます。'],
     ['基準値を空欄にすると「未設定」扱いになり、消費量×1.2倍で計算されます(基準値を入れると max(0,基準値-期末在庫) に切り替わります)。'],
     ['ケース単価必須を「はい」にすると、結果がケースサイズの倍数に丸められます(0.5ケース以上は切り上げ)。'],
+    ['保管上限(ケース数)を入れると、「期末在庫+発注数」がそのケース数を超えないよう発注数が追加で抑えられます(アイスの冷凍庫スペース対策等、空欄なら上限なし)。'],
     ['']
   ];
   sheet.getRange(1, 1, note.length, 1).setValues(note);
-  sheet.getRange(1, 1, 4, 1).setFontStyle('italic').setFontColor('#666666');
+  sheet.getRange(1, 1, 5, 1).setFontStyle('italic').setFontColor('#666666');
 
   const headerRow = note.length + 1;
-  const headers = ['基準値(空欄=未設定)', '期末在庫', '消費量', 'ケース単価必須(はい/いいえ)', 'ケースサイズ', '発注数(自動計算)'];
+  const headers = ['基準値(空欄=未設定)', '期末在庫', '消費量', 'ケース単価必須(はい/いいえ)', 'ケースサイズ', '保管上限(ケース数、空欄=上限なし)', '発注数(自動計算)'];
   sheet.getRange(headerRow, 1, 1, headers.length).setValues([headers]);
   sheet.getRange(headerRow, 1, 1, headers.length).setFontWeight('bold').setBackground('#eeeeee');
 
-  // サンプル行(編集して自由に試せる。何行足しても6列目の数式をコピーすれば同じ挙動になる)
+  // サンプル行(編集して自由に試せる。何行足しても7列目の数式をコピーすれば同じ挙動になる)
   const sampleRows = [
-    ['', 10, 30, 'はい', sampleCaseSize, ''],           // 基準値なし・ケース単価必須 → 消費30×1.2=36→ケース丸め
-    [50, 20, 30, 'はい', sampleCaseSize, ''],           // 基準値50・在庫20・ケース単価必須 → max(0,30)→ケース丸め
-    ['', 3, 12, 'いいえ', '', ''],                       // 基準値なし・通常商品 → 消費12×1.2=14.4
-    [20, 5, 12, 'いいえ', '', ''],                       // 基準値20・在庫5・通常商品 → max(0,15)
-    ['', '', '', 'いいえ', '', ''],                      // 空欄行(自由入力用)
+    ['', 10, 30, 'はい', sampleCaseSize, '', ''],           // 基準値なし・ケース単価必須・上限なし → 消費30×1.2=36→ケース丸め
+    [50, 20, 30, 'はい', sampleCaseSize, '', ''],           // 基準値50・在庫20・ケース単価必須 → max(0,30)→ケース丸め
+    ['', 0, 8, 'はい', sampleCaseSize, 1, ''],               // 基準値なし・在庫0・保管上限1ケース → アイスの例(売り切れでも1ケース、上限で頭打ち)
+    ['', 3, 12, 'いいえ', '', '', ''],                       // 基準値なし・通常商品 → 消費12×1.2=14.4
+    [20, 5, 12, 'いいえ', '', '', ''],                       // 基準値20・在庫5・通常商品 → max(0,15)
+    ['', '', '', 'いいえ', '', '', ''],                      // 空欄行(自由入力用)
   ];
   const dataStartRow = headerRow + 1;
   sheet.getRange(dataStartRow, 1, sampleRows.length, headers.length).setValues(sampleRows);
-  sheet.getRange(dataStartRow, 1, sampleRows.length, 5).setBackground('#fff9c4'); // 入力列は黄色背景
+  sheet.getRange(dataStartRow, 1, sampleRows.length, 6).setBackground('#fff9c4'); // 入力列は黄色背景
 
-  // F列(発注数)は数式——_reorderQtyFormulaStr_(_computeReorderQty_のSheets数式版)を使う:
+  // G列(発注数)は数式——_reorderQtyFormulaStr_(_computeReorderQty_のSheets数式版)を使う:
   //   基準値(A)があればそれを、無ければ消費量(C)×1.2を「目標在庫数」とみなし、max(0,目標-期末在庫(B))
   //   ケース単価必須(D="はい")かつケースサイズ(E)があれば、結果をEの倍数に丸める(ROUNDは四捨五入=0.5以上切り上げ)
+  //   保管上限(F)があれば、期末在庫+発注数がその上限を超えないようケース数をさらに抑える
   for (let i = 0; i < 20; i++) {
     const row = dataStartRow + i;
-    sheet.getRange(row, 6).setFormula(_reorderQtyFormulaStr_('A', 'B', 'C', 'D', 'E', row));
+    sheet.getRange(row, 7).setFormula(_reorderQtyFormulaStr_('A', 'B', 'C', 'D', 'E', 'F', row));
   }
 
   // 実データ参考セクション(2026-09-05追加)。storeIdを渡すと、その店舗の直近棚卸データ
@@ -2739,7 +2786,7 @@ function buildReorderTestPlaySheet(storeId) {
           product, code,
           reorderTarget !== undefined ? Number(reorderTarget) : '',
           r[invIdx.end_stock], r[invIdx.consumption],
-          info.caseOnly ? 'はい' : 'いいえ', info.casePieces || '', ''
+          info.caseOnly ? 'はい' : 'いいえ', info.casePieces || '', info.stockCapCases || '', ''
         ]);
       }
 
@@ -2747,7 +2794,7 @@ function buildReorderTestPlaySheet(storeId) {
       sheet.getRange(nextRow, 1).setFontStyle('italic').setFontColor('#666666');
       nextRow += 1;
 
-      const realHeaders = ['商品名', '商品コード', '基準値(空欄=未設定)', '期末在庫', '消費量', 'ケース単価必須', 'ケースサイズ', '発注数(自動計算)'];
+      const realHeaders = ['商品名', '商品コード', '基準値(空欄=未設定)', '期末在庫', '消費量', 'ケース単価必須', 'ケースサイズ', '保管上限(ケース数)', '発注数(自動計算)'];
       sheet.getRange(nextRow, 1, 1, realHeaders.length).setValues([realHeaders]);
       sheet.getRange(nextRow, 1, 1, realHeaders.length).setFontWeight('bold').setBackground('#eeeeee');
       const realDataStartRow = nextRow + 1;
@@ -2756,14 +2803,14 @@ function buildReorderTestPlaySheet(storeId) {
         sheet.getRange(realDataStartRow, 1, realRows.length, realHeaders.length).setValues(realRows);
         realRows.forEach((_, i) => {
           const row = realDataStartRow + i;
-          sheet.getRange(row, 8).setFormula(_reorderQtyFormulaStr_('C', 'D', 'E', 'F', 'G', row));
+          sheet.getRange(row, 9).setFormula(_reorderQtyFormulaStr_('C', 'D', 'E', 'F', 'G', 'H', row));
         });
       }
       nextRow = realDataStartRow + realRows.length;
     }
   }
 
-  sheet.autoResizeColumns(1, 8);
+  sheet.autoResizeColumns(1, 9);
   sheet.setColumnWidth(1, 140);
   SpreadsheetApp.flush();
 
