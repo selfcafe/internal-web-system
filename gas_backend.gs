@@ -377,6 +377,14 @@ function doGet(e) {
     else if (a === 'buildSalesCategoryCostRatio') result = buildSalesCategoryCostRatio(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'buildStockCheckMonthly')    result = buildStockCheckMonthly(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'purgeOldLeaveRequests')      { purgeOldLeaveRequests(); result = { ok: true }; }
+    else if (a === 'deleteAttendance') {
+      // doGet経由の書き込みはこの1アクションだけの特例のため、doPostの外側ロックと同様に
+      // ここで個別にロックを取る(パートナーの同時打刻(saveAttendance)との競合を防ぐ)
+      const _delLock = LockService.getScriptLock();
+      _delLock.waitLock(30000);
+      try { result = deleteAttendance(e.parameter.id); }
+      finally { _delLock.releaseLock(); }
+    }
     else if (a === 'mergeInventoryLogRemarksBlocks') result = mergeInventoryLogRemarksBlocks();
     else if (a === 'getSettingHistory')         result = getSettingHistory(e.parameter.key, e.parameter.limit);
     else if (a === 'getAttendance')             result = getAttendance(e.parameter.storeId);
@@ -1273,6 +1281,9 @@ function saveAttendance(storeId, name, lat, lng) {
 // 打刻ボタンを押してしまった場合の管理者側修正用。deleteLeaveRequestと同じパターンで
 // id列だけ先に絞り込んでから該当行を削除する。打刻はもともと「出勤のみ・退勤なし」で
 // 取り消し(退勤)という概念が無い機能のため、通知は送らずサイレントに削除する。
+// ロックはdoPost経由(通常の書き込み系アクション)なら外側で既に取得済み、doGet経由(この関数専用の
+// 一時的な管理者操作)なら呼び出し側(doGetの'deleteAttendance'分岐)で個別に取る——doPostの外側
+// ロックと二重に取得すると同一実行内でのwaitLockになるため、ここ自体では取らない。
 function deleteAttendance(id) {
   const sheet = getSheet(SHEET_ATTENDANCE);
   if (sheet.getLastRow() <= 1) return { ok: true };
