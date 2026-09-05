@@ -376,6 +376,8 @@ function doGet(e) {
     else if (a === 'pruneBlankStoreInventoryRows') result = pruneBlankStoreInventoryRows(e.parameter.storeId);
     else if (a === 'buildSalesCategoryCostRatio') result = buildSalesCategoryCostRatio(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'buildStockCheckMonthly')    result = buildStockCheckMonthly(e.parameter.storeId, e.parameter.periodLabel);
+    else if (a === 'runMonthlyStockCheckBackstop') result = runMonthlyStockCheckBackstop();
+    else if (a === 'setMonthlyStockCheckBackstopTrigger') { setMonthlyStockCheckBackstopTrigger(); result = { ok: true }; }
     else if (a === 'purgeOldLeaveRequests')      { purgeOldLeaveRequests(); result = { ok: true }; }
     else if (a === 'deleteAttendance') {
       // doGet経由の書き込みはこの1アクションだけの特例のため、doPostの外側ロックと同様に
@@ -3555,6 +3557,15 @@ function buildStockCheckMonthly(storeId, periodLabel) {
       if (!sheet) throw e;
     }
   }
+  // 安全確認(2026-09-06追加): この関数は常にシート2行目以降(一番上のブロック)に書き込む設計
+  // のため、2行目の期間が指定periodLabelと一致しない場合は書き込みを中止する。月次バックストップ
+  // の自動再実行(runMonthlyStockCheckBackstop)等、呼び出しタイミングによっては一番上のブロックが
+  // 既に別の(より新しい)期間になっている可能性があるため、誤って別期間のブロックを
+  // 上書きしてしまう事故を防ぐ(新規タブでまだ何も無い場合はチェックをスキップする)。
+  const topPeriodCell = sheet.getLastRow() >= 2 ? String(sheet.getRange(2, 1).getValue()) : '';
+  if (topPeriodCell && topPeriodCell !== _periodLabelJa_(periodLabel) && topPeriodCell !== String(periodLabel)) {
+    return { ok: true, skipped: 'top_block_period_mismatch', store: storeName, expected: periodLabel, found: topPeriodCell };
+  }
   // 確認状況は管理者が手入力するメモなので、再実行のたびに消してしまわないよう既存値を読んでおき、
   // 新しい行にもそのまま引き継ぐ(他の3列=ラベル・ステラ数量・差異は毎回の再計算値で上書きしてよい)。
   // 列番号を固定せず、既存の見出し行から「確認状況(手入力可)」列を毎回探す(2026-09-05、
@@ -3580,6 +3591,44 @@ function buildStockCheckMonthly(storeId, periodLabel) {
   sheet.getRange(2, STOCK_CHECK_START_COL, outRows.length, outRows[0].length).setValues(outRows);
 
   return { ok: true, store: storeName, period: periodLabel, rows: outRows.length };
+}
+
+// 盗難検知②月次バックストップの「翌月1日朝」再実行(2026-09-06追加、ユーザー要望)。
+// 棚卸完了時点の自動反映(buildStockCheckMonthly)は、その時点でstera_daily_salesにまだ
+// 反映されていない直近日数分のステラ売上を含められず、差異が実際より大きく出ることがある。
+// 日次インポート(毎朝6:03、前日=前月末日分までを確定取込み)が前月分を確実に取り込み終えた後の
+// 翌月1日朝(8:00、余裕を見て6:03より後)に、前月分を対象へ棚卸提出済みの全店舗をまとめて
+// 再計算することで、完全なステラ月間売上数量に基づく最終的な差異を月初に確定させる。
+function runMonthlyStockCheckBackstop() {
+  const now = new Date();
+  const prevMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+  const periodLabel = Utilities.formatDate(prevMonthDate, _invSheetTz(), 'yyyy-MM');
+
+  const invData = _inventoryLogRowsCached_();
+  const idx = {};
+  INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
+  const storeIds = new Set();
+  for (let i = 1; i < invData.length; i++) {
+    const r = invData[i];
+    if (_invMonthLabelStr(r[idx.period_label]) === periodLabel) storeIds.add(String(r[idx.store_id]));
+  }
+
+  const results = [];
+  storeIds.forEach(storeId => {
+    try {
+      results.push(Object.assign({ storeId }, buildStockCheckMonthly(storeId, periodLabel)));
+    } catch (e) {
+      results.push({ storeId, ok: false, error: e.message });
+    }
+  });
+  return { ok: true, period: periodLabel, stores: results.length, results };
+}
+
+function setMonthlyStockCheckBackstopTrigger() {
+  ScriptApp.getProjectTriggers().forEach(t => {
+    if (t.getHandlerFunction() === 'runMonthlyStockCheckBackstop') ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('runMonthlyStockCheckBackstop').timeBased().onMonthDay(1).atHour(8).inTimezone('Asia/Tokyo').create();
 }
 
 // 店舗タブに手作業で作った下書き行(期間・数量等が空欄のまま、商品コード/商品名だけ入っている行)を
