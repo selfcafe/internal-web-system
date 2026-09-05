@@ -392,6 +392,12 @@ function doGet(e) {
       try { result = setProductStockCap(e.parameter.code, e.parameter.capCases); }
       finally { _capLock.releaseLock(); }
     }
+    else if (a === 'renameProductName') {
+      const _renameLock = LockService.getScriptLock();
+      _renameLock.waitLock(30000);
+      try { result = renameProductName(e.parameter.code, e.parameter.newName); }
+      finally { _renameLock.releaseLock(); }
+    }
     else if (a === 'mergeInventoryLogRemarksBlocks') result = mergeInventoryLogRemarksBlocks();
     else if (a === 'getSettingHistory')         result = getSettingHistory(e.parameter.key, e.parameter.limit);
     else if (a === 'getAttendance')             result = getAttendance(e.parameter.storeId);
@@ -2383,6 +2389,25 @@ function setProductStockCap(code, capCases) {
   }
   saveSetting('all_products', JSON.stringify(products));
   return { ok: true, code: String(code), name: products[idx].name, stockCapCases: products[idx].stockCapCases || null };
+}
+
+// 商品マスタ(all_products)の1商品のname(内部識別名、棚卸・チェックシート等の商品キーとして
+// 使われる)だけをピンポイントで修正する(2026-09-05追加、プリングルズ「うましお」のnameが
+// フレーバー抜きの「プリングルス」のままだった不備の修正用)。setProductStockCap_と同じ理由で
+// all_products全体を丸ごと書き換えるのは避け、該当商品の該当フィールドだけ差分更新する。
+// 注意: 過去にこの商品を旧nameで記録した棚卸データ(inventory_log)の`product`列は変更しない
+// (歴史的な記録として残す)——名前を変えた後のメタ情報(ケース単価等)参照は新nameでのみ有効になる。
+function renameProductName(code, newName) {
+  const entry = getSettings().find(s => s.key === 'all_products');
+  if (!entry || !entry.value) return { error: 'all_products設定が見つかりません' };
+  let products;
+  try { products = JSON.parse(entry.value); } catch (e) { return { error: 'all_productsのJSON解析に失敗しました: ' + e.message }; }
+  const idx = products.findIndex(p => String(p.code) === String(code));
+  if (idx < 0) return { error: '商品コード' + code + 'が見つかりません' };
+  const oldName = products[idx].name;
+  products[idx].name = newName;
+  saveSetting('all_products', JSON.stringify(products));
+  return { ok: true, code: String(code), oldName: oldName, newName: newName };
 }
 
 // 2026-07-28、デイリーカウント・差異列を追加(ユーザーが先に手動でデイリーカウント列を渋谷神南タブに
