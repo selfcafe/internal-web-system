@@ -369,7 +369,7 @@ function doGet(e) {
     else if (a === 'setupInventoryDisposedHighlight') result = setupInventoryDisposedHighlight();
     else if (a === 'buildInventoryRollup')      result = buildInventoryRollup(e.parameter.periodLabel);
     else if (a === 'buildStoreInventorySheet')  result = buildStoreInventorySheet(e.parameter.storeId, e.parameter.periodLabel);
-    else if (a === 'buildReorderTestPlaySheet') result = buildReorderTestPlaySheet();
+    else if (a === 'buildReorderTestPlaySheet') result = buildReorderTestPlaySheet(e.parameter.storeId);
     else if (a === 'processMonthlyReorder')     result = processMonthlyReorder(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'reorderStoreTabs')          result = reorderStoreTabs();
     else if (a === 'removeInventoryLabelColumn') result = removeInventoryLabelColumn();
@@ -2616,7 +2616,7 @@ function buildStoreInventorySheet(storeId, periodLabel) {
 // JS実装をそのままSheets数式に翻訳したもの(下記IFERROR式)——両者の計算結果が食い違わないよう、
 // このシートの数式は_computeReorderQty_の分岐をそのまま踏襲している。不要になったら
 // このスプレッドシートごと削除すればよく、本番データへの影響は一切無い。
-function buildReorderTestPlaySheet() {
+function buildReorderTestPlaySheet(storeId) {
   const props = PropertiesService.getScriptProperties();
   let ss = null;
   const savedId = props.getProperty('REORDER_TEST_PLAY_SHEET_ID');
@@ -2676,7 +2676,72 @@ function buildReorderTestPlaySheet() {
     sheet.getRange(row, 6).setFormula(formula);
   }
 
-  sheet.autoResizeColumns(1, headers.length);
+  // 実データ参考セクション(2026-09-05追加)。storeIdを渡すと、その店舗の直近棚卸データ
+  // (期末在庫・消費量)・実際の基準値(reorder_targets)・商品マスタ(ケース単価情報)を
+  // 読み取り専用で拾い、サンプル行とは別のブロックとして追加する(inventory_log等の
+  // 本番シートには一切書き込まない、読むだけ)。列レイアウトは上のサンプル欄と揃えず、
+  // 商品名・商品コードを先頭に足した独自レイアウトにする(このブロック専用の見出しで説明)。
+  const sampleAreaEnd = dataStartRow + 19; // 上のA〜F数式を敷いた最終行
+  let nextRow = sampleAreaEnd + 2; // 1行空けてから次のブロックを始める
+  if (storeId) {
+    const invData = _inventoryLogRowsCached_();
+    const invIdx = {};
+    INVENTORY_COLS.forEach((c, i) => { invIdx[c] = i; });
+    const reorderTargetsForStore = _getReorderTargets_()[storeId] || {};
+
+    let latestPeriod = null;
+    for (let i = 1; i < invData.length; i++) {
+      const r = invData[i];
+      if (String(r[invIdx.store_id]) !== String(storeId)) continue;
+      const p = _invMonthLabelStr(r[invIdx.period_label]);
+      if (!latestPeriod || p > latestPeriod) latestPeriod = p;
+    }
+
+    const storeName = _storeNames_()[storeId] || storeId;
+    if (!latestPeriod) {
+      sheet.getRange(nextRow, 1).setValue(`── 実データ参考: 店舗ID「${storeId}」の棚卸データが見つかりませんでした ──`);
+      sheet.getRange(nextRow, 1).setFontStyle('italic').setFontColor('#666666');
+    } else {
+      const realRows = [];
+      for (let i = 1; i < invData.length; i++) {
+        const r = invData[i];
+        if (String(r[invIdx.store_id]) !== String(storeId)) continue;
+        if (_invMonthLabelStr(r[invIdx.period_label]) !== latestPeriod) continue;
+        const product = r[invIdx.product];
+        const code = String(r[invIdx.code]);
+        const info = meta[product] || {};
+        const reorderTarget = reorderTargetsForStore[code];
+        realRows.push([
+          product, code,
+          reorderTarget !== undefined ? Number(reorderTarget) : '',
+          r[invIdx.end_stock], r[invIdx.consumption],
+          info.caseOnly ? 'はい' : 'いいえ', info.casePieces || '', ''
+        ]);
+      }
+
+      sheet.getRange(nextRow, 1).setValue(`── 実データ参考(店舗: ${storeName}、${latestPeriod}分の棚卸データより。読み取り専用・編集しても本番には反映されません) ──`);
+      sheet.getRange(nextRow, 1).setFontStyle('italic').setFontColor('#666666');
+      nextRow += 1;
+
+      const realHeaders = ['商品名', '商品コード', '基準値(空欄=未設定)', '期末在庫', '消費量', 'ケース単価必須', 'ケースサイズ', '発注数(自動計算)'];
+      sheet.getRange(nextRow, 1, 1, realHeaders.length).setValues([realHeaders]);
+      sheet.getRange(nextRow, 1, 1, realHeaders.length).setFontWeight('bold').setBackground('#eeeeee');
+      const realDataStartRow = nextRow + 1;
+
+      if (realRows.length) {
+        sheet.getRange(realDataStartRow, 1, realRows.length, realHeaders.length).setValues(realRows);
+        realRows.forEach((_, i) => {
+          const row = realDataStartRow + i;
+          const base = `IF(C${row}<>"",MAX(0,C${row}-D${row}),IF(E${row}<>"",E${row}*1.2,""))`;
+          const formula = `=IFERROR(IF(AND(F${row}="はい",G${row}<>""),ROUND((${base})/G${row},0)*G${row},${base}),"")`;
+          sheet.getRange(row, 8).setFormula(formula);
+        });
+      }
+      nextRow = realDataStartRow + realRows.length;
+    }
+  }
+
+  sheet.autoResizeColumns(1, 8);
   sheet.setColumnWidth(1, 140);
   SpreadsheetApp.flush();
 
