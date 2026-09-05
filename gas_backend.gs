@@ -2747,36 +2747,45 @@ function buildReorderTestPlaySheet(storeId) {
     sheet.getRange(row, 7).setFormula(_reorderQtyFormulaStr_('A', 'B', 'C', 'D', 'E', 'F', row));
   }
 
-  // 実データ参考セクション(2026-09-05追加)。storeIdを渡すと、その店舗の直近棚卸データ
-  // (期末在庫・消費量)・実際の基準値(reorder_targets)・商品マスタ(ケース単価情報)を
-  // 読み取り専用で拾い、サンプル行とは別のブロックとして追加する(inventory_log等の
-  // 本番シートには一切書き込まない、読むだけ)。列レイアウトは上のサンプル欄と揃えず、
-  // 商品名・商品コードを先頭に足した独自レイアウトにする(このブロック専用の見出しで説明)。
+  // 実データ参考セクション(2026-09-05追加)。storeId(カンマ区切りで複数指定可)を渡すと、
+  // 各店舗ごとに直近棚卸データ(期末在庫・消費量)・実際の基準値(reorder_targets)・
+  // 商品マスタ(ケース単価情報)を読み取り専用で拾い、サンプル行とは別のブロックとして
+  // 店舗ごとに追加する(inventory_log等の本番シートには一切書き込まない、読むだけ)。
+  // 列レイアウトは上のサンプル欄と揃えず、商品名・商品コードを先頭に足した独自レイアウトにする
+  // (このブロック専用の見出しで説明)。
   const sampleAreaEnd = dataStartRow + 19; // 上のA〜F数式を敷いた最終行
   let nextRow = sampleAreaEnd + 2; // 1行空けてから次のブロックを始める
-  if (storeId) {
+  const storeIds = String(storeId || '').split(',').map(s => s.trim()).filter(Boolean);
+  if (storeIds.length) {
     const invData = _inventoryLogRowsCached_();
     const invIdx = {};
     INVENTORY_COLS.forEach((c, i) => { invIdx[c] = i; });
-    const reorderTargetsForStore = _getReorderTargets_()[storeId] || {};
+    const reorderTargetsAll = _getReorderTargets_();
+    const storeNames = _storeNames_();
 
-    let latestPeriod = null;
-    for (let i = 1; i < invData.length; i++) {
-      const r = invData[i];
-      if (String(r[invIdx.store_id]) !== String(storeId)) continue;
-      const p = _invMonthLabelStr(r[invIdx.period_label]);
-      if (!latestPeriod || p > latestPeriod) latestPeriod = p;
-    }
+    storeIds.forEach(sid => {
+      const reorderTargetsForStore = reorderTargetsAll[sid] || {};
 
-    const storeName = _storeNames_()[storeId] || storeId;
-    if (!latestPeriod) {
-      sheet.getRange(nextRow, 1).setValue(`── 実データ参考: 店舗ID「${storeId}」の棚卸データが見つかりませんでした ──`);
-      sheet.getRange(nextRow, 1).setFontStyle('italic').setFontColor('#666666');
-    } else {
+      let latestPeriod = null;
+      for (let i = 1; i < invData.length; i++) {
+        const r = invData[i];
+        if (String(r[invIdx.store_id]) !== String(sid)) continue;
+        const p = _invMonthLabelStr(r[invIdx.period_label]);
+        if (!latestPeriod || p > latestPeriod) latestPeriod = p;
+      }
+
+      const storeName = storeNames[sid] || sid;
+      if (!latestPeriod) {
+        sheet.getRange(nextRow, 1).setValue(`── 実データ参考: 店舗ID「${sid}」の棚卸データが見つかりませんでした ──`);
+        sheet.getRange(nextRow, 1).setFontStyle('italic').setFontColor('#666666');
+        nextRow += 2;
+        return;
+      }
+
       const realRows = [];
       for (let i = 1; i < invData.length; i++) {
         const r = invData[i];
-        if (String(r[invIdx.store_id]) !== String(storeId)) continue;
+        if (String(r[invIdx.store_id]) !== String(sid)) continue;
         if (_invMonthLabelStr(r[invIdx.period_label]) !== latestPeriod) continue;
         const product = r[invIdx.product];
         const code = String(r[invIdx.code]);
@@ -2806,8 +2815,8 @@ function buildReorderTestPlaySheet(storeId) {
           sheet.getRange(row, 9).setFormula(_reorderQtyFormulaStr_('C', 'D', 'E', 'F', 'G', 'H', row));
         });
       }
-      nextRow = realDataStartRow + realRows.length;
-    }
+      nextRow = realDataStartRow + realRows.length + 2; // 次店舗ブロックとの間に1行空ける
+    });
   }
 
   sheet.autoResizeColumns(1, 9);
