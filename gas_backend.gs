@@ -287,6 +287,7 @@ function doPost(e) {
     try {
       if      (n.type === 'attendanceGpsIssue')    notifyAttendanceGpsIssue_(n.storeId, n.name);
       else if (n.type === 'leaveRequestTomorrow')  notifyLeaveRequestTomorrow_(n.storeId, n.name, n.leaveDate);
+      else if (n.type === 'leaveRequestToday')     notifyLeaveRequestToday_(n.storeId, n.name, n.leaveDate);
       else if (n.type === 'leaveRequestCancelled') notifyLeaveRequestCancelled_(n.storeId, n.name, n.leaveDate);
       else if (n.type === 'stockInquiryReply')     sendStockBotNotification_(n.message, n.userId);
       else if (n.type === 'kaihipayApprovalAck')   sendKaihipayApprovalNotification_(n.message, n.userId);
@@ -934,8 +935,9 @@ function getAttendanceTabData(storeId) {
 }
 
 // 承認ステップなし、申請した瞬間に即時確定（2026-07-23確定仕様）。
-// 申請日が「申請時点の翌日」の場合のみ、翌朝8:30の日次通知を待たずその場でLINE WORKS通知する
-// （代打調整等の対応余地を残すため）。翌々日以降の申請は日次まとめ通知(sendDailyAttendanceCheck)に含める。
+// 申請日が「申請時点の翌日」または「申請時点の当日」の場合のみ、翌朝8:30の日次通知を待たずその場で
+// LINE WORKS通知する（代打調整等の対応余地を残すため。当日分も2026-08-05よりリアルタイム通知対象に追加）。
+// 翌々日以降の申請は日次まとめ通知(sendDailyAttendanceCheck)に含める。
 function saveLeaveRequest(storeId, name, leaveDate) {
   const sheet = getSheet(SHEET_ATTENDANCE_LEAVE);
   ensureHeaders(sheet, ATTENDANCE_LEAVE_COLS);
@@ -944,8 +946,10 @@ function saveLeaveRequest(storeId, name, leaveDate) {
 
   // 通知の送信はここでは行わず、_notifyに要否だけ載せてdoPostへ返す（doPostがLockService解放後に送信する）
   const result = { ok: true };
+  const today = Utilities.formatDate(new Date(), _sheetTz(), 'yyyy-MM-dd');
   const tomorrow = Utilities.formatDate(new Date(Date.now() + 24*60*60*1000), _sheetTz(), 'yyyy-MM-dd');
   if (leaveDate === tomorrow) result._notify = { type: 'leaveRequestTomorrow', storeId, name, leaveDate };
+  else if (leaveDate === today) result._notify = { type: 'leaveRequestToday', storeId, name, leaveDate };
   return result;
 }
 
@@ -954,6 +958,18 @@ function notifyLeaveRequestTomorrow_(storeId, name, leaveDate) {
     const who = name ? name + 'さん' : 'パートナーさん';
     const md = leaveDate.slice(5).replace('-', '/');
     sendLineWorksNotification('【休み申請】' + who + 'が明日(' + md + ')休み申請をしました。（店舗ID: ' + _storeIdLabel_(storeId) + '）\n当日の現地対応方針の確定が必要です。', _leaveLineWorksChannel_(storeId));
+  } catch(e) {
+    console.error('LINE WORKS通知エラー:', e.message);
+  }
+}
+
+// 2026-08-05追加。当日休みは従来「グループトークに直接連絡」の運用に任せてリアルタイム通知の
+// 対象外だったが、ポータル申請自体は当日分も行われる実態に合わせ、当日申請も即時通知するようにした。
+function notifyLeaveRequestToday_(storeId, name, leaveDate) {
+  try {
+    const who = name ? name + 'さん' : 'パートナーさん';
+    const md = leaveDate.slice(5).replace('-', '/');
+    sendLineWorksNotification('【休み申請】' + who + 'が本日(' + md + ')休み申請をしました。（店舗ID: ' + _storeIdLabel_(storeId) + '）\n当日の現地対応方針の確定が必要です。', _leaveLineWorksChannel_(storeId));
   } catch(e) {
     console.error('LINE WORKS通知エラー:', e.message);
   }
