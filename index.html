@@ -1697,9 +1697,12 @@ function qtyToPieces(product, qty, unitMode) {
 // 実際数量が既に入力済み、またはactualUnitModeが明示的に設定済みの行はそれをそのまま尊重する
 // ——2026-07-14より前の「実際数量は常に個数で入力」という運用で保存された既存データ
 // （actualUnitModeが空/未設定のまま数値だけ入っている行）を誤って再解釈しないための措置。
-function effectiveActualUnitMode(row) {
+function effectiveActualUnitMode(row, product) {
   if (row.actualUnitMode) return row.actualUnitMode;
-  return (row.actualQty === '' || row.actualQty == null) ? (row.unitMode || 'piece') : 'piece';
+  if (row.actualQty !== '' && row.actualQty != null) return 'piece';
+  // caseOnly商品は依頼数量側と同じく「ケース」がデフォルトの解釈であるべき
+  // (2026-09-06、これがpieceのままだったため実際数量へのケース数入力がバラ数と誤解釈される事故があった)
+  return row.unitMode || (product && product.caseOnly ? 'case' : 'piece');
 }
 
 // 実際数量のトグル（個数/ケース）。依頼側のunitToggleHTMLと違い、caseOnly商品でも
@@ -1708,7 +1711,7 @@ function effectiveActualUnitMode(row) {
 function actualUnitToggleHTML(sid, row) {
   const p = prodByName(row.product);
   if (!p || !p.caseUnit) return '';
-  const mode = effectiveActualUnitMode(row);
+  const mode = effectiveActualUnitMode(row, p);
   const btn = (val, label) => `<span class="unit-toggle-btn" onclick="setActualUnitMode('${sid}','${row.id}','${val}')"
     style="${mode===val ? 'background:#22703d;color:#fff' : 'background:#e0e0e0;color:#555'}">${esc(label)}</span>`;
   return `<span class="unit-toggle-wrap">${btn('piece', 'バラ')}${btn('case', 'ケース')}</span>`;
@@ -1734,7 +1737,7 @@ function actualQtyCell(sid, row) {
   const caseAmbiguous = !!(product && effectiveMode === 'case' && casePiecesFromUnit(product.caseUnit) == null && row.qty !== '' && row.qty != null);
   const warn = caseAmbiguous ? `<span title="1ケースあたりの個数を自動判定できません。実際数量を直接入力してください" style="color:#dc2626;font-size:11px;cursor:help">⚠変換不可</span>` : '';
 
-  const actualMode = effectiveActualUnitMode(row);
+  const actualMode = effectiveActualUnitMode(row, product);
   const actualAmbiguous = !!(product && actualMode === 'case' && casePiecesFromUnit(product.caseUnit) == null && row.actualQty !== '' && row.actualQty != null);
   const actualWarn = actualAmbiguous ? `<span title="1ケースあたりの個数を自動判定できないため、この実際数量（ケース）は棚卸の集計に反映されません" style="color:#dc2626;font-size:11px;cursor:help">⚠集計不可</span>` : '';
 
@@ -5240,13 +5243,17 @@ function updStore(id, field, value) {
   saveA(storeTab, storeRows);
 }
 
-// 実際数量→個数変換。qtyToPiecesと違い、caseOnly商品でもactualUnitModeが明示的に
-// 'case'でない限り常に'piece'として扱う（実際数量は今まで通り「個数を直接入力」がデフォルトの
-// ため、既存の保存済みactualQty＝Number(actualQty)そのままという解釈を変えないための措置）
+// 実際数量→個数変換。actualUnitModeが明示的に指定されていればそれを尊重する
+// （既存の保存済みデータ・本部が明示的に「バラ」を選んだ部分ケースの補正入力等はそのまま個数扱い）。
+// 未指定（本部がトグルに触れていない）の場合のみ、caseOnly商品はケース扱いをデフォルトにする
+// （依頼数量側qtyToPiecesと同じ解釈）。以前は未指定時に常に'piece'扱いだったため、caseOnly商品で
+// 本部が「2」＝2ケースのつもりで入力しても2個として記録される事故があった
+// （2026-09-06、渋谷神南の100RS用カップM等で実際に発覚）。
 function actualQtyToPieces(product, qty, unitMode) {
   const n = Number(qty);
   if (!product || qty === '' || qty == null || Number.isNaN(n)) return null;
-  if (unitMode !== 'case') return n;
+  const mode = unitMode || (product.caseOnly ? 'case' : 'piece');
+  if (mode !== 'case') return n;
   const pieces = casePiecesFromUnit(product.caseUnit);
   return pieces == null ? null : n * pieces;
 }
@@ -5268,23 +5275,34 @@ function recordDeliveredRows(storeId, rows) {
   });
 }
 
+// GAS応答待ち(cold startで1〜2秒)の間に焦って連打すると、confirm()はJS実行が空く間に
+// 複数回出せてしまい、当月納品（自動）へ同じ納品分が二重計上される事故があったため
+// (2026-09-06、渋谷神南の100RS用カップM等で実際に発覚)、二重実行防止ガードを追加。
+const _markDeliveredInProgress = new Set();
 async function markDelivered(id) {
+  if (_markDeliveredInProgress.has(id)) return;
   const row = storeRows.find(r=>r.id===id); if (!row) return;
   if (!row.orderDate) { alert('発注日が記載されてから納品済みにできます。'); return; }
   if (!confirm('この依頼を納品済みにして履歴へ移動しますか？')) return;
+  if (_markDeliveredInProgress.has(id)) return;
+  _markDeliveredInProgress.add(id);
   try {
-    const res = await gasPost('saveDeliveryHistory', { storeId: storeTab, row: _rowToDb(row, storeTab) });
-    if (res && res.error) throw new Error(res.error);
-  } catch(e) {
-    // DELIVERY_HISTORY_SHEET_ID未デプロイ・通信エラー時のフォールバック。
-    // 従来通りlocalStorageに保存し、「納品済み」操作自体は止めない
-    console.error('saveDeliveryHistory error (falling back to localStorage):', e);
-    _saveLocalH(storeTab, [..._loadLocalH(storeTab), {...row, deliveredAt:Date.now()}]);
+    try {
+      const res = await gasPost('saveDeliveryHistory', { storeId: storeTab, row: _rowToDb(row, storeTab) });
+      if (res && res.error) throw new Error(res.error);
+    } catch(e) {
+      // DELIVERY_HISTORY_SHEET_ID未デプロイ・通信エラー時のフォールバック。
+      // 従来通りlocalStorageに保存し、「納品済み」操作自体は止めない
+      console.error('saveDeliveryHistory error (falling back to localStorage):', e);
+      _saveLocalH(storeTab, [..._loadLocalH(storeTab), {...row, deliveredAt:Date.now()}]);
+    }
+    recordDeliveredRows(storeTab, [row]);
+    storeRows = storeRows.filter(r=>r.id!==id);
+    saveA(storeTab, storeRows);
+    renderStore();
+  } finally {
+    _markDeliveredInProgress.delete(id);
   }
-  recordDeliveredRows(storeTab, [row]);
-  storeRows = storeRows.filter(r=>r.id!==id);
-  saveA(storeTab, storeRows);
-  renderStore();
 }
 
 /* ===== 全体管理ページ ===== */
