@@ -3451,6 +3451,39 @@ function _batchUpsertStockMismatchCheckpoints_(existingRows, updates) {
   if (rows.length) sheet.getRange(2, 1, rows.length, STOCK_MISMATCH_CHECKPOINT_COLS.length).setValues(rows);
 }
 
+// 盗難検知①の「1回だけの差異では通知しない」ための状態保持(2026-09-06追加)。稼働の少ない
+// 店舗(例: 新瑞橋)では、補充した分がまだステラで売れていないだけの正常な状態でも閾値を
+// 超えてしまい誤検知が頻発していた。店舗×商品ごとに「前回も閾値超えだったか」を1行だけ
+// 保持し、2回連続で閾値を超えた時だけ通知する(1回目は記録するだけで通知しない)。
+// 解消された(閾値を下回った)ら行を削除し、次に閾値を超えてもまた1回目からやり直しになる。
+const SHEET_STOCK_MISMATCH_PENDING = 'stock_mismatch_pending';
+const STOCK_MISMATCH_PENDING_COLS = ['store_id', 'product', 'first_flagged_at'];
+
+function _getStockMismatchPendingSheet_() {
+  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const sheet = ss.getSheetByName(SHEET_STOCK_MISMATCH_PENDING) || ss.insertSheet(SHEET_STOCK_MISMATCH_PENDING);
+  ensureHeaders(sheet, STOCK_MISMATCH_PENDING_COLS);
+  return sheet;
+}
+
+// 保留行があれば削除し(true=削除した=直前まで保留中だった)、無ければ何もしない(false)。
+function _clearStockMismatchPending_(storeId, product) {
+  const sheet = _getStockMismatchPendingSheet_();
+  const values = sheet.getDataRange().getValues();
+  for (let i = 1; i < values.length; i++) {
+    if (String(values[i][0]) === String(storeId) && String(values[i][1]) === String(product)) {
+      sheet.deleteRow(i + 1);
+      return true;
+    }
+  }
+  return false;
+}
+
+function _markStockMismatchPending_(storeId, product) {
+  const sheet = _getStockMismatchPendingSheet_();
+  sheet.appendRow([storeId, product, new Date().toISOString()]);
+}
+
 // ----------------------------------------------------------------
 // 盗難検知①: 補充数量入力時の自動突き合わせ通知 2026-07-31
 // ----------------------------------------------------------------
@@ -3468,6 +3501,10 @@ function _batchUpsertStockMismatchCheckpoints_(existingRows, updates) {
 // 2026-08-25: sinceDateの日が「前回入力した時刻〜24時」で打ち切られ実売上が取りこぼされる問題を
 // チェックポイント(上記_stockMismatchCarryOverFromRows_)で解消。
 const CHECKSHEET_STOCK_MISMATCH_THRESHOLD = 2;
+// 2026-09-06追加: 絶対数の閾値だけだと、稼働の少ない店舗(補充数量そのものが小さい)ほど
+// 「まだ売れていないだけ」でも簡単に閾値を超えてしまい誤検知が多発していた(ユーザー指摘)。
+// 補充数量に対する割合も同時に満たした場合のみ「閾値超え」とみなす(絶対2個 かつ 割合30%以上)。
+const CHECKSHEET_STOCK_MISMATCH_PCT_THRESHOLD = 0.3;
 function checkChecksheetStockMismatch(storeId, product) {
   if (!storeId || !product) return { error: 'storeId/productは必須です' };
   const group = STERA_SALES_MAPPING.find(m => m.ourProducts.indexOf(product) >= 0);
@@ -3517,17 +3554,32 @@ function checkChecksheetStockMismatch(storeId, product) {
   const steraQty = carryOver + rangeQty + todayRealtimeQty;
   _batchUpsertStockMismatchCheckpoints_(checkpointRows, [{ storeId, prdId: group.prdId, dateStr: today, qty: todayRealtimeQty }]);
   const diff = inputQty - steraQty;
-  if (diff >= CHECKSHEET_STOCK_MISMATCH_THRESHOLD) {
-    try {
-      // 2026-08-03: 既存の「社内ポータル通知」Botから分離し、専用Bot経由(1:1トーク)で送る
-      sendStockBotNotification_(
-        '【在庫差異検知】' + _storeIdLabel_(storeId) + '・' + group.label +
-        'で在庫差異(補充' + inputQty + '個／ステラ実売上' + steraQty + '個、差' + diff + '個)を検知しました。ご確認ください。' +
-        '(' + sinceDate + '〜本日分)'
-      );
-    } catch (e) { console.error('LINE WORKS通知エラー(在庫差異検知):', e.message); }
+  const overAbsolute = diff >= CHECKSHEET_STOCK_MISMATCH_THRESHOLD;
+  const overPct = inputQty > 0 && (diff / inputQty) >= CHECKSHEET_STOCK_MISMATCH_PCT_THRESHOLD;
+  const thresholdMet = overAbsolute && overPct;
+  let notified = false;
+  if (thresholdMet) {
+    // 前回もこの店舗×商品で閾値超えが記録されていれば(=2回連続)通知し、保留状態はクリアする。
+    // 前回が無ければ(今回が1回目)通知せず、次回のために保留状態だけ記録する。
+    const wasPending = _clearStockMismatchPending_(storeId, product);
+    if (wasPending) {
+      try {
+        // 2026-08-03: 既存の「社内ポータル通知」Botから分離し、専用Bot経由(1:1トーク)で送る
+        sendStockBotNotification_(
+          '【在庫差異検知】' + _storeIdLabel_(storeId) + '・' + group.label +
+          'で在庫差異(補充' + inputQty + '個／ステラ実売上' + steraQty + '個、差' + diff + '個)を検知しました。ご確認ください。' +
+          '(' + sinceDate + '〜本日分、2回連続検知)'
+        );
+        notified = true;
+      } catch (e) { console.error('LINE WORKS通知エラー(在庫差異検知):', e.message); }
+    } else {
+      _markStockMismatchPending_(storeId, product);
+    }
+  } else {
+    // 閾値を下回った(解消された)ので、保留中だった場合はクリアする
+    _clearStockMismatchPending_(storeId, product);
   }
-  return { ok: true, sinceDate, throughDate: today, inputQty, steraQty, diff, carryOver };
+  return { ok: true, sinceDate, throughDate: today, inputQty, steraQty, diff, carryOver, thresholdMet, notified };
 }
 
 // ----------------------------------------------------------------
