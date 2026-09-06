@@ -1147,21 +1147,32 @@ function _checksheetDayChanged_(oldDay, newDay) {
   return JSON.stringify(strip(oldDay || {})) !== JSON.stringify(strip(newDay || {}));
 }
 
-// 日付ごとの入力時刻(_enteredAt)をdataに埋め込む。パートナーポータル側はprod:接頭辞以外の
-// キーを表示に使わないため画面には一切出ない(2026-08-05、実地カウントとの時刻突き合わせ用)。
-// クライアントは毎回その月の全日データを丸ごと送ってくる(自分のlocalStorageに_enteredAtの
-// 存在を知らない)ため、値が変わっていない日は旧タイムスタンプをこちらでマージして保持する。
+// 日付ごとの入力時刻(_enteredAt)をdataに埋め込みつつ、oldData(サーバー側の現在値)と
+// newData(クライアントのlocalStorageから送られてきた値)を真にマージする。
+// クライアントは毎回その月の全日データを丸ごと送ってくるが、それは「そのクライアントの
+// localStorageが把握している範囲」でしかない——ページを開いたまま長時間放置した端末や、
+// 他端末が別の日・別商品を追加した直後の端末が保存すると、newDataにはその追加分が
+// 含まれておらず、古い実装(newDataをそのまま採用するだけ)だとoldDataにしかない
+// 日付・商品のエントリが丸ごと消えてしまう事故があった(2026-09-06、渋谷神南のデイリー
+// カウントが実際の消費量より不自然に少なく、月内に不自然に長い入力空白があったことで発覚)。
+// 日付キー・商品キーの両方の階層でoldData優先のオーバーレイマージにし、
+// newDataに存在するキーだけを上書きする(今回送信に無い項目は既存値を残す、
+// saveInventorySnapshotのマージ方式と同じ考え方)。
 function _stampChecksheetEntryTimes_(oldData, newData) {
   const oldD = oldData || {};
+  const merged = Object.assign({}, oldD);
   Object.keys(newData || {}).forEach(dayKey => {
     const oldDay = oldD[dayKey];
-    if (_checksheetDayChanged_(oldDay, newData[dayKey])) {
-      newData[dayKey]._enteredAt = new Date().toISOString();
+    const newDay = newData[dayKey];
+    const mergedDay = Object.assign({}, oldDay || {}, newDay || {});
+    if (_checksheetDayChanged_(oldDay, newDay)) {
+      mergedDay._enteredAt = new Date().toISOString();
     } else if (oldDay && oldDay._enteredAt) {
-      newData[dayKey]._enteredAt = oldDay._enteredAt;
+      mergedDay._enteredAt = oldDay._enteredAt;
     }
+    merged[dayKey] = mergedDay;
   });
-  return newData;
+  return merged;
 }
 
 function saveChecksheetData(storeId, periodLabel, data) {
