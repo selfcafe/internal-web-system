@@ -2649,6 +2649,13 @@ function buildStoreInventorySheet(storeId, periodLabel) {
   const colOpenStock = _storeInvColLetter_('open_stock');
   const colEndStock = _storeInvColLetter_('end_stock');
   const colPrice = _storeInvColLetter_('price');
+  // 消費量・差異も単価ブロックと同じ理由(2026-08-01)でスプレッドシート実数式にする
+  // (2026-09-06、ユーザー指摘: プレーンな値のままだと納品数等を後から補正した時に
+  // 追従されず、今回の渋谷神南の一件のような食い違いの温床になる。数式にしておけば
+  // 参照先の値を直せば自動的に再計算される)
+  const colDelivery = _storeInvColLetter_('delivery');
+  const colConsumptionQty = _storeInvColLetter_('consumption');
+  const colDailyCount = _storeInvColLetter_('daily_count');
 
   // ステラ対象外(自主管理)のフレーバー違い商品は、フレーバー単体だと動きが小さく原価率が
   // ブレやすいため、SELF_MANAGED_COST_GROUPSで定義したグループ単位の合算値を使う
@@ -2690,21 +2697,30 @@ function buildStoreInventorySheet(storeId, periodLabel) {
     }
 
     const dailyCount = r[idx.daily_count];
-    const consumption = r[idx.consumption];
+    const openStock = r[idx.open_stock];
+    // 消費量=期首在庫+当月納品-期末在庫。期首在庫・期末在庫のセル自体が空欄(初月・記入漏れ等)
+    // の場合はIF()で空文字を返す(単価ブロックと同じ考え方)。当月納品(liveDelivery)は
+    // deliveryTotals[product]||0で必ず数値になっているため空欄チェック不要。
+    const consumptionFormula = `=IF(OR($${colOpenStock}${rowNum}="",$${colEndStock}${rowNum}=""),"",$${colOpenStock}${rowNum}+$${colDelivery}${rowNum}-$${colEndStock}${rowNum})`;
     // 差異=消費量(棚卸ベース)-デイリーカウント(チェックシート補充ベース)。既存の
-    // 「消費量とデイリーカウントが一致しない」という参考表示(mismatch)の数値版
-    const countDiff = (consumption !== '' && consumption !== null && dailyCount !== '' && dailyCount !== null)
-      ? Number(consumption) - Number(dailyCount) : '';
+    // 「消費量とデイリーカウントが一致しない」という参考表示(mismatch)の数式版
+    const countDiffFormula = `=IF(OR($${colConsumptionQty}${rowNum}="",$${colDailyCount}${rowNum}=""),"",$${colConsumptionQty}${rowNum}-$${colDailyCount}${rowNum})`;
+
+    // reorder_qty計算用に、シートに書く数式とは別にJS側でも同じ式(期首在庫+当月納品-期末在庫)を
+    // 評価しておく(_computeReorderQty_は数式文字列ではなく数値を必要とするため)。inventory_log側の
+    // 保存済みconsumption列は今後この用途では参照しない(納品補正後に追従しない不整合の原因だった)。
+    const derivedConsumption = (openStock !== '' && openStock !== null && endStock !== '' && endStock !== null)
+      ? Number(openStock) + Number(liveDelivery) - Number(endStock) : '';
 
     const reorderTarget = reorderTargets[String(r[idx.code])];
-    const reorderQty = _computeReorderQty_(reorderTarget, endStock, consumption, info);
+    const reorderQty = _computeReorderQty_(reorderTarget, endStock, derivedConsumption, info);
 
     return [
       _periodLabelJa_(periodLabel), r[idx.code], product,
       price,
       openingAmount, closingAmount, consumptionAmount, costRate,
-      r[idx.open_stock], endStock, liveDelivery, consumption, r[idx.disposed_qty],
-      dailyCount, countDiff,
+      openStock, endStock, liveDelivery, consumptionFormula, r[idx.disposed_qty],
+      dailyCount, countDiffFormula,
       low ? '要確認' : '',
       reorderTarget !== undefined ? Number(reorderTarget) : '', reorderQty
     ];
