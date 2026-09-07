@@ -375,6 +375,7 @@ function doGet(e) {
     else if (a === 'reorderStoreTabs')          result = reorderStoreTabs();
     else if (a === 'removeInventoryLabelColumn') result = removeInventoryLabelColumn();
     else if (a === 'removeStoreInventoryLowStockColumn') result = removeStoreInventoryLowStockColumn();
+    else if (a === 'ensureReorderRulesSheet') result = ensureReorderRulesSheet_();
     else if (a === 'pruneBlankStoreInventoryRows') result = pruneBlankStoreInventoryRows(e.parameter.storeId);
     else if (a === 'buildSalesCategoryCostRatio') result = buildSalesCategoryCostRatio(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'buildStockCheckMonthly')    result = buildStockCheckMonthly(e.parameter.storeId, e.parameter.periodLabel);
@@ -2478,7 +2479,7 @@ function renameProductName(code, newName) {
 // 数式参照はSheetsの列削除機能により自動的に追従)、後続のステラ関連ブロック(STOCK_CHECK_START_COL)
 // も1列分ずらした。詳細はdeleteLowStockColumnFromAllStoreSheets参照。
 const STORE_INVENTORY_COLS = ['period_label','code','product','price','opening_amount','closing_amount','consumption_amount','cost_rate','open_stock','end_stock','delivery','consumption','disposed_qty','daily_count','count_diff','reorder_target','reorder_qty'];
-const STORE_INVENTORY_HEADERS_JA = ['期間','商品コード','商品名','単価','期首在庫額','期末在庫額','月消費額','原価率','期首在庫','期末在庫','当月納品','消費量','処分数量','デイリーカウント','差異(消費量-デイリーカウント)','基準値','発注数'];
+const STORE_INVENTORY_HEADERS_JA = ['期間','商品コード','商品名','単価','期首在庫額','期末在庫額','月消費額','原価率(在庫消費ベース)','期首在庫','期末在庫','当月納品','消費量','処分数量','デイリーカウント','差異(消費量-デイリーカウント)','基準値(目標在庫数)','発注数'];
 // 列名→列文字(A,B,C...)の変換ヘルパー。STORE_INVENTORY_COLSの並び順を単一の情報源として、
 // 数式内のセル参照(例:$P2)を組み立てる際に使う——列順を変える場合はSTORE_INVENTORY_COLSを直すだけでよい
 function _storeInvColLetter_(name) {
@@ -2938,6 +2939,59 @@ function buildReorderTestPlaySheet(storeId) {
   return { ok: true, url: ss.getUrl() };
 }
 
+// 棚卸表(店舗タブ)の列の意味・発注数算出ルールをまとめた説明タブ(2026-09-07追加)。
+// buildStoreInventorySheet等が毎回上書きする店舗タブとは違い、このタブは「既に存在すれば
+// 何もしない」設計——ユーザーが自由に書き足していく想定(今後メール作成等の発注自動化が
+// 増えるとルール項目も増える見込み、とのユーザー方針)なので、コード側から上書き・消去は
+// 絶対にしない。初回のみこの内容で作成する。?action=ensureReorderRulesSheet で実行。
+function ensureReorderRulesSheet_() {
+  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const sheetName = '発注ルール';
+  if (ss.getSheetByName(sheetName)) return { ok: true, created: false, reason: '既に存在します(内容は上書きしません)' };
+
+  const sheet = ss.insertSheet(sheetName);
+  const rows = [
+    ['棚卸表(店舗タブ)の列の意味・発注数算出ルール'],
+    ['(このタブはコードが自動更新しません。自由に書き足してください)'],
+    [''],
+    ['■ 原価率が2種類ある理由'],
+    ['H列「原価率(在庫消費ベース)」: 期首在庫額・期末在庫額(棚卸データ×単価)だけから出す疑似指標。月消費額÷期首在庫額。実売上とは無関係。'],
+    ['S列「原価率(ステラ実売上ベース)」: stera_daily_sales(ステラの実売上、日次自動蓄積)を使った本当の原価率。対象は「販売品類」(水・レディーボーデン等、STERA_SALES_MAPPINGで定義した8グループ)のみで、他の商品は空欄。'],
+    ['S・T(ステラ売上・原価率)は行の商品名とは対応していません。8グループ分の集計を、たまたま同じ行位置に並べているだけの別表です。'],
+    [''],
+    ['■ 基準値(P列)'],
+    ['「目標在庫数」を商品コードごとに手入力した値。管理者ポータルの「発注基準値設定(月初発注)」画面から設定・変更します。'],
+    ['P列のセルを棚卸表シート上で直接書き換えても、次に棚卸が提出されたタイミングで元の設定値に上書きされて消えます(P列は表示専用、実体はapp_settingsのreorder_targets)。'],
+    [''],
+    ['■ 発注数(Q列)の計算ルール'],
+    ['1. 目標在庫数を決める: 基準値(P列)が設定されていればその値。未設定なら 消費量×1.2(安全在庫のバッファ)。'],
+    ['2. 発注数 = max(0, 目標在庫数 − 期末在庫)。在庫が目標を上回っていれば発注数は0。'],
+    ['3. ケース単価必須の商品は、結果をケースサイズの倍数に四捨五入(0.5ケース以上は切り上げ)。'],
+    ['4. 例外: ケース単価必須の商品で、丸めた結果が0ケースでも、丸める前の発注数が0より大きく、かつ期末在庫が実際に0(売り切れ)なら、最低1ケースは発注する(売り切れなのに発注数0と表示される事故を防ぐため)。'],
+    ['5. 保管上限(ケース数)が設定されている商品は、期末在庫+発注数がその上限を超えないよう発注数をさらに抑える(冷凍庫スペース対策等)。'],
+    ['6. ケース単価必須でない商品は、四捨五入(0.5未満切り捨て・0.5以上切り上げ)で整数にする(2026-09-07確定、例: 渋谷神南の抹茶ラテ)。'],
+    [''],
+    ['■ 注意: P列・Q列は数式ではありません'],
+    ['基準値(P)・発注数(Q)は、棚卸提出のタイミングでコード側が計算した「その時点のスナップショット値」です(他の列の多くは数式で常に最新の値を表示しますが、P・Qはケース単価等の商品マスタ情報がこのシート上に列として無いため数式化できていません)。'],
+    ['後から納品数やデイリーカウントを修正しても、P・Qは自動的には再計算されません。再度棚卸を提出し直すか、?action=buildStoreInventorySheetを再実行すると最新の値に更新されます。'],
+    [''],
+    ['■ 発注メール自動作成(現状は一部のみ)'],
+    ['渋谷神南のみ、アペックス向けに「発注数=max(0,基準値−期末在庫)」という簡易計算(ケース丸め等は考慮しない)でPDFを作成し、Gmail下書きを自動作成する仕組みが既にあります(processMonthlyReorder)。'],
+    ['↑これはQ列の発注数(ケース丸め・保管上限を考慮)とは計算式が異なる点に注意。今後メール作成等の発注自動化を広げる際は、この食い違いをどうするか(Q列のロジックに揃えるか等)検討が必要です。'],
+    [''],
+    ['■ 今後追記予定'],
+    [''],
+  ];
+  sheet.getRange(1, 1, rows.length, 1).setValues(rows);
+  sheet.getRange(1, 1).setFontWeight('bold').setFontSize(13);
+  sheet.getRange(2, 1).setFontStyle('italic').setFontColor('#666666');
+  [4, 9, 13, 21, 25, 29].forEach(r => sheet.getRange(r, 1).setFontWeight('bold'));
+  sheet.setColumnWidth(1, 900);
+  sheet.getRange(1, 1, rows.length, 1).setWrap(true);
+
+  return { ok: true, created: true, url: ss.getUrl() };
+}
+
 // アペックス発注書の送付先(2026-08-23、スモールスタートとして渋谷神南のみ対応。
 // 大塚駅南口はトーヨーベンディングの機械のため発注書自体を作らず、店舗タブの発注数列
 // (buildStoreInventorySheetのreorder_qty)を見て人が判断する運用でよいとユーザー確認済み)。
@@ -3106,7 +3160,7 @@ function buildSalesCategoryCostRatio(storeId, periodLabel) {
   // それらの列(P・Q)のヘッダー・データ行を上書きして壊す不具合があった(この関数は手動実行が
   // 稀だったため実害が表面化していなかった)。今回月次自動トリガーに乗せるにあたり修正した。
   const startCol = STORE_INVENTORY_HEADERS_JA.length + 1; // 例: 基準値・発注数で17列ならR列から
-  const headerRow = ['ステラ売上', '原価率'];
+  const headerRow = ['ステラ売上', '原価率(ステラ実売上ベース)'];
   sheet.getRange(1, startCol, 1, headerRow.length).setValues([headerRow]);
   sheet.getRange(2, startCol, outRows.length, outRows[0].length).setValues(outRows);
   sheet.getRange(2, startCol, outRows.length, 1).setNumberFormat(INVOICE_YEN_FORMAT);
