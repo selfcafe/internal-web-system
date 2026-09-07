@@ -376,8 +376,10 @@ function doGet(e) {
     else if (a === 'removeInventoryLabelColumn') result = removeInventoryLabelColumn();
     else if (a === 'removeStoreInventoryLowStockColumn') result = removeStoreInventoryLowStockColumn();
     else if (a === 'insertReorderCaseColumnsToAllStoreSheets') result = insertReorderCaseColumnsToAllStoreSheets();
+    else if (a === 'relocateCaseSizeColumnAndDropExtraColumns') result = relocateCaseSizeColumnAndDropExtraColumns();
     else if (a === 'ensureReorderRulesSheet') result = ensureReorderRulesSheet_();
     else if (a === 'updateReorderRulesQFormulaNote') result = updateReorderRulesQFormulaNote();
+    else if (a === 'fixReorderRulesColumnLetters') result = fixReorderRulesColumnLetters();
     else if (a === 'pruneBlankStoreInventoryRows') result = pruneBlankStoreInventoryRows(e.parameter.storeId);
     else if (a === 'buildSalesCategoryCostRatio') result = buildSalesCategoryCostRatio(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'buildStockCheckMonthly')    result = buildStockCheckMonthly(e.parameter.storeId, e.parameter.periodLabel);
@@ -2517,8 +2519,20 @@ function renameProductName(code, newName) {
 // 存在しなかったため数式化できていなかった——その情報をこの3列として実際に列出しすることで、
 // Q列を_reorderQtyFormulaStr_(buildReorderTestPlaySheetで既に使っている数式版)による
 // 実数式に変えられるようにした。既存ルール通り新規列は必ず末尾に追加する。
-const STORE_INVENTORY_COLS = ['period_label','code','product','price','opening_amount','closing_amount','consumption_amount','cost_rate','open_stock','end_stock','delivery','consumption','disposed_qty','daily_count','count_diff','reorder_target','reorder_qty','case_only','case_pieces','stock_cap_cases'];
-const STORE_INVENTORY_HEADERS_JA = ['期間','商品コード','商品名','単価','期首在庫額','期末在庫額','月消費額','原価率(在庫消費ベース)','期首在庫','期末在庫','当月納品','消費量','処分数量','デイリーカウント','差異(消費量-デイリーカウント)','基準値(目標在庫数)','発注数','ケース単価必須','ケースサイズ','保管上限(ケース数)'];
+// 2026-09-07(同日中に再修正)、上記3列のうち「ケース単価必須」「保管上限(ケース数)」の2列を
+// 廃止(ユーザー判断: 「ケース単価必須のセル不要」「保管上限のセルもいらない」)。
+// ケース単価必須はケースサイズが登録されているかどうかで自動判定できる(商品マスタ側の
+// caseUnitとcaseOnlyフラグが食い違う商品が実在する——例: 抹茶ラテ等14商品はケースサイズは
+// 登録済みだがケース単価必須ではない——ため、単純にケースサイズの有無だけで判定する仕様に
+// 変更したことで、この2つは同じ意味になった)。保管上限はシート上のセルとしては公開せず、
+// _reorderQtyFormulaStr_生成時に商品マスタの値をそのままリテラルとして数式に埋め込む方式に
+// 変更した(_reorderQtyFormulaCore_参照、店舗タブのセルとしては見えなくなるが計算上は従来通り
+// 効いている)。ケースサイズ列は「単価の左隣に移動させてほしい」という指示により、末尾追加の
+// 既存ルールを例外的に破って単価(price)の直前に配置している——このケースサイズ列は他の列と違い
+// 商品マスタの固定値をそのまま表示するだけ(期間をまたいでも値が変わらない)なので、途中挿入でも
+// 過去期間ブロックとの整合性は問題にならない。
+const STORE_INVENTORY_COLS = ['period_label','code','product','case_pieces','price','opening_amount','closing_amount','consumption_amount','cost_rate','open_stock','end_stock','delivery','consumption','disposed_qty','daily_count','count_diff','reorder_target','reorder_qty'];
+const STORE_INVENTORY_HEADERS_JA = ['期間','商品コード','商品名','ケースサイズ','単価','期首在庫額','期末在庫額','月消費額','原価率(在庫消費ベース)','期首在庫','期末在庫','当月納品','消費量','処分数量','デイリーカウント','差異(消費量-デイリーカウント)','基準値(目標在庫数)','発注数'];
 // 列名→列文字(A,B,C...)の変換ヘルパー。STORE_INVENTORY_COLSの並び順を単一の情報源として、
 // 数式内のセル参照(例:$P2)を組み立てる際に使う——列順を変える場合はSTORE_INVENTORY_COLSを直すだけでよい
 function _storeInvColLetter_(name) {
@@ -2569,72 +2583,46 @@ function _getReorderTargets_() {
   try { return JSON.parse(entry.value); } catch (e) { return {}; }
 }
 
-// 発注数の計算ロジック(2026-09-05、2026-09-05に消費量ベースもmax(0,目標-期末在庫)の形に統一)。
-// 基準値(目標在庫数)が設定されている商品コードはその基準値を、未設定の商品コード(店舗ごと
-// 基準値が一切無い店舗も含む)は消費量×1.2(安全在庫分のバッファ)を「実質的な目標在庫数」とみなし、
-// どちらの場合もmax(0,目標在庫数-期末在庫)を発注数とする——基準値の有無に関わらず、既にある
-// 在庫は必ず差し引く。ケース単価必須(caseOnly)の商品は、結果をケースサイズ(casePieces)の
-// 倍数に丸める(0.5ケース以上は切り上げ、四捨五入)——実際の発注はケース単位でしかできないため、
-// 端数のままでは発注数として使えない。ケース単価必須でない商品(丸める基準となるケースサイズが
-// 無い)も、本来の四捨五入(0.5未満切り捨て・0.5以上切り上げ)で整数にする
-// (2026-09-07確定、例: 渋谷神南の抹茶ラテ)。
-// buildStoreInventorySheetとbuildReorderTestPlaySheet(テストプレイ用シート)の両方から呼ぶ
-// 共通ロジック——ロジックの二重管理・食い違いを避けるため必ずここを経由させる。
-function _computeReorderQty_(reorderTarget, endStock, consumption, info) {
-  let effectiveTarget;
-  if (reorderTarget !== undefined) {
-    effectiveTarget = Number(reorderTarget);
-  } else if (consumption !== '' && consumption !== null) {
-    effectiveTarget = Number(consumption) * 1.2;
-  }
-
-  let reorderQty = '';
-  if (effectiveTarget !== undefined && endStock !== '' && endStock !== null) {
-    reorderQty = Math.max(0, effectiveTarget - Number(endStock));
-  }
-  if (reorderQty !== '' && info.caseOnly && info.casePieces) {
-    let cases = Math.round(reorderQty / info.casePieces);
-    // ケースサイズが大きく回転が遅い商品だと、期末在庫が0(売り切れ)でも端数が0.5ケースに
-    // 届かず0ケースに丸められてしまい、「在庫切れなのに発注数0」と表示される事故が起きる
-    // (2026-09-05、渋谷神南のアイス(ケース36個)で実際に発生・発覚)。丸め結果が0でも、
-    // 元の計算値(reorderQty)が0より大きく、かつ期末在庫が実際に0の場合だけ最低1ケースにする。
-    if (cases === 0 && reorderQty > 0 && Number(endStock) === 0) cases = 1;
-    // stockCapCases(保管上限、2026-09-05追加): 冷凍庫等の収納スペースの都合で「期末在庫+発注数」の
-    // 合計がこのケース数を超えないよう、発注ケース数の上限を追加でかける(アイスは冷凍庫の都合で
-    // 1ケース分しか置けないため上限1、というのが最初の適用例)。既に上限付近まで在庫がある場合、
-    // 1ケースも発注できない(0ケース)こともある——「ケース単位でしか発注できない」制約を保ったまま
-    // 収納上限を守るための調整であり、端数(半端な個数)での発注はしない。
-    if (info.stockCapCases) {
-      const capUnits = info.stockCapCases * info.casePieces;
-      const maxAdditionalCases = Math.max(0, Math.floor((capUnits - Number(endStock)) / info.casePieces));
-      cases = Math.min(cases, maxAdditionalCases);
-    }
-    reorderQty = cases * info.casePieces;
-  } else if (reorderQty !== '') {
-    // ケース単価必須でない商品は、端数のまま発注数として使えないため
-    // 本来の四捨五入(0.5未満切り捨て・0.5以上切り上げ)で整数にする(2026-09-07確定)。
-    reorderQty = Math.round(reorderQty);
-  }
-  return reorderQty;
-}
-
-// _computeReorderQty_のJS実装をそのままSheets数式に翻訳したもの(buildReorderTestPlaySheet専用)。
-// targetCol=基準値セル列, endStockCol=期末在庫列, consumptionCol=消費量列,
-// caseOnlyCol=ケース単価必須列("はい"/"いいえ"), caseSizeCol=ケースサイズ列,
-// capCasesCol=保管上限(ケース数、空欄なら上限なし)列。両者の計算結果が食い違わないよう、
-// _computeReorderQty_を変更したら必ずこちらも合わせて変更すること。
-function _reorderQtyFormulaStr_(targetCol, endStockCol, consumptionCol, caseOnlyCol, caseSizeCol, capCasesCol, row) {
-  const t = `${targetCol}${row}`, e = `${endStockCol}${row}`, c = `${consumptionCol}${row}`,
-        d = `${caseOnlyCol}${row}`, k = `${caseSizeCol}${row}`, cap = `${capCasesCol}${row}`;
+// 発注数の計算ロジック——2026-09-07よりSheets数式(_reorderQtyFormulaCore_)のみに一本化した。
+// 従来はJS版(_computeReorderQty_)とSheets数式版(_reorderQtyFormulaStr_)を並行して持ち、
+// 両者を手動で同期させる方式だったが、buildStoreInventorySheetのQ列を実数式化したことで
+// JS版の呼び出し元が無くなったため、ロジックの二重管理を避けるためJS版は削除した。
+// ルール(いずれも_reorderQtyFormulaCore_のコメントも参照):
+// 1. 基準値(目標在庫数)が設定されていればその値、無ければ消費量×1.2(安全在庫バッファ)を
+//    「目標在庫数」とみなし、max(0,目標在庫数-期末在庫)を発注数の基準値とする。
+// 2. ケースサイズが登録されている商品は、結果をケースサイズの倍数に丸める(四捨五入)
+//    (2026-09-07、ケース単価必須という別フラグを廃止——商品マスタ上でケースサイズ(caseUnit)は
+//    あるがケース単価必須(caseOnly)ではない商品が実在するため厳密には同義ではないが、
+//    「ケースサイズが登録されている＝ケース単価必須という判定でよい」とユーザーが確定させた)。
+// 3. ケースサイズが大きく回転が遅い商品だと、期末在庫が0(売り切れ)でも端数が0.5ケースに
+//    届かず0ケースに丸められる事故があったため(2026-09-05、渋谷神南のアイスで発覚)、
+//    丸め結果が0でも元の計算値が0より大きく期末在庫が実際に0なら最低1ケースにする。
+// 4. 保管上限(ケース数)が設定されている商品は、期末在庫+発注数がその上限を超えないよう
+//    発注ケース数をさらに抑える(冷凍庫スペース対策等、2026-09-05追加)。
+// 5. ケースサイズが無い商品は、四捨五入(0.5未満切り捨て・0.5以上切り上げ)で整数にする
+//    (2026-09-07確定、例: 渋谷神南の抹茶ラテ)。
+//
+// t/e/c/k/capは全て「式の断片(セル参照 or リテラル値 or 空文字""を表す式)」として渡す——
+// 呼び出し元がセル参照(`R2`等)にするかリテラル値(商品マスタの値をそのまま埋め込む)にするかを
+// 自由に選べるようにするため、列文字+行番号の組み立てはこの関数の外側で行う。
+// capは値が無いことを表す際は空文字リテラル`'""'`を渡すこと(空セル参照と同じ扱いになる)。
+function _reorderQtyFormulaCore_(t, e, c, k, cap) {
   const effectiveTarget = `IF(${t}<>"",${t},IF(${c}<>"",${c}*1.2,""))`;
   const base = `IF(AND(${effectiveTarget}<>"",${e}<>""),MAX(0,${effectiveTarget}-${e}),"")`;
   const roundedCases = `ROUND(${base}/${k},0)`;
   const casesAfterZeroFix = `IF(AND(${roundedCases}=0,${base}>0,${e}=0),1,${roundedCases})`;
   const maxAdditionalCases = `MAX(0,FLOOR((${cap}*${k}-${e})/${k}))`;
   const finalCases = `IF(${cap}<>"",MIN(${casesAfterZeroFix},${maxAdditionalCases}),${casesAfterZeroFix})`;
-  // ケース単価必須でない商品は、本来の四捨五入(0.5未満切り捨て・0.5以上切り上げ)で整数にする
+  // ケースサイズが無い商品は、本来の四捨五入(0.5未満切り捨て・0.5以上切り上げ)で整数にする
   const roundedBase = `IF(${base}<>"",ROUND(${base},0),"")`;
-  return `=IFERROR(IF(AND(${d}="はい",${k}<>"",${base}<>""),${finalCases}*${k},${roundedBase}),"")`;
+  return `=IFERROR(IF(AND(${k}<>"",${base}<>""),${finalCases}*${k},${roundedBase}),"")`;
+}
+
+// _reorderQtyFormulaCore_のセル参照版(buildReorderTestPlaySheet専用)。targetCol=基準値セル列、
+// endStockCol=期末在庫列、consumptionCol=消費量列、caseSizeCol=ケースサイズ列、
+// capCasesCol=保管上限(ケース数、空欄なら上限なし)列。全て列文字を渡し、内部でrowと組み合わせる。
+function _reorderQtyFormulaStr_(targetCol, endStockCol, consumptionCol, caseSizeCol, capCasesCol, row) {
+  return _reorderQtyFormulaCore_(`${targetCol}${row}`, `${endStockCol}${row}`, `${consumptionCol}${row}`, `${caseSizeCol}${row}`, `${capCasesCol}${row}`);
 }
 
 function buildStoreInventorySheet(storeId, periodLabel) {
@@ -2735,12 +2723,12 @@ function buildStoreInventorySheet(storeId, periodLabel) {
   const colDelivery = _storeInvColLetter_('delivery');
   const colConsumptionQty = _storeInvColLetter_('consumption');
   const colDailyCount = _storeInvColLetter_('daily_count');
-  // 発注数(Q列)を実数式にするための参照列(2026-09-07追加)。基準値・期末在庫・消費量は
-  // 既存列を、ケース単価情報はこの後追加する3列(ケース単価必須/ケースサイズ/保管上限)を参照する
+  // 発注数(Q列)を実数式にするための参照列(2026-09-07追加)。基準値・期末在庫・消費量・
+  // ケースサイズ(単価の左隣、D列)は実セルを参照するが、保管上限は列を持たず商品マスタの値を
+  // そのままリテラルとして数式に埋め込む(下のoutRows内でcapExprとして組み立てる、
+  // _reorderQtyFormulaCore_参照)
   const colReorderTarget = _storeInvColLetter_('reorder_target');
-  const colCaseOnly = _storeInvColLetter_('case_only');
   const colCaseSize = _storeInvColLetter_('case_pieces');
-  const colCapCases = _storeInvColLetter_('stock_cap_cases');
 
   // ステラ対象外(自主管理)のフレーバー違い商品は、フレーバー単体だと動きが小さく原価率が
   // ブレやすいため、SELF_MANAGED_COST_GROUPSで定義したグループ単位の合算値を使う
@@ -2797,21 +2785,22 @@ function buildStoreInventorySheet(storeId, periodLabel) {
     const countDiffFormula = `=IF(OR($${colConsumptionQty}${rowNum}="",$${colDailyCount}${rowNum}=""),"",$${colConsumptionQty}${rowNum}-$${colDailyCount}${rowNum})`;
 
     const reorderTarget = reorderTargets[String(r[idx.code])];
-    // 発注数(Q列)は_reorderQtyFormulaStr_(_computeReorderQty_のSheets数式版、buildReorderTestPlaySheetで
+    // 発注数(Q列)は_reorderQtyFormulaStr_/_reorderQtyFormulaCore_(buildReorderTestPlaySheetで
     // 既に使用実績あり)による実数式にする(2026-09-07、ユーザー指摘: 「Q列に関数(数式)が入っていない...
-    // 関数で表示させてほしい」)。基準値(P列)・期末在庫(J列)・消費量(L列、既に数式化済み)と、
-    // この後ろに書き込むケース単価情報の3列(R〜T列)を参照するため、これらが全て同じ行に揃っている
-    // 必要がある——この関数はrowNumがoutRows内の並び順で確定済みのため問題ない。
-    const reorderQtyFormula = _reorderQtyFormulaStr_(colReorderTarget, colEndStock, colConsumptionQty, colCaseOnly, colCaseSize, colCapCases, rowNum);
+    // 関数で表示させてほしい」)。基準値(P列)・期末在庫(J列)・消費量(L列、既に数式化済み)・
+    // ケースサイズ(D列)を参照する。保管上限だけは列を持たないため、商品マスタの値をそのまま
+    // 数式内にリテラルとして埋め込む(未設定なら空文字リテラル'""'=上限なし)。
+    const capExpr = info.stockCapCases ? String(info.stockCapCases) : '""';
+    const reorderQtyFormula = _reorderQtyFormulaCore_(`$${colReorderTarget}${rowNum}`, `$${colEndStock}${rowNum}`, `$${colConsumptionQty}${rowNum}`, `$${colCaseSize}${rowNum}`, capExpr);
 
     return [
       _periodLabelJa_(periodLabel), r[idx.code], product,
+      info.casePieces || '',
       price,
       openingAmount, closingAmount, consumptionAmount, costRate,
       openStock, endStock, liveDelivery, consumptionFormula, r[idx.disposed_qty],
       dailyCount, countDiffFormula,
-      reorderTarget !== undefined ? Number(reorderTarget) : '', reorderQtyFormula,
-      info.caseOnly ? 'はい' : 'いいえ', info.casePieces || '', info.stockCapCases || ''
+      reorderTarget !== undefined ? Number(reorderTarget) : '', reorderQtyFormula
     ];
   });
 
@@ -2836,11 +2825,12 @@ function buildStoreInventorySheet(storeId, periodLabel) {
 // 発注数ロジックのテストプレイ用シート(2026-09-05追加)。本番のinventory_log・店舗タブ
 // (INVENTORY_SHEET_ID)には一切書き込まず、専用の使い捨てスプレッドシートを新規作成し
 // (初回実行時のみ。2回目以降はScript Propertiesに保存したIDを使い回して同じシートを更新)、
-// 基準値・期末在庫・消費量・ケース単価必須・ケースサイズをセルに直接入力すると、発注数が
-// 数式でその場で再計算される「本物のGoogle Sheets」を作る。ロジックは_computeReorderQty_の
-// JS実装をそのままSheets数式に翻訳したもの(下記IFERROR式)——両者の計算結果が食い違わないよう、
-// このシートの数式は_computeReorderQty_の分岐をそのまま踏襲している。不要になったら
-// このスプレッドシートごと削除すればよく、本番データへの影響は一切無い。
+// 基準値・期末在庫・消費量・ケースサイズをセルに直接入力すると、発注数が数式でその場で
+// 再計算される「本物のGoogle Sheets」を作る。ロジックは_reorderQtyFormulaCore_のSheets数式
+// (buildStoreInventorySheetのQ列と共通)をそのまま使う——本番と食い違わないよう、必ずここを経由させる。
+// 不要になったらこのスプレッドシートごと削除すればよく、本番データへの影響は一切無い。
+// 2026-09-07、「ケース単価必須」列を廃止(ケースサイズが入っていれば自動的にケース単価必須扱いに
+// なる仕様に統一——本番の店舗タブと同じ判断基準)。
 function buildReorderTestPlaySheet(storeId) {
   const props = PropertiesService.getScriptProperties();
   let ss = null;
@@ -2853,10 +2843,10 @@ function buildReorderTestPlaySheet(storeId) {
     props.setProperty('REORDER_TEST_PLAY_SHEET_ID', ss.getId());
   }
 
-  // 実際の商品マスタからケース単価必須の商品を1つ拾い、サンプル行の参考値に使う
+  // 実際の商品マスタからケースサイズが登録されている商品を1つ拾い、サンプル行の参考値に使う
   // (実在のケースサイズで試せるように。見つからなければ24をそのまま使う)
   const meta = _productMeta_();
-  const caseOnlyEntry = Object.keys(meta).find(p => meta[p].caseOnly && meta[p].casePieces);
+  const caseOnlyEntry = Object.keys(meta).find(p => meta[p].casePieces);
   const sampleCaseSize = (caseOnlyEntry && meta[caseOnlyEntry].casePieces) || 24;
   const sampleCaseName = caseOnlyEntry || '水(サンプル)';
 
@@ -2866,43 +2856,43 @@ function buildReorderTestPlaySheet(storeId) {
 
   const note = [
     ['このシートは棚卸表の「発注数」ロジックを試すための実験用です。本番データとは無関係、いつ消しても構いません。'],
-    ['A〜F列(黄色背景)の数値・文字を書き換えると、G列の発注数が数式で自動的に再計算されます。'],
+    ['A〜E列(黄色背景)の数値を書き換えると、F列の発注数が数式で自動的に再計算されます。'],
     ['【発注数の考え方】まず「目標在庫数」を決め、発注数 = max(0, 目標在庫数 − 期末在庫) とする(在庫が目標を上回っていれば発注数は0)。'],
     ['　・基準値(A列)を入力した場合 → 目標在庫数 = その基準値。'],
     ['　・基準値(A列)を空欄にした場合 → 目標在庫数 = 消費量(C列)×1.2(安全在庫分のバッファ)。'],
-    ['ケース単価必須を「はい」にすると、結果がケースサイズ(E列)の倍数に丸められます(0.5ケース以上は切り上げ)。'],
-    ['【期末在庫が0の場合の特別対応】ケース単価必須の商品で、丸めた結果が0ケースになっても、丸める前の発注数が0より大きく、かつ期末在庫が実際に0(売り切れ)なら、最低1ケースは発注します(でないと「売り切れなのに発注数0」と表示される事故になるため)。'],
-    ['保管上限(ケース数、F列)を入れると、「期末在庫+発注数」がそのケース数を超えないよう発注数が追加で抑えられます(アイスの冷凍庫スペース対策等、空欄なら上限なし)。'],
+    ['ケースサイズ(D列)を入力すると、結果がその倍数に丸められます(0.5ケース以上は切り上げ)。空欄ならケース丸めなしの通常商品扱い(四捨五入のみ)。'],
+    ['【期末在庫が0の場合の特別対応】ケース丸め対象の商品で、丸めた結果が0ケースになっても、丸める前の発注数が0より大きく、かつ期末在庫が実際に0(売り切れ)なら、最低1ケースは発注します(でないと「売り切れなのに発注数0」と表示される事故になるため)。'],
+    ['保管上限(ケース数、E列)を入れると、「期末在庫+発注数」がそのケース数を超えないよう発注数が追加で抑えられます(アイスの冷凍庫スペース対策等、空欄なら上限なし)。'],
     ['']
   ];
   sheet.getRange(1, 1, note.length, 1).setValues(note);
   sheet.getRange(1, 1, note.length - 1, 1).setFontStyle('italic').setFontColor('#666666');
 
   const headerRow = note.length + 1;
-  const headers = ['基準値(空欄=未設定)', '期末在庫', '消費量', 'ケース単価必須(はい/いいえ)', 'ケースサイズ', '保管上限(ケース数、空欄=上限なし)', '発注数(自動計算)'];
+  const headers = ['基準値(空欄=未設定)', '期末在庫', '消費量', 'ケースサイズ(空欄=ケース丸めなし)', '保管上限(ケース数、空欄=上限なし)', '発注数(自動計算)'];
   sheet.getRange(headerRow, 1, 1, headers.length).setValues([headers]);
   sheet.getRange(headerRow, 1, 1, headers.length).setFontWeight('bold').setBackground('#eeeeee');
 
-  // サンプル行(編集して自由に試せる。何行足しても7列目の数式をコピーすれば同じ挙動になる)
+  // サンプル行(編集して自由に試せる。何行足しても6列目の数式をコピーすれば同じ挙動になる)
   const sampleRows = [
-    ['', 10, 30, 'はい', sampleCaseSize, '', ''],           // 基準値なし・ケース単価必須・上限なし → 消費30×1.2=36→ケース丸め
-    [50, 20, 30, 'はい', sampleCaseSize, '', ''],           // 基準値50・在庫20・ケース単価必須 → max(0,30)→ケース丸め
-    ['', 0, 8, 'はい', sampleCaseSize, 1, ''],               // 基準値なし・在庫0・保管上限1ケース → アイスの例(売り切れでも1ケース、上限で頭打ち)
-    ['', 3, 12, 'いいえ', '', '', ''],                       // 基準値なし・通常商品 → 消費12×1.2=14.4
-    [20, 5, 12, 'いいえ', '', '', ''],                       // 基準値20・在庫5・通常商品 → max(0,15)
-    ['', '', '', 'いいえ', '', '', ''],                      // 空欄行(自由入力用)
+    ['', 10, 30, sampleCaseSize, '', ''],           // 基準値なし・ケースサイズあり・上限なし → 消費30×1.2=36→ケース丸め
+    [50, 20, 30, sampleCaseSize, '', ''],           // 基準値50・在庫20・ケースサイズあり → max(0,30)→ケース丸め
+    ['', 0, 8, sampleCaseSize, 1, ''],               // 基準値なし・在庫0・保管上限1ケース → アイスの例(売り切れでも1ケース、上限で頭打ち)
+    ['', 3, 12, '', '', ''],                         // 基準値なし・ケースサイズなし → 消費12×1.2=14.4
+    [20, 5, 12, '', '', ''],                         // 基準値20・在庫5・ケースサイズなし → max(0,15)
+    ['', '', '', '', '', ''],                        // 空欄行(自由入力用)
   ];
   const dataStartRow = headerRow + 1;
   sheet.getRange(dataStartRow, 1, sampleRows.length, headers.length).setValues(sampleRows);
-  sheet.getRange(dataStartRow, 1, sampleRows.length, 6).setBackground('#fff9c4'); // 入力列は黄色背景
+  sheet.getRange(dataStartRow, 1, sampleRows.length, 5).setBackground('#fff9c4'); // 入力列は黄色背景
 
-  // G列(発注数)は数式——_reorderQtyFormulaStr_(_computeReorderQty_のSheets数式版)を使う:
+  // F列(発注数)は数式——_reorderQtyFormulaStr_(_reorderQtyFormulaCore_のセル参照版)を使う:
   //   基準値(A)があればそれを、無ければ消費量(C)×1.2を「目標在庫数」とみなし、max(0,目標-期末在庫(B))
-  //   ケース単価必須(D="はい")かつケースサイズ(E)があれば、結果をEの倍数に丸める(ROUNDは四捨五入=0.5以上切り上げ)
-  //   保管上限(F)があれば、期末在庫+発注数がその上限を超えないようケース数をさらに抑える
+  //   ケースサイズ(D)があれば、結果をDの倍数に丸める(ROUNDは四捨五入=0.5以上切り上げ)
+  //   保管上限(E)があれば、期末在庫+発注数がその上限を超えないようケース数をさらに抑える
   for (let i = 0; i < 20; i++) {
     const row = dataStartRow + i;
-    sheet.getRange(row, 7).setFormula(_reorderQtyFormulaStr_('A', 'B', 'C', 'D', 'E', 'F', row));
+    sheet.getRange(row, 6).setFormula(_reorderQtyFormulaStr_('A', 'B', 'C', 'D', 'E', row));
   }
 
   // 実データ参考セクション(2026-09-05追加)。storeId(カンマ区切りで複数指定可)を渡すと、
@@ -2911,7 +2901,7 @@ function buildReorderTestPlaySheet(storeId) {
   // 店舗ごとに追加する(inventory_log等の本番シートには一切書き込まない、読むだけ)。
   // 列レイアウトは上のサンプル欄と揃えず、商品名・商品コードを先頭に足した独自レイアウトにする
   // (このブロック専用の見出しで説明)。
-  const sampleAreaEnd = dataStartRow + 19; // 上のA〜F数式を敷いた最終行
+  const sampleAreaEnd = dataStartRow + 19; // 上のA〜E数式を敷いた最終行
   let nextRow = sampleAreaEnd + 2; // 1行空けてから次のブロックを始める
   const storeIds = String(storeId || '').split(',').map(s => s.trim()).filter(Boolean);
   if (storeIds.length) {
@@ -2953,7 +2943,7 @@ function buildReorderTestPlaySheet(storeId) {
           product, code,
           reorderTarget !== undefined ? Number(reorderTarget) : '',
           r[invIdx.end_stock], r[invIdx.consumption],
-          info.caseOnly ? 'はい' : 'いいえ', info.casePieces || '', info.stockCapCases || '', ''
+          info.casePieces || '', info.stockCapCases || '', ''
         ]);
       }
 
@@ -2961,7 +2951,7 @@ function buildReorderTestPlaySheet(storeId) {
       sheet.getRange(nextRow, 1).setFontStyle('italic').setFontColor('#666666');
       nextRow += 1;
 
-      const realHeaders = ['商品名', '商品コード', '基準値(空欄=未設定)', '期末在庫', '消費量', 'ケース単価必須', 'ケースサイズ', '保管上限(ケース数)', '発注数(自動計算)'];
+      const realHeaders = ['商品名', '商品コード', '基準値(空欄=未設定)', '期末在庫', '消費量', 'ケースサイズ', '保管上限(ケース数)', '発注数(自動計算)'];
       sheet.getRange(nextRow, 1, 1, realHeaders.length).setValues([realHeaders]);
       sheet.getRange(nextRow, 1, 1, realHeaders.length).setFontWeight('bold').setBackground('#eeeeee');
       const realDataStartRow = nextRow + 1;
@@ -2970,14 +2960,14 @@ function buildReorderTestPlaySheet(storeId) {
         sheet.getRange(realDataStartRow, 1, realRows.length, realHeaders.length).setValues(realRows);
         realRows.forEach((_, i) => {
           const row = realDataStartRow + i;
-          sheet.getRange(row, 9).setFormula(_reorderQtyFormulaStr_('C', 'D', 'E', 'F', 'G', 'H', row));
+          sheet.getRange(row, 8).setFormula(_reorderQtyFormulaStr_('C', 'D', 'E', 'F', 'G', row));
         });
       }
       nextRow = realDataStartRow + realRows.length + 2; // 次店舗ブロックとの間に1行空ける
     });
   }
 
-  sheet.autoResizeColumns(1, 9);
+  sheet.autoResizeColumns(1, 8);
   sheet.setColumnWidth(1, 140);
   SpreadsheetApp.flush();
 
@@ -3057,6 +3047,87 @@ function updateReorderRulesQFormulaNote() {
   ];
   sheet.getRange(headingIdx + 1, 1, newRows.length, 1).setValues(newRows);
   return { ok: true, updated: true };
+}
+
+// 2026-09-07(同日中に再修正)、ケース単価必須・保管上限の2列を廃止しケースサイズを単価の
+// 左隣へ移動したのに伴い、「発注ルール」タブ内の列アルファベット表記(H列・P列・S列等)が
+// 軒並みズレて事実と異なるものになった(updateReorderRulesQFormulaNote_も含め、列文字は
+// この時点まで一度も追従できていなかった)。ユーザーの自由記述を壊さないよう、
+// 「■ 原価率が2種類ある理由」〜「■ 発注メール自動作成」直前までの範囲だけをテキスト一致で
+// 探して丸ごと差し替えるワンショット関数(この範囲は元々コード側が書いた内容のみで、
+// ユーザーの追記はここには無い前提——見つからなければ何もしない)。
+// ?action=fixReorderRulesColumnLetters で実行、一度実行すれば十分。
+function fixReorderRulesColumnLetters() {
+  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const sheet = ss.getSheetByName('発注ルール');
+  if (!sheet) return { error: '発注ルールタブが見つかりません' };
+  const values = sheet.getRange(1, 1, sheet.getLastRow(), 1).getValues();
+  const startIdx = values.findIndex(r => r[0] === '■ 原価率が2種類ある理由');
+  const endIdx = values.findIndex(r => r[0] === '■ 発注メール自動作成(現状は一部のみ)');
+  if (startIdx < 0 || endIdx < 0 || endIdx <= startIdx) {
+    return { ok: true, updated: false, reason: '該当範囲が見つかりません(既に編集済みの可能性)' };
+  }
+  const newBlock = [
+    ['■ 原価率が2種類ある理由'],
+    ['I列「原価率(在庫消費ベース)」: 期首在庫額・期末在庫額(棚卸データ×単価)だけから出す疑似指標。月消費額÷期首在庫額。実売上とは無関係。'],
+    ['T列「原価率(ステラ実売上ベース)」: stera_daily_sales(ステラの実売上、日次自動蓄積)を使った本当の原価率。対象は「販売品類」(水・レディーボーデン等、STERA_SALES_MAPPINGで定義した8グループ)のみで、他の商品は空欄。'],
+    ['S・T(ステラ売上・原価率)は行の商品名とは対応していません。8グループ分の集計を、たまたま同じ行位置に並べているだけの別表です。'],
+    [''],
+    ['■ 基準値(Q列)'],
+    ['「目標在庫数」を商品コードごとに手入力した値。管理者ポータルの「発注基準値設定(月初発注)」画面から設定・変更します。'],
+    ['Q列のセルを棚卸表シート上で直接書き換えても、次に棚卸が提出されたタイミングで元の設定値に上書きされて消えます(Q列は表示専用、実体はapp_settingsのreorder_targets)。'],
+    [''],
+    ['■ 発注数(R列)の計算ルール'],
+    ['1. 目標在庫数を決める: 基準値(Q列)が設定されていればその値。未設定なら 消費量×1.2(安全在庫のバッファ)。'],
+    ['2. 発注数 = max(0, 目標在庫数 − 期末在庫)。在庫が目標を上回っていれば発注数は0。'],
+    ['3. ケースサイズ(D列、単価の左隣)が登録されている商品は、結果をケースサイズの倍数に四捨五入(0.5ケース以上は切り上げ)。「ケース単価必須」という別フラグは2026-09-07に廃止し、ケースサイズの有無だけで判定する方式に統一した。'],
+    ['4. 例外: ケース丸め対象の商品で、丸めた結果が0ケースでも、丸める前の発注数が0より大きく、かつ期末在庫が実際に0(売り切れ)なら、最低1ケースは発注する(売り切れなのに発注数0と表示される事故を防ぐため)。'],
+    ['5. 保管上限(ケース数)が商品マスタに設定されている商品は、期末在庫+発注数がその上限を超えないよう発注数をさらに抑える(冷凍庫スペース対策等)。保管上限は数式内にリテラル値として埋め込まれるため、シート上には列として表示されない。'],
+    ['6. ケースサイズが無い商品は、四捨五入(0.5未満切り捨て・0.5以上切り上げ)で整数にする(2026-09-07確定、例: 渋谷神南の抹茶ラテ)。'],
+    [''],
+    ['■ 注意: Q列(基準値)は数式ではありません(R列(発注数)は数式です)'],
+    ['基準値(Q)は、管理者ポータルで設定したreorder_targetsをそのまま反映した値(数式ではない)。発注数(R)は2026-09-07より実数式(=IFERROR(...))になり、基準値(Q)・期末在庫(K)・消費量(M)・ケースサイズ(D)のいずれかを後から書き換えれば自動的に再計算される。'],
+    [''],
+  ];
+  sheet.deleteRows(startIdx + 1, endIdx - startIdx);
+  sheet.insertRowsBefore(startIdx + 1, newBlock.length);
+  sheet.getRange(startIdx + 1, 1, newBlock.length, 1).setValues(newBlock);
+  sheet.getRange(startIdx + 1, 1, newBlock.length, 1).setWrap(true);
+  [0, 5, 9, 17].forEach(offset => sheet.getRange(startIdx + 1 + offset, 1).setFontWeight('bold'));
+  return { ok: true, updated: true };
+}
+
+// 2026-09-07(同日中に再修正)、STORE_INVENTORY_HEADERS_JAからケース単価必須・保管上限の2列を
+// 廃止し、ケースサイズを単価(price)の左隣(D列)へ移動したのに伴うワンショット移行用
+// (insertReorderCaseColumnsToAllStoreSheetsの逆方向+移動を1回でまとめて行う)。
+// 既存の店舗タブは「ケース単価必須・ケースサイズ・保管上限(ケース数)」の3列を持つ前提
+// (直前のinsertReorderCaseColumnsToAllStoreSheetsで移行済みのはず)——ケースサイズ列の中身だけ
+// 退避してから3列とも削除し、単価の直前に新しい列を1つ挿入して退避した値を書き戻す。
+// 見出しが見つからないタブは「既に移行済み/元々この列が無い」とみなしスキップする。
+function relocateCaseSizeColumnAndDropExtraColumns() {
+  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const storeNames = Object.values(_storeNames_());
+  const results = storeNames.map(name => {
+    const sheet = ss.getSheetByName(name);
+    if (!sheet) return { store: name, migrated: false, reason: 'タブが存在しません' };
+    const lastRow = sheet.getLastRow();
+    const lastCol = sheet.getLastColumn();
+    if (lastCol < 20) return { store: name, migrated: false, reason: `列数が${lastCol}しかありません` };
+    const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
+    const caseOnlyIdx = headers.indexOf('ケース単価必須') + 1;
+    const casePiecesIdx = headers.indexOf('ケースサイズ') + 1;
+    const capIdx = headers.indexOf('保管上限(ケース数)') + 1;
+    const priceIdx = headers.indexOf('単価') + 1;
+    if (!caseOnlyIdx || !casePiecesIdx || !capIdx || !priceIdx) {
+      return { store: name, migrated: false, reason: '想定した見出し(ケース単価必須/ケースサイズ/保管上限/単価)が見つかりません(既に移行済みの可能性)' };
+    }
+    const casePiecesValues = sheet.getRange(1, casePiecesIdx, lastRow, 1).getValues();
+    [caseOnlyIdx, casePiecesIdx, capIdx].sort((a, b) => b - a).forEach(colIdx => sheet.deleteColumn(colIdx));
+    sheet.insertColumnsBefore(priceIdx, 1);
+    sheet.getRange(1, priceIdx, lastRow, 1).setValues(casePiecesValues);
+    return { store: name, migrated: true };
+  });
+  return { ok: true, results };
 }
 
 // アペックス発注書の送付先(2026-08-23、スモールスタートとして渋谷神南のみ対応。
