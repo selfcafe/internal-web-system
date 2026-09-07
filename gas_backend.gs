@@ -2726,11 +2726,17 @@ function buildStoreInventorySheet(storeId, periodLabel) {
         // グループ内の各行のIFERROR(単価×在庫,0)を合算する(空欄行は0扱いで合算から除外)
         openingAmount = '=' + groupRows.map(rn => `IFERROR($${colPrice}${rn}*$${colOpenStock}${rn},0)`).join('+');
         closingAmount = '=' + groupRows.map(rn => `IFERROR($${colPrice}${rn}*$${colEndStock}${rn},0)`).join('+');
+        // 消費額も同じグループ合算方式(単価×消費量、下記の単独行と同じ考え方)
+        consumptionAmount = '=' + groupRows.map(rn => `IFERROR($${colPrice}${rn}*$${colConsumptionQty}${rn},0)`).join('+');
       } else {
         openingAmount = `=IF($${colOpenStock}${rowNum}="","",$${colPrice}${rowNum}*$${colOpenStock}${rowNum})`;
         closingAmount = `=IF($${colEndStock}${rowNum}="","",$${colPrice}${rowNum}*$${colEndStock}${rowNum})`;
+        // 2026-09-07修正: 従来「期首在庫額-期末在庫額」だったが、これだと当月納品分が
+        // 差し引かれず(消費量=期首+当月納品-期末とは不整合)、納品があった商品ほど
+        // 月消費額が実態と大きくズレる(納品が多いと大幅なマイナス値になる)不具合があった
+        // (ユーザー指摘で発覚)。消費量(L列、当月納品を織り込み済み)×単価に統一する。
+        consumptionAmount = `=IF(OR($${colOpenStock}${rowNum}="",$${colEndStock}${rowNum}=""),"",$${colPrice}${rowNum}*$${colConsumptionQty}${rowNum})`;
       }
-      consumptionAmount = `=IF(OR($${colOpening}${rowNum}="",$${colClosing}${rowNum}=""),"",$${colOpening}${rowNum}-$${colClosing}${rowNum})`;
       costRate = `=IF(OR($${colOpening}${rowNum}="",$${colOpening}${rowNum}=0),"",$${colConsumption}${rowNum}/$${colOpening}${rowNum})`;
     }
 
