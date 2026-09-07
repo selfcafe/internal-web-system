@@ -374,6 +374,7 @@ function doGet(e) {
     else if (a === 'processMonthlyReorder')     result = processMonthlyReorder(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'reorderStoreTabs')          result = reorderStoreTabs();
     else if (a === 'removeInventoryLabelColumn') result = removeInventoryLabelColumn();
+    else if (a === 'removeStoreInventoryLowStockColumn') result = removeStoreInventoryLowStockColumn();
     else if (a === 'pruneBlankStoreInventoryRows') result = pruneBlankStoreInventoryRows(e.parameter.storeId);
     else if (a === 'buildSalesCategoryCostRatio') result = buildSalesCategoryCostRatio(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'buildStockCheckMonthly')    result = buildStockCheckMonthly(e.parameter.storeId, e.parameter.periodLabel);
@@ -2099,6 +2100,32 @@ function removeInventoryLabelColumn() {
   return { ok: true, removed: true };
 }
 
+// 2026-09-07、STORE_INVENTORY_HEADERS_JAから在庫僅少列を削除したのに伴うワンショット移行用
+// (removeInventoryLabelColumnと同じパターン)。全店舗タブ(_storeNames_()の全storeName)を
+// 対象に、実在するシートだけP列(16列目)の見出しが実際に「在庫僅少」であることを確認してから
+// deleteColumnする——物理的な列削除なので、それより右側(基準値・発注数・ステラ関連ブロック)の
+// 既存データ・数式参照はSheetsが自動的に1列分ずらして追従する(過去期間分も含め安全)。
+// 見出しが一致しないタブは「既に削除済み/元々この列が無い」とみなしスキップする。
+function removeStoreInventoryLowStockColumn() {
+  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const lowStockColIdx1based = 16; // 在庫僅少は削除前のSTORE_INVENTORY_HEADERS_JAで16番目=P列
+  const storeNames = Object.values(_storeNames_());
+  const results = storeNames.map(name => {
+    const sheet = ss.getSheetByName(name);
+    if (!sheet) return { store: name, removed: false, reason: 'タブが存在しません' };
+    if (sheet.getLastColumn() < lowStockColIdx1based) {
+      return { store: name, removed: false, reason: `列数が${sheet.getLastColumn()}しかありません` };
+    }
+    const headerAtCol16 = String(sheet.getRange(1, lowStockColIdx1based).getValue());
+    if (headerAtCol16 !== '在庫僅少') {
+      return { store: name, removed: false, reason: `P列の見出しが${JSON.stringify(headerAtCol16)}で在庫僅少ではありません(既に削除済みの可能性)` };
+    }
+    sheet.deleteColumn(lowStockColIdx1based);
+    return { store: name, removed: true };
+  });
+  return { ok: true, results };
+}
+
 // INVENTORY_COLSに新規列（anomaly_note、daily_count/matchedなど）を追加した際のワンショット移行用。
 // ensureHeadersは空シートにしか列を作らないため、既存の運用中「棚卸集計」シートには手動で一度叩く必要がある
 // （migrateOrderColumnsと同じパターン。既存データには一切触れない、何度実行しても安全。
@@ -2446,8 +2473,12 @@ function renameProductName(code, newName) {
 // この後ろに続くステラ関連ブロック(STOCK_CHECK_START_COL等)の列位置には影響しない。
 // 2026-08-23、末尾に基準値・発注数の2列を追加(月初発注機能、[[reorder_targets設定]]参照)。
 // 既存ルール通り新規列は必ず末尾に追加する(途中挿入すると過去期間の既存データ行が列ズレする)
-const STORE_INVENTORY_COLS = ['period_label','code','product','price','opening_amount','closing_amount','consumption_amount','cost_rate','open_stock','end_stock','delivery','consumption','disposed_qty','daily_count','count_diff','low_stock','reorder_target','reorder_qty'];
-const STORE_INVENTORY_HEADERS_JA = ['期間','商品コード','商品名','単価','期首在庫額','期末在庫額','月消費額','原価率','期首在庫','期末在庫','当月納品','消費量','処分数量','デイリーカウント','差異(消費量-デイリーカウント)','在庫僅少','基準値','発注数'];
+// 2026-09-07、在庫僅少(low_stock)列を削除(新規店舗に不要とのユーザー判断)。この列は途中の
+// 位置だったため、削除に合わせて全店舗タブの物理列P自体をdeleteColumnで削除し(既存データ・
+// 数式参照はSheetsの列削除機能により自動的に追従)、後続のステラ関連ブロック(STOCK_CHECK_START_COL)
+// も1列分ずらした。詳細はdeleteLowStockColumnFromAllStoreSheets参照。
+const STORE_INVENTORY_COLS = ['period_label','code','product','price','opening_amount','closing_amount','consumption_amount','cost_rate','open_stock','end_stock','delivery','consumption','disposed_qty','daily_count','count_diff','reorder_target','reorder_qty'];
+const STORE_INVENTORY_HEADERS_JA = ['期間','商品コード','商品名','単価','期首在庫額','期末在庫額','月消費額','原価率','期首在庫','期末在庫','当月納品','消費量','処分数量','デイリーカウント','差異(消費量-デイリーカウント)','基準値','発注数'];
 // 列名→列文字(A,B,C...)の変換ヘルパー。STORE_INVENTORY_COLSの並び順を単一の情報源として、
 // 数式内のセル参照(例:$P2)を組み立てる際に使う——列順を変える場合はSTORE_INVENTORY_COLSを直すだけでよい
 function _storeInvColLetter_(name) {
@@ -2677,7 +2708,6 @@ function buildStoreInventorySheet(storeId, periodLabel) {
     const info = meta[product] || {};
     const endStock = r[idx.end_stock];
     const liveDelivery = deliveryTotals[product] || 0;
-    const low = !!(info.caseOnly && info.casePieces && endStock !== '' && endStock !== null && Number(endStock) <= info.casePieces);
     const price = Number(r[idx.price]) || 0;
     const rowNum = startRow + i;
 
@@ -2729,7 +2759,6 @@ function buildStoreInventorySheet(storeId, periodLabel) {
       openingAmount, closingAmount, consumptionAmount, costRate,
       openStock, endStock, liveDelivery, consumptionFormula, r[idx.disposed_qty],
       dailyCount, countDiffFormula,
-      low ? '要確認' : '',
       reorderTarget !== undefined ? Number(reorderTarget) : '', reorderQty
     ];
   });
@@ -3618,7 +3647,8 @@ function checkChecksheetStockMismatch(storeId, product) {
 // 違う点に注意——buildSalesCategoryCostRatioは使い捨てタブ「ステラ注文詳細」(都度まるごとインポート)
 // を読むが、こちらは蓄積型のstera_daily_salesを月間分合計する(①の日次照会と同じ関数を再利用)。
 // ?action=buildStockCheckMonthly&storeId=shibuya&periodLabel=2026-07 で実行。
-const STOCK_CHECK_START_COL = 21; // U列(P〜S列=販売品類原価率ブロックの右に間隔を空ける、別ブロックとして分離)
+// 2026-09-07、在庫僅少列削除に伴い物理列を1列分左へシフトしたため21→20に変更(T列)
+const STOCK_CHECK_START_COL = 20;
 // 先頭に商品グループ名(m.label)の列を追加(2026-09-05)。この一覧はSTERA_SALES_MAPPING単位
 // (販売品類のみ8グループ)の独立した小さな表で、隣接するA〜Q列のメイン商品一覧(全ベンダー・
 // 全商品、行数も並び順も別)とは行番号がたまたま重なっているだけで対応していない
