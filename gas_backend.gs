@@ -2539,6 +2539,44 @@ function _storeInvColLetter_(name) {
   return String.fromCharCode(64 + STORE_INVENTORY_COLS.indexOf(name) + 1);
 }
 
+// 店舗タブの列の背景色分け(2026-09-07追加)。従来は渋谷神南だけユーザーが手作業で途中まで
+// 着色していたが(「色分けは無いようにしたい、渋谷だったら金額は青、棚卸はオレンジ、
+// 消費量と差異は赤。基準値オレンジ、発注数は赤い、ステラ関連は緑」とユーザーが色分けルールを
+// 確定)、コード側で毎回自動的に塗り直すようにし、全店舗タブに一貫して適用されるようにした。
+// 色コードは渋谷神南で既に手作業着色されていた実際のセル背景色をdebugStoreInventoryColColorsで
+// 読み取って踏襲(Google Sheetsの標準パレット「淡色3」系列で統一感を持たせる)。
+// 意味: 青=金額(単価・在庫額・原価率)、オレンジ=手入力される棚卸の実数(在庫数・納品・処分数量・
+// デイリーカウント・基準値)、赤=計算結果(消費量・差異・発注数)、緑=ステラ関連(売上・原価率・
+// 在庫確認状況ブロック、buildSalesCategoryCostRatio/buildStockCheckMonthly側で塗る)。
+const STORE_INV_COLOR_BLUE = '#cfe2f3';   // 金額
+const STORE_INV_COLOR_ORANGE = '#fce5cd'; // 棚卸(手入力の実数)・基準値
+const STORE_INV_COLOR_RED = '#f4cccc';    // 消費量・差異・発注数(計算結果)
+const STORE_INV_COLOR_GREEN = '#d9ead3';  // ステラ関連(buildSalesCategoryCostRatio/buildStockCheckMonthly側で使用)
+const STORE_INV_COL_COLORS = {
+  price: STORE_INV_COLOR_BLUE,
+  opening_amount: STORE_INV_COLOR_BLUE,
+  closing_amount: STORE_INV_COLOR_BLUE,
+  consumption_amount: STORE_INV_COLOR_BLUE,
+  cost_rate: STORE_INV_COLOR_BLUE,
+  open_stock: STORE_INV_COLOR_ORANGE,
+  end_stock: STORE_INV_COLOR_ORANGE,
+  delivery: STORE_INV_COLOR_ORANGE,
+  disposed_qty: STORE_INV_COLOR_ORANGE,
+  daily_count: STORE_INV_COLOR_ORANGE,
+  reorder_target: STORE_INV_COLOR_ORANGE,
+  consumption: STORE_INV_COLOR_RED,
+  count_diff: STORE_INV_COLOR_RED,
+  reorder_qty: STORE_INV_COLOR_RED,
+};
+// STORE_INV_COL_COLORSに定義された列だけをまとめて塗る(period_label/code/product/case_pieces等、
+// 定義されていない列は白のまま=手を加えない)。1回のsetBackgroundsで済むよう全列まとめて計算する。
+function _applyStoreInventoryColColors_(sheet, startRow, numRows) {
+  const bgRow = STORE_INVENTORY_COLS.map(c => STORE_INV_COL_COLORS[c] || '#ffffff');
+  const backgrounds = [];
+  for (let i = 0; i < numRows; i++) backgrounds.push(bgRow);
+  sheet.getRange(startRow, 1, numRows, STORE_INVENTORY_COLS.length).setBackgrounds(backgrounds);
+}
+
 // 店舗単体の棚卸表シート（店舗の表示名タブ、例:「渋谷神南」）を1店舗分だけ生成・更新するワンショット関数。
 // ?action=buildStoreInventorySheet&storeId=shibuya&periodLabel=2026-07 で実行。
 // 全店舗棚卸集計(buildInventoryRollup)と違い、このシートは月をまたいで蓄積していく想定のため、
@@ -2818,6 +2856,10 @@ function buildStoreInventorySheet(storeId, periodLabel) {
   ['opening_amount', 'closing_amount', 'consumption_amount', 'price'].forEach(c => {
     sheet.getRange(startRow, STORE_INVENTORY_COLS.indexOf(c) + 1, outRows.length, 1).setNumberFormat(INVOICE_YEN_FORMAT);
   });
+  // 列の背景色分け(2026-09-07追加、ユーザー確定ルール参照)。この期間ブロック分の行だけ塗る——
+  // 既存の他期間ブロックは配色ルール変更前に書かれた行でも、そのブロックが次回再構築される時に
+  // 揃う(過去ブロックを毎回全部塗り直すコストは避ける)
+  _applyStoreInventoryColColors_(sheet, startRow, outRows.length);
 
   return { ok: true, store: sheetName, period: periodLabel, rows: outRows.length };
 }
@@ -3292,6 +3334,17 @@ function buildSalesCategoryCostRatio(storeId, periodLabel) {
       if (!sheet) throw e;
     }
   }
+  // 安全確認(2026-09-07追加、buildStockCheckMonthlyと同じ理由): この関数は常にシート2行目
+  // 以降(一番上のブロック)に書き込む設計のため、2行目の期間が指定periodLabelと一致しない場合は
+  // 書き込みを中止する。手動実行で「今月分を見たい」つもりで最新のperiodLabelを渡したが、
+  // その店舗タブにまだ該当期間のブロックが無い(棚卸未提出等)場合に、1つ上の別期間のブロックへ
+  // 誤って書き込んでしまう事故があったため(2026-09-07、渋谷神南の9月分実行時に実際に発生・発覚・
+  // 8月分で上書き修正済み)。新規タブでまだ何も無い場合はチェックをスキップする。
+  const topPeriodCell = sheet.getLastRow() >= 2 ? String(sheet.getRange(2, 1).getValue()) : '';
+  if (topPeriodCell && topPeriodCell !== _periodLabelJa_(periodLabel) && topPeriodCell !== String(periodLabel)) {
+    return { ok: true, skipped: 'top_block_period_mismatch', store: storeName, expected: periodLabel, found: topPeriodCell };
+  }
+
   // 列位置は必ずSTORE_INVENTORY_HEADERS_JAの直後(間隔なし、STOCK_CHECK_START_COLとも隣接)に
   // ハードコードせず動的に決める——2026-09-07、この列を固定16(P)にしていた旧実装は、
   // 基準値・発注数列が末尾に追加された後もこの数値が更新されないままだったため、実行すると
@@ -3303,6 +3356,8 @@ function buildSalesCategoryCostRatio(storeId, periodLabel) {
   sheet.getRange(2, startCol, outRows.length, outRows[0].length).setValues(outRows);
   sheet.getRange(2, startCol, outRows.length, 1).setNumberFormat(INVOICE_YEN_FORMAT);
   sheet.getRange(2, startCol + 1, outRows.length, 1).setNumberFormat('0.0%');
+  // ステラ関連ブロックは緑(2026-09-07、ユーザー確定の店舗タブ配色ルール。[[_applyStoreInventoryColColors_]]参照)
+  sheet.getRange(2, startCol, outRows.length, headerRow.length).setBackground(STORE_INV_COLOR_GREEN);
 
   return { ok: true, store: sheetName, period: periodLabel, rows: outRows.length };
 }
@@ -3934,6 +3989,8 @@ function buildStockCheckMonthly(storeId, periodLabel) {
 
   sheet.getRange(1, STOCK_CHECK_START_COL, 1, STOCK_CHECK_HEADERS.length).setValues([STOCK_CHECK_HEADERS]);
   sheet.getRange(2, STOCK_CHECK_START_COL, outRows.length, outRows[0].length).setValues(outRows);
+  // ステラ関連ブロックは緑(2026-09-07、ユーザー確定の店舗タブ配色ルール。[[_applyStoreInventoryColColors_]]参照)
+  sheet.getRange(2, STOCK_CHECK_START_COL, outRows.length, STOCK_CHECK_HEADERS.length).setBackground(STORE_INV_COLOR_GREEN);
 
   return { ok: true, store: storeName, period: periodLabel, rows: outRows.length };
 }
