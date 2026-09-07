@@ -2504,7 +2504,8 @@ function _getReorderTargets_() {
 // どちらの場合もmax(0,目標在庫数-期末在庫)を発注数とする——基準値の有無に関わらず、既にある
 // 在庫は必ず差し引く。ケース単価必須(caseOnly)の商品は、結果をケースサイズ(casePieces)の
 // 倍数に丸める(0.5ケース以上は切り上げ、四捨五入)——実際の発注はケース単位でしかできないため、
-// 端数のままでは発注数として使えない。
+// 端数のままでは発注数として使えない。ケース単価必須でない商品(丸める基準となるケースサイズが
+// 無く四捨五入できない)は、端数を切り捨てる(2026-09-07確定、例: 渋谷神南の抹茶ラテ)。
 // buildStoreInventorySheetとbuildReorderTestPlaySheet(テストプレイ用シート)の両方から呼ぶ
 // 共通ロジック——ロジックの二重管理・食い違いを避けるため必ずここを経由させる。
 function _computeReorderQty_(reorderTarget, endStock, consumption, info) {
@@ -2537,6 +2538,10 @@ function _computeReorderQty_(reorderTarget, endStock, consumption, info) {
       cases = Math.min(cases, maxAdditionalCases);
     }
     reorderQty = cases * info.casePieces;
+  } else if (reorderQty !== '') {
+    // ケース単価必須でない商品(ケース単位に丸める根拠が無い=四捨五入できない)は、
+    // 端数のまま発注数として使えないため切り捨てる(2026-09-07確定、例: 渋谷神南の抹茶ラテ)。
+    reorderQty = Math.floor(reorderQty);
   }
   return reorderQty;
 }
@@ -2555,7 +2560,9 @@ function _reorderQtyFormulaStr_(targetCol, endStockCol, consumptionCol, caseOnly
   const casesAfterZeroFix = `IF(AND(${roundedCases}=0,${base}>0,${e}=0),1,${roundedCases})`;
   const maxAdditionalCases = `MAX(0,FLOOR((${cap}*${k}-${e})/${k}))`;
   const finalCases = `IF(${cap}<>"",MIN(${casesAfterZeroFix},${maxAdditionalCases}),${casesAfterZeroFix})`;
-  return `=IFERROR(IF(AND(${d}="はい",${k}<>"",${base}<>""),${finalCases}*${k},${base}),"")`;
+  // ケース単価必須でない商品(四捨五入できない=ケース単位に丸める根拠が無い)は端数を切り捨てる
+  const flooredBase = `IF(${base}<>"",FLOOR(${base}),"")`;
+  return `=IFERROR(IF(AND(${d}="はい",${k}<>"",${base}<>""),${finalCases}*${k},${flooredBase}),"")`;
 }
 
 function buildStoreInventorySheet(storeId, periodLabel) {
