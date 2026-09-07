@@ -375,7 +375,9 @@ function doGet(e) {
     else if (a === 'reorderStoreTabs')          result = reorderStoreTabs();
     else if (a === 'removeInventoryLabelColumn') result = removeInventoryLabelColumn();
     else if (a === 'removeStoreInventoryLowStockColumn') result = removeStoreInventoryLowStockColumn();
+    else if (a === 'insertReorderCaseColumnsToAllStoreSheets') result = insertReorderCaseColumnsToAllStoreSheets();
     else if (a === 'ensureReorderRulesSheet') result = ensureReorderRulesSheet_();
+    else if (a === 'updateReorderRulesQFormulaNote') result = updateReorderRulesQFormulaNote();
     else if (a === 'pruneBlankStoreInventoryRows') result = pruneBlankStoreInventoryRows(e.parameter.storeId);
     else if (a === 'buildSalesCategoryCostRatio') result = buildSalesCategoryCostRatio(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'buildStockCheckMonthly')    result = buildStockCheckMonthly(e.parameter.storeId, e.parameter.periodLabel);
@@ -2127,6 +2129,35 @@ function removeStoreInventoryLowStockColumn() {
   return { ok: true, results };
 }
 
+// 2026-09-07、STORE_INVENTORY_HEADERS_JAの末尾にケース単価必須・ケースサイズ・保管上限の3列を
+// 追加(Q列発注数の数式化)したのに伴うワンショット移行用(removeStoreInventoryLowStockColumnと
+// 逆方向の同じパターン)。既存の店舗タブは元々17列(A〜Q)だったため、その直後(旧R列=18列目、
+// ステラ売上ブロックの開始位置)に空列を3つinsertColumnsBeforeで挿入し、既存のステラ売上/原価率
+// (S・T列だったブロック)・在庫確認状況ブロック(手入力の確認状況メモ含む)を右へ3列分ずらして
+// 保持したまま、新しい列位置(buildSalesCategoryCostRatioのstartCol=STORE_INVENTORY_HEADERS_JA.length+1、
+// STOCK_CHECK_START_COL共に動的計算で自動的に新位置=21列目U列以降を指すようになる)に揃える。
+// 挿入前に旧R列(18列目)の見出しが実際に「ステラ売上」であることを確認してから実行し、既に
+// 移行済み/想定外のタブはスキップする。
+function insertReorderCaseColumnsToAllStoreSheets() {
+  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const oldSalesStartCol1based = 18; // 旧STORE_INVENTORY_HEADERS_JA(17列)の直後=R列
+  const storeNames = Object.values(_storeNames_());
+  const results = storeNames.map(name => {
+    const sheet = ss.getSheetByName(name);
+    if (!sheet) return { store: name, inserted: false, reason: 'タブが存在しません' };
+    if (sheet.getLastColumn() < oldSalesStartCol1based) {
+      return { store: name, inserted: false, reason: `列数が${sheet.getLastColumn()}しかありません` };
+    }
+    const headerAtOldR = String(sheet.getRange(1, oldSalesStartCol1based).getValue());
+    if (headerAtOldR !== 'ステラ売上') {
+      return { store: name, inserted: false, reason: `R列の見出しが${JSON.stringify(headerAtOldR)}でステラ売上ではありません(既に移行済みの可能性)` };
+    }
+    sheet.insertColumnsBefore(oldSalesStartCol1based, 3);
+    return { store: name, inserted: true };
+  });
+  return { ok: true, results };
+}
+
 // INVENTORY_COLSに新規列（anomaly_note、daily_count/matchedなど）を追加した際のワンショット移行用。
 // ensureHeadersは空シートにしか列を作らないため、既存の運用中「棚卸集計」シートには手動で一度叩く必要がある
 // （migrateOrderColumnsと同じパターン。既存データには一切触れない、何度実行しても安全。
@@ -2478,8 +2509,16 @@ function renameProductName(code, newName) {
 // 位置だったため、削除に合わせて全店舗タブの物理列P自体をdeleteColumnで削除し(既存データ・
 // 数式参照はSheetsの列削除機能により自動的に追従)、後続のステラ関連ブロック(STOCK_CHECK_START_COL)
 // も1列分ずらした。詳細はdeleteLowStockColumnFromAllStoreSheets参照。
-const STORE_INVENTORY_COLS = ['period_label','code','product','price','opening_amount','closing_amount','consumption_amount','cost_rate','open_stock','end_stock','delivery','consumption','disposed_qty','daily_count','count_diff','reorder_target','reorder_qty'];
-const STORE_INVENTORY_HEADERS_JA = ['期間','商品コード','商品名','単価','期首在庫額','期末在庫額','月消費額','原価率(在庫消費ベース)','期首在庫','期末在庫','当月納品','消費量','処分数量','デイリーカウント','差異(消費量-デイリーカウント)','基準値(目標在庫数)','発注数'];
+// 2026-09-07、末尾にケース単価必須・ケースサイズ・保管上限(ケース数)の3列を追加。これまで
+// 発注数(reorder_qty)列は_computeReorderQty_のJS計算結果を書き込むだけのプレーンな値
+// (棚卸提出時点のスナップショット)で、納品数等を後から補正しても自動追従しなかった
+// (ユーザー指摘: 「Q列に関数(数式)が入っていない...この問題どう解決しますか？関数で表示させてほしい」)。
+// 商品マスタのケース単価情報(caseOnly/casePieces/stockCapCases)がこのシート上に列として
+// 存在しなかったため数式化できていなかった——その情報をこの3列として実際に列出しすることで、
+// Q列を_reorderQtyFormulaStr_(buildReorderTestPlaySheetで既に使っている数式版)による
+// 実数式に変えられるようにした。既存ルール通り新規列は必ず末尾に追加する。
+const STORE_INVENTORY_COLS = ['period_label','code','product','price','opening_amount','closing_amount','consumption_amount','cost_rate','open_stock','end_stock','delivery','consumption','disposed_qty','daily_count','count_diff','reorder_target','reorder_qty','case_only','case_pieces','stock_cap_cases'];
+const STORE_INVENTORY_HEADERS_JA = ['期間','商品コード','商品名','単価','期首在庫額','期末在庫額','月消費額','原価率(在庫消費ベース)','期首在庫','期末在庫','当月納品','消費量','処分数量','デイリーカウント','差異(消費量-デイリーカウント)','基準値(目標在庫数)','発注数','ケース単価必須','ケースサイズ','保管上限(ケース数)'];
 // 列名→列文字(A,B,C...)の変換ヘルパー。STORE_INVENTORY_COLSの並び順を単一の情報源として、
 // 数式内のセル参照(例:$P2)を組み立てる際に使う——列順を変える場合はSTORE_INVENTORY_COLSを直すだけでよい
 function _storeInvColLetter_(name) {
@@ -2696,6 +2735,12 @@ function buildStoreInventorySheet(storeId, periodLabel) {
   const colDelivery = _storeInvColLetter_('delivery');
   const colConsumptionQty = _storeInvColLetter_('consumption');
   const colDailyCount = _storeInvColLetter_('daily_count');
+  // 発注数(Q列)を実数式にするための参照列(2026-09-07追加)。基準値・期末在庫・消費量は
+  // 既存列を、ケース単価情報はこの後追加する3列(ケース単価必須/ケースサイズ/保管上限)を参照する
+  const colReorderTarget = _storeInvColLetter_('reorder_target');
+  const colCaseOnly = _storeInvColLetter_('case_only');
+  const colCaseSize = _storeInvColLetter_('case_pieces');
+  const colCapCases = _storeInvColLetter_('stock_cap_cases');
 
   // ステラ対象外(自主管理)のフレーバー違い商品は、フレーバー単体だと動きが小さく原価率が
   // ブレやすいため、SELF_MANAGED_COST_GROUPSで定義したグループ単位の合算値を使う
@@ -2751,14 +2796,13 @@ function buildStoreInventorySheet(storeId, periodLabel) {
     // 「消費量とデイリーカウントが一致しない」という参考表示(mismatch)の数式版
     const countDiffFormula = `=IF(OR($${colConsumptionQty}${rowNum}="",$${colDailyCount}${rowNum}=""),"",$${colConsumptionQty}${rowNum}-$${colDailyCount}${rowNum})`;
 
-    // reorder_qty計算用に、シートに書く数式とは別にJS側でも同じ式(期首在庫+当月納品-期末在庫)を
-    // 評価しておく(_computeReorderQty_は数式文字列ではなく数値を必要とするため)。inventory_log側の
-    // 保存済みconsumption列は今後この用途では参照しない(納品補正後に追従しない不整合の原因だった)。
-    const derivedConsumption = (openStock !== '' && openStock !== null && endStock !== '' && endStock !== null)
-      ? Number(openStock) + Number(liveDelivery) - Number(endStock) : '';
-
     const reorderTarget = reorderTargets[String(r[idx.code])];
-    const reorderQty = _computeReorderQty_(reorderTarget, endStock, derivedConsumption, info);
+    // 発注数(Q列)は_reorderQtyFormulaStr_(_computeReorderQty_のSheets数式版、buildReorderTestPlaySheetで
+    // 既に使用実績あり)による実数式にする(2026-09-07、ユーザー指摘: 「Q列に関数(数式)が入っていない...
+    // 関数で表示させてほしい」)。基準値(P列)・期末在庫(J列)・消費量(L列、既に数式化済み)と、
+    // この後ろに書き込むケース単価情報の3列(R〜T列)を参照するため、これらが全て同じ行に揃っている
+    // 必要がある——この関数はrowNumがoutRows内の並び順で確定済みのため問題ない。
+    const reorderQtyFormula = _reorderQtyFormulaStr_(colReorderTarget, colEndStock, colConsumptionQty, colCaseOnly, colCaseSize, colCapCases, rowNum);
 
     return [
       _periodLabelJa_(periodLabel), r[idx.code], product,
@@ -2766,7 +2810,8 @@ function buildStoreInventorySheet(storeId, periodLabel) {
       openingAmount, closingAmount, consumptionAmount, costRate,
       openStock, endStock, liveDelivery, consumptionFormula, r[idx.disposed_qty],
       dailyCount, countDiffFormula,
-      reorderTarget !== undefined ? Number(reorderTarget) : '', reorderQty
+      reorderTarget !== undefined ? Number(reorderTarget) : '', reorderQtyFormula,
+      info.caseOnly ? 'はい' : 'いいえ', info.casePieces || '', info.stockCapCases || ''
     ];
   });
 
@@ -2990,6 +3035,28 @@ function ensureReorderRulesSheet_() {
   sheet.getRange(1, 1, rows.length, 1).setWrap(true);
 
   return { ok: true, created: true, url: ss.getUrl() };
+}
+
+// 「発注ルール」タブは一度作ったらコードから絶対に上書きしないルール(ensureReorderRulesSheet_
+// 参照)だが、Q列を数式化した(2026-09-07、_reorderQtyFormulaStr_をbuildStoreInventorySheetにも
+// 適用)ことで、作成当初に書いた「P列・Q列は数式ではありません」という説明が事実と異なって
+// しまった(Qは数式化済み、Pは引き続きプレーンな値のまま)。ユーザーの自由記述を壊さないよう
+// 該当2行(旧見出し・旧説明文)だけをテキスト一致で探して差し替えるワンショット関数——見つからなければ
+// (既に手動編集済み等)何もしない。?action=updateReorderRulesQFormulaNote で実行、一度実行すれば十分。
+function updateReorderRulesQFormulaNote() {
+  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const sheet = ss.getSheetByName('発注ルール');
+  if (!sheet) return { error: '発注ルールタブが見つかりません' };
+  const values = sheet.getRange(1, 1, sheet.getLastRow(), 1).getValues();
+  const oldHeading = '■ 注意: P列・Q列は数式ではありません';
+  const headingIdx = values.findIndex(r => r[0] === oldHeading);
+  if (headingIdx < 0) return { ok: true, updated: false, reason: '該当箇所が見つかりません(既に編集済みの可能性)' };
+  const newRows = [
+    ['■ 注意: P列は数式ではありません(Q列は2026-09-07より数式化済み)'],
+    ['基準値(P)は、管理者ポータルで設定したreorder_targetsをそのまま反映した値(数式ではない)。発注数(Q)は2026-09-07より実数式(=IFERROR(...))になり、基準値(P)・期末在庫(J)・消費量(L)・ケース単価情報(R〜T)のいずれかを後から書き換えれば自動的に再計算される。'],
+  ];
+  sheet.getRange(headingIdx + 1, 1, newRows.length, 1).setValues(newRows);
+  return { ok: true, updated: true };
 }
 
 // アペックス発注書の送付先(2026-08-23、スモールスタートとして渋谷神南のみ対応。
