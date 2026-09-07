@@ -3040,43 +3040,27 @@ function importSteraOrdersCsv(csvText) {
   return { ok: true, rows: rows.length - 1 };
 }
 
-// storeId+periodLabelについて、ステラ「ステラ注文詳細」タブの実売上とinventory_logの消費額(原価)を
-// 商品ID単位(グループはourProducts合算)で突き合わせ、販売品類の原価率を計算してstoreシートに書き込む。
-// ?action=buildSalesCategoryCostRatio&storeId=shibuya&periodLabel=2026-07 で実行。
+// storeId+periodLabelについて、stera_daily_sales(日次自動蓄積、amount列)の実売上とinventory_logの
+// 消費額(原価)を商品ID単位(グループはourProducts合算)で突き合わせ、販売品類の原価率を計算して
+// storeシートに書き込む。?action=buildSalesCategoryCostRatio&storeId=shibuya&periodLabel=2026-07 で実行。
+// 2026-09-07、データ元を「ステラ注文詳細」(手動CSVインポートが必要な使い捨てタブ)から
+// stera_daily_sales(日次自動インポート、amount列)へ切り替えた——手動インポート運用が
+// 現実的に続かず原価率が2026年7月分で止まっていた問題への対応。これによりrunMonthlyStockCheckBackstop
+// (buildStockCheckMonthlyと同じ月次自動トリガー)から呼べるようになり、完全自動化した。
 function buildSalesCategoryCostRatio(storeId, periodLabel) {
   if (!storeId) return { error: 'storeIdは必須です' };
   if (!periodLabel) return { error: 'periodLabelは必須です（例: 2026-07）' };
 
   const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
-  const ordersSheet = ss.getSheetByName(SHEET_STERA_ORDERS);
-  if (!ordersSheet) return { error: `「${SHEET_STERA_ORDERS}」タブが見つかりません。ステラの注文詳細CSVを手動インポートしてください` };
-  const ordersData = ordersSheet.getDataRange().getValues();
-  const ordersHdrs = ordersData[0].map(String);
-  const oIdx = {};
-  STERA_ORDER_HEADERS.forEach(h => { oIdx[h] = ordersHdrs.indexOf(h); });
-  if (Object.values(oIdx).some(i => i < 0)) {
-    return { error: `「${SHEET_STERA_ORDERS}」タブの列見出しが想定と異なります(注文詳細CSVそのままの見出しでインポートしてください)` };
-  }
-
   const storeName = _storeNames_()[storeId] || storeId;
-  // ステラの店舗名は「セルフカフェ」接頭辞・「店」接尾辞の付き方が店舗によって不統一
-  // (例: 当方「渋谷神南」⇔ステラ「渋谷神南店」、当方「ナディアパーク栄」⇔ステラ「ナディアパーク栄店」)。
-  // 厳密な店舗名マッピング表はまだ無いため、両接頭辞・接尾辞を剥がした正規化文字列で比較する
-  const normalizeStoreLabel = s => String(s).replace(/^セルフカフェ/, '').replace(/店$/, '');
-  const storeNameNorm = normalizeStoreLabel(storeName);
+  // "YYYY-MM-00"/"YYYY-MM-32"は実在しない日付だが、文字列比較上は必ずその月の1日より前/末日より後に
+  // なるため、月初・月末を求めるための日付計算をせずに範囲指定できる(buildStockCheckMonthlyと同じ手法)
+  const fromDateExclusive = periodLabel + '-00';
+  const toDateInclusive = periodLabel + '-32';
   const revenueByPrdId = {}; // prd_id -> 商品合計金額の合計(この店舗・この期間)
-  for (let i = 1; i < ordersData.length; i++) {
-    const r = ordersData[i];
-    if (normalizeStoreLabel(r[oIdx['店舗名']]) !== storeNameNorm) continue;
-    const occurredAtRaw = r[oIdx['発生日時']];
-    // CSVインポート時にSheetsが「発生日時」列を日付型セルへ自動変換することがある
-    // (setValuesで書き込んだ直後は文字列でも、日付らしい文字列は自動的に日付型になる。
-    // inventory_log等で繰り返し起きてきたのと同じ問題)。Date型ならyyyy-MM文字列に戻して比較する
-    const occurredAt = occurredAtRaw instanceof Date ? Utilities.formatDate(occurredAtRaw, _invSheetTz(), 'yyyy-MM') : String(occurredAtRaw);
-    if (!occurredAt.startsWith(periodLabel)) continue;
-    const prdId = r[oIdx['商品ID']];
-    revenueByPrdId[prdId] = (revenueByPrdId[prdId] || 0) + Number(r[oIdx['商品合計金額']] || 0);
-  }
+  STERA_SALES_MAPPING.forEach(m => {
+    revenueByPrdId[m.prdId] = getSteraDailyAmountTotal_(storeId, m.prdId, fromDateExclusive, toDateInclusive);
+  });
 
   const invData = _inventoryLogRowsCached_();
   const idx = {};
@@ -3095,7 +3079,7 @@ function buildSalesCategoryCostRatio(storeId, periodLabel) {
     const cost = m.ourProducts.reduce((sum, name) => sum + (costByProduct[name] || 0), 0);
     const hasCost = m.ourProducts.some(name => costByProduct[name] !== undefined);
     const rate = (revenue && hasCost) ? cost / revenue : '';
-    return [m.label, hasCost ? cost : '', revenue === undefined ? '' : revenue, rate];
+    return [revenue, rate];
   });
 
   const sheetName = storeName;
@@ -3110,12 +3094,17 @@ function buildSalesCategoryCostRatio(storeId, periodLabel) {
       if (!sheet) throw e;
     }
   }
-  const startCol = 16; // P列(既存のO列=在庫僅少より右に間隔を空ける。vendor:'other'の在庫消費率とは別集計)
-  const headerRow = [`販売品類原価率(ステラ実売上ベース・${periodLabel})`, '消費額(原価)', 'ステラ売上', '原価率'];
+  // 列位置は必ずSTORE_INVENTORY_HEADERS_JAの直後(間隔なし、STOCK_CHECK_START_COLとも隣接)に
+  // ハードコードせず動的に決める——2026-09-07、この列を固定16(P)にしていた旧実装は、
+  // 基準値・発注数列が末尾に追加された後もこの数値が更新されないままだったため、実行すると
+  // それらの列(P・Q)のヘッダー・データ行を上書きして壊す不具合があった(この関数は手動実行が
+  // 稀だったため実害が表面化していなかった)。今回月次自動トリガーに乗せるにあたり修正した。
+  const startCol = STORE_INVENTORY_HEADERS_JA.length + 1; // 例: 基準値・発注数で17列ならR列から
+  const headerRow = ['ステラ売上', '原価率'];
   sheet.getRange(1, startCol, 1, headerRow.length).setValues([headerRow]);
   sheet.getRange(2, startCol, outRows.length, outRows[0].length).setValues(outRows);
-  sheet.getRange(2, startCol + 1, outRows.length, 2).setNumberFormat(INVOICE_YEN_FORMAT);
-  sheet.getRange(2, startCol + 3, outRows.length, 1).setNumberFormat('0.0%');
+  sheet.getRange(2, startCol, outRows.length, 1).setNumberFormat(INVOICE_YEN_FORMAT);
+  sheet.getRange(2, startCol + 1, outRows.length, 1).setNumberFormat('0.0%');
 
   return { ok: true, store: sheetName, period: periodLabel, rows: outRows.length };
 }
@@ -3124,12 +3113,18 @@ function buildSalesCategoryCostRatio(storeId, periodLabel) {
 // ステラ日次売上の蓄積(盗難検知機能の基盤) 2026-07-31
 // ----------------------------------------------------------------
 // 「ステラ注文詳細」タブ(SHEET_STERA_ORDERS)は原価率計算のため毎回まるごと上書きする使い捨て設計
-// (importSteraOrdersCsv参照、ユーザー確認済み「見たい期間をカバーするCSVを都度まるごとインポート」)。
-// 盗難検知機能ではチェックシートへの入力タイミングごとに「前回入力からの累積売上」を求める必要があり、
-// そのためには日々の売上数量を上書きせずに蓄積し続けるシートが別途必要。混同を避けるため
-// 明確に別タブ・別関数として持つ(ステラ注文詳細とは一切連動しない)。
+// (importSteraOrdersCsv参照)だったが、手動インポートを都度行う運用が現実的に続かない
+// (2026-09-07、ユーザー指摘)ため、原価率計算もamount列を追加したこちらへ移行した
+// (buildSalesCategoryCostRatio参照)。盗難検知機能ではチェックシートへの入力タイミングごとに
+// 「前回入力からの累積売上」を求める必要があり、そのためには日々の売上数量を上書きせずに
+// 蓄積し続けるシートが別途必要——このシートはその蓄積用。
+// 2026-09-07、amount(商品合計金額)列を追加。日次自動インポート(import_stera_daily_sales.py)は
+// 元々「注文詳細CSV」(商品合計金額を含む)を毎日取得済みだったが、GAS側(importSteraDailySales)が
+// 数量(qty)しか集計せず金額を読み捨てていたため、原価率計算だけ手動インポートに頼る状態になっていた。
+// 新規列は必ず末尾に追加する既存ルールに従う(既存行はamount列が空欄のまま、getSteraDailyAmountTotal_は
+// 0として扱う——過去分の原価率は出せないが、蓄積が進むにつれ順次カバーされる)。
 const SHEET_STERA_DAILY = 'stera_daily_sales';
-const STERA_DAILY_COLS = ['date', 'store_id', 'prd_id', 'qty'];
+const STERA_DAILY_COLS = ['date', 'store_id', 'prd_id', 'qty', 'amount'];
 
 function getSteraDailySheet_() {
   const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
@@ -3177,6 +3172,7 @@ function importSteraDailySales(dateStr, csvText) {
   const normalize = s => String(s).replace(/^セルフカフェ/, '').replace(/店$/, '');
 
   const totals = {}; // `${storeId}|${prdId}` -> qty合計
+  const amountTotals = {}; // `${storeId}|${prdId}` -> 商品合計金額の合計(2026-09-07追加、原価率計算用)
   const unmatchedStores = {};
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i];
@@ -3186,8 +3182,10 @@ function importSteraDailySales(dateStr, csvText) {
     if (!storeId) { unmatchedStores[storeNameRaw] = true; continue; }
     const prdId = r[idx['商品ID']];
     const qty = Number(r[idx['商品数量']] || 0);
+    const amount = Number(r[idx['商品合計金額']] || 0);
     const key = storeId + '|' + prdId;
     totals[key] = (totals[key] || 0) + qty;
+    amountTotals[key] = (amountTotals[key] || 0) + amount;
   }
 
   const sheet = getSteraDailySheet_();
@@ -3205,7 +3203,7 @@ function importSteraDailySales(dateStr, csvText) {
 
   const newRows = Object.keys(totals).map(key => {
     const parts = key.split('|');
-    return [dateStr, parts[0], parts[1], totals[key]];
+    return [dateStr, parts[0], parts[1], totals[key], amountTotals[key] || 0];
   });
 
   if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, STERA_DAILY_COLS.length).clearContent();
@@ -3229,6 +3227,21 @@ function getSteraDailyTotal_(storeId, prdId, fromDateExclusive, toDateInclusive)
     if (fromDateExclusive && String(r.date) <= fromDateExclusive) return;
     if (toDateInclusive && String(r.date) > toDateInclusive) return;
     total += Number(r.qty) || 0;
+  });
+  return total;
+}
+
+// getSteraDailyTotal_のamount(商品合計金額)版(2026-09-07追加、buildSalesCategoryCostRatioの
+// 原価率計算専用)。ロジックはqty版と完全に対称——2つに分けているのは呼び出し側(在庫差異検知は
+// 数量、原価率は金額)の意図を型で分かりやすくするため。
+function getSteraDailyAmountTotal_(storeId, prdId, fromDateExclusive, toDateInclusive) {
+  const rows = sheetRows(getSteraDailySheet_(), STERA_DAILY_COLS);
+  let total = 0;
+  rows.forEach(r => {
+    if (String(r.store_id) !== String(storeId) || String(r.prd_id) !== String(prdId)) return;
+    if (fromDateExclusive && String(r.date) <= fromDateExclusive) return;
+    if (toDateInclusive && String(r.date) > toDateInclusive) return;
+    total += Number(r.amount) || 0;
   });
   return total;
 }
@@ -3647,8 +3660,10 @@ function checkChecksheetStockMismatch(storeId, product) {
 // 違う点に注意——buildSalesCategoryCostRatioは使い捨てタブ「ステラ注文詳細」(都度まるごとインポート)
 // を読むが、こちらは蓄積型のstera_daily_salesを月間分合計する(①の日次照会と同じ関数を再利用)。
 // ?action=buildStockCheckMonthly&storeId=shibuya&periodLabel=2026-07 で実行。
-// 2026-09-07、在庫僅少列削除に伴い物理列を1列分左へシフトしたため21→20に変更(T列)
-const STOCK_CHECK_START_COL = 20;
+// 2026-09-07、固定値(21)をやめ動的計算にした——buildSalesCategoryCostRatioのstartColと同じ
+// 理由(基準値・発注数列の追加時にこの数値が更新されずズレて他列を壊す不具合があった)。
+// 販売品類原価率ブロック(2列: ステラ売上・原価率)の直後(間隔なし)に配置する。
+const STOCK_CHECK_START_COL = STORE_INVENTORY_HEADERS_JA.length + 1 + 2;
 // 先頭に商品グループ名(m.label)の列を追加(2026-09-05)。この一覧はSTERA_SALES_MAPPING単位
 // (販売品類のみ8グループ)の独立した小さな表で、隣接するA〜Q列のメイン商品一覧(全ベンダー・
 // 全商品、行数も並び順も別)とは行番号がたまたま重なっているだけで対応していない
@@ -3731,6 +3746,9 @@ function buildStockCheckMonthly(storeId, periodLabel) {
 // 日次インポート(毎朝6:03、前日=前月末日分までを確定取込み)が前月分を確実に取り込み終えた後の
 // 翌月1日朝(8:00、余裕を見て6:03より後)に、前月分を対象へ棚卸提出済みの全店舗をまとめて
 // 再計算することで、完全なステラ月間売上数量に基づく最終的な差異を月初に確定させる。
+// 2026-09-07、原価率(buildSalesCategoryCostRatio)もこの月次トリガーに相乗りさせた——
+// 手動CSVインポート運用が現実的に続かないとのユーザー指摘を受け、データ元をstera_daily_sales
+// (自動蓄積)に切り替えたことで同じ仕組みに乗せられるようになったため。
 function runMonthlyStockCheckBackstop() {
   const now = new Date();
   const prevMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
@@ -3751,6 +3769,14 @@ function runMonthlyStockCheckBackstop() {
       results.push(Object.assign({ storeId }, buildStockCheckMonthly(storeId, periodLabel)));
     } catch (e) {
       results.push({ storeId, ok: false, error: e.message });
+    }
+    // 2026-09-07追加: 原価率(buildSalesCategoryCostRatio)も同じ月次自動トリガーに乗せる
+    // (手動CSVインポート依存をやめてstera_daily_salesベースに切り替えたことで自動実行が可能になった)。
+    // 失敗しても在庫差異チェック側の結果には影響させたくないため別途catchする。
+    try {
+      results.push(Object.assign({ storeId, block: 'costRatio' }, buildSalesCategoryCostRatio(storeId, periodLabel)));
+    } catch (e) {
+      results.push({ storeId, block: 'costRatio', ok: false, error: e.message });
     }
   });
   return { ok: true, period: periodLabel, stores: results.length, results };
