@@ -3189,10 +3189,14 @@ async function loadChecksheetDataFromDb(storeId) {
 // 盗難検知①(表示専用)：「前回入力からの実売上」。チェックシートタブを開くたびに1回だけ取得する
 // (表示内容は前回チェックポイント基準で今回の入力値には依存しないため、タップごとの再取得は不要)。
 // キーは商品名(prod:接頭辞なし)、値は{label, sinceDate, qty}またはnull(まだ前回入力が無い商品)
-let _checksheetStockChecks = {};
-async function loadChecksheetStockChecks(storeId) {
-  try { _checksheetStockChecks = await gasGet('getChecksheetStockChecks', { storeId }) || {}; }
-  catch (e) { console.error('getChecksheetStockChecks error:', e); _checksheetStockChecks = {}; }
+// ステラ取り扱い商品の残り在庫(2026-09-08〜、パートナー入力に一切依存しない自動計算値。
+// 旧仕組み(デイリーカウント入力からの逆算・入力時の気づき通知)は廃止した——
+// theft-detection-notes.mdの🔄再設計メモ参照。このオブジェクトのキー一覧が
+// そのまま「ステラ扱い商品名」の一覧としても使われる(_checksheetProductColumns参照)。
+let _steraStockEstimate = {};
+async function loadSteraStockEstimate(storeId) {
+  try { _steraStockEstimate = await gasGet('getSteraStockEstimate', { storeId }) || {}; }
+  catch (e) { console.error('getSteraStockEstimate error:', e); _steraStockEstimate = {}; }
 }
 
 // 「残り在庫」表示用：直近確定済み棚卸の期末在庫(=今期の期首在庫)だけを取得する。
@@ -3223,24 +3227,10 @@ function checksheetRemainingStock(productName) {
   const used = getInventoryDailyCount(storeTab, period.label, productName);
   return openStock - (used === '' ? 0 : Number(used));
 }
-// 盗難検知①(通知)：saveChecksheetDataの保存フロー(_checksheetSyncChain)とは完全に独立した
-// 別のデバウンス用タイマーマップ。既存の保存の直列化には一切触らない——連続タップのたびに
-// 通知が連投されるのを防ぐためだけの目的で、データの保存タイミング・信頼性には影響を与えない
-const _stockMismatchDebounceTimers = {};
-const STOCK_MISMATCH_DEBOUNCE_MS = 3000;
-function _scheduleStockMismatchCheck(storeId, itemKey) {
-  if (!itemKey.startsWith('prod:')) return; // 商品(数量)以外(清掃・点検項目等)は対象外
-  const product = itemKey.slice(5);
-  const key = storeId + '|' + product;
-  clearTimeout(_stockMismatchDebounceTimers[key]);
-  // 対象商品かどうか(STERA_SALES_MAPPINGに載っているか)はGAS側で判定する(クライアントには
-  // マッピング表を持たせない方針)。対象外ならGAS側が{skipped:'not_tracked'}を返すだけで無害
-  _stockMismatchDebounceTimers[key] = setTimeout(() => {
-    delete _stockMismatchDebounceTimers[key];
-    gasPost('checkChecksheetStockMismatch', { storeId, product })
-      .catch(e => console.error('checkChecksheetStockMismatch error:', e));
-  }, STOCK_MISMATCH_DEBOUNCE_MS);
-}
+// 2026-09-08、盗難検知①(入力時の自動突き合わせ通知、旧_scheduleStockMismatchCheck)は廃止した。
+// ステラ取り扱い商品はデイリーカウント入力自体を廃止したため(_checksheetProductColumns参照)、
+// この通知のトリガーだった「補充数量の入力」自体が発生しなくなったことに整合させた
+// (theft-detection-notes.mdの🔄再設計メモ参照)。
 function updateChecksheetField(dayKey, itemKey, rawValue, type) {
   // dayKeyの属する暦月を使う（当月1〜5日に前月分の履歴を編集するケースがあるため、常に「今日」の期間とは限らない）
   const [y, m, d] = dayKey.split('-').map(Number);
@@ -3249,10 +3239,7 @@ function updateChecksheetField(dayKey, itemKey, rawValue, type) {
   setChecksheetField(storeTab, period.label, dayKey, itemKey, value);
   _syncChecksheetToDb(storeTab, period.label);
   updateChecksheetTotals();
-  if (type === 'qty') {
-    _scheduleStockMismatchCheck(storeTab, itemKey);
-    if (itemKey.startsWith('prod:')) _updateChecksheetRemainingNote(itemKey);
-  }
+  if (type === 'qty' && itemKey.startsWith('prod:')) _updateChecksheetRemainingNote(itemKey);
 }
 // 残り在庫の表示を、行全体を再描画せずその場で更新する(qtyボタン連打でも軽く保つため)
 function _updateChecksheetRemainingNote(itemKey) {
@@ -3272,21 +3259,37 @@ function stepChecksheetQty(dayKey, itemId, delta) {
 }
 
 // デイリーカウント（補充数量）列：棚卸表と同じ商品リストのうち、アペックス100RS／トーヨーベンディング／55D CS3の全商品と、
-// その他のペーパータオル・ストロー、販売品の水のみを対象にする（店舗別取扱商品設定に連動）
+// その他のペーパータオル・ストロー・トイレットペーパーを対象にする（店舗別取扱商品設定に連動）。
+// 2026-09-08、ステラ取り扱い商品(水など、_steraStockEstimateのキー一覧＝STERA_SALES_MAPPING対象)は
+// ここから除外し、末尾に読み取り専用の別枠を追加する形に変更した——デイリーカウント入力自体を
+// 廃止し、残り在庫はステラ実売上ベースの自動計算(getSteraStockEstimate)に一本化したため
+// (theft-detection-notes.mdの🔄再設計メモ参照)。
 const CHECKSHEET_QTY_VENDOR_ALL = ['apex', 'toyo', 'cs3'];
 function _checksheetProductColumns() {
   const VENDOR_LABELS = Object.fromEntries(VENDOR_CONFIG.map(v => [v.key, v.label]));
+  const steraNames = Object.keys(_steraStockEstimate || {});
   const products = _inventoryProductList().filter(p => {
+    if (steraNames.includes(p.name)) return false;
     if (CHECKSHEET_QTY_VENDOR_ALL.includes(p.vendor)) return true;
     if (p.vendor === 'other') return p.name === 'ペーパータオル' || p.name === 'ストロー' || p.name === 'トイレットペーパー';
-    if (p.vendor === 'sales') return p.name === '水';
     return false;
   });
-  return VENDOR_CONFIG.map(v => ({
+  const groups = VENDOR_CONFIG.map(v => ({
     key: 'vendor:' + v.key,
     label: VENDOR_LABELS[v.key] || v.key,
     cols: products.filter(p => p.vendor === v.key).map(p => ({ id:'prod:' + p.name, type:'qty', name:p.label || p.name })),
   })).filter(g => g.cols.length);
+
+  // ステラ取り扱い商品は入力不要・読み取り専用の残り在庫表示のみ(type:'readonly')
+  if (steraNames.length) {
+    const allProducts = _inventoryProductList();
+    const steraCols = steraNames
+      .map(name => allProducts.find(p => p.name === name))
+      .filter(Boolean)
+      .map(p => ({ id: 'prod:' + p.name, type: 'readonly', name: p.label || p.name }));
+    if (steraCols.length) groups.push({ key: 'vendor:stera', label: 'ステラ商品(参考在庫・入力不要)', cols: steraCols });
+  }
+  return groups;
 }
 // 表を「デイリーカウント」「清掃・点検」の2大分類＋その下のベンダー/カテゴリ別サブグループで構成する
 function _checksheetColumnGroups(storeId) {
@@ -3367,6 +3370,13 @@ function renderChecksheetTodayForm(wrap, subgroups) {
     <div class="checksheet-today-list">
       ${sg.cols.map(col => {
         const v = dayData[col.id];
+        // ステラ取り扱い商品(読み取り専用、2026-09-08〜)は入力不要——残り在庫の数字をそのまま表示する
+        // だけで、デイリーカウント入力欄・過去の「前回入力からの実売上」表示は無い(廃止済み)
+        if (col.type === 'readonly') {
+          const estimate = _steraStockEstimate[col.id.slice(5)];
+          const display = (estimate === null || estimate === undefined) ? '―' : esc(estimate);
+          return `<div class="checksheet-today-row"><span>${esc(col.name)}</span><span style="color:#22703d;font-weight:600;flex-shrink:0;white-space:nowrap">残り在庫：${display}個</span></div>`;
+        }
         const input = col.type === 'check'
           ? `<input type="checkbox" ${v ? 'checked' : ''} onchange="updateChecksheetField('${dKey}','${col.id}',this.checked,'check')">`
           : `<div class="qty-wrap">
@@ -3375,19 +3385,13 @@ function renderChecksheetTodayForm(wrap, subgroups) {
                 onchange="updateChecksheetField('${dKey}','${col.id}',this.value,'qty')">
               <button class="qty-btn" onclick="stepChecksheetQty('${dKey}','${col.id}',1)">＋</button>
             </div>`;
-        // 盗難検知①(表示専用、通知は行わない): STERA_SALES_MAPPING対象商品のみ「前回入力からの実売上」を
-        // 商品名の下にサブテキストとして添える。既存のflexレイアウト(span+input の2要素)を保つため、
-        // 新しい要素を追加せずspan内に<br>で収める(他の行のレイアウトに一切影響を与えないための工夫)
-        const check = _checksheetStockChecks[col.id.replace(/^prod:/, '')];
-        const checkNote = check
-          ? `<br><small style="color:#888;font-weight:400">前回入力(${esc(check.sinceDate.slice(5))})以降の実売上:${esc(check.qty)}個</small>`
-          : '';
-        // 残り在庫（棚卸未着手の店舗/商品はnullのまま非表示＝現状の表示を維持）
+        // 残り在庫（棚卸未着手の店舗/商品はnullのまま非表示＝現状の表示を維持。ステラ対象外の
+        // 通常商品向け、上のreadonly分岐とは別物——checksheetRemainingStockの旧来ロジック）
         const remain = col.id.startsWith('prod:') ? checksheetRemainingStock(col.id.slice(5)) : null;
         const remainNote = remain !== null
           ? `<br><small id="cs-remain-${col.id}" style="color:#22703d;font-weight:600">残り在庫：${esc(remain)}個</small>`
           : '';
-        return `<div class="checksheet-today-row"><span>${esc(col.name)}${checkNote}${remainNote}</span>${input}</div>`;
+        return `<div class="checksheet-today-row"><span>${esc(col.name)}${remainNote}</span>${input}</div>`;
       }).join('')}
     </div>`).join('');
 
@@ -3513,7 +3517,7 @@ async function switchPartnerTab(tab) {
   }
   if (tab === 'checklist') {
     renderChecksheet();
-    await Promise.all([loadChecksheetDataFromDb(storeTab), loadChecksheetStockChecks(storeTab), loadChecksheetOpeningStock(storeTab)]);
+    await Promise.all([loadChecksheetDataFromDb(storeTab), loadSteraStockEstimate(storeTab), loadChecksheetOpeningStock(storeTab)]);
     renderChecksheet();
   }
   if (tab === 'attendance') {

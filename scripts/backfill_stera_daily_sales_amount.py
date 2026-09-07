@@ -24,7 +24,6 @@ import sys
 import time
 from datetime import date
 
-import requests
 from playwright.sync_api import sync_playwright
 
 from import_stera_daily_sales import (
@@ -32,7 +31,7 @@ from import_stera_daily_sales import (
     kill_cdp_chrome,
     launch_cdp_chrome,
     login_if_needed,
-    notify_failure,
+    post_bulk_to_gas,
     request_order_detail_csv,
     resolve_orders_url,
     run_with_retry,
@@ -47,16 +46,6 @@ def parse_args():
     p.add_argument("--end", required=True, help="対象期間の終了日(YYYY-MM-DD、開始日と同じ月内)")
     p.add_argument("--keep-open", action="store_true", help="終了後もブラウザを閉じない(デバッグ用)")
     return p.parse_args()
-
-
-def post_bulk_to_gas(gas_url, csv_path):
-    csv_text = csv_path.read_text(encoding="utf-8-sig")  # ステラCSVはUTF-8 with BOM
-    resp = requests.post(gas_url, json={
-        "action": "importSteraDailySalesBulk",
-        "csvText": csv_text,
-    }, timeout=180)
-    resp.raise_for_status()
-    return resp.json()
 
 
 def main():

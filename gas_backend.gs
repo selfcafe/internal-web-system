@@ -356,7 +356,7 @@ function doGet(e) {
     else if (a === 'getSettings')       result = getSettings();
     else if (a === 'getLostItems')      result = getLostItems(e.parameter.month, e.parameter.storeId);
     else if (a === 'getChecksheetData') result = getChecksheetData(e.parameter.storeId);
-    else if (a === 'getChecksheetStockChecks') result = getChecksheetStockChecks(e.parameter.storeId);
+    else if (a === 'getSteraStockEstimate') result = getSteraStockEstimate(e.parameter.storeId);
     else if (a === 'getInventoryHistory') result = getInventoryHistory(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'getLatestConsumptionByCode') result = getLatestConsumptionByCode(e.parameter.storeId);
     else if (a === 'getInventoryDeliveryAuto') result = getInventoryDeliveryAuto(e.parameter.storeId, e.parameter.periodLabel);
@@ -468,7 +468,6 @@ function doPost(e) {
     else if (b.action === 'updateSteraRealtimeToday') result = updateSteraRealtimeToday(b.dateStr, b.rows);
     else if (b.action === 'checkSteraRefunds') result = checkSteraRefunds(b.dateStr, b.refunds);
     else if (b.action === 'reportScriptFailure') result = reportScriptFailure(b.message, b.key);
-    else if (b.action === 'checkChecksheetStockMismatch') result = checkChecksheetStockMismatch(b.storeId, b.product);
     else if (b.action === 'submitInvoice')       result = submitInvoice(b.payload);
     else if (b.action === 'saveInvoiceReceiptImage') result = saveInvoiceReceiptImage(b.imageBase64, b.imageMime, b.filename);
     else if (b.action === 'saveAttendance')      result = saveAttendance(b.storeId, b.name, b.lat, b.lng);
@@ -3427,6 +3426,27 @@ function getSteraDailySheet_() {
   return sheet;
 }
 
+// 「営業日」の境界(2026-09-08追加)。stera_daily_salesの`date`列は暦日ではなく、この時刻を
+// 境界にした「営業日」(例: AM4:30が境界なら、当日0:00〜4:29の売上は前日の営業日扱い)。
+// 全店舗で「早くて5時開店・遅くて4時閉店」という営業実態から、どの店舗でも人が少ない
+// 早朝の時間帯としてAM4:30に確定(ユーザー確認済み、店舗ごとの個別設定はしない)。
+// この定数を変える場合、stera_daily_sales内の既存データの`date`列の意味も変わってしまう
+// (過去分は旧境界で振り分け済みのまま)ため、変更時は既存データの再集計が必要になる点に注意。
+const STERA_BUSINESS_DAY_CUTOVER_HOUR = 4.5; // AM4:30
+// "YYYY-MM-DD HH:MM:SS"形式の日時文字列から、上記の境界を適用した営業日("YYYY-MM-DD")を返す。
+// 例: カットオフ4.5時(AM4:30)の場合、"2026-08-15 02:00:00"は前営業日"2026-08-14"、
+// "2026-08-15 04:30:00"は当日"2026-08-15"の扱いになる。
+function _steraBusinessDateFromDateTime_(dateTimeStr) {
+  const m = String(dateTimeStr).match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})/);
+  if (!m) return null;
+  // タイムゾーン変換を避けるため、年月日時分秒の数値だけでUTC基準のDateを作り、
+  // カットオフ時間ぶんだけミリ秒を引いてから年月日部分だけ取り出す(暦・タイムゾーンの
+  // 換算はDateオブジェクトに任せ、文字列操作では計算しない)
+  const dt = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]));
+  dt.setUTCMilliseconds(dt.getUTCMilliseconds() - STERA_BUSINESS_DAY_CUTOVER_HOUR * 3600 * 1000);
+  return Utilities.formatDate(dt, 'UTC', 'yyyy-MM-dd');
+}
+
 // ステラCSVの「店舗名」(セルフカフェ接頭辞・店接尾辞の表記ゆれあり)→store_idの逆引き表。
 // buildSalesCategoryCostRatioのnormalizeStoreLabelと同じ正規化ロジック(表記ゆれの対処自体は
 // 1関数に共通化していないが、正規化のルール文字列は完全に同じものを複製している——どちらか
@@ -3530,12 +3550,13 @@ function importSteraDailySalesBulk(csvText) {
   for (let i = 1; i < rows.length; i++) {
     const r = rows[i];
     if (!r[idx['商品ID']]) continue; // 商品コード/商品IDどちらも空の行(明細以外の空行等)は無視
-    // 「作成日時」は"2026-08-15 12:34:56"のような形式(先頭10文字がYYYY-MM-DD)。
-    // 日次取込み(importSteraDailySales)は日付を引数で外側から与える設計のため、この行単位の
-    // 日付抽出はバックフィル専用。想定外の形式の行はスキップしてカウントする(致命扱いにしない)。
+    // 「作成日時」は"2026-08-15 12:34:56"のような形式。暦日ではなく「営業日」(AM4:30締め、
+    // _steraBusinessDateFromDateTime_参照)に振り分ける(2026-09-08、深夜の売上を前日の
+    // 営業日扱いにすることで、営業実態に合った日次集計にする)。想定外の形式の行はスキップして
+    // カウントする(致命扱いにしない)。
     const createdAt = String(r[idx['作成日時']] || '');
-    const dateStr = createdAt.slice(0, 10);
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) { unparsedDateRows++; continue; }
+    const dateStr = _steraBusinessDateFromDateTime_(createdAt);
+    if (!dateStr) { unparsedDateRows++; continue; }
     const storeNameRaw = r[idx['店舗名']];
     const storeId = nameToId[normalize(storeNameRaw)];
     if (!storeId) { unmatchedStores[storeNameRaw] = true; continue; }
@@ -3681,7 +3702,7 @@ function _seedSteraDailyFromRealtimeRollover_(dateStr, existingRealtimeRows) {
   sheet.getRange(startRow, 1, newRows.length, STERA_DAILY_COLS.length).setValues(newRows);
 }
 
-// getChecksheetStockChecks専用: 当該storeIdの{prd_id: qty}をまとめて返す。dateStrが今日と
+// getSteraStockEstimate等で使う: 当該storeIdの{prd_id: qty}をまとめて返す。dateStrが今日と
 // 一致しない行(ポーリングが日付跨ぎ後まだ走っていない間の残骸)は無視して古い数字を出し続けない
 // ようにする。STERA_SALES_MAPPINGの商品数分(8件)呼ばれてもシートは1回しか開かない設計にする
 // こと(N+1回避、theft-detection-notes.mdの既存方針と同じ——呼び出し側で1回だけ呼ぶこと)
@@ -3764,106 +3785,93 @@ function checkSteraRefunds(dateStr, refunds) {
   return { ok: true, notified: notifiedCount };
 }
 
-// ----------------------------------------------------------------
-// 盗難検知①: チェックシート入力欄の「前回入力からの実売上」表示 2026-07-31
-// ----------------------------------------------------------------
-// STERA_SALES_MAPPINGに載っている商品(販売品類の一部)について、グループ(ourProducts)内のどれかの
-// 商品に最後に入力があった日を基準に、その翌日から今日までの実売上数量を返す。通知(LINE WORKS)は
-// 一切行わない(通知はcheckChecksheetStockMismatch側で別途行う)。チェックシートタブを開くたびに
-// 1回まとめて呼ぶ想定(タップごとに毎回呼ばない)。?action=getChecksheetStockChecks&storeId=... で実行。
-// 戻り値は{商品名: {label, sinceDate, qty} または null(まだ前回入力が無い商品)}
-// 2026-08-26: 「前回入力"時刻"〜次回入力"時刻"の実売上を過不足なく見せてほしい」という要望を受け、
-// checkChecksheetStockMismatch側と同じチェックポイント方式(_stockMismatchCarryOverFromRows_)で
-// sinceDateの日の取りこぼしを解消。通知は送らないが、チェックポイントシートへの書き込みは行う
-// (チェックシート保存フロー自体には一切触れないので、上記の「通知は一切行わない」という既存方針とは
-// 矛盾しない)。stera_daily_salesは蓄積型で行数が増え続けるため、8商品分をループする前に1回だけ
-// 全件読み込んでメモリ上で使い回す(N+1回避。商品ごとに読み直すと、タブを開くたびのロードが
-// データが増えるほど遅くなってしまうため——2026-08-26、パフォーマンス改善)。
-function getChecksheetStockChecks(storeId) {
+// "YYYY-MM"の最終日を"YYYY-MM-DD"で返す(例: "2026-08" → "2026-08-31")
+function _lastDayOfPeriod_(periodLabel) {
+  const parts = String(periodLabel).split('-').map(Number);
+  const lastDay = new Date(Date.UTC(parts[0], parts[1], 0)); // 翌月の0日目=当月末日
+  return Utilities.formatDate(lastDay, 'UTC', 'yyyy-MM-dd');
+}
+
+// 2026-09-08追加。ステラ取り扱い商品の「残り在庫」をチェックシート向けに自動計算する
+// (パートナー入力に一切依存しない設計。theft-detection-notes.mdの🔄再設計メモ参照)。
+// 直近確定棚卸の期末在庫を起点に、その後の当月納品(inventory_delivery_auto、recorded_at基準)を足し、
+// その後のステラ実売上(stera_daily_sales、営業日=AM4:30締めベース。当日分はstera_realtime_todayで補う)を
+// 引く。STERA_SALES_MAPPINGのグループ単位(ourProductsが複数ある場合は合算)で1つの残り在庫を返す。
+// ?action=getSteraStockEstimate&storeId=... で実行。戻り値は{商品名: 残り在庫数 または null}
+// (nullは対象商品の確定棚卸データがまだ無い店舗)。デイリーカウント(手入力)は一切参照しない。
+function getSteraStockEstimate(storeId) {
   if (!storeId) return { error: 'storeIdは必須です' };
-  const periods = getChecksheetData(storeId);
-  // 全期間の{dayKey:{itemKey:value}}を1つにまとめる(月をまたいだ「前回入力日」検索に対応するため。
-  // 通常は同じdayKeyが複数期間に重複することは無いが、念のためObject.assignで安全側に扱う)
-  const allDays = {};
-  periods.forEach(p => Object.keys(p.data || {}).forEach(dayKey => {
-    allDays[dayKey] = Object.assign(allDays[dayKey] || {}, p.data[dayKey]);
-  }));
-  const today = Utilities.formatDate(new Date(), _invSheetTz(), 'yyyy-MM-dd');
-  const yesterday = Utilities.formatDate(new Date(Date.now() - 86400000), _invSheetTz(), 'yyyy-MM-dd');
-  const priorDays = Object.keys(allDays).filter(d => d < today).sort().reverse();
-  // 以下3つは全商品分のループに入る前に1回だけ読み込む(N+1回避)
-  const realtimeToday = _getSteraRealtimeTodayMap_(storeId);
-  const checkpointRows = sheetRows(_getStockMismatchCheckpointSheet_(), STOCK_MISMATCH_CHECKPOINT_COLS);
+  const invData = _inventoryLogRowsCached_();
+  const idx = {};
+  INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
+
+  // 商品名ごとに、直近(最新period_label)の確定棚卸行(期末在庫)を探す
+  const latestByProduct = {}; // product -> {periodLabel, endStock}
+  for (let i = 1; i < invData.length; i++) {
+    const r = invData[i];
+    if (String(r[idx.store_id]) !== String(storeId)) continue;
+    const product = r[idx.product];
+    const periodLabel = _invMonthLabelStr(r[idx.period_label]);
+    const endStock = r[idx.end_stock];
+    if (endStock === '' || endStock === null || endStock === undefined) continue;
+    const existing = latestByProduct[product];
+    if (!existing || periodLabel > existing.periodLabel) {
+      latestByProduct[product] = { periodLabel, endStock: Number(endStock) };
+    }
+  }
+
+  // 納品(inventory_delivery_auto)はrecorded_at(実タイムスタンプ)基準で「起点日より後」を
+  // 拾う必要があるため、期間集計用のキャッシュ(_deliveryAutoRowsCached_、recorded_atを持たない)
+  // ではなく生シートを直接読む
+  const deliverySheet = getDeliveryAutoSheet();
+  const dLastRow = deliverySheet.getLastRow();
+  const deliveryRows = dLastRow > 1
+    ? deliverySheet.getRange(2, 1, dLastRow - 1, DELIVERY_AUTO_COLS.length).getValues()
+    : [];
+  const dsIdx = DELIVERY_AUTO_COLS.indexOf('store_id'), dpIdx = DELIVERY_AUTO_COLS.indexOf('product'),
+        dqIdx = DELIVERY_AUTO_COLS.indexOf('qty'), drIdx = DELIVERY_AUTO_COLS.indexOf('recorded_at');
+
   const dailyRows = sheetRows(getSteraDailySheet_(), STERA_DAILY_COLS);
+  const realtimeToday = _getSteraRealtimeTodayMap_(storeId);
+  const todayBusinessDate = _steraBusinessDateFromDateTime_(
+    Utilities.formatDate(new Date(), _invSheetTz(), 'yyyy-MM-dd HH:mm:ss')
+  );
 
   const result = {};
-  const checkpointUpdates = [];
   STERA_SALES_MAPPING.forEach(m => {
-    const itemKeys = m.ourProducts.map(name => 'prod:' + name);
-    let sinceDate = null;
-    for (let i = 0; i < priorDays.length; i++) {
-      const dayData = allDays[priorDays[i]];
-      if (itemKeys.some(k => dayData[k] !== undefined && dayData[k] !== '' && dayData[k] !== null)) {
-        sinceDate = priorDays[i];
-        break;
-      }
-    }
-    // qtyは「sinceDate(除く)〜前日(含む)」の確定分(stera_daily_sales)に、carryOver(sinceDateの日の
-    // 打ち切られた残り)と当日分の速報値(stera_realtime_today)を加算する(2026-08-15、パートナーが
-    // 「当日の実売上が常に0と表示され混乱する」との指摘を受けて当日分を追加。2026-08-26、carryOverを
-    // 追加してsinceDateの日の取りこぼしも解消)。
-    let entry = null;
-    if (sinceDate) {
-      const carryOver = _stockMismatchCarryOverFromRows_(dailyRows, checkpointRows, storeId, m.prdId, sinceDate);
-      const rangeQty = dailyRows
-        .filter(r => String(r.store_id) === String(storeId) && String(r.prd_id) === String(m.prdId) &&
-          String(r.date) > sinceDate && String(r.date) <= yesterday)
-        .reduce((sum, r) => sum + (Number(r.qty) || 0), 0);
-      const todayQty = realtimeToday[m.prdId] || 0;
-      entry = { label: m.label, sinceDate, qty: carryOver + rangeQty + todayQty };
-      checkpointUpdates.push({ storeId, prdId: m.prdId, dateStr: today, qty: todayQty });
-    }
-    m.ourProducts.forEach(name => { result[name] = entry; });
+    // グループ内の各商品名について、直近の確定棚卸情報を集める(1つも無ければ対象外=null)
+    const memberInfos = m.ourProducts.map(name => latestByProduct[name]).filter(Boolean);
+    if (!memberInfos.length) { m.ourProducts.forEach(name => { result[name] = null; }); return; }
+    const endStockTotal = memberInfos.reduce((sum, info) => sum + info.endStock, 0);
+    // グループ内で複数の確定期間が混在する場合は、最も新しい期間を起点にする(古い期間を
+    // 起点にすると、既に新しい期間の期末在庫に反映済みの納品/売上を二重に差し引く/加算する
+    // ことになるため。多少の誤差はあり得るが「目安の残り在庫」として許容する)
+    const latestPeriod = memberInfos.reduce((max, info) => info.periodLabel > max ? info.periodLabel : max, memberInfos[0].periodLabel);
+    const sinceDate = _lastDayOfPeriod_(latestPeriod); // "YYYY-MM-DD"、この日の営業日終了時点が起点
+
+    let deliverySince = 0;
+    deliveryRows.forEach(row => {
+      if (String(row[dsIdx]) !== String(storeId)) return;
+      if (m.ourProducts.indexOf(String(row[dpIdx])) < 0) return;
+      const recordedAt = row[drIdx];
+      const recordedDateStr = recordedAt instanceof Date
+        ? Utilities.formatDate(recordedAt, _invSheetTz(), 'yyyy-MM-dd')
+        : String(recordedAt).slice(0, 10);
+      if (recordedDateStr > sinceDate) deliverySince += Number(row[dqIdx]) || 0;
+    });
+
+    const salesSince = dailyRows
+      .filter(r => String(r.store_id) === String(storeId) && String(r.prd_id) === String(m.prdId) &&
+        String(r.date) > sinceDate && String(r.date) <= todayBusinessDate)
+      .reduce((sum, r) => sum + (Number(r.qty) || 0), 0);
+    // 当日分の速報(stera_realtime_today)は暦日ベースなので、営業日境界(AM4:30)をまたぐ
+    // 0:00〜4:29の間だけ二重集計/未集計の誤差が生じ得るが、参考表示のため許容する
+    const todaySales = (todayBusinessDate > sinceDate) ? (realtimeToday[m.prdId] || 0) : 0;
+
+    const estimate = endStockTotal + deliverySince - salesSince - todaySales;
+    m.ourProducts.forEach(name => { result[name] = estimate; });
   });
-  if (checkpointUpdates.length) _batchUpsertStockMismatchCheckpoints_(checkpointRows, checkpointUpdates);
   return result;
-}
-
-// ----------------------------------------------------------------
-// 盗難検知①-補助: 日またぎ取りこぼし対策のチェックポイント 2026-08-25
-// ----------------------------------------------------------------
-// 従来はsinceDate(前回入力日)を比較期間から除外していたため、「前回入力した"時刻"〜その日の24時」の
-// 実売上がどのチェックにも一度も含まれない空白になっていた(前回入力時のチェックはその時点までの
-// 実売上しか見えず、翌日以降のチェックはsinceDateの日をまるごと比較範囲外にしてしまうため)。
-// 対策: チェックのたびに「その日の実売上をどこまで数えたか(=stera_realtime_todayの累計値)」を
-// チェックポイントとして記録しておく。翌日以降のチェックで、前回のsinceDateが確定値
-// (stera_daily_sales、CSV取込み後)になっていたら、その日の確定合計からチェックポイントを
-// 差し引いた「取りこぼし分」をcarryOverとして繰り越して回収する。
-// 確定値がまだ来ていない(CSV未取込み、深夜〜早朝の稀なケース)場合は今回はcarryOver=0のまま
-// チェックポイントを進める(その回だけ取りこぼしを許容する——毎日必ず取りこぼす従来の状態からの
-// 大幅な改善であり、これ以上の完全解決は複雑さに見合わないと判断)。
-const SHEET_STOCK_MISMATCH_CHECKPOINT = 'stock_mismatch_checkpoint';
-const STOCK_MISMATCH_CHECKPOINT_COLS = ['store_id', 'prd_id', 'checkpoint_date', 'checkpoint_qty'];
-
-function _getStockMismatchCheckpointSheet_() {
-  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
-  const sheet = ss.getSheetByName(SHEET_STOCK_MISMATCH_CHECKPOINT) || ss.insertSheet(SHEET_STOCK_MISMATCH_CHECKPOINT);
-  ensureHeaders(sheet, STOCK_MISMATCH_CHECKPOINT_COLS);
-  return sheet;
-}
-
-// sinceDateの「打ち切られた残り」を確定値から回収するcarryOverを計算する。dailyRows/checkpointRowsは
-// 呼び出し側で事前に全件取得済みの配列を渡すこと(N+1回避。stera_daily_salesは蓄積型で行数が
-// 増え続けるため、商品ごとに読み直すとタブを開くたびのロードがデータが増えるほど遅くなってしまう)。
-function _stockMismatchCarryOverFromRows_(dailyRows, checkpointRows, storeId, prdId, sinceDate) {
-  const checkpoint = checkpointRows.find(r => String(r.store_id) === String(storeId) && String(r.prd_id) === String(prdId));
-  if (!checkpoint || String(checkpoint.checkpoint_date) !== sinceDate) return 0;
-  const sinceDateRows = dailyRows.filter(r => String(r.date) === sinceDate);
-  if (!sinceDateRows.length) return 0; // まだCSV未取込み(確定していない)。次回以降に回収する
-  const fullQty = sinceDateRows
-    .filter(r => String(r.store_id) === String(storeId) && String(r.prd_id) === String(prdId))
-    .reduce((sum, r) => sum + (Number(r.qty) || 0), 0);
-  return Math.max(0, fullQty - Number(checkpoint.checkpoint_qty || 0));
 }
 
 // stera_daily_salesにdateStr当日の行が1件でもあれば、その日はCSV取込み済み(確定)とみなす
@@ -3873,148 +3881,13 @@ function _hasSteraDailyDataForDate_(dateStr) {
   return sheetRows(getSteraDailySheet_(), STERA_DAILY_COLS).some(r => String(r.date) === dateStr);
 }
 
-// 複数商品分のチェックポイント更新をまとめて1回のシート書き込みで反映する(N+1回避)。
-// existingRowsは呼び出し側で事前に取得済みのチェックポイント全行(getChecksheetStockChecks等参照)。
-function _batchUpsertStockMismatchCheckpoints_(existingRows, updates) {
-  const map = {};
-  existingRows.forEach(r => { map[r.store_id + '|' + r.prd_id] = [r.store_id, r.prd_id, r.checkpoint_date, r.checkpoint_qty]; });
-  updates.forEach(u => { map[u.storeId + '|' + u.prdId] = [u.storeId, u.prdId, u.dateStr, u.qty]; });
-  const rows = Object.keys(map).map(k => map[k]);
-  const sheet = _getStockMismatchCheckpointSheet_();
-  if (sheet.getLastRow() > 1) sheet.deleteRows(2, sheet.getLastRow() - 1);
-  if (rows.length) sheet.getRange(2, 1, rows.length, STOCK_MISMATCH_CHECKPOINT_COLS.length).setValues(rows);
-}
-
-// 盗難検知①の「1回だけの差異では通知しない」ための状態保持(2026-09-06追加)。稼働の少ない
-// 店舗(例: 新瑞橋)では、補充した分がまだステラで売れていないだけの正常な状態でも閾値を
-// 超えてしまい誤検知が頻発していた。店舗×商品ごとに「前回も閾値超えだったか」を1行だけ
-// 保持し、2回連続で閾値を超えた時だけ通知する(1回目は記録するだけで通知しない)。
-// 解消された(閾値を下回った)ら行を削除し、次に閾値を超えてもまた1回目からやり直しになる。
-const SHEET_STOCK_MISMATCH_PENDING = 'stock_mismatch_pending';
-const STOCK_MISMATCH_PENDING_COLS = ['store_id', 'product', 'first_flagged_at'];
-
-function _getStockMismatchPendingSheet_() {
-  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
-  const sheet = ss.getSheetByName(SHEET_STOCK_MISMATCH_PENDING) || ss.insertSheet(SHEET_STOCK_MISMATCH_PENDING);
-  ensureHeaders(sheet, STOCK_MISMATCH_PENDING_COLS);
-  return sheet;
-}
-
-// 保留行があれば削除し(true=削除した=直前まで保留中だった)、無ければ何もしない(false)。
-function _clearStockMismatchPending_(storeId, product) {
-  const sheet = _getStockMismatchPendingSheet_();
-  const values = sheet.getDataRange().getValues();
-  for (let i = 1; i < values.length; i++) {
-    if (String(values[i][0]) === String(storeId) && String(values[i][1]) === String(product)) {
-      sheet.deleteRow(i + 1);
-      return true;
-    }
-  }
-  return false;
-}
-
-function _markStockMismatchPending_(storeId, product) {
-  const sheet = _getStockMismatchPendingSheet_();
-  sheet.appendRow([storeId, product, new Date().toISOString()]);
-}
-
-// ----------------------------------------------------------------
-// 盗難検知①: 補充数量入力時の自動突き合わせ通知 2026-07-31
-// ----------------------------------------------------------------
-// saveChecksheetDataとは完全に独立した読み取り専用アクション(書き込みロックを取らないため、既存の
-// チェックシート保存フロー・データには一切触れない・影響しない)。クライアント側はデバウンス(既定3秒)
-// してから呼ぶことで、連続タップのたびに通知が連投されることを防ぐ(index.html側で対応)。
-// ?action=checkChecksheetStockMismatch(POST、{storeId, product})で実行。
-// 差異(グループ合算の補充量-ステラ売上数量)が閾値以上ならLINE WORKSへ通知する(既存Bot
-// 「社内ポータル通知」の既定チャンネル、2026-07-31時点でテスト運用としてこの形。
-// channelIdOverride省略で既定チャンネルへ送る)。通知文言は断定しない中立表現にする
-// (パートナーの数え間違い・処分・店舗間移動等でも同じ差異が出るため、盗難と決めつけない)
-// 2026-08-16: 比較期間を「sinceDate(除く)〜前日(含む)」から「sinceDate(除く)〜当日(含む、
-// stera_realtime_today経由)」に拡張。従来は毎日連続入力(=通常運用)だと比較期間が空になり
-// 差異が常に0対0で通知が事実上機能しない問題があったため。
-// 2026-08-25: sinceDateの日が「前回入力した時刻〜24時」で打ち切られ実売上が取りこぼされる問題を
-// チェックポイント(上記_stockMismatchCarryOverFromRows_)で解消。
-const CHECKSHEET_STOCK_MISMATCH_THRESHOLD = 2;
-// 2026-09-06追加: 絶対数の閾値だけだと、稼働の少ない店舗(補充数量そのものが小さい)ほど
-// 「まだ売れていないだけ」でも簡単に閾値を超えてしまい誤検知が多発していた(ユーザー指摘)。
-// 補充数量に対する割合も同時に満たした場合のみ「閾値超え」とみなす(絶対2個 かつ 割合30%以上)。
-const CHECKSHEET_STOCK_MISMATCH_PCT_THRESHOLD = 0.3;
-function checkChecksheetStockMismatch(storeId, product) {
-  if (!storeId || !product) return { error: 'storeId/productは必須です' };
-  const group = STERA_SALES_MAPPING.find(m => m.ourProducts.indexOf(product) >= 0);
-  if (!group) return { ok: true, skipped: 'not_tracked' }; // 盗難検知の対象商品ではない
-
-  const periods = getChecksheetData(storeId);
-  const allDays = {};
-  periods.forEach(p => Object.keys(p.data || {}).forEach(dayKey => {
-    allDays[dayKey] = Object.assign(allDays[dayKey] || {}, p.data[dayKey]);
-  }));
-  const today = Utilities.formatDate(new Date(), _invSheetTz(), 'yyyy-MM-dd');
-  const yesterday = Utilities.formatDate(new Date(Date.now() - 86400000), _invSheetTz(), 'yyyy-MM-dd');
-  const itemKeys = group.ourProducts.map(name => 'prod:' + name);
-
-  const priorDays = Object.keys(allDays).filter(d => d < today).sort().reverse();
-  let sinceDate = null;
-  for (let i = 0; i < priorDays.length; i++) {
-    const dayData = allDays[priorDays[i]];
-    if (itemKeys.some(k => dayData[k] !== undefined && dayData[k] !== '' && dayData[k] !== null)) {
-      sinceDate = priorDays[i];
-      break;
-    }
-  }
-  if (!sinceDate) return { ok: true, skipped: 'no_prior_entry' }; // 今回が初回入力、比較対象が無い
-
-  // 補充量(inputQty)とステラ実売上(steraQty)を同じ「sinceDate(除く)〜当日(含む)」の期間で揃える。
-  // 2026-08-04時点ではstera_daily_salesが前日分までしか無かったため当日分を除外していたが
-  // (当日分の補充だけ一方的に加算されラグ由来の見せかけの差異が出る問題があった)、
-  // 2026-08-16にstera_realtime_today(当日分のリアルタイム売上)を追加したことで当日分も
-  // 正しく比較できるようになったため含めるよう変更。これにより「前回入力の翌日〜前回入力当日」
-  // の間隔が1日(=毎日連続入力)の時は比較期間が空になり差異検知が事実上機能しない、という
-  // 見落としも解消される(毎日連続入力が通常運用のため、これが直らないと①の通知はほぼ発火しない)。
-  let inputQty = 0;
-  Object.keys(allDays).forEach(dayKey => {
-    if (!(dayKey > sinceDate && dayKey <= today)) return;
-    itemKeys.forEach(k => { inputQty += Number(allDays[dayKey][k]) || 0; });
-  });
-
-  const dailyRows = sheetRows(getSteraDailySheet_(), STERA_DAILY_COLS);
-  const checkpointRows = sheetRows(_getStockMismatchCheckpointSheet_(), STOCK_MISMATCH_CHECKPOINT_COLS);
-  const carryOver = _stockMismatchCarryOverFromRows_(dailyRows, checkpointRows, storeId, group.prdId, sinceDate);
-  const rangeQty = dailyRows
-    .filter(r => String(r.store_id) === String(storeId) && String(r.prd_id) === String(group.prdId) &&
-      String(r.date) > sinceDate && String(r.date) <= yesterday)
-    .reduce((sum, r) => sum + (Number(r.qty) || 0), 0);
-  const todayRealtimeQty = _getSteraRealtimeTodayMap_(storeId)[group.prdId] || 0;
-  const steraQty = carryOver + rangeQty + todayRealtimeQty;
-  _batchUpsertStockMismatchCheckpoints_(checkpointRows, [{ storeId, prdId: group.prdId, dateStr: today, qty: todayRealtimeQty }]);
-  const diff = inputQty - steraQty;
-  const overAbsolute = diff >= CHECKSHEET_STOCK_MISMATCH_THRESHOLD;
-  const overPct = inputQty > 0 && (diff / inputQty) >= CHECKSHEET_STOCK_MISMATCH_PCT_THRESHOLD;
-  const thresholdMet = overAbsolute && overPct;
-  let notified = false;
-  if (thresholdMet) {
-    // 前回もこの店舗×商品で閾値超えが記録されていれば(=2回連続)通知し、保留状態はクリアする。
-    // 前回が無ければ(今回が1回目)通知せず、次回のために保留状態だけ記録する。
-    const wasPending = _clearStockMismatchPending_(storeId, product);
-    if (wasPending) {
-      try {
-        // 2026-08-03: 既存の「社内ポータル通知」Botから分離し、専用Bot経由(1:1トーク)で送る
-        sendStockBotNotification_(
-          '【在庫差異検知】' + _storeIdLabel_(storeId) + '・' + group.label +
-          'で在庫差異(補充' + inputQty + '個／ステラ実売上' + steraQty + '個、差' + diff + '個)を検知しました。ご確認ください。' +
-          '(' + sinceDate + '〜本日分、2回連続検知)'
-        );
-        notified = true;
-      } catch (e) { console.error('LINE WORKS通知エラー(在庫差異検知):', e.message); }
-    } else {
-      _markStockMismatchPending_(storeId, product);
-    }
-  } else {
-    // 閾値を下回った(解消された)ので、保留中だった場合はクリアする
-    _clearStockMismatchPending_(storeId, product);
-  }
-  return { ok: true, sinceDate, throughDate: today, inputQty, steraQty, diff, carryOver, thresholdMet, notified };
-}
+// 2026-09-08、盗難検知①(チェックシート入力時の「前回入力からの実売上」表示・自動通知、
+// getChecksheetStockChecks/checkChecksheetStockMismatch)は廃止した。ステラ取り扱い商品の
+// デイリーカウント入力自体を廃止した(getSteraStockEstimate参照)ため、比較起点(sinceDate)を
+// チェックシート入力から求める設計が成立しなくなったことに加え、パートナーによる盗難は
+// このカテゴリでは想定していないと確定したため(theft-detection-notes.mdの🔄再設計メモ参照)。
+// 旧実装が使っていたstock_mismatch_checkpoint/stock_mismatch_pendingの各シートは、
+// 過去データの記録として残したままコード側の参照だけ削除した(シート自体は削除していない)。
 
 // ----------------------------------------------------------------
 // 盗難検知②: 月次バックストップ(消費量とステラ月間売上数量の突き合わせ) 2026-07-31

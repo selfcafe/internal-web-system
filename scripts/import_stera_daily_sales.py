@@ -1,8 +1,19 @@
 #!/usr/bin/env python3
 """
 盗難検知機能(棚卸×ステラ突き合わせ)のデータパイプライン: stera smart oneの
-「SaaSサービス > 注文 > 注文詳細CSV」を指定日(既定は前日)分だけダウンロードし、
-社内ポータルのGAS backend(importSteraDailySales)へ送信する。
+「SaaSサービス > 注文 > 注文詳細CSV」を直近数日分ダウンロードし、
+社内ポータルのGAS backend(importSteraDailySalesBulk)へ送信する。
+
+2026-09-08、「営業日」(AM4:30締め、gas_backend.gsの_steraBusinessDateFromDateTime_参照)
+単位の集計に移行したことに伴い、1暦日だけを取得する方式(旧importSteraDailySales)から、
+プリセット「過去3日」で直近3暦日分をまとめて取得し、CSVの各行の実タイムスタンプから
+GAS側で営業日を判定する方式(importSteraDailySalesBulk)に変更した。営業日の境界が
+暦日をまたぐため(例: 4:30締めだと、ある営業日は前日23:00〜当日4:29のように2暦日にまたがる)、
+1暦日だけの取得では取りこぼしが起きる——「過去3日」なら暦月をまたぐ日(月末〜月初)でも
+プリセットボタン1回で済み、開始日・終了日を個別にカレンダーセルでクリックする必要がない。
+複数日分を毎日重複して取得することになるが、importSteraDailySalesBulk側が「このCSVに
+含まれる営業日は毎回まるごと置き換える」設計のため、重複取得は無害(むしろ前回分の
+取りこぼしがあっても自己修復される)。
 
 2026-08-03、実際にログインして画面を確認しながら実装・検証済み(旧版はログイン情報を
 持たない環境で書かれたたたき台だった)。実地検証で判明した重要事項:
@@ -32,9 +43,10 @@
 
 使い方:
     STERA_EMAIL=xxx STERA_PASSWORD=xxx GAS_URL=https://script.google.com/macros/s/xxx/exec \
-        python import_stera_daily_sales.py [--date 2026-08-02]
+        python import_stera_daily_sales.py
 
---date を省略すると前日(実行環境のローカル日付基準)を対象にする。
+常に「過去3日」プリセットを使うため、対象日の指定はできない(特定の過去日をピンポイントで
+再取込みしたい場合はbackfill_stera_daily_sales_amount.pyを使うこと)。
 """
 import argparse
 import os
@@ -42,7 +54,7 @@ import re
 import subprocess
 import sys
 import time
-from datetime import date, timedelta
+from datetime import date
 from pathlib import Path
 
 import requests
@@ -59,15 +71,8 @@ CDP_PORT = 9444
 
 def parse_args():
     p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--date", help="対象日(YYYY-MM-DD)。省略時は前日", default=None)
     p.add_argument("--keep-open", action="store_true", help="終了後もブラウザを閉じない(デバッグ用)")
     return p.parse_args()
-
-
-def resolve_target_date(date_str):
-    if date_str:
-        return date_str
-    return (date.today() - timedelta(days=1)).isoformat()
 
 
 def _find_chrome_exe():
@@ -284,6 +289,30 @@ def set_date_range(page, target_date, end_date=None):
     print(f"日付範囲設定完了: {got_start} 〜 {got_end}")
 
 
+def set_date_range_preset(page, preset_label):
+    """開始日付inputをクリックしてカレンダーを開き、プリセットボタン(例:「過去3日」)を押して
+    範囲を確定する(2026-09-08追加)。営業日集計方式への移行に伴い、日次自動取込みは複数暦日分を
+    まとめて取得してGAS側(importSteraDailySalesBulk)で営業日に振り分ける方式にしたため、
+    set_date_range関数の「開始・終了セルを個別にクリックする」方式(暦月をまたぐ2日間の指定は
+    右側パネルの操作が必要でリスクが高い)よりも、プリセットボタン1回で済むこちらを使う。"""
+    start_input = page.locator('input[placeholder="開始日付"]').first
+    start_input.click()
+    time.sleep(0.5)
+
+    page.get_by_text(preset_label, exact=True).click()
+    time.sleep(0.3)
+
+    # プリセットボタンは、通常のセルクリックと違い選択と同時にカレンダーを閉じてしまう
+    # (2026-09-08実地検証: 「決定」ボタンがそもそも出現しないまま閉じることを確認)。
+    # 「決定」ボタンが出ていれば念のため押すが、出ていなくてもエラーにしない。
+    try:
+        page.get_by_role("button", name="決定").click(timeout=3000)
+        time.sleep(0.5)
+    except PlaywrightTimeoutError:
+        pass
+    print(f"日付範囲プリセット「{preset_label}」を適用しました")
+
+
 def request_order_detail_csv(page, remark):
     # 「検索」ボタンはCSSの文字間隔で"検 索"のように見える(DOM上も空白が入る)ため正規表現で拾う
     page.locator("button", has_text=re.compile("検.?索")).first.click()
@@ -352,12 +381,28 @@ def wait_and_download(page, remark, timeout_sec=120):
 
 
 def post_to_gas(gas_url, target_date, csv_path):
+    """1暦日分のCSVをその日付として送る(旧方式、手動での単日再取込み用に残す)。
+    日次自動取込みの本流は2026-09-08よりpost_bulk_to_gas(下記)に移行済み。"""
     csv_text = csv_path.read_text(encoding="utf-8-sig")  # ステラCSVはUTF-8 with BOM
     resp = requests.post(gas_url, json={
         "action": "importSteraDailySales",
         "dateStr": target_date,
         "csvText": csv_text,
     }, timeout=120)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def post_bulk_to_gas(gas_url, csv_path):
+    """複数暦日分のCSVをまとめて送る(2026-09-08追加)。GAS側(importSteraDailySalesBulk)が
+    各行の実タイムスタンプから営業日(AM4:30締め)を判定して振り分ける。日次自動取込み
+    (import_stera_daily_sales.py)・バックフィル(backfill_stera_daily_sales_amount.py)の
+    両方から共通で使う。"""
+    csv_text = csv_path.read_text(encoding="utf-8-sig")  # ステラCSVはUTF-8 with BOM
+    resp = requests.post(gas_url, json={
+        "action": "importSteraDailySalesBulk",
+        "csvText": csv_text,
+    }, timeout=180)
     resp.raise_for_status()
     return resp.json()
 
@@ -410,9 +455,6 @@ def main():
     if not email or not password:
         sys.exit("環境変数 STERA_EMAIL / STERA_PASSWORD を設定してください")
 
-    target_date = resolve_target_date(args.date)
-    print(f"対象日: {target_date}")
-
     def _attempt():
         launch_cdp_chrome()
         with sync_playwright() as p:
@@ -427,16 +469,18 @@ def main():
             page.wait_for_load_state("domcontentloaded")
             time.sleep(1)
 
-            remark = f"自動取込み{target_date}"
-            set_date_range(page, target_date)
+            remark = f"自動取込み{date.today().isoformat()}"
+            set_date_range_preset(page, "過去3日")
             request_order_detail_csv(page, remark)
             csv_path = wait_and_download(page, remark)
             print(f"CSVダウンロード完了: {csv_path}")
 
-            result = post_to_gas(gas_url, target_date, csv_path)
+            result = post_bulk_to_gas(gas_url, csv_path)
             print(f"GASへの取込み結果: {result}")
             if result.get("unmatchedStores"):
                 print(f"[警告] 店舗名が一致しなかった行があります(stores.jsと表記が合っていない可能性): {result['unmatchedStores']}")
+            if result.get("unparsedDateRows"):
+                print(f"[警告] 日付を読み取れなかった行が{result['unparsedDateRows']}件ありました")
             if result.get("error"):
                 raise RuntimeError(result["error"])
 
