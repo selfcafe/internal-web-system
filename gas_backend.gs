@@ -2546,12 +2546,15 @@ function _storeInvColLetter_(name) {
 // 色コードは渋谷神南で既に手作業着色されていた実際のセル背景色をdebugStoreInventoryColColorsで
 // 読み取って踏襲(Google Sheetsの標準パレット「淡色3」系列で統一感を持たせる)。
 // 意味: 青=金額(単価・在庫額・原価率)、オレンジ=手入力される棚卸の実数(在庫数・納品・処分数量・
-// デイリーカウント・基準値)、赤=計算結果(消費量・差異・発注数)、緑=ステラ関連(売上・原価率・
-// 在庫確認状況ブロック、buildSalesCategoryCostRatio/buildStockCheckMonthly側で塗る)。
+// デイリーカウント)、赤=計算結果(消費量・差異・発注数)、緑=ステラ関連(売上・原価率・
+// 在庫確認状況ブロック、buildSalesCategoryCostRatio/buildStockCheckMonthly側で塗る)、
+// グレー=基準値(2026-09-07、他の手入力実数(オレンジ)と違い設定元がapp_settingsのreorder_targets
+// でありシート上は表示専用なので区別したいとユーザー指示、灰色に変更)。
 const STORE_INV_COLOR_BLUE = '#cfe2f3';   // 金額
-const STORE_INV_COLOR_ORANGE = '#fce5cd'; // 棚卸(手入力の実数)・基準値
+const STORE_INV_COLOR_ORANGE = '#fce5cd'; // 棚卸(手入力の実数)
 const STORE_INV_COLOR_RED = '#f4cccc';    // 消費量・差異・発注数(計算結果)
 const STORE_INV_COLOR_GREEN = '#d9ead3';  // ステラ関連(buildSalesCategoryCostRatio/buildStockCheckMonthly側で使用)
+const STORE_INV_COLOR_GRAY = '#d9d9d9';   // 基準値(表示専用、実体はreorder_targets設定)
 const STORE_INV_COL_COLORS = {
   price: STORE_INV_COLOR_BLUE,
   opening_amount: STORE_INV_COLOR_BLUE,
@@ -2563,7 +2566,7 @@ const STORE_INV_COL_COLORS = {
   delivery: STORE_INV_COLOR_ORANGE,
   disposed_qty: STORE_INV_COLOR_ORANGE,
   daily_count: STORE_INV_COLOR_ORANGE,
-  reorder_target: STORE_INV_COLOR_ORANGE,
+  reorder_target: STORE_INV_COLOR_GRAY,
   consumption: STORE_INV_COLOR_RED,
   count_diff: STORE_INV_COLOR_RED,
   reorder_qty: STORE_INV_COLOR_RED,
