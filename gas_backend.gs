@@ -382,6 +382,7 @@ function doGet(e) {
     else if (a === 'fixReorderRulesColumnLetters') result = fixReorderRulesColumnLetters();
     else if (a === 'pruneBlankStoreInventoryRows') result = pruneBlankStoreInventoryRows(e.parameter.storeId);
     else if (a === 'buildSalesCategoryCostRatio') result = buildSalesCategoryCostRatio(e.parameter.storeId, e.parameter.periodLabel);
+    else if (a === 'migrateSteraDailySalesColumns') result = migrateSteraDailySalesColumns();
     else if (a === 'buildStockCheckMonthly')    result = buildStockCheckMonthly(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'runMonthlyStockCheckBackstop') result = runMonthlyStockCheckBackstop();
     else if (a === 'setMonthlyStockCheckBackstopTrigger') { setMonthlyStockCheckBackstopTrigger(); result = { ok: true }; }
@@ -463,6 +464,7 @@ function doPost(e) {
     else if (b.action === 'recordInventoryDelivery') result = recordInventoryDelivery(b.storeId, b.periodLabel, b.product, b.qty);
     else if (b.action === 'importSteraOrdersCsv') result = importSteraOrdersCsv(b.csvText);
     else if (b.action === 'importSteraDailySales') result = importSteraDailySales(b.dateStr, b.csvText);
+    else if (b.action === 'importSteraDailySalesBulk') result = importSteraDailySalesBulk(b.csvText);
     else if (b.action === 'updateSteraRealtimeToday') result = updateSteraRealtimeToday(b.dateStr, b.rows);
     else if (b.action === 'checkSteraRefunds') result = checkSteraRefunds(b.dateStr, b.refunds);
     else if (b.action === 'reportScriptFailure') result = reportScriptFailure(b.message, b.key);
@@ -3382,6 +3384,34 @@ function buildSalesCategoryCostRatio(storeId, periodLabel) {
 const SHEET_STERA_DAILY = 'stera_daily_sales';
 const STERA_DAILY_COLS = ['date', 'store_id', 'prd_id', 'qty', 'amount'];
 
+// 根本原因の修正(2026-09-07)。ensureHeaders(getSteraDailySheet_参照)は「シートが完全に空の
+// 時だけ見出し行を書く」設計のため、既に運用中だったstera_daily_salesにamount列を追加した際、
+// 見出し行(1行目)には反映されずE1が空のままだった——書き込み側(importSteraDailySales等)は
+// STERA_DAILY_COLSの並び順で位置指定(setValues)するため気づかず正しく書けていたが、
+// 読み取り側(sheetRows経由、getSteraDailyAmountTotal_等)は見出しテキストで列を探す設計のため
+// 「amount」列が見つからず常にnull→0扱いになっていた(原価率(ステラ実売上ベース)が7〜9月分
+// すべて空欄/0になっていた根本原因)。migrateOrderColumnsと同じパターンで、既存ヘッダーに
+// 無い列だけを末尾に追記する。実際の金額データ自体はE列に既に正しく存在しているため、
+// この見出し追加だけで読み取り側が即座に正しい値を読めるようになる(データの再取込みは不要)。
+function migrateSteraDailySalesColumns() {
+  const sheet = getSteraDailySheet_();
+  if (sheet.getLastRow() === 0) { ensureHeaders(sheet, STERA_DAILY_COLS); return { ok: true, added: STERA_DAILY_COLS }; }
+  // migrateOrderColumnsと違い、getLastColumn()+1(末尾に追記)ではなくSTERA_DAILY_COLS上の
+  // 本来の列位置に直接書く——書き込み側(importSteraDailySales等)は既にamount列のデータを
+  // STERA_DAILY_COLSの並び順(5列目=E列)へ位置指定で書き込み済みのため、getLastColumn()は
+  // (見出しが無くても)データ自体の存在により既に5を返す。ここでgetLastColumn()+1に
+  // 見出しを追記すると6列目(F1)に付いてしまい、実データがあるE列とズレて直らない。
+  const hdrs = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
+  const missing = [];
+  STERA_DAILY_COLS.forEach((c, i) => {
+    if (hdrs.indexOf(c) < 0) {
+      sheet.getRange(1, i + 1).setValue(c);
+      missing.push(c);
+    }
+  });
+  return { ok: true, added: missing };
+}
+
 function getSteraDailySheet_() {
   const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
   let sheet = ss.getSheetByName(SHEET_STERA_DAILY);
@@ -3469,6 +3499,85 @@ function importSteraDailySales(dateStr, csvText) {
     sheet.getRange(2, 1, allRows.length, STERA_DAILY_COLS.length).setValues(allRows);
   }
   return { ok: true, date: dateStr, rows: newRows.length, unmatchedStores: Object.keys(unmatchedStores) };
+}
+
+// 7月・8月分のstera_daily_sales金額(amount)バックフィル用(2026-09-07追加)。7月分はそもそも
+// 日次取込みパイプライン開始前(2026-08-03稼働開始)のため1行も無く、8月〜9月頭分は取込み済み
+// だがamount列を追加する前のコードで取り込まれたため常に0のままだった(発覚経緯:
+// buildSalesCategoryCostRatioの原価率が8月分も9月分も常に空欄/0になっていたユーザー指摘)。
+// importSteraDailySalesは「CSV全体を1日分」として扱う設計だが、バックフィルでは複数日分を
+// まとめた大きな注文詳細CSV(1ヶ月分など)を一度に取り込みたいため、この関数は各行の「作成日時」
+// 列(YYYY-MM-DD部分)から実際の日付を読み取り、日付ごとにグルーピングしてから一括で置き換える。
+// 対象となった日付は(スプレッドシート上に既存の行があってもなくても)まとめて上書きする——
+// 通常のimportSteraDailySalesと同じ「取り直し対応」の考え方を複数日分に拡張したもの。
+// ?action=importSteraDailySalesBulk(POST、{csvText})で実行。
+function importSteraDailySalesBulk(csvText) {
+  const rows = Utilities.parseCsv(csvText);
+  if (!rows.length) return { error: 'CSVが空です' };
+  const hdrs = rows[0].map(String);
+  const idx = {};
+  STERA_ORDER_HEADERS.forEach(h => { idx[h] = hdrs.indexOf(h); });
+  if (Object.values(idx).some(i => i < 0)) {
+    return { error: '注文詳細CSVの列見出しが想定と異なります(そのままの見出しでインポートしてください)' };
+  }
+  const nameToId = _steraStoreNameToId_();
+  const normalize = s => String(s).replace(/^セルフカフェ/, '').replace(/店$/, '');
+
+  const totals = {}; // `${date}|${storeId}|${prdId}` -> qty合計
+  const amountTotals = {}; // 同キー -> 商品合計金額の合計
+  const unmatchedStores = {};
+  let unparsedDateRows = 0;
+  for (let i = 1; i < rows.length; i++) {
+    const r = rows[i];
+    if (!r[idx['商品ID']]) continue; // 商品コード/商品IDどちらも空の行(明細以外の空行等)は無視
+    // 「作成日時」は"2026-08-15 12:34:56"のような形式(先頭10文字がYYYY-MM-DD)。
+    // 日次取込み(importSteraDailySales)は日付を引数で外側から与える設計のため、この行単位の
+    // 日付抽出はバックフィル専用。想定外の形式の行はスキップしてカウントする(致命扱いにしない)。
+    const createdAt = String(r[idx['作成日時']] || '');
+    const dateStr = createdAt.slice(0, 10);
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) { unparsedDateRows++; continue; }
+    const storeNameRaw = r[idx['店舗名']];
+    const storeId = nameToId[normalize(storeNameRaw)];
+    if (!storeId) { unmatchedStores[storeNameRaw] = true; continue; }
+    const prdId = r[idx['商品ID']];
+    const qty = Number(r[idx['商品数量']] || 0);
+    const amount = Number(r[idx['商品合計金額']] || 0);
+    const key = dateStr + '|' + storeId + '|' + prdId;
+    totals[key] = (totals[key] || 0) + qty;
+    amountTotals[key] = (amountTotals[key] || 0) + amount;
+  }
+
+  const newRows = Object.keys(totals).map(key => {
+    const parts = key.split('|');
+    return [parts[0], parts[1], parts[2], totals[key], amountTotals[key] || 0];
+  });
+  const coveredDates = {};
+  newRows.forEach(r => { coveredDates[r[0]] = true; });
+
+  const sheet = getSteraDailySheet_();
+  const dIdx = STERA_DAILY_COLS.indexOf('date');
+  const lastRow = sheet.getLastRow();
+  // 今回のCSVでカバーされている日付の既存行だけを除外し(取り直し対応)、それ以外の日付の
+  // 既存行はそのまま残す(importSteraDailySalesと同じ「他日には触れない」考え方を、単一dateStrの
+  // 代わりに「このCSVに含まれる日付の集合」に拡張しただけ)
+  const keptRows = lastRow > 1
+    ? sheet.getRange(2, 1, lastRow - 1, STERA_DAILY_COLS.length).getValues()
+        .filter(row => !coveredDates[String(row[dIdx])])
+    : [];
+
+  if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, STERA_DAILY_COLS.length).clearContent();
+  const allRows = keptRows.concat(newRows);
+  if (allRows.length) {
+    sheet.getRange(2, dIdx + 1, allRows.length, 1).setNumberFormat('@');
+    sheet.getRange(2, 1, allRows.length, STERA_DAILY_COLS.length).setValues(allRows);
+  }
+  return {
+    ok: true,
+    datesCovered: Object.keys(coveredDates).sort(),
+    rows: newRows.length,
+    unparsedDateRows,
+    unmatchedStores: Object.keys(unmatchedStores)
+  };
 }
 
 // storeId×prdId(単一)について、(fromDateExclusive, toDateInclusive]の範囲でstera_daily_salesの

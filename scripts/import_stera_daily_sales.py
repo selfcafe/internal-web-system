@@ -214,11 +214,31 @@ def resolve_orders_url(page, max_attempts=3):
     return f"{STERA_BASE_URL}/apps/{m.group(1)}/oneqr/orders"
 
 
-def set_date_range(page, target_date):
-    """開始日付inputをクリックしてカレンダーを開き、対象日のセルを2回クリックして
-    単日範囲にしてから「決定」を押す(ファイル冒頭コメント参照)。"""
+def _find_month_cell(left_panel, day_str):
+    """前月/翌月の余白セル(ant-calendar-last-month-cell / ant-calendar-next-month-btn-day)は
+    除外し、左パネルに表示中の月に実在する日だけを対象にする。"""
+    cells = left_panel.locator(
+        "td.ant-calendar-cell:not(.ant-calendar-last-month-cell):not(.ant-calendar-next-month-btn-day)"
+    )
+    for i in range(cells.count()):
+        if cells.nth(i).inner_text().strip() == day_str:
+            return cells.nth(i)
+    raise RuntimeError(f"カレンダーに{day_str}日のセルが見つかりません")
+
+
+def set_date_range(page, target_date, end_date=None):
+    """開始日付inputをクリックしてカレンダーを開き、target_date(〜end_date、省略時は
+    target_dateと同日)のセルをクリックして範囲を選択してから「決定」を押す
+    (ファイル冒頭コメント参照)。end_dateはtarget_dateと同じ月内である必要がある
+    (2026-09-07、バックフィル用途で月内範囲指定に対応するため2引数化。1日だけを
+    指定する既存の日次取込みの呼び出し方は完全に後方互換——end_date省略時は同じセルを
+    2回クリックする従来通りの単日range選択になる)。"""
     target = date.fromisoformat(target_date)
+    end = date.fromisoformat(end_date) if end_date else target
+    if end.year != target.year or end.month != target.month:
+        raise RuntimeError(f"end_dateはtarget_dateと同じ月内である必要があります: {target_date}〜{end_date}")
     day_str = str(target.day)
+    end_day_str = str(end.day)
 
     start_input = page.locator('input[placeholder="開始日付"]').first
     start_input.click()
@@ -244,23 +264,11 @@ def set_date_range(page, target_date):
     else:
         raise RuntimeError(f"カレンダーを{target.year}年{target.month}月まで移動できませんでした")
 
-    # 前月/翌月の余白セル(ant-calendar-last-month-cell / ant-calendar-next-month-btn-day)は
-    # 除外し、表示中の月に実在する日だけを対象にする(上のナビゲートと合わせて日番号の
-    # 誤マッチを防ぐ)
-    cells = left_panel.locator(
-        "td.ant-calendar-cell:not(.ant-calendar-last-month-cell):not(.ant-calendar-next-month-btn-day)"
-    )
-    target_cell = None
-    for i in range(cells.count()):
-        if cells.nth(i).inner_text().strip() == day_str:
-            target_cell = cells.nth(i)
-            break
-    if target_cell is None:
-        raise RuntimeError(f"カレンダーに{day_str}日のセルが見つかりません")
-
-    target_cell.click()
+    _find_month_cell(left_panel, day_str).click()
     time.sleep(0.3)
-    target_cell.click()  # 2回目のクリックで単日range(start=end=target_date)にする
+    # end_date省略時(day_str == end_day_str)は同じセルへの2回目のクリックとなり、
+    # 従来通り単日range(start=end=target_date)になる
+    _find_month_cell(left_panel, end_day_str).click()
     time.sleep(0.3)
 
     page.get_by_role("button", name="決定").click()
@@ -269,8 +277,9 @@ def set_date_range(page, target_date):
     end_input = page.locator('input[placeholder="終了日付"]').first
     got_start = start_input.input_value()
     got_end = end_input.input_value()
-    expected_prefix = target.strftime("%Y/%m/%d")
-    if not (got_start.startswith(expected_prefix) and got_end.startswith(expected_prefix)):
+    expected_start_prefix = target.strftime("%Y/%m/%d")
+    expected_end_prefix = end.strftime("%Y/%m/%d")
+    if not (got_start.startswith(expected_start_prefix) and got_end.startswith(expected_end_prefix)):
         raise RuntimeError(f"日付範囲の設定に失敗しました: start={got_start!r} end={got_end!r}")
     print(f"日付範囲設定完了: {got_start} 〜 {got_end}")
 
