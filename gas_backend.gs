@@ -357,6 +357,7 @@ function doGet(e) {
     else if (a === 'getLostItems')      result = getLostItems(e.parameter.month, e.parameter.storeId);
     else if (a === 'getChecksheetData') result = getChecksheetData(e.parameter.storeId);
     else if (a === 'getSteraStockEstimate') result = getSteraStockEstimate(e.parameter.storeId);
+    else if (a === 'getSteraWaterInfo') result = getSteraWaterInfo(e.parameter.storeId);
     else if (a === 'getInventoryHistory') result = getInventoryHistory(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'getLatestConsumptionByCode') result = getLatestConsumptionByCode(e.parameter.storeId);
     else if (a === 'getInventoryDeliveryAuto') result = getInventoryDeliveryAuto(e.parameter.storeId, e.parameter.periodLabel);
@@ -467,6 +468,7 @@ function doPost(e) {
     else if (b.action === 'importSteraDailySalesBulk') result = importSteraDailySalesBulk(b.csvText);
     else if (b.action === 'updateSteraRealtimeToday') result = updateSteraRealtimeToday(b.dateStr, b.rows);
     else if (b.action === 'checkSteraRefunds') result = checkSteraRefunds(b.dateStr, b.refunds);
+    else if (b.action === 'saveSteraWaterCount') result = saveSteraWaterCount(b.storeId, b.dateStr, b.qty);
     else if (b.action === 'reportScriptFailure') result = reportScriptFailure(b.message, b.key);
     else if (b.action === 'submitInvoice')       result = submitInvoice(b.payload);
     else if (b.action === 'saveInvoiceReceiptImage') result = saveInvoiceReceiptImage(b.imageBase64, b.imageMime, b.filename);
@@ -3592,9 +3594,13 @@ function importSteraDailySalesBulk(csvText) {
     sheet.getRange(2, dIdx + 1, allRows.length, 1).setNumberFormat('@');
     sheet.getRange(2, 1, allRows.length, STERA_DAILY_COLS.length).setValues(allRows);
   }
+  const datesCovered = Object.keys(coveredDates).sort();
+  // 2026-09-09追加: この取込みで新たに確定した日付ぶんについて、水の盗難検知(実測本数 vs
+  // ステラ実売上)を実行する。失敗しても取込み自体は成功として返したいのでtry/catchで囲む
+  try { _checkSteraWaterTheftForImportedDates_(datesCovered); } catch (e) { console.error('_checkSteraWaterTheftForImportedDates_ error:', e.message); }
   return {
     ok: true,
-    datesCovered: Object.keys(coveredDates).sort(),
+    datesCovered,
     rows: newRows.length,
     unparsedDateRows,
     unmatchedStores: Object.keys(unmatchedStores)
@@ -3880,6 +3886,194 @@ function getSteraStockEstimate(storeId) {
     m.ourProducts.forEach(name => { result[name] = estimate; });
   });
   return result;
+}
+
+// ----------------------------------------------------------------
+// 水の盗難検知(客による無断持ち去り対策) 2026-09-09
+// ----------------------------------------------------------------
+// 「パートナーによる盗難は、ステラ取り扱い商品カテゴリでは想定していない」という2026-09-07の
+// 前提は、あくまでスタッフ(パートナー)による盗難の話であって、客による無断持ち去りは
+// 別問題だったと判明(2026-09-09)。水は「ドリンク代に相当する」商品(ドリンクマシン非経由・
+// 会員かどうか問わず必ずステラ決済が発生する唯一の商品)で、客がドリンクマシン感覚で
+// 無断で持ち去るリスクを検知するため、実測本数の日次カウントを復活させる。お菓子類は
+// 品目数が多く毎日の全数カウントが非現実的なため対象外のまま(theft-detection-notes.mdの
+// 🔄🔄再設計メモ2参照)。
+//
+// 過去のチェックシート「デイリーカウント」入力起点(sinceDate)の設計は、入力が無い日が
+// 続くと比較が丸ごと機能しなくなる欠点があった(2026-09-07に旧①廃止の理由になったのと
+// 同じ問題)。今回は「前回いつ実測したか」をこのシート自身の履歴から都度探すcheckpoint方式
+// にすることで、入力が数日空いても壊れない設計にしている。
+const SHEET_STERA_WATER_COUNT = 'stera_water_daily_count';
+const STERA_WATER_COUNT_COLS = ['store_id', 'date', 'qty', 'recorded_at'];
+
+function getSteraWaterDailyCountSheet_() {
+  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const sheet = ss.getSheetByName(SHEET_STERA_WATER_COUNT) || ss.insertSheet(SHEET_STERA_WATER_COUNT);
+  ensureHeaders(sheet, STERA_WATER_COUNT_COLS);
+  return sheet;
+}
+
+// STERA_SALES_MAPPINGから「水」のエントリを1回だけ探す小さいヘルパー(呼び出し側で毎回
+// Array.findを書かなくて済むように)
+function _steraWaterMapping_() {
+  return STERA_SALES_MAPPING.find(m => m.label === '水') || null;
+}
+
+// パートナー向けチェックシート画面用。理論在庫は既存のgetSteraStockEstimateをそのまま使う
+// (呼び出し側で別途取得する想定、ここでは重複計算しない)。
+// 戻り値: { todaySales: 当日売上本数(速報、確定データがあればそちらを優先), lastCount: {date, qty} または null }
+// ?action=getSteraWaterInfo&storeId=... で実行。
+function getSteraWaterInfo(storeId) {
+  if (!storeId) return { error: 'storeIdは必須です' };
+  const mapping = _steraWaterMapping_();
+  if (!mapping) return { error: 'STERA_SALES_MAPPINGに「水」が見つかりません' };
+
+  const todayBusinessDate = _steraBusinessDateFromDateTime_(
+    Utilities.formatDate(new Date(), _invSheetTz(), 'yyyy-MM-dd HH:mm:ss')
+  );
+  // 当日分は、確定取込み(毎朝06:00)が既に済んでいればその値を、まだなら速報値(realtime poll)を使う。
+  // _hasSteraDailyDataForDate_はdateStr当日の行が(どの店舗・商品でも)1件でもあれば確定済みと
+  // みなす関数——このstoreId自体の水売上が0件でも「確定済みの0」として正しく区別するため、
+  // getSteraDailyTotal_の結果が0かどうかではなく、この確定判定を先に見る必要がある
+  // (0かどうかで判定すると「まだ未確定」と「確定済みだが0件」を区別できず速報値にフォール
+  // バックし続けてしまう)。
+  const todaySales = _hasSteraDailyDataForDate_(todayBusinessDate)
+    ? getSteraDailyTotal_(storeId, mapping.prdId, _priorDateStr_(todayBusinessDate), todayBusinessDate)
+    : (_getSteraRealtimeTodayMap_(storeId)[mapping.prdId] || 0);
+
+  const countRows = sheetRows(getSteraWaterDailyCountSheet_(), STERA_WATER_COUNT_COLS)
+    .filter(r => String(r.store_id) === String(storeId));
+  let lastCount = null;
+  countRows.forEach(r => {
+    if (!lastCount || String(r.date) > lastCount.date) lastCount = { date: String(r.date), qty: Number(r.qty) || 0 };
+  });
+
+  return { todaySales, lastCount };
+}
+
+// "YYYY-MM-DD"の前日を返す(getSteraDailyTotal_のfromDateExclusiveに単日分だけ渡すためのヘルパー)
+function _priorDateStr_(dateStr) {
+  const parts = String(dateStr).split('-').map(Number);
+  const d = new Date(Date.UTC(parts[0], parts[1] - 1, parts[2]));
+  d.setUTCDate(d.getUTCDate() - 1);
+  return Utilities.formatDate(d, 'UTC', 'yyyy-MM-dd');
+}
+
+// パートナーが実測本数を保存する専用アクション。saveChecksheetData(月間データ丸ごと送信)とは
+// 完全に独立させている——チェックシート全体のマージ事故(feature_inventory_phase1/
+// bug_shibuya_delivery_data_20260906参照)から、盗難検知の生命線になるこのデータだけは
+// 隔離するため。同じ(store_id, date)の行があれば置き換える(取り直し対応)。
+// ?action=saveSteraWaterCount(POST、{storeId, dateStr, qty})で実行。
+function saveSteraWaterCount(storeId, dateStr, qty) {
+  if (!storeId) return { error: 'storeIdは必須です' };
+  if (!dateStr) return { error: 'dateStrは必須です' };
+  const n = Number(qty);
+  if (qty === '' || qty == null || Number.isNaN(n) || n < 0) return { error: 'qtyは0以上の数値で指定してください' };
+
+  const sheet = getSteraWaterDailyCountSheet_();
+  const lastRow = sheet.getLastRow();
+  const sIdx = STERA_WATER_COUNT_COLS.indexOf('store_id'), dIdx = STERA_WATER_COUNT_COLS.indexOf('date');
+  const keptRows = lastRow > 1
+    ? sheet.getRange(2, 1, lastRow - 1, STERA_WATER_COUNT_COLS.length).getValues()
+        .filter(row => !(String(row[sIdx]) === String(storeId) && String(row[dIdx]) === String(dateStr)))
+    : [];
+  const now = Utilities.formatDate(new Date(), _invSheetTz(), 'yyyy-MM-dd HH:mm:ss');
+  const allRows = keptRows.concat([[storeId, dateStr, n, now]]);
+
+  if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, STERA_WATER_COUNT_COLS.length).clearContent();
+  sheet.getRange(2, dIdx + 1, allRows.length, 1).setNumberFormat('@');
+  sheet.getRange(2, 1, allRows.length, STERA_WATER_COUNT_COLS.length).setValues(allRows);
+
+  // 保存直後にも突き合わせを試みる(既に確定済みの日付を後から入力した場合等、翌朝の
+  // 確定取込み後トリガー(_checkSteraWaterTheftForImportedDates_)を待たずに反応できるように)。
+  // まだ確定していない日付なら中で何もせず抜ける(checkSteraWaterTheftMismatch_参照)ので、
+  // 呼ぶだけなら無害
+  try { checkSteraWaterTheftMismatch_(storeId, dateStr); } catch (e) { console.error('checkSteraWaterTheftMismatch_ error:', e.message); }
+
+  return { ok: true };
+}
+
+// 水の実測消費量とステラ実売上を突き合わせ、閾値超えなら即時通知する。
+// dateStrの実測本数がまだ入力されていない、比較対象となる前回実測が無い、またはdateStrの
+// ステラ売上がまだ確定取込み(毎朝06:00)されていない場合は何もしない(黙ってスキップ、
+// エラー扱いにしない——呼び出し側は「とりあえず呼んでおく」使い方をする想定のため)。
+// 閾値: 絶対3個以上 かつ 割合30%以上(ステラ売上0件で実測消費だけあった場合は割合条件を
+// 無条件で満たす扱い)。2026-09-09、ユーザー決定により「2回連続」は待たず1回検知で即通知
+// (監視カメラ映像の保存期間(概ね7日)内に照合できるよう、速報性を優先する)。
+function checkSteraWaterTheftMismatch_(storeId, dateStr) {
+  if (!_hasSteraDailyDataForDate_(dateStr)) return; // まだ確定していない日は速報値の誤差で誤検知させないため判定しない
+
+  const mapping = _steraWaterMapping_();
+  if (!mapping) return;
+
+  const countRows = sheetRows(getSteraWaterDailyCountSheet_(), STERA_WATER_COUNT_COLS)
+    .filter(r => String(r.store_id) === String(storeId));
+  const todayCount = countRows.find(r => String(r.date) === String(dateStr));
+  if (!todayCount) return; // その日の実測本数が未入力
+
+  // checkpoint方式: dateStrより前で最も新しい日付の実測本数を探す(間が空いても壊れない)
+  let prevCount = null;
+  countRows.forEach(r => {
+    if (String(r.date) >= String(dateStr)) return;
+    if (!prevCount || String(r.date) > prevCount.date) prevCount = { date: String(r.date), qty: Number(r.qty) || 0 };
+  });
+  if (!prevCount) return; // 比較対象となる前回実測がまだ無い(初回)
+
+  // (prevCount.date, dateStr]の間の水の当月納品(inventory_delivery_auto、recorded_at基準)を合算
+  // (getSteraStockEstimateの納品集計ロジックと同じ考え方)
+  const deliverySheet = getDeliveryAutoSheet();
+  const dLastRow = deliverySheet.getLastRow();
+  const deliveryRows = dLastRow > 1
+    ? deliverySheet.getRange(2, 1, dLastRow - 1, DELIVERY_AUTO_COLS.length).getValues()
+    : [];
+  const dsIdx = DELIVERY_AUTO_COLS.indexOf('store_id'), dpIdx = DELIVERY_AUTO_COLS.indexOf('product'),
+        dqIdx = DELIVERY_AUTO_COLS.indexOf('qty'), drIdx = DELIVERY_AUTO_COLS.indexOf('recorded_at');
+  let deliveredSince = 0;
+  deliveryRows.forEach(row => {
+    if (String(row[dsIdx]) !== String(storeId)) return;
+    if (mapping.ourProducts.indexOf(String(row[dpIdx])) < 0) return;
+    const recordedAt = row[drIdx];
+    const recordedDateStr = recordedAt instanceof Date
+      ? Utilities.formatDate(recordedAt, _invSheetTz(), 'yyyy-MM-dd')
+      : String(recordedAt).slice(0, 10);
+    if (recordedDateStr > prevCount.date && recordedDateStr <= dateStr) deliveredSince += Number(row[dqIdx]) || 0;
+  });
+
+  const actualConsumption = prevCount.qty + deliveredSince - todayCount.qty;
+  const salesQty = getSteraDailyTotal_(storeId, mapping.prdId, prevCount.date, dateStr);
+  const diff = actualConsumption - salesQty;
+
+  const pctMet = salesQty > 0 ? (diff / salesQty) >= 0.3 : diff > 0;
+  const thresholdMet = diff >= 3 && pctMet;
+  if (!thresholdMet) return;
+
+  try {
+    sendStockBotNotification_(
+      '【水の在庫差異・盗難疑い】' + _storeIdLabel_(storeId) + '\n' +
+      prevCount.date + '(実測' + prevCount.qty + '本) → ' + dateStr + '(実測' + todayCount.qty + '本)\n' +
+      'この間の納品' + deliveredSince + '本、実測消費量' + actualConsumption + '本 に対し、ステラ実売上は' + salesQty + '本\n' +
+      '差: ' + diff + '本。監視カメラ映像とステラの購入履歴を突き合わせて確認してください。'
+    );
+  } catch (e) { console.error('水の盗難疑い通知エラー:', e.message); }
+}
+
+// 毎朝の確定売上取込み(importSteraDailySalesBulk)完了後、新たに確定した日付ぶんについて
+// 水の在庫差異チェックを走らせる。実測本数が入力されている(storeId, date)の組み合わせだけ
+// 対象にする(入力が無い店舗/日付は自動的にスキップされる、checkSteraWaterTheftMismatch_参照)
+function _checkSteraWaterTheftForImportedDates_(coveredDates) {
+  if (!coveredDates || !coveredDates.length) return;
+  const coveredSet = {};
+  coveredDates.forEach(d => { coveredSet[d] = true; });
+  const countRows = sheetRows(getSteraWaterDailyCountSheet_(), STERA_WATER_COUNT_COLS);
+  const targets = {}; // `${storeId}|${date}` -> true (重複排除)
+  countRows.forEach(r => {
+    if (!coveredSet[String(r.date)]) return;
+    targets[r.store_id + '|' + r.date] = true;
+  });
+  Object.keys(targets).forEach(key => {
+    const parts = key.split('|');
+    try { checkSteraWaterTheftMismatch_(parts[0], parts[1]); } catch (e) { console.error('checkSteraWaterTheftMismatch_ error:', e.message); }
+  });
 }
 
 // stera_daily_salesにdateStr当日の行が1件でもあれば、その日はCSV取込み済み(確定)とみなす

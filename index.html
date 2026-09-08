@@ -3255,6 +3255,32 @@ async function loadSteraStockEstimate(storeId) {
   catch (e) { console.error('getSteraStockEstimate error:', e); _steraStockEstimate = {}; }
 }
 
+// 水の盗難検知(客による無断持ち去り対策、2026-09-09追加)用データ。{todaySales, lastCount:{date,qty}}
+// または取得失敗時null。理論在庫は既存の_steraStockEstimateをそのまま使う(重複計算しない)。
+// 保存(saveSteraWaterCount)はチェックシート本体のsaveChecksheetData(月間データ丸ごと送信)とは
+// 完全に独立させている——過去にこの「丸ごと送信」方式が原因のマージ事故が複数回起きているため
+// (feature_inventory_phase1/bug_shibuya_delivery_data_20260906参照)、水の実測本数という
+// 盗難検知の生命線になるデータだけは、その種の事故から隔離された専用の小さい保存経路にする。
+let _steraWaterInfo = null;
+async function loadSteraWaterInfo(storeId) {
+  try { _steraWaterInfo = await gasGet('getSteraWaterInfo', { storeId }) || null; }
+  catch (e) { console.error('getSteraWaterInfo error:', e); _steraWaterInfo = null; }
+}
+// 水の実測本数を保存する。saveChecksheetDataとは別の専用アクション(saveSteraWaterCount)を
+// 直接叩くだけで、storeRows/checksheetの他のどのローカル状態も経由しない
+async function saveSteraWaterCountInput(dateStr, rawValue) {
+  if (rawValue === '') return; // 空欄に戻されただけなら何もしない(既存の保存済み値を消さない)
+  const qty = Math.max(0, parseInt(rawValue, 10) || 0);
+  try {
+    await gasPost('saveSteraWaterCount', { storeId: storeTab, dateStr, qty });
+    await loadSteraWaterInfo(storeTab);
+    renderChecksheet();
+  } catch (e) {
+    console.error('saveSteraWaterCount error:', e);
+    alert('水の実測本数の保存に失敗しました。通信状況を確認してもう一度お試しください。');
+  }
+}
+
 // 「残り在庫」表示用：直近確定済み棚卸の期末在庫(=今期の期首在庫)だけを取得する。
 // 棚卸タブと同じgetInventoryHistory(GAS側で25秒キャッシュ済み)を使うため、チェックシートタブを
 // 開くたびに呼んでも軽い。棚卸表を一度も送信していない店舗/商品は行が無く、残り在庫は非表示のまま
@@ -3336,13 +3362,16 @@ function _checksheetProductColumns() {
     cols: products.filter(p => p.vendor === v.key).map(p => ({ id:'prod:' + p.name, type:'qty', name:p.label || p.name })),
   })).filter(g => g.cols.length);
 
-  // ステラ取り扱い商品は入力不要・読み取り専用の理論在庫表示のみ(type:'readonly')
+  // ステラ取り扱い商品は入力不要・読み取り専用の理論在庫表示のみ(type:'readonly')。
+  // ただし「水」だけは客による無断持ち去り(盗難)対策として実測本数の日次入力を復活させる
+  // (type:'water_theft_check'、2026-09-09。お菓子類は品目数が多く毎日の全数カウントが
+  // 非現実的なため対象外のまま、theft-detection-notes.mdの🔄🔄再設計メモ2参照)
   if (steraNames.length) {
     const allProducts = _inventoryProductList();
     const steraCols = steraNames
       .map(name => allProducts.find(p => p.name === name))
       .filter(Boolean)
-      .map(p => ({ id: 'prod:' + p.name, type: 'readonly', name: p.label || p.name }));
+      .map(p => ({ id: 'prod:' + p.name, type: (p.name === '水' ? 'water_theft_check' : 'readonly'), name: p.label || p.name }));
     if (steraCols.length) groups.push({ key: 'vendor:stera', label: 'ステラ商品(参考在庫・入力不要)', cols: steraCols });
   }
   return groups;
@@ -3432,6 +3461,37 @@ function renderChecksheetTodayForm(wrap, subgroups) {
           const estimate = _steraStockEstimate[col.id.slice(5)];
           const display = (estimate === null || estimate === undefined) ? '―' : esc(estimate);
           return `<div class="checksheet-today-row"><span>${esc(col.name)}</span><span style="color:#22703d;font-weight:600;flex-shrink:0;white-space:nowrap">理論在庫：${display}個</span></div>`;
+        }
+        // 水だけ、客による無断持ち去り(盗難)対策として実測本数の入力を残す(2026-09-09追加)。
+        // 理論在庫(既存)・当日売上本数(速報値、realtime pollベース)を表示した上で、実測本数を
+        // 入力してもらう。保存(saveSteraWaterCountInput)はチェックシート本体のupdateChecksheetField
+        // /saveChecksheetDataとは別経路——過去のマージ事故の教訓から、盗難検知の生命線になる
+        // このデータだけは月間データ丸ごと送信の対象に一切含めない
+        if (col.type === 'water_theft_check') {
+          const estimate = _steraStockEstimate[col.id.slice(5)];
+          const theoDisplay = (estimate === null || estimate === undefined) ? '―' : esc(estimate);
+          const info = _steraWaterInfo || {};
+          const todaySales = (info.todaySales === null || info.todaySales === undefined) ? '―' : esc(info.todaySales);
+          const lastCount = info.lastCount || null;
+          const isTodaysCount = !!(lastCount && lastCount.date === dKey);
+          const prefill = isTodaysCount ? lastCount.qty : '';
+          const lastCountNote = (lastCount && !isTodaysCount)
+            ? `<div style="font-size:10px;color:#888;white-space:nowrap">前回(${esc(lastCount.date)})実測：${esc(lastCount.qty)}本</div>`
+            : '';
+          return `<div class="checksheet-today-row" style="flex-wrap:wrap">
+            <span>${esc(col.name)}</span>
+            <div style="display:flex;flex-direction:column;align-items:flex-end;gap:2px">
+              <span style="color:#22703d;font-weight:600;flex-shrink:0;white-space:nowrap">理論在庫：${theoDisplay}個</span>
+              <span style="color:#2563eb;font-weight:600;flex-shrink:0;white-space:nowrap">当日売上(速報)：${todaySales}本</span>
+              <div style="display:flex;align-items:center;gap:4px">
+                <span style="font-size:11px;color:#555;white-space:nowrap">実測本数</span>
+                <input type="number" min="0" step="1" id="cs-water-qty-${col.id}" value="${prefill === '' ? '' : esc(prefill)}" placeholder="本数"
+                  style="width:70px;font-size:14px;font-weight:700;border:1px solid #ddd;border-radius:5px;padding:3px 4px;font-family:inherit"
+                  onchange="saveSteraWaterCountInput('${dKey}',this.value)">
+              </div>
+              ${lastCountNote}
+            </div>
+          </div>`;
         }
         const input = col.type === 'check'
           ? `<input type="checkbox" ${v ? 'checked' : ''} onchange="updateChecksheetField('${dKey}','${col.id}',this.checked,'check')">`
@@ -3573,7 +3633,7 @@ async function switchPartnerTab(tab) {
   }
   if (tab === 'checklist') {
     renderChecksheet();
-    await Promise.all([loadChecksheetDataFromDb(storeTab), loadSteraStockEstimate(storeTab), loadChecksheetOpeningStock(storeTab)]);
+    await Promise.all([loadChecksheetDataFromDb(storeTab), loadSteraStockEstimate(storeTab), loadChecksheetOpeningStock(storeTab), loadSteraWaterInfo(storeTab)]);
     renderChecksheet();
   }
   if (tab === 'attendance') {
