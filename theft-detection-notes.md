@@ -6,16 +6,19 @@
 
 また、下記の「残り在庫」表示は、**盗難が起きるとその分だけ実物との乖離が広がっていくにも関わらず、この数字自体はそれに気づけない理論値でしかない**ため、「残り在庫」から**「理論在庫」に改称**した(index.html/README.md/本ファイル、2026-09-09)。「残り在庫」という名前が実物在庫であるかのように誤解を招くための変更で、計算ロジック自体は変更していない。
 
-**実装した設計(2026-09-09)**:
-1. **水だけ、チェックシートに「実測本数」の日次入力を復活**(index.html、`_checksheetProductColumns`の`water_theft_check`種別)。理論在庫(既存)・当日売上本数(速報、`getSteraWaterInfo`)と並べて、実測本数を1項目だけ入力してもらう。保存は`saveSteraWaterCount`という完全に独立した専用アクションで、チェックシート本体の`saveChecksheetData`(月間データ丸ごと送信)には一切乗せない——過去のマージ事故(feature_inventory_phase1/bug_shibuya_delivery_data_20260906)の教訓から、盗難検知の生命線になるこのデータだけは隔離する設計にした。
-2. **比較の起点はチェックシート入力ではなく、専用シート`stera_water_daily_count`(store_id, date, qty, recorded_at)自身の履歴から都度探すcheckpoint方式**(`checkSteraWaterTheftMismatch_`)。「dateStrより前で最も新しい日付」を毎回探すだけなので、入力が数日空いても壊れない(旧①の`sinceDate`問題を再現しない)。
-3. **突き合わせ**: 実測消費量(前回実測本数 + その間の当月納品 − 今回実測本数) と ステラ実売上(`getSteraDailyTotal_`、同じ期間)を比較。**閾値は絶対3個以上 かつ 割合30%以上(ステラ実売上0件で消費だけあった場合は割合条件を無条件で満たす扱い)**。旧①の「2回連続」は待たず**1回検知で即通知**(ユーザー決定、2026-09-09)——監視カメラ映像の保存期間(概ね7日)内にステラの購入履歴と照合できるよう、速報性を優先。通知は既存の在庫差異検知専用Bot(`sendStockBotNotification_`)をそのまま使う。
-4. **チェックの実行タイミング**: 毎朝06:00の確定売上取込み(`importSteraDailySalesBulk`)完了直後、その回で新たに確定した日付ぶんについて自動実行(`_checkSteraWaterTheftForImportedDates_`)。加えて`saveSteraWaterCount`保存直後にも同じ関数を呼ぶ(まだ確定していない日付なら中で無害にスキップするだけなので、二重に呼んでも問題ない——確定済みの日付を後から遡って入力した場合に、翌朝を待たず反応できるようにするため)。
-5. **当日売上本数(速報)の表示**(`getSteraWaterInfo`): 当該営業日が既に確定取込み済みなら確定値、まだなら`stera_realtime_today`の速報値を表示。理論在庫と同じく参考情報で、通知の判定には使わない(判定は必ず確定データのみで行う、`checkSteraWaterTheftMismatch_`参照)。
+**当初検討し、実装まで進めたが同日中に撤回した案**: 水専用の独立した保存経路(`stera_water_daily_count`シート、「実測本数」入力、`getSteraWaterInfo`/`saveSteraWaterCount`)を新設し、実測本数のスナップショットを比較するcheckpoint方式で組んだ。しかしユーザーから2点指摘があり撤回:
+1. 水の日次入力は「実測本数(現在庫のスナップショット)」ではなく、他のデイリーカウント対象商品と全く同じ「補充数(現場で棚から出した量)」であるべき——商品によって入力の意味を変えると混乱を招く。入力欄も他商品と同じUIに揃えるべき。
+2. 理論在庫(ステラ実売上ベース)の表示は、盗難が続くと実物とどんどん乖離していくにも関わらずこの数字自体はそれに気づけないため、「なんだかいつも在庫が少ない」という表示が続き**日々の士気が下がる**懸念がある。水の在庫自体は巡回時にパートナーが物理的にすぐ確認できるため、この数字を見せる必要性も薄い。
 
-**影響範囲**: `gas_backend.gs`(新規シート`stera_water_daily_count`、`getSteraWaterInfo`/`saveSteraWaterCount`/`checkSteraWaterTheftMismatch_`/`_checkSteraWaterTheftForImportedDates_`等、`importSteraDailySalesBulk`末尾へのフック追加)、`index.html`(チェックシートの水の行だけ`readonly`→`water_theft_check`に変更、`loadSteraWaterInfo`/`saveSteraWaterCountInput`追加)。`scripts/import_stera_daily_sales.py`は変更不要(GAS側のフックだけで完結)。
+**最終的に実装した設計(2026-09-09)**: 過去の実装履歴を調査した結果、2026-09-07以前は水がまさに他商品と全く同じ「デイリーカウント(補充数量)」のqty入力として扱われており、盗難検知①(`getChecksheetStockChecks`/`checkChecksheetStockMismatch`)もその入力値を直接使っていたと判明。この実証済みの設計をベースに、水だけ復活させた。
+1. **水を`_checksheetProductColumns`の通常qtyフィルタに戻す**(`p.vendor === 'sales' && p.name === '水'`、2026-09-08以前の設計と同じ)。ステラ取り扱い商品の読み取り専用グループ(`steraNames`)からは水だけ除外する。これにより水は他商品と全く同じ+/-ステッパー入力になり、`saveChecksheetData`の通常の保存フローにそのまま乗る(専用の保存経路は不要になった)。同時に、水の表示は自動的に`checksheetRemainingStock`ベースの「残り在庫」(パートナー自身の補充数入力ベース、盗難の有無に左右されない)になり、理論在庫の表示自体が水では出なくなる——士気の懸念も自然に解消された。
+2. **`updateChecksheetField`に`_scheduleStockMismatchCheck`(旧設計を復活)を追加**。水(`prod:水`)のqtyが変わるたびに3秒デバウンスで`checkWaterStockMismatch`(POST、`{storeId, product}`)を呼ぶ。対象外の商品が来ても`{skipped:'not_tracked'}`を返すだけで無害。
+3. **`checkWaterStockMismatch`(旧`checkChecksheetStockMismatch`を復活・改修)**: チェックシートの`prod:水`入力履歴から`sinceDate`(前回入力日)を探し、`sinceDate`(除く)〜本日(含む)の補充量合計(`inputQty`)と、同期間のステラ実売上(`carryOver` + 確定分`stera_daily_sales` + 当日速報`stera_realtime_today`、`stock_mismatch_checkpoint`シートで日またぎの取りこぼしを防止)を突き合わせる。**閾値は絶対3個以上(旧は2個) かつ 割合30%以上(inputQtyに対する比率)**。旧①の「2回連続」待機は行わず**1回検知で即時通知**(ユーザー決定、2026-09-09——監視カメラ映像の保存期間(概ね7日)内にステラの購入履歴と照合できるよう、速報性を優先)。通知は既存の在庫差異検知専用Bot(`sendStockBotNotification_`)をそのまま使う。
+4. **当日売上本数の表示は行わない**(旧設計のまま踏襲。バックエンドの突き合わせだけで完結し、パートナーには数字を見せない設計)。
 
-**未検証(実データでの動作確認が必要)**: ロジック自体はNode上での計算シミュレーションで確認済みだが、実際にApps Scriptへデプロイした上で、実測本数を数日分入力→翌朝の確定取込み後に通知が正しく飛ぶかは未確認。デプロイ後、最初の数日は通知が来なくても(前回実測が無いため、または未入力のため)想定通りなので慌てないこと。
+**影響範囲**: `gas_backend.gs`(`_checkSteraWaterTheftForImportedDates_`等の当初案は削除、`stock_mismatch_checkpoint`関連関数(`_getStockMismatchCheckpointSheet_`/`_stockMismatchCarryOverFromRows_`/`_batchUpsertStockMismatchCheckpoints_`)を復活、`checkWaterStockMismatch`新設)、`index.html`(`_checksheetProductColumns`で水をqtyフィルタに戻す、`updateChecksheetField`に`_scheduleStockMismatchCheck`復活、当初案の`water_theft_check`関連コードは全て削除)。`scripts/import_stera_daily_sales.py`は変更不要。
+
+**未検証(実データでの動作確認が必要)**: ロジック自体はNode上での計算シミュレーションで確認済み、UIもPlaywrightで見た目確認済み(水が他商品と同じ「残り在庫」表示になること、他のステラ商品は引き続き「理論在庫」のままであることを確認)。ただし実際に数日分の補充数を入力→通知が正しく飛ぶかは未確認。
 
 ## 🔄 再設計メモ (2026-09-07/08、実装完了)
 
