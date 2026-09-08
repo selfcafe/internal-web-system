@@ -3692,9 +3692,15 @@ function _seedSteraDailyFromRealtimeRollover_(dateStr, existingRealtimeRows) {
   if (_hasSteraDailyDataForDate_(dateStr)) return;
   const idx = {};
   STERA_REALTIME_COLS.forEach((c, i) => { idx[c] = i; });
+  // 2026-09-09修正: STERA_DAILY_COLSに'amount'列(2026-09-07追加)が入ってから、この行だけ
+  // 4列のまま更新し忘れていたため、日付が変わるたびに
+  // 「データの列数が範囲の列数と一致しません(データ4列、範囲5列)」で失敗し続けていた
+  // (migrateSteraDailySalesColumnsで見出しだけは直したが、この書き込み側の追随漏れ)。
+  // 速報値(stera_realtime_today)にamount(商品合計金額)は無いため0で埋める——翌朝の
+  // 確定CSV取込み(importSteraDailySalesBulk)で同日付が上書きされればamountも正しい値に置き換わる。
   const newRows = existingRealtimeRows
     .filter(r => (Number(r[idx.qty]) || 0) > 0)
-    .map(r => [dateStr, r[idx.store_id], r[idx.prd_id], Number(r[idx.qty]) || 0]);
+    .map(r => [dateStr, r[idx.store_id], r[idx.prd_id], Number(r[idx.qty]) || 0, 0]);
   if (!newRows.length) return;
   const sheet = getSteraDailySheet_();
   const startRow = sheet.getLastRow() + 1;
