@@ -1659,14 +1659,22 @@ const nearingExpiry = d => !!d && !overdue(d) && d <= oneMonthFromToday();
 const esc     = s  => (s == null ? '' : String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
 const prodByName = n => PRODUCTS.find(p => p.name===n) || null;
+
+// ケースサイズを添える際の共通文言。以前は「ケース（25）」のように括弧内が合計本数なのか
+// ケースあたりの入り数なのか紛らわしかったため、「/1ケースの入り数25」で統一する
+// （2026-09-08、発注依頼のプルダウン等も含めアプリ全体で表記を揃えるための共通化）
+function caseSizeHint(caseUnit) {
+  return caseUnit ? `/1ケースの入り数${esc(caseUnit)}` : '';
+}
+
 // caseOnly商品は常に'case'扱い。それ以外でcaseUnitがある商品は行ごとのunitMode
 // （'piece'|'case'、未指定は既定'piece'＝今まで通りの挙動）で表示を切り替える
 function unitLabelText(name, unitMode) {
   const p = prodByName(name);
   if (!p) return '';
-  if (p.caseOnly) return `ケース（${p.caseUnit}）`;
+  if (p.caseOnly) return `ケース${caseSizeHint(p.caseUnit)}`;
   if (!p.caseUnit) return p.unit;
-  return (unitMode || 'piece') === 'case' ? `ケース（${p.caseUnit}）` : `${p.unit}（${p.caseUnit}）`;
+  return (unitMode || 'piece') === 'case' ? `ケース${caseSizeHint(p.caseUnit)}` : `${p.unit}${caseSizeHint(p.caseUnit)}`;
 }
 
 // ケース単位の行（caseOnly商品、またはunitModeが'case'の行）は「2 ケース（25）」のような
@@ -1683,18 +1691,27 @@ function caseQtyParts(row) {
   if (product && mode === 'case' && product.caseUnit) {
     const caseSize = casePiecesFromUnit(product.caseUnit);
     if (caseSize != null) {
-      return { qtyPart: `${esc(row.qty)}ケース`, sizePart: `/1ケースの入り数${caseSize}` };
+      return { qtyPart: `${esc(row.qty)}ケース`, sizePart: caseSizeHint(caseSize) };
     }
   }
   return null;
 }
 
-// 管理者ポータル（発注タブ）の依頼数量ボックス用。「1ケースの入り数」部分は主情報の
-// ケース数と違って参考情報のため、太字にしない（2026-09-08指摘）
+// 文字列中に「/1ケースの入り数◯◯」があれば、そこだけ太字を弱めた控えめな見た目にする。
+// 主情報(依頼数量そのもの)と違って参考情報のため（2026-09-08指摘）。ケース単位の行・
+// バラ数量に参考情報として入り数が付く行(砂糖の「5 袋/1ケースの入り数20」等)の両方に
+// 同じ見た目を適用し、表記を統一する
+function dimCaseSizeHint(str) {
+  const idx = str.indexOf('/1ケースの入り数');
+  if (idx === -1) return str;
+  return `${str.slice(0, idx)}<span style="font-weight:400;color:#888">${str.slice(idx)}</span>`;
+}
+
+// 管理者ポータル（発注タブ）の依頼数量ボックス用
 function qtyLabelText(row) {
   const parts = caseQtyParts(row);
   if (parts) return `依頼数：${parts.qtyPart}<span style="font-weight:400;color:#888">${parts.sizePart}</span>`;
-  return `依頼：${esc(row.qty)||'—'} ${esc(unitLabelText(row.product, row.unitMode))}`;
+  return dimCaseSizeHint(`依頼：${esc(row.qty)||'—'} ${esc(unitLabelText(row.product, row.unitMode))}`);
 }
 
 // パートナーポータルの「数量」列（発注済み一覧・依頼済み履歴）用。列見出しに既に「数量」と
@@ -1756,7 +1773,7 @@ function actualUnitToggleHTML(sid, row) {
 function actualUnitLabelText(product, actualMode) {
   if (!product) return '';
   if (!product.caseUnit) return product.unit;
-  return actualMode === 'case' ? `ケース（${product.caseUnit}）` : product.unit;
+  return actualMode === 'case' ? `ケース${caseSizeHint(product.caseUnit)}` : product.unit;
 }
 
 // 発注タブ（管理者）用：本部が実際数量を編集できる欄。パートナー側のqty/unitModeと同じく
@@ -4772,7 +4789,7 @@ function filterProd(rowId) {
       ${inUse ? '<span style="font-size:10px;background:#94a3b8;color:white;border-radius:3px;padding:1px 5px;margin-left:5px">依頼中</span>' : ''}
       ${!inUse && p.caseOnly ? '<span style="font-size:10px;background:#ef4444;color:white;border-radius:3px;padding:1px 5px;margin-left:5px">ケース注文のみ</span>' : ''}
       ${!inUse && !p.caseOnly && p.caseUnit ? '<span style="font-size:10px;background:#22703d;color:white;border-radius:3px;padding:1px 5px;margin-left:5px">個数/ケース選択可</span>' : ''}
-      <span style="font-size:11px;color:#888;margin-left:6px">${p.caseOnly ? 'ケース（'+esc(p.caseUnit)+')' : (esc(p.unit)+(p.caseUnit?' / '+esc(p.caseUnit):''))}</span>
+      <span style="font-size:11px;color:#888;margin-left:6px">${p.caseOnly ? 'ケース'+caseSizeHint(p.caseUnit) : (esc(p.unit)+caseSizeHint(p.caseUnit))}</span>
     </div>`;
   };
 
