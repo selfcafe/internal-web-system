@@ -6108,16 +6108,23 @@ function setActualUnitMode(storeId, rowId, mode) {
 }
 
 // 実際数量を初めて入力した瞬間、その時点で表示されていた単位（未設定なら依頼のunitModeに
-// 追従した見た目、effectiveActualUnitMode参照）をactualUnitModeとして確定させる。
-// これをしないと、入力直後にactualQtyが非空になったことでeffectiveActualUnitModeの
-// フォールバックが'piece'側に変わってしまい、見た目が勝手に切り替わる上、
-// 棚卸集計（actualQtyToPieces/deliveredPiecesForRow）はactualUnitModeを直接見るため
-// 表示と異なる単位で個数変換されてしまう
+// 追従した見た目）をactualUnitModeとして確定させる。これをしないと、入力直後に
+// actualQtyが非空になったことでeffectiveActualUnitModeのフォールバックが'piece'側に
+// 変わってしまい、見た目が勝手に切り替わる上、棚卸集計（actualQtyToPieces/
+// deliveredPiecesForRow）はactualUnitModeを直接見るため表示と異なる単位で個数変換されてしまう。
+//
+// 「その時点で表示されていた単位」の判定は必ずeffectiveActualUnitMode(row, product)を
+// そのまま呼ぶこと——ここだけ`row.unitMode || 'piece'`のように別ロジックを書き直すと、
+// 表示側(effectiveActualUnitMode)だけ仕様変更された時にここが追従できず、見た目と保存内容が
+// 食い違う（2026-09-08発覚: caseOnly商品は依頼側にunitMode自体が存在しないため常に'piece'に
+// 確定してしまい、実際数量が空の新規行で「ケース」表示を見て数字を入力した本部の意図が
+// バラ数として記録される事故があった。9/6にeffectiveActualUnitMode側だけcaseOnly対応した際、
+// ここの独自ロジックが追従していなかったことが原因）。
 function setActualQty(storeId, rowId, value) {
   const active = loadA(storeId);
   const row = active.find(r => r.id === rowId);
   if (row) {
-    if (!row.actualUnitMode) row.actualUnitMode = row.unitMode || 'piece';
+    if (!row.actualUnitMode) row.actualUnitMode = effectiveActualUnitMode(row, prodByName(row.product));
     row.actualQty = value;
     saveA(storeId, active);
   }
