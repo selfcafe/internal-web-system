@@ -1669,6 +1669,42 @@ function unitLabelText(name, unitMode) {
   return (unitMode || 'piece') === 'case' ? `ケース（${p.caseUnit}）` : `${p.unit}（${p.caseUnit}）`;
 }
 
+// ケース単位の行（caseOnly商品、またはunitModeが'case'の行）は「2 ケース（25）」のような
+// 表記だと、括弧内の25が合計本数なのかケースあたりの入り数なのか紛らわしいという指摘
+// （2026-09-08、管理者・パートナー両ポータルの発注画面共通）があったため、
+// 「2ケース」（qtyPart）と「/1ケースの入り数25」（sizePart）に分けて返す（本/袋/ロール等の
+// 単位名は出さない）。sizePartは呼び出し側で控えめな見せ方(太字にしない等)にできるよう
+// 別々の文字列にしてある。ケース以外（バラ数量そのままの行、砂糖の「5 袋（20）」等）や、
+// ケースサイズ表記から入り数を自動判定できない行はnullを返す（呼び出し側で従来通りの
+// 表記にフォールバックする）
+function caseQtyParts(row) {
+  const product = prodByName(row.product);
+  const mode = product && product.caseOnly ? 'case' : (row.unitMode || 'piece');
+  if (product && mode === 'case' && product.caseUnit) {
+    const caseSize = casePiecesFromUnit(product.caseUnit);
+    if (caseSize != null) {
+      return { qtyPart: `${esc(row.qty)}ケース`, sizePart: `/1ケースの入り数${caseSize}` };
+    }
+  }
+  return null;
+}
+
+// 管理者ポータル（発注タブ）の依頼数量ボックス用。「1ケースの入り数」部分は主情報の
+// ケース数と違って参考情報のため、太字にしない（2026-09-08指摘）
+function qtyLabelText(row) {
+  const parts = caseQtyParts(row);
+  if (parts) return `依頼数：${parts.qtyPart}<span style="font-weight:400;color:#888">${parts.sizePart}</span>`;
+  return `依頼：${esc(row.qty)||'—'} ${esc(unitLabelText(row.product, row.unitMode))}`;
+}
+
+// パートナーポータルの「数量」列（発注済み一覧・依頼済み履歴）用。列見出しに既に「数量」と
+// あるため「依頼数：」等のラベルは付けず、ケース詳細のみ差し込む
+function qtyTableCellHTML(row) {
+  const parts = caseQtyParts(row);
+  if (parts) return `<span class="unit-label">${parts.qtyPart}${parts.sizePart}</span>`;
+  return `<span style="font-size:13px">${esc(row.qty)||'—'}</span> <span class="unit-label">${esc(unitLabelText(row.product, row.unitMode))}</span>`;
+}
+
 // caseUnit（商品設定の「1ケースの入り数」欄）は2026-07-14以降、素の数字（例："25"）での
 // 入力を想定に変更した（旧仕様は"1ケース/20本"のような自由文字列で、末尾の数字だけを
 // 実個数として拾う必要があり、数字を含まない表記だと変換不可になっていた）。この関数は
@@ -1741,15 +1777,15 @@ function actualQtyCell(sid, row) {
   const actualAmbiguous = !!(product && actualMode === 'case' && casePiecesFromUnit(product.caseUnit) == null && row.actualQty !== '' && row.actualQty != null);
   const actualWarn = actualAmbiguous ? `<span title="1ケースあたりの個数を自動判定できないため、この実際数量（ケース）は棚卸の集計に反映されません" style="color:#dc2626;font-size:11px;cursor:help">⚠集計不可</span>` : '';
 
-  return `<div style="display:flex;flex-direction:column;gap:2px;min-width:110px">
-    <div style="font-size:12px;color:#555;font-weight:600">依頼：${esc(row.qty)||'—'} ${esc(unitLabelText(row.product, row.unitMode))}</div>
-    <div style="display:flex;align-items:center;gap:4px;flex-wrap:wrap">
-      <span style="font-size:10px;color:#888;white-space:nowrap;display:inline-flex;align-items:center;gap:3px">実際数量<span class="qhint" tabindex="0" style="cursor:help;align-items:center;justify-content:center;width:13px;height:13px;border-radius:50%;background:#2563eb;color:#fff;font-size:9px;font-weight:700;font-style:normal;line-height:1">i<span class="qhint-tip">空欄の場合は依頼数量がそのまま使われます。実際が依頼と同じならここは未入力のままでOKです</span></span></span>
+  return `<div style="display:flex;flex-direction:column;gap:3px;min-width:110px">
+    <div style="font-size:12px;color:#555;font-weight:600">${qtyLabelText(row)}</div>
+    <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
+      <span style="font-size:12px;color:#555;font-weight:700;white-space:nowrap;display:inline-flex;align-items:center;gap:3px">実際数量<span class="qhint" tabindex="0" style="cursor:help;align-items:center;justify-content:center;width:13px;height:13px;border-radius:50%;background:#2563eb;color:#fff;font-size:9px;font-weight:700;font-style:normal;line-height:1">i<span class="qhint-tip">空欄の場合は依頼数量がそのまま使われます。実際が依頼と同じならここは未入力のままでOKです</span></span></span>
       <input type="number" min="0" value="${row.actualQty !== '' && row.actualQty != null ? esc(row.actualQty) : ''}"
         placeholder="${actualMode === 'piece' && fallback != null ? esc(fallback) : ''}"
-        style="width:60px;font-size:12px;border:1px solid #ddd;border-radius:5px;padding:3px 4px;font-family:inherit"
+        style="width:72px;font-size:17px;font-weight:700;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-family:inherit"
         onchange="setActualQty('${sid}','${row.id}',this.value)">
-      <span style="font-size:11px;color:#888;display:inline-block;min-width:64px">${esc(actualUnitLabelText(product, actualMode))}</span>
+      <span style="font-size:13px;font-weight:700;color:#333;display:inline-block;min-width:64px">${esc(actualUnitLabelText(product, actualMode))}</span>
       ${actualUnitToggleHTML(sid, row)}
     </div>
     ${warn}${actualWarn}
@@ -4947,7 +4983,7 @@ function renderStore() {
         : `<td class="c-product" data-label="商品名">${productSearchHTML(row.id, row.product)}</td>`;
 
       const qtyCell = isLocked
-        ? `<td class="c-qty" data-label="数量"><span style="font-size:13px">${esc(row.qty)||'—'}</span> <span class="unit-label">${esc(unitLabelText(row.product, row.unitMode))}</span></td>`
+        ? `<td class="c-qty" data-label="数量">${qtyTableCellHTML(row)}</td>`
         : `<td class="c-qty" data-label="数量"><div class="qty-wrap">
             <button class="qty-btn" onclick="stepQty('${row.id}',-1)">－</button>
             <input type="number" min="0" id="qty-${row.id}" ${row.qty !== null && row.qty !== '' ? `value="${esc(row.qty)}"` : ''} onchange="updStore('${row.id}','qty',this.value)">
@@ -5163,7 +5199,7 @@ function renderOrderHistory() {
           <td class="c-order" data-label="発注日">${displayCell(row.orderDate)}</td>
           <td class="c-delivery" data-label="納品予定日">${displayCell(row.deliveryDate)}</td>
           <td class="c-product" data-label="商品名" style="font-size:13px">${pLabel ? esc(pLabel) : '<span style="color:#bbb">未選択</span>'}</td>
-          <td class="c-qty" data-label="数量"><span style="font-size:13px">${esc(row.qty)||'—'}</span> <span class="unit-label">${esc(unitLabelText(row.product, row.unitMode))}</span>${actualQtyLine}</td>
+          <td class="c-qty" data-label="数量">${qtyTableCellHTML(row)}${actualQtyLine}</td>
           <td class="c-note" data-label="備考" style="font-size:13px;color:#555;white-space:pre-wrap">${esc(row.note)}</td>
           ${actionCell}`;
         tbody.appendChild(tr);
