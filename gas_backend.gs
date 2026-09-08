@@ -3792,13 +3792,15 @@ function _lastDayOfPeriod_(periodLabel) {
   return Utilities.formatDate(lastDay, 'UTC', 'yyyy-MM-dd');
 }
 
-// 2026-09-08追加。ステラ取り扱い商品の「残り在庫」をチェックシート向けに自動計算する
+// 2026-09-08追加。ステラ取り扱い商品の「理論在庫」をチェックシート向けに自動計算する
 // (パートナー入力に一切依存しない設計。theft-detection-notes.mdの🔄再設計メモ参照)。
 // 直近確定棚卸の期末在庫を起点に、その後の当月納品(inventory_delivery_auto、recorded_at基準)を足し、
 // その後のステラ実売上(stera_daily_sales、営業日=AM4:30締めベース。当日分はstera_realtime_todayで補う)を
-// 引く。STERA_SALES_MAPPINGのグループ単位(ourProductsが複数ある場合は合算)で1つの残り在庫を返す。
-// ?action=getSteraStockEstimate&storeId=... で実行。戻り値は{商品名: 残り在庫数 または null}
+// 引く。STERA_SALES_MAPPINGのグループ単位(ourProductsが複数ある場合は合算)で1つの理論在庫を返す。
+// ?action=getSteraStockEstimate&storeId=... で実行。戻り値は{商品名: 理論在庫数 または null}
 // (nullは対象商品の確定棚卸データがまだ無い店舗)。デイリーカウント(手入力)は一切参照しない。
+// 「理論在庫」という名称なのは、盗難で実物が減ってもこの数字自体はそれに気づけない
+// 理論値でしかないため(2026-09-09、「残り在庫」から改称。関数名・戻り値の形は変更なし)。
 function getSteraStockEstimate(storeId) {
   if (!storeId) return { error: 'storeIdは必須です' };
   const invData = _inventoryLogRowsCached_();
@@ -3845,7 +3847,7 @@ function getSteraStockEstimate(storeId) {
     const endStockTotal = memberInfos.reduce((sum, info) => sum + info.endStock, 0);
     // グループ内で複数の確定期間が混在する場合は、最も新しい期間を起点にする(古い期間を
     // 起点にすると、既に新しい期間の期末在庫に反映済みの納品/売上を二重に差し引く/加算する
-    // ことになるため。多少の誤差はあり得るが「目安の残り在庫」として許容する)
+    // ことになるため。多少の誤差はあり得るが「目安の理論在庫」として許容する)
     const latestPeriod = memberInfos.reduce((max, info) => info.periodLabel > max ? info.periodLabel : max, memberInfos[0].periodLabel);
     const sinceDate = _lastDayOfPeriod_(latestPeriod); // "YYYY-MM-DD"、この日の営業日終了時点が起点
 

@@ -3242,10 +3242,13 @@ async function loadChecksheetDataFromDb(storeId) {
 // 盗難検知①(表示専用)：「前回入力からの実売上」。チェックシートタブを開くたびに1回だけ取得する
 // (表示内容は前回チェックポイント基準で今回の入力値には依存しないため、タップごとの再取得は不要)。
 // キーは商品名(prod:接頭辞なし)、値は{label, sinceDate, qty}またはnull(まだ前回入力が無い商品)
-// ステラ取り扱い商品の残り在庫(2026-09-08〜、パートナー入力に一切依存しない自動計算値。
+// ステラ取り扱い商品の理論在庫(2026-09-08〜、パートナー入力に一切依存しない自動計算値。
 // 旧仕組み(デイリーカウント入力からの逆算・入力時の気づき通知)は廃止した——
 // theft-detection-notes.mdの🔄再設計メモ参照。このオブジェクトのキー一覧が
 // そのまま「ステラ扱い商品名」の一覧としても使われる(_checksheetProductColumns参照)。
+// 「理論在庫」という名称にしているのは、これが納品−ステラ実売上から逆算した理論値でしか
+// なく、実物の在庫とは独立していないため(2026-09-09、盗難が起きると理論値と実物が
+// 乖離していく一方でこの数字自体は気づけないという指摘を受け、「残り在庫」から改称)。
 let _steraStockEstimate = {};
 async function loadSteraStockEstimate(storeId) {
   try { _steraStockEstimate = await gasGet('getSteraStockEstimate', { storeId }) || {}; }
@@ -3315,7 +3318,7 @@ function stepChecksheetQty(dayKey, itemId, delta) {
 // その他のペーパータオル・ストロー・トイレットペーパーを対象にする（店舗別取扱商品設定に連動）。
 // 2026-09-08、ステラ取り扱い商品(水など、_steraStockEstimateのキー一覧＝STERA_SALES_MAPPING対象)は
 // ここから除外し、末尾に読み取り専用の別枠を追加する形に変更した——デイリーカウント入力自体を
-// 廃止し、残り在庫はステラ実売上ベースの自動計算(getSteraStockEstimate)に一本化したため
+// 廃止し、理論在庫はステラ実売上ベースの自動計算(getSteraStockEstimate)に一本化したため
 // (theft-detection-notes.mdの🔄再設計メモ参照)。
 const CHECKSHEET_QTY_VENDOR_ALL = ['apex', 'toyo', 'cs3'];
 function _checksheetProductColumns() {
@@ -3333,7 +3336,7 @@ function _checksheetProductColumns() {
     cols: products.filter(p => p.vendor === v.key).map(p => ({ id:'prod:' + p.name, type:'qty', name:p.label || p.name })),
   })).filter(g => g.cols.length);
 
-  // ステラ取り扱い商品は入力不要・読み取り専用の残り在庫表示のみ(type:'readonly')
+  // ステラ取り扱い商品は入力不要・読み取り専用の理論在庫表示のみ(type:'readonly')
   if (steraNames.length) {
     const allProducts = _inventoryProductList();
     const steraCols = steraNames
@@ -3423,12 +3426,12 @@ function renderChecksheetTodayForm(wrap, subgroups) {
     <div class="checksheet-today-list">
       ${sg.cols.map(col => {
         const v = dayData[col.id];
-        // ステラ取り扱い商品(読み取り専用、2026-09-08〜)は入力不要——残り在庫の数字をそのまま表示する
+        // ステラ取り扱い商品(読み取り専用、2026-09-08〜)は入力不要——理論在庫の数字をそのまま表示する
         // だけで、デイリーカウント入力欄・過去の「前回入力からの実売上」表示は無い(廃止済み)
         if (col.type === 'readonly') {
           const estimate = _steraStockEstimate[col.id.slice(5)];
           const display = (estimate === null || estimate === undefined) ? '―' : esc(estimate);
-          return `<div class="checksheet-today-row"><span>${esc(col.name)}</span><span style="color:#22703d;font-weight:600;flex-shrink:0;white-space:nowrap">残り在庫：${display}個</span></div>`;
+          return `<div class="checksheet-today-row"><span>${esc(col.name)}</span><span style="color:#22703d;font-weight:600;flex-shrink:0;white-space:nowrap">理論在庫：${display}個</span></div>`;
         }
         const input = col.type === 'check'
           ? `<input type="checkbox" ${v ? 'checked' : ''} onchange="updateChecksheetField('${dKey}','${col.id}',this.checked,'check')">`
