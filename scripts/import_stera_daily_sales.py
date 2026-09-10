@@ -425,6 +425,24 @@ def notify_failure(script_name, error):
         print(f"失敗通知の送信にも失敗しました: {notify_err}")
 
 
+def notify_recovery(script_name):
+    """失敗通知の後、次に成功した時点で復旧をLINE WORKSへ知らせてほしいとの要望を受けて
+    追加(2026-09-10)。実際に通知が必要か(直前に失敗通知が出ていたか)はGAS側
+    (reportScriptRecovery)が判断するため、ここでは成功するたびに無条件で呼んでよい。
+    通知自体が失敗しても、成功した本来の処理結果には影響させない(ログに残すだけ)。"""
+    gas_url = os.environ.get("GAS_URL")
+    if not gas_url:
+        return
+    try:
+        requests.post(gas_url, json={
+            "action": "reportScriptRecovery",
+            "message": f"{script_name}が復旧しました(直前の失敗が解消し、正常に完了しました)",
+            "key": script_name,
+        }, timeout=15)
+    except Exception as notify_err:
+        print(f"復旧通知の送信に失敗しました: {notify_err}")
+
+
 def run_with_retry(fn, script_name, attempts=2):
     """ここ数日の失敗はいずれも原因が毎回違う一過性のもの(404、ソケット未接続、CDP接続
     タイムアウト、UI要素待ちタイムアウト)で、手動再実行では即成功していた。CDP Chromeを
@@ -434,6 +452,7 @@ def run_with_retry(fn, script_name, attempts=2):
     for attempt in range(1, attempts + 1):
         try:
             fn()
+            notify_recovery(script_name)
             return
         except Exception as e:
             last_err = e
