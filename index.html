@@ -342,10 +342,11 @@
       .phw-tr { grid-column:59/101; grid-row:1/59; background:#6b7280; }
       .phw-tr span { writing-mode:vertical-rl; text-orientation:upright; letter-spacing:1px; font-size:17px; text-align:start; }
       .phw-bl { grid-column:1/43; grid-row:43/101; background:linear-gradient(180deg,#dfc35a,#b6952f); color:#241a12; }
+      .phw-bl.partner-attendance-btn { background:#22703d; color:white; }
       .phw-bl.phw-piece-empty { background:#eef1ea; cursor:default; color:white; }
       .phw-br { grid-column:43/101; grid-row:59/101; background:#22703d; font-size:16px; white-space:nowrap; }
       .phw-br.manual-menu-btn { background:#b5544a; }
-      .phw-tl.invoice-btn { background:#22703d; cursor:pointer; }
+      .phw-tl.invoice-btn { background:#8a8f7e; cursor:pointer; }
       .admin-title-row h1 { flex-basis:100%; }
       .link-btn { padding:8px 12px; font-size:13px; }
       table.card-mode { display:block; box-shadow:none; background:transparent; border-radius:0; }
@@ -546,14 +547,14 @@
     <img src="logo-horizontal.png" class="portal-logo" alt="セルフカフェ">
     <div class="partner-hdr-btns">
       <div class="partner-hdr-cell" style="display:flex;gap:8px;align-items:center">
-        <button id="ptab-attendance-pc" class="pc-only" onclick="switchPartnerTab('attendance')" style="display:none;background:linear-gradient(180deg,#dfc35a,#b6952f);color:#241a12;padding:10px 16px;font-size:14px;font-weight:700;border-radius:6px;border:1px solid #b6952f;cursor:pointer;font-family:inherit;flex-shrink:0">業務管理</button>
-        <button onclick="siteLogout()" class="portal-logout-btn" style="background:#6b7280;color:white;padding:10px 18px;font-size:15px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">ログアウト</button>
-      </div>
-      <div class="partner-hdr-cell" style="display:flex;gap:6px">
+        <button id="ptab-attendance-pc" class="pc-only" onclick="switchPartnerTab('attendance')" style="display:none;background:#22703d;color:white;padding:10px 16px;font-size:14px;font-weight:700;border-radius:6px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">業務管理</button>
         <div class="doc-menu-wrap">
           <button onclick="toggleManualMenu('pc', getManualDocs())" style="background:#b5544a;color:white;padding:7px 13px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">マニュアル</button>
           <div class="doc-menu-dd" id="manual-dd-pc"></div>
         </div>
+      </div>
+      <div class="partner-hdr-cell" style="display:flex;gap:6px">
+        <button onclick="siteLogout()" class="portal-logout-btn" style="background:#6b7280;color:white;padding:10px 18px;font-size:15px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">ログアウト</button>
       </div>
     </div>
     <div class="portal-title-store-row">
@@ -561,7 +562,7 @@
       <div class="partner-hdr-pinwheel">
         <div class="phw-piece phw-tl" id="phw-empty"></div>
         <button class="phw-piece phw-tr" onclick="siteLogout()"><span>ログ<br>アウト</span></button>
-        <button id="ptab-attendance-sp" class="phw-piece phw-bl" onclick="if(isAttendanceEnabled(storeTab))switchPartnerTab('attendance')"><span>業務<br>管理</span></button>
+        <button id="ptab-attendance-sp" class="phw-piece phw-bl partner-attendance-btn" onclick="if(isAttendanceEnabled(storeTab))switchPartnerTab('attendance')"><span>業務<br>管理</span></button>
         <button class="phw-piece phw-br manual-menu-btn" onclick="toggleManualMenu('sp', getManualDocs())"><span>マニュアル</span></button>
       </div>
       <div class="doc-menu-dd" id="manual-dd-sp" style="position:absolute;top:134px;right:0"></div>
@@ -747,7 +748,7 @@
   <div class="page-header" style="flex-direction:column;align-items:stretch;gap:4px;position:relative">
     <img src="logo-horizontal.png" class="portal-logo" alt="セルフカフェ">
     <div class="admin-hdr-btns">
-      <button class="admin-attendance-btn" onclick="switchAdminView('attendance')" style="background:#22703d;color:white;padding:9px 14px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">業務管理</button>
+      <button class="admin-attendance-btn" onclick="switchAdminView('attendance')" style="background:linear-gradient(180deg,#dfc35a,#b6952f);color:#241a12;padding:9px 14px;font-size:13px;font-weight:700;border-radius:8px;border:1px solid #b6952f;cursor:pointer;font-family:inherit">業務管理</button>
       <div class="doc-menu-wrap">
         <button onclick="toggleManualMenu('admin-pc', ADMIN_MANUAL_DOCS)" style="background:#b5544a;color:white;padding:8px 13px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">マニュアル</button>
         <div class="doc-menu-dd" id="manual-dd-admin-pc"></div>
