@@ -3264,7 +3264,7 @@ function processMonthlyReorder(storeId, periodLabel) {
 const STERA_SALES_MAPPING = [
   { prdId: 'prd_223df30ea1f511d1df19c6c', label: '水', ourProducts: ['水'] },
   { prdId: 'prd_12fd82ee35d41bcef497baa', label: 'レディーボーデン各種', ourProducts: ['アイス　チョコ　レディーボーデン', 'アイス　バニラ　レディーボーデン', 'アイス　プレミアムミルク　レディーボーデン', 'アイス　クッキーアンドクリーム　レディーボーデン'] },
-  { prdId: 'prd_535430d421048c6d58de73e', label: 'プリングルス各種', ourProducts: ['プリングルス', 'プリングルス　チーズ', 'プリングルス　サワークリーム＆オニオン'] },
+  { prdId: 'prd_535430d421048c6d58de73e', label: 'プリングルス各種', ourProducts: ['プリングルス　うましお', 'プリングルス　チーズ', 'プリングルス　サワークリーム＆オニオン'] },
   { prdId: 'prd_db5c32edaf3cba6889315ce', label: 'プチシリーズ', ourProducts: ['プチシリーズ'] },
   { prdId: 'prd_e5beda23225e76774172fe8', label: 'ソイジョイ', ourProducts: ['ソイジョイ'] },
   { prdId: 'prd_57998f0bdebf586bcd3e51c', label: '大粒ラムネ', ourProducts: ['大粒ラムネ'] },
