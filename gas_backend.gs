@@ -469,6 +469,7 @@ function doPost(e) {
     else if (b.action === 'checkSteraRefunds') result = checkSteraRefunds(b.dateStr, b.refunds);
     else if (b.action === 'checkWaterStockMismatch') result = checkWaterStockMismatch(b.storeId, b.product);
     else if (b.action === 'reportScriptFailure') result = reportScriptFailure(b.message, b.key);
+    else if (b.action === 'reportScriptRecovery') result = reportScriptRecovery(b.message, b.key);
     else if (b.action === 'submitInvoice')       result = submitInvoice(b.payload);
     else if (b.action === 'saveInvoiceReceiptImage') result = saveInvoiceReceiptImage(b.imageBase64, b.imageMime, b.filename);
     else if (b.action === 'saveAttendance')      result = saveAttendance(b.storeId, b.name, b.lat, b.lng);
@@ -4438,6 +4439,32 @@ function reportScriptFailure(message, key) {
     props.setProperty(throttleKey, String(now));
   } catch (e) {
     console.error('reportScriptFailureの通知送信エラー:', e.message);
+    return { error: '通知送信自体に失敗: ' + e.message };
+  }
+  return { ok: true };
+}
+
+// 2026-09-10追加: 失敗通知を受けた後、次に成功した時点で「復旧した」ことも知らせてほしい
+// との要望を受けて追加。scriptFailureNotifiedAt_<key>が実際にセットされている(=直前に
+// 失敗通知を送っている)場合に限り復旧を通知し、通知後はこのプロパティを削除する
+// (削除しないと、次に本当に新しい失敗が起きた時に古い通知時刻のままスロットリングされ、
+// 最大1時間気づかれない事故になる)。まだ一度も失敗していない(プロパティ未設定)場合は
+// 何もせず{skipped: 'not_previously_failed'}を返す——呼び出し側(Python)は成功するたびに
+// 毎回無条件でこれを呼んでよく、実際に通知が必要かどうかの判断はこちら側で行う。
+// ?action=reportScriptRecovery(POST、{message, key})で実行。
+function reportScriptRecovery(message, key) {
+  if (!message) return { error: 'messageは必須です' };
+  const props = PropertiesService.getScriptProperties();
+  const throttleKey = 'scriptFailureNotifiedAt_' + (key || 'default');
+  const wasFailed = props.getProperty(throttleKey);
+  if (!wasFailed) {
+    return { ok: true, skipped: 'not_previously_failed' };
+  }
+  try {
+    sendStockBotNotification_('【スクリプト復旧】' + message);
+    props.deleteProperty(throttleKey);
+  } catch (e) {
+    console.error('reportScriptRecoveryの通知送信エラー:', e.message);
     return { error: '通知送信自体に失敗: ' + e.message };
   }
   return { ok: true };
