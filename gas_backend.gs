@@ -1294,7 +1294,11 @@ function saveAttendance(storeId, name, lat, lng) {
   }
 
   const now = new Date();
-  const todayStr = Utilities.formatDate(now, _sheetTz(), 'yyyy-MM-dd');
+  // 「同じ日に同じ人がもう一度打刻したら上書き」の"同じ日"は暦日ではなく営業日(AM4:30締め)で
+  // 判定する(2026-09-11変更)。暦日のままだと、閉店直後で日付をまたいだ深夜0時台の打刻(前日の
+  // 営業扱い)が、翌日の正当な打刻で上書きされて消えてしまう事故があったため
+  // (大塚駅南口店で発生、経緯は該当のやり取り参照)。
+  const todayBizDate = _businessDateFromDateTime_(Utilities.formatDate(now, _sheetTz(), 'yyyy-MM-dd HH:mm:ss'));
   let updatedExisting = false;
   if (sheet.getLastRow() > 1) {
     const hdrs = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
@@ -1309,7 +1313,7 @@ function saveAttendance(storeId, name, lat, lng) {
       if (String(data[i][storeIdx]) !== String(storeId)) continue;
       if ((data[i][nameIdx] || '') !== (name || '')) continue;
       const clocked = _dateTimeStr(data[i][dateIdx]);
-      if (!clocked || clocked.slice(0, 10) !== todayStr) continue;
+      if (!clocked || _businessDateFromDateTime_(clocked) !== todayBizDate) continue;
       sheet.getRange(i + 2, 1, 1, ATTENDANCE_COLS.length).setValues([[data[i][idIdx], storeId, name, now, lat, lng, withinRange]]);
       updatedExisting = true;
       break;
@@ -3447,6 +3451,13 @@ function _steraBusinessDateFromDateTime_(dateTimeStr) {
   const dt = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]));
   dt.setUTCMilliseconds(dt.getUTCMilliseconds() - STERA_BUSINESS_DAY_CUTOVER_HOUR * 3600 * 1000);
   return Utilities.formatDate(dt, 'UTC', 'yyyy-MM-dd');
+}
+
+// 業務開始(attendance)・チェックシートでも同じAM4:30営業日境界を使うための汎用エイリアス
+// (2026-09-11追加、ステラ専用ではなく全店舗・全機能共通の「営業日」概念のため)。
+// 計算式自体は_steraBusinessDateFromDateTime_と完全に同一。
+function _businessDateFromDateTime_(dateTimeStr) {
+  return _steraBusinessDateFromDateTime_(dateTimeStr);
 }
 
 // ステラCSVの「店舗名」(セルフカフェ接頭辞・店接尾辞の表記ゆれあり)→store_idの逆引き表。

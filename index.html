@@ -3445,9 +3445,23 @@ function renderChecksheet() {
   }
 }
 
+// チェックシートの「今日」は暦日ではなく営業日(AM4:30締め)で判定する(2026-09-11変更)。
+// 深夜0時〜4:29の入力は前日の営業日分のデータとして扱う。閉店直後に日付をまたいで
+// 入力すると翌日分のシートに一部誤って書き込まれてしまう事故が大塚駅南口店で起きたため
+// (経緯は該当のやり取り参照)。他機能で広く使われているtoday()自体は変更せず、
+// チェックシート専用に別関数を用意する。
+function checksheetToday() {
+  const n = new Date();
+  const pad = x => String(x).padStart(2, '0');
+  const localStr = `${n.getFullYear()}-${pad(n.getMonth() + 1)}-${pad(n.getDate())} ${pad(n.getHours())}:${pad(n.getMinutes())}:${pad(n.getSeconds())}`;
+  return _businessDateFromDateTime(localStr) || today();
+}
 function renderChecksheetTodayForm(wrap, subgroups) {
-  const period = getChecksheetPeriod();
-  const dKey = today();
+  const dKey = checksheetToday();
+  // periodもdKey(営業日)基準で決める。月末深夜〜AM4:29に暦月をまたぐと、
+  // 「今日」のフォームなのに period.label だけ翌月のまま…という月境界のズレを防ぐため
+  const [dy, dm, dd] = dKey.split('-').map(Number);
+  const period = getChecksheetPeriod(new Date(dy, dm - 1, dd));
   const dayData = getChecksheetData(storeTab, period.label)[dKey] || {};
 
   const body = subgroups.map(sg => `
@@ -3481,7 +3495,7 @@ function renderChecksheetTodayForm(wrap, subgroups) {
     </div>`).join('');
 
   wrap.innerHTML = `
-    <div style="font-size:12px;color:#888;margin-bottom:8px">${fmtChecksheetDay(new Date())} の入力（${esc(period.label)}分）
+    <div style="font-size:12px;color:#888;margin-bottom:8px">${fmtChecksheetDay(new Date(dKey))} の入力（${esc(period.label)}分）
       <span id="checksheet-saving-indicator" style="display:none;color:#c98a1a;font-weight:600;margin-left:6px">保存中…（完了までリロードしないでください）</span>
     </div>
     ${body}`;
@@ -3502,7 +3516,7 @@ function autoBreakChecksheetHeader(name) {
 // 履歴は確認用のみ（編集不可）。数値・チェックとも読み取り専用のテキスト/記号表示にする
 function renderChecksheetHistoryTable(wrap, subgroups, period) {
   const days = checksheetPeriodDays(period);
-  const todayKey = today();
+  const todayKey = checksheetToday();
   const data = getChecksheetData(storeTab, period.label);
   const allCols = subgroups.flatMap(sg => sg.cols);
 
@@ -3811,6 +3825,25 @@ async function loadAttendanceHistory(storeId) {
     ATTENDANCE_HISTORY_CACHE = await gasGet('getAttendance', { storeId });
   } catch(e) { console.error('getAttendance error:', e); ATTENDANCE_HISTORY_CACHE = []; }
 }
+// 営業日の境界(AM4:30、gas_backend.gsの_businessDateFromDateTime_と同じ基準)。
+// "yyyy-MM-dd HH:mm:ss"形式の日時文字列から営業日("yyyy-MM-dd")を返す。
+// 例: AM4:30が境界の場合、"2026-09-11 00:15:37"は前営業日"2026-09-10"の扱いになる。
+function _businessDateFromDateTime(dateTimeStr) {
+  const m = String(dateTimeStr).match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})/);
+  if (!m) return null;
+  const dt = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3], +m[4], +m[5], +m[6]));
+  dt.setUTCMilliseconds(dt.getUTCMilliseconds() - 4.5 * 3600 * 1000);
+  return dt.toISOString().slice(0, 10);
+}
+// 打刻の表示時刻文字列に、営業日が暦日と異なる場合だけ「（M月D日分の打刻）」を付け足す。
+function _attendanceDisplayWithBizDay(clockedAt) {
+  const raw = clockedAt || '';
+  const calDate = raw.slice(0, 10);
+  const bizDate = _businessDateFromDateTime(raw);
+  if (!bizDate || bizDate === calDate) return esc(raw);
+  const [, mo, da] = bizDate.split('-');
+  return `${esc(raw)}<span style="color:#888;font-size:11px">（${+mo}月${+da}日分の打刻）</span>`;
+}
 function renderAttendanceHistory() {
   const wrap = document.getElementById('attendance-history-wrap');
   if (!wrap) return;
@@ -3828,7 +3861,7 @@ function renderAttendanceHistory() {
     <thead><tr style="background:#22703d;color:white"><th style="padding:6px 10px;font-size:12px">日時</th><th style="padding:6px 10px;font-size:12px">判定</th></tr></thead>
     <tbody>${rows.map(r => `
       <tr style="border-bottom:1px solid #eee">
-        <td style="padding:6px 10px;font-size:13px;white-space:nowrap">${esc(r.clocked_at || '')}</td>
+        <td style="padding:6px 10px;font-size:13px;white-space:nowrap">${_attendanceDisplayWithBizDay(r.clocked_at)}</td>
         <td style="padding:6px 10px;font-size:13px;text-align:center">${r.within_range === false ? '<span style="color:#dc2626">要確認</span>' : (r.within_range === true ? '<span style="color:#22703d">✓</span>' : '<span style="color:#aaa">未判定</span>')}</td>
       </tr>`).join('')}
     </tbody></table></div>`;
@@ -3859,10 +3892,12 @@ function renderAttendanceTally() {
     ? _attendanceMonthLabel(new Date(now.getFullYear(), now.getMonth() - 1, 1))
     : _attendanceMonthLabel(now);
   const activeName = _attendanceActiveName();
-  const rows = ATTENDANCE_HISTORY_CACHE.filter(r => r.within_range === true && (r.name || '') === activeName && String(r.clocked_at || '').startsWith(label));
+  // 「日数」は暦日ではなく営業日(AM4:30締め)基準で数える。深夜0時台の打刻は前日の
+  // 営業日としてカウントするため、対象月の判定・重複除去とも営業日ベースで行う
+  const rows = ATTENDANCE_HISTORY_CACHE.filter(r => r.within_range === true && (r.name || '') === activeName && String(_businessDateFromDateTime(r.clocked_at) || '').startsWith(label));
   const cardStyle = 'background:#fff;border:1px solid #e0ede5;border-radius:10px;padding:14px 16px;margin-bottom:10px';
   const numStyle = 'font-size:28px;font-weight:700;color:#22703d;font-variant-numeric:tabular-nums';
-  const days = new Set(rows.map(r => String(r.clocked_at).slice(0, 10))).size;
+  const days = new Set(rows.map(r => _businessDateFromDateTime(r.clocked_at))).size;
   wrap.innerHTML = `<div style="${cardStyle}"><div style="${numStyle}">${days}<span style="font-size:13px;font-weight:600;color:#888;margin-left:3px">日</span></div></div>`;
 }
 
@@ -7944,7 +7979,7 @@ async function renderAttendanceAdminHistory() {
     </tr></thead>
     <tbody>${rows.map(r => `
       <tr style="border-bottom:1px solid #eee">
-        <td style="padding:6px 10px;font-size:13px;white-space:nowrap">${esc(r.clocked_at || '')}</td>
+        <td style="padding:6px 10px;font-size:13px;white-space:nowrap">${_attendanceDisplayWithBizDay(r.clocked_at)}</td>
         <td style="padding:6px 10px;font-size:13px;color:#22703d;font-weight:600">${esc(STORES[r.store_id] || r.store_id)}</td>
         <td style="padding:6px 10px;font-size:13px">${esc(r.name || '')}</td>
         <td style="padding:6px 10px;font-size:13px;text-align:center">${r.within_range === false
