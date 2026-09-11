@@ -344,7 +344,8 @@
       .phw-bl { grid-column:1/43; grid-row:43/101; background:linear-gradient(180deg,#dfc35a,#b6952f); color:#241a12; }
       .phw-bl.phw-piece-empty { background:#eef1ea; cursor:default; color:white; }
       .phw-br { grid-column:43/101; grid-row:59/101; background:#22703d; font-size:16px; white-space:nowrap; }
-      .phw-tl.manual-menu-btn { background:#22703d; cursor:pointer; }
+      .phw-tl.manual-menu-btn { background:#b5544a; cursor:pointer; }
+      .phw-br.manual-menu-btn { background:#b5544a; }
       .admin-title-row h1 { flex-basis:100%; }
       .link-btn { padding:8px 12px; font-size:13px; }
       table.card-mode { display:block; box-shadow:none; background:transparent; border-radius:0; }
@@ -550,7 +551,7 @@
       </div>
       <div class="partner-hdr-cell" style="display:flex;gap:6px">
         <div class="doc-menu-wrap">
-          <button onclick="toggleManualMenu('pc', getManualDocs())" style="background:transparent;color:#22703d;padding:7px 13px;font-size:13px;font-weight:600;border-radius:6px;border:1px solid #22703d;cursor:pointer;font-family:inherit;flex-shrink:0">マニュアル</button>
+          <button onclick="toggleManualMenu('pc', getManualDocs())" style="background:transparent;color:#b5544a;padding:7px 13px;font-size:13px;font-weight:600;border-radius:6px;border:1px solid #b5544a;cursor:pointer;font-family:inherit;flex-shrink:0">マニュアル</button>
           <div class="doc-menu-dd" id="manual-dd-pc"></div>
         </div>
       </div>
@@ -748,7 +749,7 @@
     <div class="admin-hdr-btns">
       <button class="admin-attendance-btn" onclick="switchAdminView('attendance')" style="background:#22703d;color:white;padding:9px 14px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">業務管理</button>
       <div class="doc-menu-wrap">
-        <button onclick="toggleManualMenu('admin-pc', ADMIN_MANUAL_DOCS)" style="background:transparent;color:#22703d;padding:8px 13px;font-size:13px;font-weight:600;border-radius:8px;border:1px solid #22703d;cursor:pointer;font-family:inherit">マニュアル</button>
+        <button onclick="toggleManualMenu('admin-pc', ADMIN_MANUAL_DOCS)" style="background:transparent;color:#b5544a;padding:8px 13px;font-size:13px;font-weight:600;border-radius:8px;border:1px solid #b5544a;cursor:pointer;font-family:inherit">マニュアル</button>
         <div class="doc-menu-dd" id="manual-dd-admin-pc"></div>
       </div>
       <button onclick="location.href='invoice.html'" style="background:#8a8f7e;color:white;padding:9px 14px;font-size:13px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">請求</button>
