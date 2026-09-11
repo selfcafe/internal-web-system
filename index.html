@@ -344,8 +344,8 @@
       .phw-bl { grid-column:1/43; grid-row:43/101; background:linear-gradient(180deg,#dfc35a,#b6952f); color:#241a12; }
       .phw-bl.phw-piece-empty { background:#eef1ea; cursor:default; color:white; }
       .phw-br { grid-column:43/101; grid-row:59/101; background:#22703d; font-size:16px; white-space:nowrap; }
-      .phw-tl.manual-menu-btn { background:#b5544a; cursor:pointer; }
       .phw-br.manual-menu-btn { background:#b5544a; }
+      .phw-tl.invoice-btn { background:#22703d; cursor:pointer; }
       .admin-title-row h1 { flex-basis:100%; }
       .link-btn { padding:8px 12px; font-size:13px; }
       table.card-mode { display:block; box-shadow:none; background:transparent; border-radius:0; }
@@ -758,10 +758,10 @@
     <div class="admin-title-row" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <h1>管理者ポータル</h1>
       <div class="partner-hdr-pinwheel">
-        <button class="phw-piece phw-tl manual-menu-btn" onclick="toggleManualMenu('admin-sp', ADMIN_MANUAL_DOCS)"><span>マニュ<br>アル</span></button>
+        <button class="phw-piece phw-tl invoice-btn" onclick="location.href='invoice.html'">請求</button>
         <button class="phw-piece phw-tr" onclick="adminLogout()"><span>ログ<br>アウト</span></button>
         <button class="phw-piece phw-bl" onclick="switchAdminView('attendance')"><span>業務<br>管理</span></button>
-        <button class="phw-piece phw-br" onclick="location.href='invoice.html'">請求</button>
+        <button class="phw-piece phw-br manual-menu-btn" onclick="toggleManualMenu('admin-sp', ADMIN_MANUAL_DOCS)">マニュアル</button>
       </div>
       <div class="doc-menu-dd" id="manual-dd-admin-sp" style="position:absolute;top:134px;right:0"></div>
       <div class="admin-menu-wrap">
