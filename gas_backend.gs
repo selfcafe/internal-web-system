@@ -3940,7 +3940,11 @@ const WATER_STOCK_MISMATCH_PCT_THRESHOLD = 0.3;
 // (実例: 鶴舞店=tsurumai、shp_f5798582c7e7d425309057dのstatusがdraft/activeTime nullと判明)。
 // このため対象店舗では「補充はあるのにステラ実売上が常に0」という誤検知が構造的に起き続ける。
 // 対象はユーザーから今後追加指示がある想定なので、配列に追加するだけで除外できるようにしておく。
-const WATER_STOCK_MISMATCH_EXCLUDED_STORES = ['tsurumai'];
+// 2026-09-11追記: ユーザー指示により赤塚・常滑・布袋・新瑞橋・幸田・豊田・木曽岬を追加
+// (いずれも水のみ扱う「全店舗まとめて1店舗」運用の対象店舗、鶴舞と同様の理由)。
+const WATER_STOCK_MISMATCH_EXCLUDED_STORES = [
+  'tsurumai', 'akatsuka', 'tokoname', 'hotei', 'aratamabashi', 'kouta', 'toyota', 'kisomisaki',
+];
 
 // 盗難検知①-補助: 日またぎ取りこぼし対策のチェックポイント。従来はsinceDate(前回入力日)を
 // 比較期間から除外していたため、「前回入力した"時刻"〜その日の24時」の実売上がどのチェックにも
