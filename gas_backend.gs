@@ -357,6 +357,7 @@ function doGet(e) {
     else if (a === 'getLostItems')      result = getLostItems(e.parameter.month, e.parameter.storeId);
     else if (a === 'getChecksheetData') result = getChecksheetData(e.parameter.storeId);
     else if (a === 'getSteraStockEstimate') result = getSteraStockEstimate(e.parameter.storeId);
+    else if (a === 'getSteraProductGroups') result = getSteraProductGroups();
     else if (a === 'getInventoryHistory') result = getInventoryHistory(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'getLatestConsumptionByCode') result = getLatestConsumptionByCode(e.parameter.storeId);
     else if (a === 'getInventoryDeliveryAuto') result = getInventoryDeliveryAuto(e.parameter.storeId, e.parameter.periodLabel);
@@ -3893,6 +3894,14 @@ function getSteraStockEstimate(storeId) {
     m.ourProducts.forEach(name => { result[name] = estimate; });
   });
   return result;
+}
+
+// STERA側が味を区別しないグループ(ourProductsが複数)だけを、表示側(チェックシートの
+// 参考在庫欄)がまとめて1行表示できるように返す(2026-09-11追加)。当方の商品同士の対応表
+// STERA_SALES_MAPPING自体をフロント側に複製すると、今回のプリングルズ名寄せ漏れと同じ
+// 事故が再発するため、単一の情報源(このマッピング)から都度取得させる形にする。
+function getSteraProductGroups() {
+  return STERA_SALES_MAPPING.filter(m => m.ourProducts.length > 1).map(m => ({ label: m.label, members: m.ourProducts }));
 }
 
 // ----------------------------------------------------------------

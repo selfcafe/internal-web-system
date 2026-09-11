@@ -3253,9 +3253,16 @@ async function loadChecksheetDataFromDb(storeId) {
 // なく、実物の在庫とは独立していないため(2026-09-09、盗難が起きると理論値と実物が
 // 乖離していく一方でこの数字自体は気づけないという指摘を受け、「残り在庫」から改称)。
 let _steraStockEstimate = {};
+// STERA側が味を区別しないグループ(レディーボーデン各種・プリングルス各種等)の一覧。
+// 当方の商品名同士の対応関係(STERA_SALES_MAPPING)はgas_backend.gs側だけが持つ唯一の
+// 情報源とし、フロント側には複製しない(複製すると2026-09に実際に起きた
+// 「プリングルズうましお」名寄せ漏れと同種の事故が再発するため、常にAPI経由で取得する)。
+let _steraProductGroups = [];
 async function loadSteraStockEstimate(storeId) {
   try { _steraStockEstimate = await gasGet('getSteraStockEstimate', { storeId }) || {}; }
   catch (e) { console.error('getSteraStockEstimate error:', e); _steraStockEstimate = {}; }
+  try { _steraProductGroups = await gasGet('getSteraProductGroups', {}) || []; }
+  catch (e) { console.error('getSteraProductGroups error:', e); _steraProductGroups = []; }
 }
 
 // 「残り在庫」表示用：直近確定済み棚卸の期末在庫(=今期の期首在庫)だけを取得する。
@@ -3365,13 +3372,26 @@ function _checksheetProductColumns() {
     cols: products.filter(p => p.vendor === v.key).map(p => ({ id:'prod:' + p.name, type:'qty', name:p.label || p.name })),
   })).filter(g => g.cols.length);
 
-  // 水を除くステラ取り扱い商品は入力不要・読み取り専用の理論在庫表示のみ(type:'readonly')
+  // 水を除くステラ取り扱い商品は入力不要・読み取り専用の理論在庫表示のみ(type:'readonly')。
+  // レディーボーデン各種・プリングルス各種のようにSTERA側が味を区別しないグループは、
+  // 全フレーバーに同じ合算値がそのまま入るため、フレーバー別に何行も並べると
+  // 「なぜ全部同じ数字？」と誤解を招く。_steraProductGroups(getSteraProductGroups由来)を
+  // 使ってグループごとに1行へまとめ、グループに属さない単独商品はこれまで通り個別表示する
+  // (2026-09-11、渋谷店で全フレーバー同数値の表示について指摘を受けて変更)。
   if (steraNames.length) {
     const allProducts = _inventoryProductList();
-    const steraCols = steraNames
-      .map(name => allProducts.find(p => p.name === name))
-      .filter(Boolean)
-      .map(p => ({ id: 'prod:' + p.name, type: 'readonly', name: p.label || p.name }));
+    const groupedNames = new Set();
+    const steraCols = [];
+    (_steraProductGroups || []).forEach(g => {
+      const present = g.members.filter(name => steraNames.includes(name));
+      if (!present.length) return;
+      present.forEach(name => groupedNames.add(name));
+      steraCols.push({ id: 'prod:' + present[0], type: 'readonly', name: g.label + '（合計）' });
+    });
+    steraNames.filter(name => !groupedNames.has(name)).forEach(name => {
+      const p = allProducts.find(p => p.name === name);
+      if (p) steraCols.push({ id: 'prod:' + p.name, type: 'readonly', name: p.label || p.name });
+    });
     if (steraCols.length) groups.push({ key: 'vendor:stera', label: 'ステラ商品(参考在庫・入力不要)', cols: steraCols });
   }
   return groups;
