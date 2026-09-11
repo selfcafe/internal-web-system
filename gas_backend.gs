@@ -3934,6 +3934,14 @@ function getSteraProductGroups() {
 const WATER_STOCK_MISMATCH_ABS_THRESHOLD = 3;
 const WATER_STOCK_MISMATCH_PCT_THRESHOLD = 0.3;
 
+// 水の盗難検知の対象外店舗(2026-09-11追加)。水のみ扱う店舗をステラ上では個別公開せず
+// 「全店舗まとめて1店舗」として扱う運用があり、該当店舗はステラのshop状態が非公開(draft)の
+// ままになるため、当ロジックの前提(「その店舗のステラ実売上」が個別に取得できる)が成立しない
+// (実例: 鶴舞店=tsurumai、shp_f5798582c7e7d425309057dのstatusがdraft/activeTime nullと判明)。
+// このため対象店舗では「補充はあるのにステラ実売上が常に0」という誤検知が構造的に起き続ける。
+// 対象はユーザーから今後追加指示がある想定なので、配列に追加するだけで除外できるようにしておく。
+const WATER_STOCK_MISMATCH_EXCLUDED_STORES = ['tsurumai'];
+
 // 盗難検知①-補助: 日またぎ取りこぼし対策のチェックポイント。従来はsinceDate(前回入力日)を
 // 比較期間から除外していたため、「前回入力した"時刻"〜その日の24時」の実売上がどのチェックにも
 // 一度も含まれない空白になっていた。対策: チェックのたびに「その日の実売上をどこまで数えたか
@@ -3982,6 +3990,7 @@ function _batchUpsertStockMismatchCheckpoints_(existingRows, updates) {
 // ?action=checkWaterStockMismatch(POST、{storeId, product})で実行。
 function checkWaterStockMismatch(storeId, product) {
   if (!storeId || !product) return { error: 'storeId/productは必須です' };
+  if (WATER_STOCK_MISMATCH_EXCLUDED_STORES.indexOf(storeId) >= 0) return { ok: true, skipped: 'excluded_store' };
   const group = STERA_SALES_MAPPING.find(m => m.ourProducts.indexOf(product) >= 0);
   if (!group) return { ok: true, skipped: 'not_tracked' }; // 盗難検知の対象商品ではない
 
