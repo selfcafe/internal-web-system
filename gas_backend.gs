@@ -13,6 +13,43 @@ const SHEET_ID        = '';  // GoogleスプレッドシートのID
 const IMAGE_FOLDER_ID = '1adg7TQIYXSkWIo19ohVo93raDY2HsTW_';
 // 棚卸完了の送信先（別Driveの「棚卸集計」スプレッドシート、この実行アカウントに編集権限で共有しておくこと）
 const INVENTORY_SHEET_ID = '';  // 棚卸集計スプレッドシートのID
+// 棚卸集計スプレッドシートは店舗数の増加・データ蓄積に伴い1年ごとに新規ファイルへ切り替える運用を
+// 予定している(2026-09-12、ユーザー確認済み)。切り替えた年の最初の期間(例: 翌年1月分)は「前期間」
+// (前年12月分)が旧ファイル側にしか存在しないため、年をまたぐ「前期間」読み取り(期首在庫の自動入力・
+// 前月比較の異常検知・「先月の棚卸を見る」)だけ自動的に旧ファイルへフォールバックさせる仕組み
+// (_inventorySheetIdForPeriod_/getInventoryHistory参照)。
+// 【設定】新しい年のファイルへ切り替える際、旧INVENTORY_SHEET_IDの値をここに追加してから
+// INVENTORY_SHEET_ID自体を新ファイルのIDに差し替えること。実IDは他の*_SHEET_ID定数と同じく
+// このリポジトリには絶対にコミットしない(空のプレースホルダーのまま維持、本番Apps Scriptエディタ側にのみ設定)。
+const INVENTORY_SHEET_ID_ARCHIVE = {
+  // '2026': '',  // 例: 2027年に新ファイルへ切り替える際、2026年分の旧INVENTORY_SHEET_IDをここに追加する
+};
+// 🔁【年またぎ対応チェックリスト、2026-09-12】このスプレッドシート(INVENTORY_SHEET_ID)配下に
+// 新しい機能・新しいシートを追加するたびに、年をまたいでも動き続けるよう以下を確認すること
+// (棚卸本体だけでなくstera_daily_sales/在庫差異検知等、後から追加した機能すべてに同じ考え方を適用済み。
+// 詳細な実例は各関数のコメント、シミュレーション検証はscratchpad/year_boundary_sim.js参照——
+// セッションが替わって手元に無い場合は、この設計思想に沿って同等のテストを再構築すればよい)。
+// 1. periodLabel("2026-07"等)でデータを引く/書く機能 → 生の`SpreadsheetApp.openById(INVENTORY_SHEET_ID)`
+//    ではなく`SpreadsheetApp.openById(_inventorySheetIdForPeriod_(periodLabel))`を使う(読み書き両方)。
+//    店舗タブ・全店舗棚卸集計等、periodLabelで書き込み先が決まるものは特に注意——現行ファイル固定のまま
+//    書くと、年をまたいだ期間のデータが旧ファイル側の同名タブと分裂する。
+// 2. 日付範囲(fromDateExclusive/toDateInclusive、stera_daily_salesのような日次蓄積シート)で読む機能 →
+//    `_steraSheetIdsForRange_(from, to)`で対象ファイル一覧を求め、全ファイル分を合算する
+//    (getSteraDailyTotal_/getSteraStockEstimate参照)。
+// 3. 新しいシートを開くヘルパー(getXxxSheet_的なもの)は、getInventorySheet/getSteraDailySheet_/
+//    getDeliveryAutoSheetと同じく`sheetId`引数を取り、省略時はINVENTORY_SHEET_ID(現行ファイル)を
+//    デフォルトにする——1・2のような年をまたぐ呼び出し側から後で渡せるようにしておく。
+// 4. 「その店舗の直近の実績を探す」系(getLatestConsumptionByCode/getSteraStockEstimate) →
+//    現行ファイルに何も無ければアーカイブの新しい年から順にフォールバックする(店舗がまだ今年
+//    棚卸を1件も送っていないケース対応)。ただし現行・全アーカイブいずれにも無い場合
+//    (新規店舗で本当にデータが存在しない)は、それ以上の無駄な全ファイル読み取りをせず
+//    早期returnすること(2026-09-12、getSteraStockEstimateで実際に無駄読みが発生し修正済み)。
+// 5. 逆に対応不要なもの: その日/現在の状態だけを持つ「today限定」シート(stera_realtime_today等)、
+//    使い捨てで毎回まるごと上書きする「使い捨てスナップショット」タブ(ステラ注文詳細等)、
+//    現在の設定・ルールを持つだけの管理系タブ(発注ルール等)、店舗タブへの一発移行・掃除用の
+//    管理者ツール関数——これらは意図的に現行ファイル固定のままでよい。
+// 実装後は年またぎシナリオ(店舗が旧年にはデータがあり今年はまだ無い/新規店舗で旧年に一切データが
+// 無い、の両方)を上記シミュレーション手法で演算確認してから本番反映すること。
 // 月初納品分など、アプリを通さず本部が直接手配・受領した納品を本部が手入力するスプレッドシート
 // （棚卸集計とは別。この実行アカウントに編集権限で共有しておくこと。列は「期間ラベル/店舗ID/商品コード/数量」）
 const MANUAL_DELIVERY_SHEET_ID = '';  // 手動納品入力スプレッドシートのID
@@ -1665,22 +1702,58 @@ function compactChecksheetData() {
 // ----------------------------------------------------------------
 // 棚卸集計は別スプレッドシート（別Driveの場合あり）のため、SHEET_IDとは別に開く。
 // あらかじめこの実行アカウントに編集権限で共有しておくこと。
-function getInventorySheet() {
-  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+// sheetId省略時は現行のINVENTORY_SHEET_ID。年またぎの旧ファイル参照(_inventorySheetIdForPeriod_
+// 経由)の時だけ明示的に別のsheetIdが渡される
+function getInventorySheet(sheetId) {
+  const ss = SpreadsheetApp.openById(sheetId || INVENTORY_SHEET_ID);
   return ss.getSheetByName(SHEET_INVENTORY) || ss.insertSheet(SHEET_INVENTORY);
 }
 // タイムゾーンはSHEET_ID側と共有せず、棚卸集計スプレッドシート自体のものを使う
 // （_sheetTzと同じ理由。別Driveのスプレッドシートなのでタイムゾーンが異なる可能性がある）
-let _cachedInvTz = null;
-function _invSheetTz() {
-  if (!_cachedInvTz) _cachedInvTz = SpreadsheetApp.openById(INVENTORY_SHEET_ID).getSpreadsheetTimeZone();
-  return _cachedInvTz;
+// sheetIdごとにキャッシュする(年またぎで旧ファイルを開く場合、現行ファイルと異なる
+// タイムゾーンの可能性もゼロではないため、使い回さず個別に取得する)
+let _cachedInvTz = {};
+function _invSheetTz(sheetId) {
+  const id = sheetId || INVENTORY_SHEET_ID;
+  if (!_cachedInvTz[id]) _cachedInvTz[id] = SpreadsheetApp.openById(id).getSpreadsheetTimeZone();
+  return _cachedInvTz[id];
 }
 // "2026-06"のような年月文字列がSheetsに日付型セルへ自動変換されるのを防ぐ
 // （_monthLabelStrと同じ問題。棚卸集計側のタイムゾーンを使う点だけが異なる）
-function _invMonthLabelStr(v) {
-  if (v instanceof Date) return Utilities.formatDate(v, _invSheetTz(), 'yyyy-MM');
+function _invMonthLabelStr(v, sheetId) {
+  if (v instanceof Date) return Utilities.formatDate(v, _invSheetTz(sheetId), 'yyyy-MM');
   return v || null;
+}
+// periodLabel(例: "2026-01")の年が、年またぎでファイルを切り替えた過去の年に該当する場合、
+// INVENTORY_SHEET_ID_ARCHIVEに登録された旧ファイルIDを返す。該当しなければ現行のINVENTORY_SHEET_ID。
+// getInventoryHistory(前期間読み取り)だけでなく、buildStoreInventorySheet/buildInventoryRollup/
+// buildStockCheckMonthly/buildSalesCategoryCostRatio/runMonthlyStockCheckBackstop等、
+// periodLabelを扱う関数は原則これで参照先ファイルを解決する(2026-09-12、店舗タブ等の書き込み先も
+// 含めて統一——年をまたいだperiodLabelを常に現行ファイルへ書くと、旧ファイル側の同じ店舗タブと
+// 分裂してしまうため)。dateStr("YYYY-MM-DD")を渡しても年の取り出し(先頭4文字)は同じロジックで
+// 機能するため、_steraSheetIdsForRange_等の日付ベースの解決にもそのまま流用している。
+function _inventorySheetIdForPeriod_(periodLabel) {
+  const year = String(periodLabel || '').slice(0, 4);
+  return (year && INVENTORY_SHEET_ID_ARCHIVE[year]) || INVENTORY_SHEET_ID;
+}
+
+// [fromDateExclusive, toDateInclusive]の日付範囲("YYYY-MM-DD"文字列、どちらもnull可)が
+// またぎうる年をすべて洗い出し、対応する参照先ファイルIDの配列を返す(現行ファイルは常に含む)。
+// stera_daily_sales/inventory_delivery_autoのような「複数日にまたがる範囲」を読む関数群で、
+// 年をまたいだ範囲(例: 12月末〜1月)を1回の呼び出しで正しく合算できるようにするための共通ヘルパー
+// (2026-09-12追加)。範囲の判定を跨いで対象外の年のファイルまで含めても、各ファイル内で日付フィルタが
+// 効くため実害は無い(多少余分にファイルを開くだけ)——精密な年境界の切り分けより単純さを優先した。
+function _steraSheetIdsForRange_(fromDateExclusive, toDateInclusive) {
+  const fromYear = fromDateExclusive ? Number(String(fromDateExclusive).slice(0, 4)) : null;
+  const toYear = toDateInclusive ? Number(String(toDateInclusive).slice(0, 4)) : new Date().getFullYear();
+  const ids = [INVENTORY_SHEET_ID];
+  Object.keys(INVENTORY_SHEET_ID_ARCHIVE).forEach(yearStr => {
+    const year = Number(yearStr);
+    if (fromYear !== null && year < fromYear) return;
+    if (year > toYear) return;
+    ids.push(INVENTORY_SHEET_ID_ARCHIVE[yearStr]);
+  });
+  return ids;
 }
 
 // inventory_log全体(生の2次元配列)を短時間(25秒)だけCacheServiceに保持する
@@ -1694,32 +1767,40 @@ function _invMonthLabelStr(v) {
 // 都度読み直しに自然劣化する(エラーにはならない、その場合は今まで通りの動作に戻るだけ)。
 // 将来的にデータ量がその規模に達したら、店舗×期間で読む範囲を絞り込む設計(別途検討)が必要になる。
 const INVENTORY_LOG_CACHE_KEY = 'inventory_log_rows_v1';
-function _inventoryLogRowsCached_() {
+// sheetId省略時は現行ファイル(従来通りの挙動・キャッシュキーも変えない)。年またぎで旧ファイルを
+// 指定された場合だけキャッシュキーをsheetIdごとに分ける(現行ファイルのキャッシュと混ざらないように)
+function _inventoryLogRowsCached_(sheetId) {
+  const id = sheetId || INVENTORY_SHEET_ID;
   const cache = CacheService.getScriptCache();
-  const cached = cache.get(INVENTORY_LOG_CACHE_KEY);
+  const cacheKey = id === INVENTORY_SHEET_ID ? INVENTORY_LOG_CACHE_KEY : (INVENTORY_LOG_CACHE_KEY + ':' + id);
+  const cached = cache.get(cacheKey);
   if (cached) return JSON.parse(cached);
-  const sheet = getInventorySheet();
+  const sheet = getInventorySheet(id);
   const data = sheet.getLastRow() > 1 ? sheet.getDataRange().getValues() : [];
   // Date型セルはJSON化でUTC文字列に化けてしまうため、キャッシュに入れる前に文字列化しておく
   // （_invMonthLabelStr等が期待する形に later 変換できるよう、素朴なISO風文字列に揃える）
   const safe = data.map(row => row.map(v =>
-    v instanceof Date ? Utilities.formatDate(v, _invSheetTz(), "yyyy-MM-dd'T'HH:mm:ss") : v
+    v instanceof Date ? Utilities.formatDate(v, _invSheetTz(id), "yyyy-MM-dd'T'HH:mm:ss") : v
   ));
-  try { cache.put(INVENTORY_LOG_CACHE_KEY, JSON.stringify(safe), 25); } catch (e) {} // 100KB超過時は諦めて次回も都度読む
+  try { cache.put(cacheKey, JSON.stringify(safe), 25); } catch (e) {} // 100KB超過時は諦めて次回も都度読む
   return safe;
 }
 function _invalidateInventoryLogCache_() {
   try { CacheService.getScriptCache().remove(INVENTORY_LOG_CACHE_KEY); } catch (e) {}
 }
 
+// periodLabelの年が年またぎで切り替えた過去の年ならINVENTORY_SHEET_ID_ARCHIVE側の旧ファイルを、
+// そうでなければ現行ファイルを自動的に読みに行く(2026-09-12追加)。呼び出し側(getInventoryTabData等)は
+// prevPeriodLabelが去年のものかどうかを意識する必要はない
 function getInventoryHistory(storeId, periodLabel) {
-  const data = _inventoryLogRowsCached_();
+  const sheetId = _inventorySheetIdForPeriod_(periodLabel);
+  const data = _inventoryLogRowsCached_(sheetId);
   if (data.length <= 1) return [];
   const rows = data.slice(1).map(row => {
     const obj = {};
     // ヘッダーの表示テキスト(日本語)ではなく、INVENTORY_COLSの宣言順=物理列位置として読む
     INVENTORY_COLS.forEach((c, i) => { obj[c] = i < row.length ? row[i] : null; });
-    obj.period_label = _invMonthLabelStr(obj.period_label);
+    obj.period_label = _invMonthLabelStr(obj.period_label, sheetId);
     return obj;
   });
   return rows.filter(r =>
@@ -1733,8 +1814,24 @@ function getInventoryHistory(storeId, periodLabel) {
 // 発注側のPRODUCTS(商品名)と棚卸側のinventory_log(商品名+商品コード)を突き合わせる際、
 // 表記ゆれではなく一意な商品コードで結びつけたいというユーザー要望による。
 // 消費量が空欄(未入力)や0以下の行は候補から除外する(発注数量の提案としては意味を持たないため)。
+// 年またぎ対応(2026-09-12追加): getInventoryHistoryと違い、この関数は「前期間」ではなく
+// 「直近に見つかった実績」を店舗単位で探すため、periodLabelの年から参照先を決める
+// _inventorySheetIdForPeriod_はそのまま使えない。年が明けてからその店舗がまだ一度もその年の
+// 棚卸を送信していない間は、現行ファイルにその店舗の行が1件も無い状態になり提案が空になって
+// しまう——現行ファイルで1件も見つからなければ、INVENTORY_SHEET_ID_ARCHIVEのうち最も新しい年の
+// 旧ファイルにフォールバックして同じロジックで探し直す(年始の発注提案が空になる問題への対応)。
 function getLatestConsumptionByCode(storeId) {
-  const data = _inventoryLogRowsCached_();
+  const result = _latestConsumptionByCodeFromSheet_(storeId, INVENTORY_SHEET_ID);
+  if (Object.keys(result).length) return result;
+  const archiveYears = Object.keys(INVENTORY_SHEET_ID_ARCHIVE).sort().reverse(); // 新しい年から順に試す
+  for (let i = 0; i < archiveYears.length; i++) {
+    const fallback = _latestConsumptionByCodeFromSheet_(storeId, INVENTORY_SHEET_ID_ARCHIVE[archiveYears[i]]);
+    if (Object.keys(fallback).length) return fallback;
+  }
+  return result;
+}
+function _latestConsumptionByCodeFromSheet_(storeId, sheetId) {
+  const data = _inventoryLogRowsCached_(sheetId);
   const result = {};
   if (data.length <= 1) return result;
   const codeIdx   = INVENTORY_COLS.indexOf('code');
@@ -1751,7 +1848,7 @@ function getLatestConsumptionByCode(storeId) {
     if (consumption === '' || consumption === null || consumption === undefined) continue;
     const n = Number(consumption);
     if (!(n > 0)) continue;
-    const period = _invMonthLabelStr(row[periodIdx]);
+    const period = _invMonthLabelStr(row[periodIdx], sheetId);
     if (!latestPeriodByCode[code] || period > latestPeriodByCode[code]) {
       latestPeriodByCode[code] = period;
       result[code] = n;
@@ -1916,8 +2013,9 @@ function mergeInventoryLogRemarksBlocks() {
 const SHEET_DELIVERY_AUTO  = 'inventory_delivery_auto';
 const DELIVERY_AUTO_COLS   = ['period_label', 'store_id', 'product', 'qty', 'recorded_at'];
 
-function getDeliveryAutoSheet() {
-  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+// sheetId省略時は現行ファイル。年またぎ対応(2026-09-12)でgetInventorySheetと同じパターンにする
+function getDeliveryAutoSheet(sheetId) {
+  const ss = SpreadsheetApp.openById(sheetId || INVENTORY_SHEET_ID);
   return ss.getSheetByName(SHEET_DELIVERY_AUTO) || ss.insertSheet(SHEET_DELIVERY_AUTO);
 }
 
@@ -1944,11 +2042,15 @@ function recordInventoryDelivery(storeId, periodLabel, product, qty) {
 // 棚卸表タブを開くたびにinventory_delivery_autoシート全体を読み直していたため、
 // 忘れ物/勤怠と同じ25秒キャッシュを追加する（2026-08-12、同時アクセスが多い時の負荷軽減）
 const DELIVERY_AUTO_CACHE_KEY = 'delivery_auto_rows_v1';
-function _deliveryAutoRowsCached_() {
+// sheetId省略時は現行ファイル(従来通りキャッシュキーも変えない)。年またぎでperiodLabelの年が
+// 過去のものだった場合だけ_inventorySheetIdForPeriod_経由で旧ファイルのsheetIdが渡される
+function _deliveryAutoRowsCached_(sheetId) {
+  const id = sheetId || INVENTORY_SHEET_ID;
   const cache = CacheService.getScriptCache();
-  const cached = cache.get(DELIVERY_AUTO_CACHE_KEY);
+  const cacheKey = id === INVENTORY_SHEET_ID ? DELIVERY_AUTO_CACHE_KEY : (DELIVERY_AUTO_CACHE_KEY + ':' + id);
+  const cached = cache.get(cacheKey);
   if (cached) return JSON.parse(cached);
-  const sheet = getDeliveryAutoSheet();
+  const sheet = getDeliveryAutoSheet(id);
   let rows = [];
   if (sheet.getLastRow() > 1) {
     const data = sheet.getDataRange().getValues();
@@ -1956,18 +2058,19 @@ function _deliveryAutoRowsCached_() {
     const pIdx = hdrs.indexOf('period_label'), sIdx = hdrs.indexOf('store_id'),
           prIdx = hdrs.indexOf('product'), qIdx = hdrs.indexOf('qty');
     rows = data.slice(1).map(row => ({
-      period_label: _invMonthLabelStr(row[pIdx]), store_id: row[sIdx], product: row[prIdx], qty: Number(row[qIdx] || 0),
+      period_label: _invMonthLabelStr(row[pIdx], id), store_id: row[sIdx], product: row[prIdx], qty: Number(row[qIdx] || 0),
     }));
   }
-  try { cache.put(DELIVERY_AUTO_CACHE_KEY, JSON.stringify(rows), 25); } catch (e) {}
+  try { cache.put(cacheKey, JSON.stringify(rows), 25); } catch (e) {}
   return rows;
 }
 function _invalidateDeliveryAutoCache_() {
   try { CacheService.getScriptCache().remove(DELIVERY_AUTO_CACHE_KEY); } catch (e) {}
 }
+// periodLabelの年から参照先ファイルを自動解決する(getInventoryHistoryと同じ_inventorySheetIdForPeriod_を再利用)
 function getInventoryDeliveryAuto(storeId, periodLabel) {
   const totals = {};
-  _deliveryAutoRowsCached_().forEach(row => {
+  _deliveryAutoRowsCached_(_inventorySheetIdForPeriod_(periodLabel)).forEach(row => {
     if (String(row.store_id) !== String(storeId)) return;
     if (row.period_label !== String(periodLabel)) return;
     totals[row.product] = (totals[row.product] || 0) + row.qty;
@@ -2316,7 +2419,7 @@ function _productCaseInfo_() {
 // （ユーザー要望：「納品済みボタン押されたら自動的にこのシート側で納品カウントもする」に対応）
 function _deliveryAutoTotalsForPeriod_(periodLabel) {
   const totals = {};
-  _deliveryAutoRowsCached_().forEach(row => {
+  _deliveryAutoRowsCached_(_inventorySheetIdForPeriod_(periodLabel)).forEach(row => {
     if (row.period_label !== String(periodLabel)) return;
     const sid = String(row.store_id), prod = String(row.product);
     if (!totals[sid]) totals[sid] = {};
@@ -2325,9 +2428,13 @@ function _deliveryAutoTotalsForPeriod_(periodLabel) {
   return totals;
 }
 
+// 年またぎ対応(2026-09-12): periodLabelの年から参照先ファイルを解決する(_inventorySheetIdForPeriod_)。
+// 年をまたいで書き戻す先(全店舗棚卸集計タブ)も同じファイルでなければならないため、
+// 下のss=SpreadsheetApp.openById(...)も同じsheetIdを使う
 function buildInventoryRollup(periodLabel) {
   if (!periodLabel) return { error: 'periodLabelは必須です（例: 2026-07）' };
-  const data = _inventoryLogRowsCached_();
+  const sheetId = _inventorySheetIdForPeriod_(periodLabel);
+  const data = _inventoryLogRowsCached_(sheetId);
   const hasData = data.length > 1;
   const idx = {};
   // 列位置はヘッダーの表示テキスト(日本語)ではなく、INVENTORY_COLSの宣言順を正として読む
@@ -2342,7 +2449,7 @@ function buildInventoryRollup(periodLabel) {
   if (hasData) {
     for (let i = 1; i < data.length; i++) {
       const r = data[i];
-      if (_invMonthLabelStr(r[idx.period_label]) !== String(periodLabel)) continue;
+      if (_invMonthLabelStr(r[idx.period_label], sheetId) !== String(periodLabel)) continue;
       const storeId = String(r[idx.store_id]);
       submitted[storeId] = true;
       // FC店舗は全店舗棚卸集計(このシート)の対象外(ユーザー要望、2026-08-21)。
@@ -2400,7 +2507,7 @@ function buildInventoryRollup(periodLabel) {
     subtotalRowIdxs.push(outRows.length + 1); // +1: ヘッダー行の分
   });
 
-  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const ss = SpreadsheetApp.openById(sheetId);
   const sheet = ss.getSheetByName(SHEET_INVENTORY_ROLLUP) || ss.insertSheet(SHEET_INVENTORY_ROLLUP);
   sheet.clearContents();
   sheet.clearConditionalFormatRules();
@@ -2674,11 +2781,15 @@ function _reorderQtyFormulaStr_(targetCol, endStockCol, consumptionCol, caseSize
   return _reorderQtyFormulaCore_(`${targetCol}${row}`, `${endStockCol}${row}`, `${consumptionCol}${row}`, `${caseSizeCol}${row}`, `${capCasesCol}${row}`);
 }
 
+// 年またぎ対応(2026-09-12): periodLabelの年から参照先ファイルを解決する。この店舗タブ自体も
+// そのファイル側に(無ければ新規作成して)書き込む——年をまたいだ期間のブロックを現行ファイルの
+// 店舗タブへ誤って書き込むと、旧ファイル側の同じ店舗タブと分裂してしまうため。
 function buildStoreInventorySheet(storeId, periodLabel) {
   if (!storeId) return { error: 'storeIdは必須です' };
   if (!periodLabel) return { error: 'periodLabelは必須です（例: 2026-07）' };
 
-  const data = _inventoryLogRowsCached_();
+  const sheetId = _inventorySheetIdForPeriod_(periodLabel);
+  const data = _inventoryLogRowsCached_(sheetId);
   if (data.length <= 1) return { error: '棚卸データがまだありません' };
   const idx = {};
   // 列位置はヘッダーの表示テキスト(日本語)ではなく、INVENTORY_COLSの宣言順を正として読む
@@ -2692,14 +2803,14 @@ function buildStoreInventorySheet(storeId, periodLabel) {
   for (let i = 1; i < data.length; i++) {
     const r = data[i];
     if (String(r[idx.store_id]) !== String(storeId)) continue;
-    if (_invMonthLabelStr(r[idx.period_label]) === String(periodLabel)) curRows[r[idx.product]] = r;
+    if (_invMonthLabelStr(r[idx.period_label], sheetId) === String(periodLabel)) curRows[r[idx.product]] = r;
   }
 
   const products = Object.keys(curRows);
   if (!products.length) return { error: `${storeId}の${periodLabel}分の棚卸データが見つかりません` };
   products.sort((a, b) => ((meta[a] && meta[a].order) || 0) - ((meta[b] && meta[b].order) || 0));
 
-  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const ss = SpreadsheetApp.openById(sheetId);
   const sheetName = _storeNames_()[storeId] || storeId;
   // 新規店舗の初回棚卸送信時、saveInventorySnapshotから並行して発火する複数のGETリクエスト
   // (buildStoreInventorySheet等)が同時にこの店舗のタブをまだ「無い」と判定し、両方が
@@ -3206,7 +3317,9 @@ function processMonthlyReorder(storeId, periodLabel) {
   const recipient = APEX_REORDER_RECIPIENTS[storeId];
   if (!recipient) return { ok: true, skipped: 'no_recipient_configured' };
 
-  const data = _inventoryLogRowsCached_();
+  // 年またぎ対応(2026-09-12): periodLabelの年からファイルを解決する
+  const sheetId = _inventorySheetIdForPeriod_(periodLabel);
+  const data = _inventoryLogRowsCached_(sheetId);
   const idx = {};
   INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
 
@@ -3214,7 +3327,7 @@ function processMonthlyReorder(storeId, periodLabel) {
   for (let i = 1; i < data.length; i++) {
     const r = data[i];
     if (String(r[idx.store_id]) !== String(storeId)) continue;
-    if (_invMonthLabelStr(r[idx.period_label]) !== String(periodLabel)) continue;
+    if (_invMonthLabelStr(r[idx.period_label], sheetId) !== String(periodLabel)) continue;
     const code = String(r[idx.code]);
     if (!(code in targets)) continue;
     const endStock = r[idx.end_stock];
@@ -3298,11 +3411,14 @@ function importSteraOrdersCsv(csvText) {
 // stera_daily_sales(日次自動インポート、amount列)へ切り替えた——手動インポート運用が
 // 現実的に続かず原価率が2026年7月分で止まっていた問題への対応。これによりrunMonthlyStockCheckBackstop
 // (buildStockCheckMonthlyと同じ月次自動トリガー)から呼べるようになり、完全自動化した。
+// 年またぎ対応(2026-09-12): periodLabelの年からファイルを解決する。getSteraDailyAmountTotal_は
+// 自身で日付範囲から対象ファイルを解決する(_steraSheetIdsForRange_)ため呼び出し側の変更不要。
 function buildSalesCategoryCostRatio(storeId, periodLabel) {
   if (!storeId) return { error: 'storeIdは必須です' };
   if (!periodLabel) return { error: 'periodLabelは必須です（例: 2026-07）' };
 
-  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const sheetId = _inventorySheetIdForPeriod_(periodLabel);
+  const ss = SpreadsheetApp.openById(sheetId);
   const storeName = _storeNames_()[storeId] || storeId;
   // "YYYY-MM-00"/"YYYY-MM-32"は実在しない日付だが、文字列比較上は必ずその月の1日より前/末日より後に
   // なるため、月初・月末を求めるための日付計算をせずに範囲指定できる(buildStockCheckMonthlyと同じ手法)
@@ -3313,13 +3429,13 @@ function buildSalesCategoryCostRatio(storeId, periodLabel) {
     revenueByPrdId[m.prdId] = getSteraDailyAmountTotal_(storeId, m.prdId, fromDateExclusive, toDateInclusive);
   });
 
-  const invData = _inventoryLogRowsCached_();
+  const invData = _inventoryLogRowsCached_(sheetId);
   const idx = {};
   INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
   const costByProduct = {}; // product名 -> price×consumption(この店舗・この期間の消費額=原価)
   invData.slice(1).forEach(r => {
     if (String(r[idx.store_id]) !== String(storeId)) return;
-    if (_invMonthLabelStr(r[idx.period_label]) !== String(periodLabel)) return;
+    if (_invMonthLabelStr(r[idx.period_label], sheetId) !== String(periodLabel)) return;
     const price = Number(r[idx.price]) || 0;
     const consumption = Number(r[idx.consumption]) || 0;
     costByProduct[r[idx.product]] = price * consumption;
@@ -3418,8 +3534,9 @@ function migrateSteraDailySalesColumns() {
   return { ok: true, added: missing };
 }
 
-function getSteraDailySheet_() {
-  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+// sheetId省略時は現行ファイル。年またぎ対応(2026-09-12)で他のgetXxxSheet系と同じパターンにする
+function getSteraDailySheet_(sheetId) {
+  const ss = SpreadsheetApp.openById(sheetId || INVENTORY_SHEET_ID);
   let sheet = ss.getSheetByName(SHEET_STERA_DAILY);
   if (!sheet) {
     try {
@@ -3508,7 +3625,9 @@ function importSteraDailySales(dateStr, csvText) {
     amountTotals[key] = (amountTotals[key] || 0) + amount;
   }
 
-  const sheet = getSteraDailySheet_();
+  // 年またぎ対応(2026-09-12): dateStrの年から書き込み先ファイルを解決する(通常は現行ファイルだが、
+  // 旧年の日付を後から取り直す場合等は旧ファイルへ書く)
+  const sheet = getSteraDailySheet_(_inventorySheetIdForPeriod_(dateStr));
   const dIdx = STERA_DAILY_COLS.indexOf('date');
   // 同じdateStrの既存行を除いた残り行を求め、一括clear+一括書き直しで置き換える(取り直し対応、
   // 他日には一切触れない)。以前はdeleteRowを該当行数ぶん1件ずつ呼んでいたが、蓄積データが
@@ -3589,23 +3708,32 @@ function importSteraDailySalesBulk(csvText) {
   const coveredDates = {};
   newRows.forEach(r => { coveredDates[r[0]] = true; });
 
-  const sheet = getSteraDailySheet_();
   const dIdx = STERA_DAILY_COLS.indexOf('date');
-  const lastRow = sheet.getLastRow();
-  // 今回のCSVでカバーされている日付の既存行だけを除外し(取り直し対応)、それ以外の日付の
-  // 既存行はそのまま残す(importSteraDailySalesと同じ「他日には触れない」考え方を、単一dateStrの
-  // 代わりに「このCSVに含まれる日付の集合」に拡張しただけ)
-  const keptRows = lastRow > 1
-    ? sheet.getRange(2, 1, lastRow - 1, STERA_DAILY_COLS.length).getValues()
-        .filter(row => !coveredDates[String(row[dIdx])])
-    : [];
-
-  if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, STERA_DAILY_COLS.length).clearContent();
-  const allRows = keptRows.concat(newRows);
-  if (allRows.length) {
-    sheet.getRange(2, dIdx + 1, allRows.length, 1).setNumberFormat('@');
-    sheet.getRange(2, 1, allRows.length, STERA_DAILY_COLS.length).setValues(allRows);
-  }
+  // 年またぎ対応(2026-09-12): 1回のCSV(直近3日プリセット等)に12/31と1/1が混在する年に1回のケースに
+  // 対応するため、新規行を日付の年ごとにグループ化し、各年の対象ファイルへ個別に書き込む
+  // (importSteraDailySalesと同じ「取り直し対応」を、単一ファイル前提から複数ファイル対応に拡張)
+  const rowsBySheetId = {};
+  newRows.forEach(r => {
+    const sheetId = _inventorySheetIdForPeriod_(r[dIdx]);
+    (rowsBySheetId[sheetId] || (rowsBySheetId[sheetId] = [])).push(r);
+  });
+  Object.keys(rowsBySheetId).forEach(sheetId => {
+    const sheet = getSteraDailySheet_(sheetId);
+    const lastRow = sheet.getLastRow();
+    // 今回のCSVでカバーされている日付の既存行だけを除外し(取り直し対応)、それ以外の日付の
+    // 既存行はそのまま残す(importSteraDailySalesと同じ「他日には触れない」考え方を、単一dateStrの
+    // 代わりに「このCSVに含まれる日付の集合」に拡張しただけ)
+    const keptRows = lastRow > 1
+      ? sheet.getRange(2, 1, lastRow - 1, STERA_DAILY_COLS.length).getValues()
+          .filter(row => !coveredDates[String(row[dIdx])])
+      : [];
+    if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, STERA_DAILY_COLS.length).clearContent();
+    const allRows = keptRows.concat(rowsBySheetId[sheetId]);
+    if (allRows.length) {
+      sheet.getRange(2, dIdx + 1, allRows.length, 1).setNumberFormat('@');
+      sheet.getRange(2, 1, allRows.length, STERA_DAILY_COLS.length).setValues(allRows);
+    }
+  });
   return {
     ok: true,
     datesCovered: Object.keys(coveredDates).sort(),
@@ -3619,29 +3747,35 @@ function importSteraDailySalesBulk(csvText) {
 // qtyを合計する。日付はどちらも"YYYY-MM-DD"文字列(fromDateExclusiveはnull可=下限無し)。①②共通で使う。
 // グループ(STERA_SALES_MAPPINGのourProducts)単位で合算したい場合は、そのグループのprdIdでこの関数を
 // 呼ぶだけでよい(1グループ=1prdIdのマッピングのため、呼び出し側でのグループ内合算は不要)
+// 年またぎ対応(2026-09-12): 範囲が年をまたぐ場合、_steraSheetIdsForRange_で解決した全ファイル分を
+// 合算する(呼び出し側は範囲がどの年にまたがるか意識する必要はない)
 function getSteraDailyTotal_(storeId, prdId, fromDateExclusive, toDateInclusive) {
-  const rows = sheetRows(getSteraDailySheet_(), STERA_DAILY_COLS);
+  const sheetIds = _steraSheetIdsForRange_(fromDateExclusive, toDateInclusive);
   let total = 0;
-  rows.forEach(r => {
-    if (String(r.store_id) !== String(storeId) || String(r.prd_id) !== String(prdId)) return;
-    if (fromDateExclusive && String(r.date) <= fromDateExclusive) return;
-    if (toDateInclusive && String(r.date) > toDateInclusive) return;
-    total += Number(r.qty) || 0;
+  sheetIds.forEach(sheetId => {
+    sheetRows(getSteraDailySheet_(sheetId), STERA_DAILY_COLS).forEach(r => {
+      if (String(r.store_id) !== String(storeId) || String(r.prd_id) !== String(prdId)) return;
+      if (fromDateExclusive && String(r.date) <= fromDateExclusive) return;
+      if (toDateInclusive && String(r.date) > toDateInclusive) return;
+      total += Number(r.qty) || 0;
+    });
   });
   return total;
 }
 
 // getSteraDailyTotal_のamount(商品合計金額)版(2026-09-07追加、buildSalesCategoryCostRatioの
 // 原価率計算専用)。ロジックはqty版と完全に対称——2つに分けているのは呼び出し側(在庫差異検知は
-// 数量、原価率は金額)の意図を型で分かりやすくするため。
+// 数量、原価率は金額)の意図を型で分かりやすくするため。年またぎ対応も同様。
 function getSteraDailyAmountTotal_(storeId, prdId, fromDateExclusive, toDateInclusive) {
-  const rows = sheetRows(getSteraDailySheet_(), STERA_DAILY_COLS);
+  const sheetIds = _steraSheetIdsForRange_(fromDateExclusive, toDateInclusive);
   let total = 0;
-  rows.forEach(r => {
-    if (String(r.store_id) !== String(storeId) || String(r.prd_id) !== String(prdId)) return;
-    if (fromDateExclusive && String(r.date) <= fromDateExclusive) return;
-    if (toDateInclusive && String(r.date) > toDateInclusive) return;
-    total += Number(r.amount) || 0;
+  sheetIds.forEach(sheetId => {
+    sheetRows(getSteraDailySheet_(sheetId), STERA_DAILY_COLS).forEach(r => {
+      if (String(r.store_id) !== String(storeId) || String(r.prd_id) !== String(prdId)) return;
+      if (fromDateExclusive && String(r.date) <= fromDateExclusive) return;
+      if (toDateInclusive && String(r.date) > toDateInclusive) return;
+      total += Number(r.amount) || 0;
+    });
   });
   return total;
 }
@@ -3716,7 +3850,9 @@ function _seedSteraDailyFromRealtimeRollover_(dateStr, existingRealtimeRows) {
     .filter(r => (Number(r[idx.qty]) || 0) > 0)
     .map(r => [dateStr, r[idx.store_id], r[idx.prd_id], Number(r[idx.qty]) || 0, 0]);
   if (!newRows.length) return;
-  const sheet = getSteraDailySheet_();
+  // 年またぎ対応(2026-09-12): dateStr(前日)が旧年の12/31等の場合、書き込み先も旧ファイル側にする
+  // (現行ファイルへ書くと、12/31分のデータだけ新ファイルに紛れ込んでしまう)
+  const sheet = getSteraDailySheet_(_inventorySheetIdForPeriod_(dateStr));
   const startRow = sheet.getLastRow() + 1;
   sheet.getRange(startRow, STERA_DAILY_COLS.indexOf('date') + 1, newRows.length, 1).setNumberFormat('@');
   sheet.getRange(startRow, 1, newRows.length, STERA_DAILY_COLS.length).setValues(newRows);
@@ -3821,19 +3957,18 @@ function _lastDayOfPeriod_(periodLabel) {
 // (nullは対象商品の確定棚卸データがまだ無い店舗)。デイリーカウント(手入力)は一切参照しない。
 // 「理論在庫」という名称なのは、盗難で実物が減ってもこの数字自体はそれに気づけない
 // 理論値でしかないため(2026-09-09、「残り在庫」から改称。関数名・戻り値の形は変更なし)。
-function getSteraStockEstimate(storeId) {
-  if (!storeId) return { error: 'storeIdは必須です' };
-  const invData = _inventoryLogRowsCached_();
+// 指定シート1つについて、商品名ごとに直近(最新period_label)の確定棚卸行(期末在庫)を探す。
+// getSteraStockEstimateから年またぎフォールバック(下記)のために切り出した(2026-09-12)。
+function _latestInvEndStockByProduct_(storeId, sheetId) {
+  const invData = _inventoryLogRowsCached_(sheetId);
   const idx = {};
   INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
-
-  // 商品名ごとに、直近(最新period_label)の確定棚卸行(期末在庫)を探す
   const latestByProduct = {}; // product -> {periodLabel, endStock}
   for (let i = 1; i < invData.length; i++) {
     const r = invData[i];
     if (String(r[idx.store_id]) !== String(storeId)) continue;
     const product = r[idx.product];
-    const periodLabel = _invMonthLabelStr(r[idx.period_label]);
+    const periodLabel = _invMonthLabelStr(r[idx.period_label], sheetId);
     const endStock = r[idx.end_stock];
     if (endStock === '' || endStock === null || endStock === undefined) continue;
     const existing = latestByProduct[product];
@@ -3841,35 +3976,73 @@ function getSteraStockEstimate(storeId) {
       latestByProduct[product] = { periodLabel, endStock: Number(endStock) };
     }
   }
+  return latestByProduct;
+}
 
-  // 納品(inventory_delivery_auto)はrecorded_at(実タイムスタンプ)基準で「起点日より後」を
-  // 拾う必要があるため、期間集計用のキャッシュ(_deliveryAutoRowsCached_、recorded_atを持たない)
-  // ではなく生シートを直接読む
-  const deliverySheet = getDeliveryAutoSheet();
-  const dLastRow = deliverySheet.getLastRow();
-  const deliveryRows = dLastRow > 1
-    ? deliverySheet.getRange(2, 1, dLastRow - 1, DELIVERY_AUTO_COLS.length).getValues()
-    : [];
-  const dsIdx = DELIVERY_AUTO_COLS.indexOf('store_id'), dpIdx = DELIVERY_AUTO_COLS.indexOf('product'),
-        dqIdx = DELIVERY_AUTO_COLS.indexOf('qty'), drIdx = DELIVERY_AUTO_COLS.indexOf('recorded_at');
+function getSteraStockEstimate(storeId) {
+  if (!storeId) return { error: 'storeIdは必須です' };
 
-  const dailyRows = sheetRows(getSteraDailySheet_(), STERA_DAILY_COLS);
-  const realtimeToday = _getSteraRealtimeTodayMap_(storeId);
+  // 年またぎ対応(2026-09-12): その店舗が今年まだ一度も棚卸を送信していない間は現行ファイルに
+  // 行が1件も無いため、getLatestConsumptionByCodeと同じ考え方でアーカイブの新しい年から順に
+  // フォールバックする(見つかった時点の年のperiodLabelをそのまま使うので、_lastDayOfPeriod_等の
+  // 以降の計算は年をまたいでいることを意識しなくてよい)
+  let latestByProduct = _latestInvEndStockByProduct_(storeId, INVENTORY_SHEET_ID);
+  if (!Object.keys(latestByProduct).length) {
+    const archiveYears = Object.keys(INVENTORY_SHEET_ID_ARCHIVE).sort().reverse();
+    for (let i = 0; i < archiveYears.length && !Object.keys(latestByProduct).length; i++) {
+      latestByProduct = _latestInvEndStockByProduct_(storeId, INVENTORY_SHEET_ID_ARCHIVE[archiveYears[i]]);
+    }
+  }
+  // 新規店舗(まだ一度も棚卸を送信していない、現行ファイル・全アーカイブいずれにも行が無い)の場合、
+  // 以降のSTERA_SALES_MAPPINGループはどのグループもmemberInfosが空になり必ずnullを返すだけなのに、
+  // それに気づかず日次売上・納品を全アーカイブ年ぶん読みに行ってしまう無駄が起きる(2026-09-12発見、
+  // [[feedback_proactive_perf_flagging]]の方針により未使用のまま処理を続けない)。ここで早期returnする。
+  if (!Object.keys(latestByProduct).length) {
+    const result = {};
+    STERA_SALES_MAPPING.forEach(m => { m.ourProducts.forEach(name => { result[name] = null; }); });
+    return result;
+  }
+
   const todayBusinessDate = _steraBusinessDateFromDateTime_(
     Utilities.formatDate(new Date(), _invSheetTz(), 'yyyy-MM-dd HH:mm:ss')
   );
 
-  const result = {};
-  STERA_SALES_MAPPING.forEach(m => {
-    // グループ内の各商品名について、直近の確定棚卸情報を集める(1つも無ければ対象外=null)
+  // 各グループのsinceDate(直近確定期間の月末)を先に計算しておく(STERA_SALES_MAPPINGと同じ並び順の配列)。
+  // 起点が店舗×グループごとに異なりうるため、日次売上・納品の一括取得(N+1回避)は全グループの
+  // 最も古いsinceDateを下限にして1回で済ませる
+  const groupSinceDates = STERA_SALES_MAPPING.map(m => {
     const memberInfos = m.ourProducts.map(name => latestByProduct[name]).filter(Boolean);
-    if (!memberInfos.length) { m.ourProducts.forEach(name => { result[name] = null; }); return; }
-    const endStockTotal = memberInfos.reduce((sum, info) => sum + info.endStock, 0);
+    if (!memberInfos.length) return null;
     // グループ内で複数の確定期間が混在する場合は、最も新しい期間を起点にする(古い期間を
     // 起点にすると、既に新しい期間の期末在庫に反映済みの納品/売上を二重に差し引く/加算する
     // ことになるため。多少の誤差はあり得るが「目安の理論在庫」として許容する)
     const latestPeriod = memberInfos.reduce((max, info) => info.periodLabel > max ? info.periodLabel : max, memberInfos[0].periodLabel);
-    const sinceDate = _lastDayOfPeriod_(latestPeriod); // "YYYY-MM-DD"、この日の営業日終了時点が起点
+    return _lastDayOfPeriod_(latestPeriod); // "YYYY-MM-DD"、この日の営業日終了時点が起点
+  });
+  const earliestSinceDate = groupSinceDates.filter(Boolean).sort()[0] || null;
+
+  // 納品(inventory_delivery_auto)はrecorded_at(実タイムスタンプ)基準で「起点日より後」を
+  // 拾う必要があるため、期間集計用のキャッシュ(_deliveryAutoRowsCached_、recorded_atを持たない)
+  // ではなく生シートを直接読む。年またぎ対応: sinceDate〜今日の範囲にまたがる年のファイルを全て読む
+  const rangeSheetIds = _steraSheetIdsForRange_(earliestSinceDate, todayBusinessDate);
+  const deliveryRows = rangeSheetIds.reduce((rows, sid) => {
+    const deliverySheet = getDeliveryAutoSheet(sid);
+    const dLastRow = deliverySheet.getLastRow();
+    return dLastRow > 1 ? rows.concat(deliverySheet.getRange(2, 1, dLastRow - 1, DELIVERY_AUTO_COLS.length).getValues()) : rows;
+  }, []);
+  const dsIdx = DELIVERY_AUTO_COLS.indexOf('store_id'), dpIdx = DELIVERY_AUTO_COLS.indexOf('product'),
+        dqIdx = DELIVERY_AUTO_COLS.indexOf('qty'), drIdx = DELIVERY_AUTO_COLS.indexOf('recorded_at');
+
+  const dailyRows = rangeSheetIds.reduce((rows, sid) => rows.concat(sheetRows(getSteraDailySheet_(sid), STERA_DAILY_COLS)), []);
+  const realtimeToday = _getSteraRealtimeTodayMap_(storeId);
+
+  const result = {};
+  STERA_SALES_MAPPING.forEach((m, i) => {
+    // グループ内の各商品名について、直近の確定棚卸情報を集める(1つも無ければ対象外=null)
+    const memberInfos = m.ourProducts.map(name => latestByProduct[name]).filter(Boolean);
+    if (!memberInfos.length) { m.ourProducts.forEach(name => { result[name] = null; }); return; }
+    const endStockTotal = memberInfos.reduce((sum, info) => sum + info.endStock, 0);
+    const sinceDate = groupSinceDates[i];
 
     let deliverySince = 0;
     deliveryRows.forEach(row => {
@@ -3956,8 +4129,10 @@ const WATER_STOCK_MISMATCH_EXCLUDED_STORES = [
 const SHEET_STOCK_MISMATCH_CHECKPOINT = 'stock_mismatch_checkpoint';
 const STOCK_MISMATCH_CHECKPOINT_COLS = ['store_id', 'prd_id', 'checkpoint_date', 'checkpoint_qty'];
 
-function _getStockMismatchCheckpointSheet_() {
-  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+// sheetId省略時は現行ファイル。年またぎ対応(2026-09-12)で他のgetXxxSheet系と同じパターンにする——
+// checkWaterStockMismatchがsinceDateの年に応じて過去分の読み取りにも使う
+function _getStockMismatchCheckpointSheet_(sheetId) {
+  const ss = SpreadsheetApp.openById(sheetId || INVENTORY_SHEET_ID);
   const sheet = ss.getSheetByName(SHEET_STOCK_MISMATCH_CHECKPOINT) || ss.insertSheet(SHEET_STOCK_MISMATCH_CHECKPOINT);
   ensureHeaders(sheet, STOCK_MISMATCH_CHECKPOINT_COLS);
   return sheet;
@@ -4026,16 +4201,28 @@ function checkWaterStockMismatch(storeId, product) {
     itemKeys.forEach(k => { inputQty += Number(allDays[dayKey][k]) || 0; });
   });
 
-  const dailyRows = sheetRows(getSteraDailySheet_(), STERA_DAILY_COLS);
-  const checkpointRows = sheetRows(_getStockMismatchCheckpointSheet_(), STOCK_MISMATCH_CHECKPOINT_COLS);
-  const carryOver = _stockMismatchCarryOverFromRows_(dailyRows, checkpointRows, storeId, group.prdId, sinceDate);
+  // 年またぎ対応(2026-09-12): sinceDate〜yesterdayの範囲が年をまたぐ場合(12月末に最後の入力があり、
+  // 年明けに次の入力があったケース)、stera_daily_salesは範囲内の各年のファイルを合算して読む。
+  // チェックポイントは「今回の更新」は必ず現行ファイルへ書く(通常通り)が、sinceDateがちょうど
+  // 旧年の日付の場合に限り、carryOver判定のためだけ旧ファイル側の既存チェックポイントも見に行く
+  // (旧ファイルが「現行」だった当時に書かれたものなので、書き込み先の現行ファイルには無い)。
+  const dailySheetIds = _steraSheetIdsForRange_(sinceDate, yesterday);
+  const dailyRows = dailySheetIds.reduce((rows, sid) => rows.concat(sheetRows(getSteraDailySheet_(sid), STERA_DAILY_COLS)), []);
+  const checkpointRowsCurrent = sheetRows(_getStockMismatchCheckpointSheet_(), STOCK_MISMATCH_CHECKPOINT_COLS);
+  const sinceDateSheetId = _inventorySheetIdForPeriod_(sinceDate);
+  const checkpointRowsForLookup = sinceDateSheetId === INVENTORY_SHEET_ID
+    ? checkpointRowsCurrent
+    : checkpointRowsCurrent.concat(sheetRows(_getStockMismatchCheckpointSheet_(sinceDateSheetId), STOCK_MISMATCH_CHECKPOINT_COLS));
+  const carryOver = _stockMismatchCarryOverFromRows_(dailyRows, checkpointRowsForLookup, storeId, group.prdId, sinceDate);
   const rangeQty = dailyRows
     .filter(r => String(r.store_id) === String(storeId) && String(r.prd_id) === String(group.prdId) &&
       String(r.date) > sinceDate && String(r.date) <= yesterday)
     .reduce((sum, r) => sum + (Number(r.qty) || 0), 0);
   const todayRealtimeQty = _getSteraRealtimeTodayMap_(storeId)[group.prdId] || 0;
   const steraQty = carryOver + rangeQty + todayRealtimeQty;
-  _batchUpsertStockMismatchCheckpoints_(checkpointRows, [{ storeId, prdId: group.prdId, dateStr: today, qty: todayRealtimeQty }]);
+  // チェックポイントの書き込み(upsert)は常に現行ファイルのみが対象(既存分もcheckpointRowsCurrentのみ渡す)——
+  // 旧ファイル側のチェックポイントは読み取り専用のまま残し、書き込みで新ファイルへ混ぜ込まない
+  _batchUpsertStockMismatchCheckpoints_(checkpointRowsCurrent, [{ storeId, prdId: group.prdId, dateStr: today, qty: todayRealtimeQty }]);
 
   const diff = inputQty - steraQty;
   const overAbsolute = diff >= WATER_STOCK_MISMATCH_ABS_THRESHOLD;
@@ -4057,9 +4244,10 @@ function checkWaterStockMismatch(storeId, product) {
 
 // stera_daily_salesにdateStr当日の行が1件でもあれば、その日はCSV取込み済み(確定)とみなす
 // (_seedSteraDailyFromRealtimeRollover_専用、日付ロールオーバー時に1回だけ呼ばれる低頻度パスなので
-// 都度シートを読んでも問題ない)
+// 都度シートを読んでも問題ない)。年またぎ対応(2026-09-12): dateStrは常に「昨日」(日付ロールオーバー
+// の対象日)なので、1年に1回・12/31→1/1の切り替わりでだけ旧ファイル側を見る必要がある
 function _hasSteraDailyDataForDate_(dateStr) {
-  return sheetRows(getSteraDailySheet_(), STERA_DAILY_COLS).some(r => String(r.date) === dateStr);
+  return sheetRows(getSteraDailySheet_(_inventorySheetIdForPeriod_(dateStr)), STERA_DAILY_COLS).some(r => String(r.date) === dateStr);
 }
 
 // 2026-09-08、盗難検知①(チェックシート入力時の「前回入力からの実売上」表示・自動通知、
@@ -4090,17 +4278,20 @@ const STOCK_CHECK_START_COL = STORE_INVENTORY_HEADERS_JA.length + 1 + 2;
 // アペックスの原料の数量か？」と誤解されるため(2026-09-05、ユーザー指摘で発覚)、
 // buildSalesCategoryCostRatioに合わせてラベル列を追加した。
 const STOCK_CHECK_HEADERS = ['商品(ステラ突合対象)', 'ステラ数量(月間)', '差異(消費量-処分数量-ステラ数量)', '確認状況(手入力可)'];
+// 年またぎ対応(2026-09-12): periodLabelの年からファイルを解決する。getSteraDailyTotal_は
+// 自身で日付範囲から対象ファイルを解決する(_steraSheetIdsForRange_)ため呼び出し側の変更不要。
 function buildStockCheckMonthly(storeId, periodLabel) {
   if (!storeId) return { error: 'storeIdは必須です' };
   if (!periodLabel) return { error: 'periodLabelは必須です（例: 2026-07）' };
 
-  const invData = _inventoryLogRowsCached_();
+  const sheetId = _inventorySheetIdForPeriod_(periodLabel);
+  const invData = _inventoryLogRowsCached_(sheetId);
   const idx = {};
   INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
   const consumptionByProduct = {}, disposedByProduct = {};
   invData.slice(1).forEach(r => {
     if (String(r[idx.store_id]) !== String(storeId)) return;
-    if (_invMonthLabelStr(r[idx.period_label]) !== String(periodLabel)) return;
+    if (_invMonthLabelStr(r[idx.period_label], sheetId) !== String(periodLabel)) return;
     consumptionByProduct[r[idx.product]] = Number(r[idx.consumption]) || 0;
     disposedByProduct[r[idx.product]] = Number(r[idx.disposed_qty]) || 0;
   });
@@ -4110,7 +4301,7 @@ function buildStockCheckMonthly(storeId, periodLabel) {
   const fromDateExclusive = periodLabel + '-00';
   const toDateInclusive = periodLabel + '-32';
 
-  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const ss = SpreadsheetApp.openById(sheetId);
   const storeName = _storeNames_()[storeId] || storeId;
   // buildStoreInventorySheetと同じ理由(新規店舗の初回送信時、saveInventorySnapshotから並行
   // 発火する複数リクエストがタブ作成で競合しうる)でここも同じフォールバックを入れる。
@@ -4170,18 +4361,22 @@ function buildStockCheckMonthly(storeId, periodLabel) {
 // 2026-09-07、原価率(buildSalesCategoryCostRatio)もこの月次トリガーに相乗りさせた——
 // 手動CSVインポート運用が現実的に続かないとのユーザー指摘を受け、データ元をstera_daily_sales
 // (自動蓄積)に切り替えたことで同じ仕組みに乗せられるようになったため。
+// 年またぎ対応(2026-09-12): 1月1日にこのトリガーが「前月」=去年12月分を計算しようとするケースが
+// 実際に発生する。periodLabelの年から参照先ファイルを解決しないと、ファイル切り替え後は現行(新年)
+// ファイルの空データを見て対象店舗0件のまま何もしなくなってしまう。
 function runMonthlyStockCheckBackstop() {
   const now = new Date();
   const prevMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 1);
   const periodLabel = Utilities.formatDate(prevMonthDate, _invSheetTz(), 'yyyy-MM');
+  const sheetId = _inventorySheetIdForPeriod_(periodLabel);
 
-  const invData = _inventoryLogRowsCached_();
+  const invData = _inventoryLogRowsCached_(sheetId);
   const idx = {};
   INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
   const storeIds = new Set();
   for (let i = 1; i < invData.length; i++) {
     const r = invData[i];
-    if (_invMonthLabelStr(r[idx.period_label]) === periodLabel) storeIds.add(String(r[idx.store_id]));
+    if (_invMonthLabelStr(r[idx.period_label], sheetId) === periodLabel) storeIds.add(String(r[idx.store_id]));
   }
 
   const results = [];
