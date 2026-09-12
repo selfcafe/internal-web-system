@@ -1,0 +1,42 @@
+name: TEST rollover dry_run=false path (decoy targets, temporary, delete after use)
+
+# rollover-inventory-year.ymlのdry_run=false時のロジック(archive JSON更新→secret更新)を、
+# 本番のINVENTORY_SHEET_ID/INVENTORY_SHEET_ID_ARCHIVE_JSONではなく決め打ちのデコイ名
+# (TEST_ROLLOVER_*)に対して実行し、本番に一切影響を与えずに動作確認するための使い捨てワークフロー。
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: デコイのarchiveへ旧年を追記
+        env:
+          GH_TOKEN: ${{ secrets.SECRETS_ADMIN_TOKEN }}
+          OLD_ID: ${{ secrets.TEST_ROLLOVER_INVENTORY_SHEET_ID }}
+          OLD_YEAR: "2026"
+          CURRENT_ARCHIVE_JSON: ${{ vars.TEST_ROLLOVER_ARCHIVE_JSON }}
+        run: |
+          set -eu
+          NEW_ARCHIVE=$(node -e "
+            const cur = JSON.parse(process.env.CURRENT_ARCHIVE_JSON || '{}');
+            cur[process.env.OLD_YEAR] = process.env.OLD_ID;
+            process.stdout.write(JSON.stringify(cur));
+          ")
+          echo "更新後のarchive: $NEW_ARCHIVE"
+          gh variable set TEST_ROLLOVER_ARCHIVE_JSON --repo "${{ github.repository }}" --body "$NEW_ARCHIVE"
+
+      - name: デコイのINVENTORY_SHEET_IDを新ファイルへ切り替え
+        env:
+          GH_TOKEN: ${{ secrets.SECRETS_ADMIN_TOKEN }}
+        run: |
+          gh secret set TEST_ROLLOVER_INVENTORY_SHEET_ID --repo "${{ github.repository }}" --body "FAKE_NEW_FILE_ID_2027"
+
+      - name: 結果確認
+        env:
+          GH_TOKEN: ${{ secrets.SECRETS_ADMIN_TOKEN }}
+        run: |
+          echo "--- variable list ---"
+          gh variable list --repo "${{ github.repository }}"
+          echo "--- secret list (値は表示不可) ---"
+          gh secret list --repo "${{ github.repository }}" | grep TEST_ROLLOVER
