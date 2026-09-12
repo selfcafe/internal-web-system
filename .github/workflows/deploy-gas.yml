@@ -36,6 +36,7 @@ jobs:
           INVENTORY_SHEET_ID: ${{ secrets.INVENTORY_SHEET_ID }}
           DELIVERY_HISTORY_SHEET_ID: ${{ secrets.DELIVERY_HISTORY_SHEET_ID }}
           CLASP_SCRIPT_ID: ${{ secrets.CLASP_SCRIPT_ID }}
+          INVENTORY_SHEET_ID_ARCHIVE_JSON: ${{ vars.INVENTORY_SHEET_ID_ARCHIVE_JSON }}
         run: |
           set -eu
           mkdir -p gas-deploy
@@ -56,6 +57,20 @@ jobs:
           grep -qF "const SHEET_ID        = '';" gas-deploy/gas_backend.js && { echo "::error::SHEET_ID置換に失敗しました"; exit 1; }
           grep -qF "const INVENTORY_SHEET_ID = '';" gas-deploy/gas_backend.js && { echo "::error::INVENTORY_SHEET_ID置換に失敗しました"; exit 1; }
           grep -qF "const DELIVERY_HISTORY_SHEET_ID = '';" gas-deploy/gas_backend.js && { echo "::error::DELIVERY_HISTORY_SHEET_ID置換に失敗しました"; exit 1; }
+
+          # INVENTORY_SHEET_ID_ARCHIVE(年→旧ファイルIDのマップ)はGitHub Actions Variable
+          # (vars.INVENTORY_SHEET_ID_ARCHIVE_JSON、rollover-inventory-year.ymlが更新する)から
+          # 差し込む。複数行ブロックのためsedではなくnodeで置換する([[feature_inventory_year_rollover]]参照)。
+          node -e "
+            const fs = require('fs');
+            const path = 'gas-deploy/gas_backend.js';
+            let src = fs.readFileSync(path, 'utf8');
+            const archive = JSON.parse(process.env.INVENTORY_SHEET_ID_ARCHIVE_JSON || '{}');
+            const re = /const INVENTORY_SHEET_ID_ARCHIVE = \{[\s\S]*?\n\};/;
+            if (!re.test(src)) { console.error('::error::INVENTORY_SHEET_ID_ARCHIVEの置換対象ブロックが見つかりません'); process.exit(1); }
+            src = src.replace(re, 'const INVENTORY_SHEET_ID_ARCHIVE = ' + JSON.stringify(archive) + ';');
+            fs.writeFileSync(path, src);
+          "
 
           printf '{"scriptId":"%s","rootDir":"."}' "$CLASP_SCRIPT_ID" > gas-deploy/.clasp.json
 

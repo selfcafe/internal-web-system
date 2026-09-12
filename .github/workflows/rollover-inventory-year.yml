@@ -1,0 +1,102 @@
+name: rollover inventory year
+
+# 棚卸集計スプレッドシートの年次切り替えを1コマンドで完結させる([[feature_inventory_year_rollover]]参照)。
+# 実行タイミングは「毎年1/1深夜(JST)」固定——理由・設計の背景はinternal-web-system/CLAUDE.md参照。
+# ここでは以下を順に行う:
+#   1. provisionNewInventorySheet(GAS)で新しい年のスプレッドシートを作成
+#   2. INVENTORY_SHEET_ID_ARCHIVE_JSON(GitHub Actions Variable、読み書き可能)に
+#      「旧年: 旧INVENTORY_SHEET ID」を追記
+#   3. INVENTORY_SHEET_ID(GitHub Secret)を新しいスプレッドシートIDへ更新
+#   4. deploy-gas.ymlを起動して本番Apps Scriptへ反映し、完了を待つ
+# dry_run=true(既定)では1のみ実行し、2以降(Secrets/Variables更新・本番切り替え)は行わない。
+on:
+  workflow_dispatch:
+    inputs:
+      year:
+        description: "新しく切り替える年(例: 2027)。省略時は来年(JST基準)"
+        required: false
+      dry_run:
+        description: "true=新規スプレッドシート作成のみ(安全・本番に一切影響なし) / false=実際に切り替え(Secrets/Variables更新・本番再デプロイ)"
+        required: true
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+
+jobs:
+  rollover:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Resolve target/old year
+        id: yr
+        run: |
+          YEAR="${{ inputs.year }}"
+          if [ -z "$YEAR" ]; then YEAR=$(TZ=Asia/Tokyo date -d '+1 year' +%Y); fi
+          OLDYEAR=$((YEAR - 1))
+          echo "year=$YEAR" >> "$GITHUB_OUTPUT"
+          echo "oldyear=$OLDYEAR" >> "$GITHUB_OUTPUT"
+          echo "対象年: $YEAR / アーカイブする旧年: $OLDYEAR"
+
+      - name: Create new inventory spreadsheet via GAS
+        id: create
+        run: |
+          set -eu
+          resp=$(curl -s -L "https://script.google.com/macros/s/${{ secrets.CLASP_DEPLOYMENT_ID }}/exec?action=provisionNewInventorySheet&label=${{ steps.yr.outputs.year }}")
+          echo "response: $resp"
+          ok=$(echo "$resp" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{console.log(JSON.parse(d).ok===true?'true':'false')}catch(e){console.log('false')}})")
+          if [ "$ok" != "true" ]; then
+            echo "::error::新規スプレッドシート作成に失敗しました: $resp"
+            exit 1
+          fi
+          new_id=$(echo "$resp" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>console.log(JSON.parse(d).spreadsheetId))")
+          already=$(echo "$resp" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>console.log(JSON.parse(d).alreadyExisted))")
+          echo "new_id=$new_id" >> "$GITHUB_OUTPUT"
+          echo "新規スプレッドシートID: $new_id (既存流用: $already)"
+
+      - name: dry_run結果の表示
+        if: inputs.dry_run == 'true'
+        run: |
+          echo "::notice title=dry_run完了::新しい${{ steps.yr.outputs.year }}年用スプレッドシート(ID: ${{ steps.create.outputs.new_id }})を作成しました。実際の切り替え(Secrets/Variables更新・本番再デプロイ)は行っていません。本番に切り替えるには、この同じワークフローをdry_run=falseで再実行してください。"
+
+      - name: INVENTORY_SHEET_ID_ARCHIVE_JSONへ旧年を追記
+        if: inputs.dry_run == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.SECRETS_ADMIN_TOKEN }}
+          OLD_ID: ${{ secrets.INVENTORY_SHEET_ID }}
+          OLD_YEAR: ${{ steps.yr.outputs.oldyear }}
+          CURRENT_ARCHIVE_JSON: ${{ vars.INVENTORY_SHEET_ID_ARCHIVE_JSON }}
+        run: |
+          set -eu
+          NEW_ARCHIVE=$(node -e "
+            const cur = JSON.parse(process.env.CURRENT_ARCHIVE_JSON || '{}');
+            cur[process.env.OLD_YEAR] = process.env.OLD_ID;
+            process.stdout.write(JSON.stringify(cur));
+          ")
+          echo "更新後のarchive: $NEW_ARCHIVE"
+          gh variable set INVENTORY_SHEET_ID_ARCHIVE_JSON --repo "${{ github.repository }}" --body "$NEW_ARCHIVE"
+
+      - name: INVENTORY_SHEET_IDを新ファイルへ切り替え
+        if: inputs.dry_run == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.SECRETS_ADMIN_TOKEN }}
+        run: |
+          gh secret set INVENTORY_SHEET_ID --repo "${{ github.repository }}" --body "${{ steps.create.outputs.new_id }}"
+
+      - name: 本番再デプロイを起動して完了を待つ
+        if: inputs.dry_run == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.SECRETS_ADMIN_TOKEN }}
+        run: |
+          set -eu
+          gh workflow run deploy-gas.yml --repo "${{ github.repository }}" --ref main
+          sleep 8
+          RUN_ID=$(gh run list --repo "${{ github.repository }}" --workflow deploy-gas.yml --limit 1 --json databaseId --jq '.[0].databaseId')
+          echo "deploy-gas run: $RUN_ID"
+          gh run watch "$RUN_ID" --repo "${{ github.repository }}" --exit-status
+
+      - name: 完了通知
+        if: inputs.dry_run == 'false'
+        run: |
+          echo "::notice title=年次切り替え完了::${{ steps.yr.outputs.oldyear }}年→${{ steps.yr.outputs.year }}年への切り替えが完了しました。新ファイルID: ${{ steps.create.outputs.new_id }}"
