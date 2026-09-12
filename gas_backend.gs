@@ -406,6 +406,7 @@ function doGet(e) {
     else if (a === 'migrateInventoryColumns')   result = migrateInventoryColumns();
     else if (a === 'migrateStoreIdRenames')     result = migrateStoreIdRenames();
     else if (a === 'setupInventoryDisposedHighlight') result = setupInventoryDisposedHighlight();
+    else if (a === 'provisionNewInventorySheet') result = provisionNewInventorySheet(e.parameter.label);
     else if (a === 'buildInventoryRollup')      result = buildInventoryRollup(e.parameter.periodLabel);
     else if (a === 'buildStoreInventorySheet')  result = buildStoreInventorySheet(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'buildReorderTestPlaySheet') result = buildReorderTestPlaySheet(e.parameter.storeId);
@@ -584,6 +585,25 @@ function _provisionDeliveryHistorySheet_() {
   const sheet = ss.getSheets()[0];
   sheet.setName(SHEET_DELIVERY_HISTORY);
   sheet.appendRow(DELIVERY_HISTORY_COLS);
+  return { ok: true, alreadyExisted: false, spreadsheetId: ss.getId(), url: ss.getUrl() };
+}
+
+// 棚卸集計スプレッドシートの年次切り替え自動化用(2026-09-12、[[feature_inventory_year_rollover]]参照)。
+// _provisionDeliveryHistorySheet_と全く同じ手法——この実行アカウント(selfcafe001@gmail.com)の
+// 所有として新規作成するため、追加の共有設定なしで直ちに読み書きできる。この関数はスプレッドシートを
+// 用意するところまでだけを担当し、INVENTORY_SHEET_ID自体の切り替え(GitHub Secrets更新・再デプロイ)は
+// 別途(rollover-inventory-year.ymlワークフロー側)で行う。
+// ?action=provisionNewInventorySheet&label=2027 で実行。既に同名のファイルが無いか確認してから
+// 作る(誤って複数回実行しても複製が増えないための軽い安全策)。
+function provisionNewInventorySheet(label) {
+  if (!label) return { error: 'labelは必須です(例: 2027)' };
+  const name = '棚卸集計_' + label;
+  const existing = DriveApp.getFilesByName(name);
+  if (existing.hasNext()) {
+    const f = existing.next();
+    return { ok: true, alreadyExisted: true, spreadsheetId: f.getId(), url: f.getUrl() };
+  }
+  const ss = SpreadsheetApp.create(name);
   return { ok: true, alreadyExisted: false, spreadsheetId: ss.getId(), url: ss.getUrl() };
 }
 
