@@ -96,6 +96,7 @@ class Sheet {
   getRange(row, col, numRows, numCols) { return new Range(this, row, col, numRows || 1, numCols || 1); }
   appendRow(arr) { this.rows.push(arr.slice()); return this; }
   deleteRows(start, num) { this.rows.splice(start - 1, num); }
+  deleteRow(row) { this.rows.splice(row - 1, 1); }
   insertRowsBefore(before, num) { const blanks = Array.from({ length: num }, () => []); this.rows.splice(before - 1, 0, ...blanks); }
   clearContents() { this.rows = []; }
   clearConditionalFormatRules() {}
@@ -323,6 +324,33 @@ const newStoreBuild = context.buildStoreInventorySheet(NEW_STORE, '2027-01');
 check('新規店舗: 初回棚卸で店舗タブ作成ok', newStoreBuild.ok, true);
 check('新規店舗: 店舗タブは新ファイル側に作られる', !!FILES['FILE_2027'].getSheetByName(NEW_STORE), true);
 check('新規店舗: 旧ファイル側には作られない', !!(FILES['FILE_2026'] && FILES['FILE_2026'].getSheetByName(NEW_STORE)), false);
+
+// ============ (i) 前年最終期間の遅延送信(締めが翌月5日のため1/1〜1/5に起こりうる) ============
+// 切り替え後(現行ファイル=FILE_2027)に、shibuyaが"2026-12"分の棚卸完了を再送信(訂正)した場合、
+// saveInventorySnapshotがperiodLabelの年を見て正しく旧ファイル(FILE_2026)へ書き込むか検証する。
+// 修正前は常に現行ファイルへ書いてしまい、getInventoryHistory('2026-12')(旧ファイルを見に行く)
+// と食い違って迷子になるバグがあった(2026-09-12発見・修正)。
+const straggler = context.saveInventorySnapshot('shibuya', '2026-12', [
+  { code: 'STE001', product: '水', open_stock: 100, delivery: 0, end_stock: 65, consumption: 35, disposed_qty: 0, price: 100 },
+], '1/3に遅れて訂正送信');
+check('遅延送信: saveInventorySnapshot ok', straggler.ok, true);
+
+const stragglerHist = context.getInventoryHistory('shibuya', '2026-12');
+check('遅延送信: 旧ファイル側の読み取りに反映される(end_stock)', stragglerHist[0] && Number(stragglerHist[0].end_stock), 65);
+
+// 新ファイル(FILE_2027)のinventory_logには"2026-12"のshibuya行が紛れ込んでいないこと
+const newFileInvSheet = FILES['FILE_2027'].getSheetByName('inventory_log');
+const leakedIntoNewFile = newFileInvSheet
+  ? newFileInvSheet.rows.slice(1).some(r => String(r[0]) === '2026-12' && String(r[1]) === 'shibuya')
+  : false;
+check('遅延送信: 新ファイルに紛れ込んでいない', leakedIntoNewFile, false);
+
+// 納品済みボタン(recordInventoryDelivery)も同様に旧ファイルへ書き込まれるか検証
+// (FILE_2026には最初から'2026-12'期間の水99個の納品が種として入っている。今回5個を追加するので
+// 合計104になるはず。旧ファイルへ正しく追記されていることの確認)
+context.recordInventoryDelivery('shibuya', '2026-12', '水', 5);
+const stragglerDelivery = context.getInventoryDeliveryAuto('shibuya', '2026-12');
+check('遅延送信: 納品済みも旧ファイル経由で読み取れる(既存99+今回5)', stragglerDelivery['水'], 104);
 
 // ================= 結果表示 =================
 console.log('='.repeat(60));

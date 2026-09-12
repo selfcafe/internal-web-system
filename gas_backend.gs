@@ -1785,8 +1785,12 @@ function _inventoryLogRowsCached_(sheetId) {
   try { cache.put(cacheKey, JSON.stringify(safe), 25); } catch (e) {} // 100KB超過時は諦めて次回も都度読む
   return safe;
 }
-function _invalidateInventoryLogCache_() {
-  try { CacheService.getScriptCache().remove(INVENTORY_LOG_CACHE_KEY); } catch (e) {}
+// sheetId省略時は現行ファイルのキャッシュのみ無効化(従来通り)。年またぎで旧ファイルへ書き込んだ
+// 場合はそちらのキャッシュキーを無効化する必要がある(saveInventorySnapshot参照、2026-09-12)
+function _invalidateInventoryLogCache_(sheetId) {
+  const id = sheetId || INVENTORY_SHEET_ID;
+  const cacheKey = id === INVENTORY_SHEET_ID ? INVENTORY_LOG_CACHE_KEY : (INVENTORY_LOG_CACHE_KEY + ':' + id);
+  try { CacheService.getScriptCache().remove(cacheKey); } catch (e) {}
 }
 
 // periodLabelの年が年またぎで切り替えた過去の年ならINVENTORY_SHEET_ID_ARCHIVE側の旧ファイルを、
@@ -1875,7 +1879,7 @@ function _latestConsumptionByCodeFromSheet_(storeId, sheetId) {
 // ※getInventoryHistory等の参照系はCacheServiceでの25秒キャッシュ(_inventoryLogRowsCached_)で対応済み
 // だが、ここは複数端末での同時送信の正しいマージに直結するため、キャッシュ(最大25秒古い可能性)は
 // 使わず常に最新のシートを直接読む——正確性を優先し、代わりに読む「列数」を絞ることで高速化する。
-function _matchingInventoryLogRowNumbers_(sheet, storeId, periodLabel) {
+function _matchingInventoryLogRowNumbers_(sheet, storeId, periodLabel, sheetId) {
   const lastRow = sheet.getLastRow();
   if (lastRow <= 1) return [];
   const sidCol = INVENTORY_COLS.indexOf('store_id') + 1;
@@ -1884,15 +1888,23 @@ function _matchingInventoryLogRowNumbers_(sheet, storeId, periodLabel) {
   const pidVals = sheet.getRange(2, pidCol, lastRow - 1, 1).getValues();
   const matchRows = [];
   for (let i = 0; i < sidVals.length; i++) {
-    if (String(sidVals[i][0]) === String(storeId) && _invMonthLabelStr(pidVals[i][0]) === String(periodLabel)) {
+    if (String(sidVals[i][0]) === String(storeId) && _invMonthLabelStr(pidVals[i][0], sheetId) === String(periodLabel)) {
       matchRows.push(i + 2); // 1-based行番号(見出し行の分+1)
     }
   }
   return matchRows;
 }
 
+// 年またぎ対応(2026-09-12): 送信されたperiodLabelの年から書き込み先ファイルを解決する
+// (_inventorySheetIdForPeriod_)。以前は常に現行INVENTORY_SHEET_IDへ書いていたため、年次切り替え
+// (INVENTORY_SHEET_ID_ARCHIVEへの登録+INVENTORY_SHEET_ID差し替え)を行った直後の数日間、
+// 前年最終期間(例: "2026-12"、締めが翌月5日のため1/1〜1/5にも遅れて送信されうる)の遅延送信が
+// 誤って新ファイルに書き込まれ、読み取り側(_inventorySheetIdForPeriod_経由で旧ファイルを見に行く)
+// と食い違って迷子になる欠陥があった。periodLabelを見て書き込み先を決めることで、切り替えの
+// タイミングに関わらず常に正しいファイルへ書き込まれるようにする。
 function saveInventorySnapshot(storeId, periodLabel, rows, remarks) {
-  const sheet = getInventorySheet();
+  const sheetId = _inventorySheetIdForPeriod_(periodLabel);
+  const sheet = getInventorySheet(sheetId);
   ensureHeaders(sheet, INVENTORY_HEADERS_JA);
   const now = new Date().toISOString();
 
@@ -1900,7 +1912,7 @@ function saveInventorySnapshot(storeId, periodLabel, rows, remarks) {
   const existingByProduct = {};
   const remarksIdx = INVENTORY_COLS.indexOf('remarks');
   const prodIdx = INVENTORY_COLS.indexOf('product');
-  const matchRows = _matchingInventoryLogRowNumbers_(sheet, storeId, periodLabel);
+  const matchRows = _matchingInventoryLogRowNumbers_(sheet, storeId, periodLabel, sheetId);
   if (matchRows.length) {
     // 該当行は同じ送信でまとめて追記された連続ブロックであることが多いため、連続区間ごとに
     // まとめて1回のgetRangeで読む(該当行がバラバラでも正しく動くが、連続していれば読み込み回数が減る)
@@ -1968,7 +1980,7 @@ function saveInventorySnapshot(storeId, periodLabel, rows, remarks) {
   // inventory_logの内容が変わったため、getInventoryHistory/buildStoreInventorySheet等が使う
   // キャッシュを無効化する(2026-08-01追加)。これを忘れると、直後にbuildStoreInventorySheetが
   // 別リクエストとして走った際に25秒以内は古いデータのままになってしまう
-  _invalidateInventoryLogCache_();
+  _invalidateInventoryLogCache_(sheetId);
   return { ok: true };
 }
 
@@ -2019,8 +2031,13 @@ function getDeliveryAutoSheet(sheetId) {
   return ss.getSheetByName(SHEET_DELIVERY_AUTO) || ss.insertSheet(SHEET_DELIVERY_AUTO);
 }
 
+// 年またぎ対応(2026-09-12): saveInventorySnapshotと同じ理由で、periodLabelの年から書き込み先を
+// 解決する。以前は常に現行ファイルへ書いていたため、年次切り替え直後に前年最終期間(締めが翌月5日の
+// ため1/1〜1/5にも「納品済み」が押されうる)の記録が新ファイルに紛れ込み、読み取り側(旧ファイルを
+// 見に行く)と食い違って迷子になる欠陥があった。
 function recordInventoryDelivery(storeId, periodLabel, product, qty) {
-  const sheet = getDeliveryAutoSheet();
+  const sheetId = _inventorySheetIdForPeriod_(periodLabel);
+  const sheet = getDeliveryAutoSheet(sheetId);
   ensureHeaders(sheet, DELIVERY_AUTO_COLS);
   const row = DELIVERY_AUTO_COLS.map(c => {
     if (c === 'period_label') return periodLabel;
@@ -2034,7 +2051,7 @@ function recordInventoryDelivery(storeId, periodLabel, product, qty) {
   // period_labelが"YYYY-MM"のまま日付型に自動変換されないよう固定
   sheet.getRange(startRow, DELIVERY_AUTO_COLS.indexOf('period_label') + 1, 1, 1).setNumberFormat('@');
   sheet.getRange(startRow, 1, 1, DELIVERY_AUTO_COLS.length).setValues([row]);
-  _invalidateDeliveryAutoCache_();
+  _invalidateDeliveryAutoCache_(sheetId);
   return { ok: true };
 }
 
@@ -2064,8 +2081,12 @@ function _deliveryAutoRowsCached_(sheetId) {
   try { cache.put(cacheKey, JSON.stringify(rows), 25); } catch (e) {}
   return rows;
 }
-function _invalidateDeliveryAutoCache_() {
-  try { CacheService.getScriptCache().remove(DELIVERY_AUTO_CACHE_KEY); } catch (e) {}
+// sheetId省略時は現行ファイルのキャッシュのみ無効化。年またぎで旧ファイルへ書き込んだ場合は
+// そちらのキャッシュキーを無効化する必要がある(recordInventoryDelivery参照、2026-09-12)
+function _invalidateDeliveryAutoCache_(sheetId) {
+  const id = sheetId || INVENTORY_SHEET_ID;
+  const cacheKey = id === INVENTORY_SHEET_ID ? DELIVERY_AUTO_CACHE_KEY : (DELIVERY_AUTO_CACHE_KEY + ':' + id);
+  try { CacheService.getScriptCache().remove(cacheKey); } catch (e) {}
 }
 // periodLabelの年から参照先ファイルを自動解決する(getInventoryHistoryと同じ_inventorySheetIdForPeriod_を再利用)
 function getInventoryDeliveryAuto(storeId, periodLabel) {
