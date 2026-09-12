@@ -117,4 +117,8 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 - `dry_run=false`の危険な経路(Secrets/Variables更新)は、本番の`INVENTORY_SHEET_ID`/`INVENTORY_SHEET_ID_ARCHIVE_JSON`ではなく**決め打ちのデコイ名(`TEST_ROLLOVER_*`)を使った専用の使い捨てワークフロー**で実行し、正しく更新されることを確認してから削除した(本番の値には一度も触れていない)
 - 上記テストで作成した実スプレッドシート(「棚卸集計_TESTPLAY9999」「棚卸集計_TESTYEAR9999」)はDrive上に残っている——削除権限がこのセッションに無かったため、不要なら手動で削除すること
 
-**まだ手動対応が必要なもの**: 実際に「毎年1/1深夜」に自動実行させるトリガー自体(Claude Codeの`/schedule`ルーティン登録)は、このリポジトリのコードの外の話であり、かつ`/schedule`スキル自体がある種のセッション権限設定では呼び出せないため、**人間が`/schedule`コマンドを直接叩いて「毎年1/1 00:15(JST)に`gh workflow run rollover-inventory-year.yml -f dry_run=false`を実行」という予約を登録する必要がある。** これが完了するまでは、この日付を忘れずに手動実行する運用のままとなる。
+**自動実行トリガー登録済み(2026-09-12)**: 毎年1/1 00:15(JST)に自動発火するClaude Codeの`/schedule`ルーティン(cloud routine)を登録済み。routine: https://claude.ai/code/routines/trig_01BPsb39P38g8n7PYoRMbZVk (次回発火: 2027-01-01 00:15 JST)。
+
+- 発火するとクラウドエージェントが`TZ=Asia/Tokyo date +%Y`でJST基準の年を取得し(発火時点で既にJSTは新年に入っているため、そのままの年を使う。`+1`しない・省略もしない)、GitHub MCPツール(`actions_run_trigger`、method: run_workflow)で`rollover-inventory-year.yml`を`year=<その年>, dry_run=false`で起動、完了まで監視して結果を報告する。失敗時は自動リトライせず報告のみ(本番Secrets操作のため)。
+- 事前にトリガー機構自体を`year=9999, dry_run=true`のデコイ値で実機テスト済み(2026-09-12、Run ID `34698834540`、success)——クラウド環境からのGitHub認証・workflow_dispatch起動が問題なく動くことを確認済み。
+- ルーティンの一覧・削除は https://claude.ai/code/routines から(API側に削除機能は無い)。プロンプト内容の変更は`/schedule`スキルの update アクションで行う。
