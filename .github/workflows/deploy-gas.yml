@@ -18,8 +18,11 @@ jobs:
         with:
           node-version: "20"
 
+      # このPCのローカルclaspがv3.3.0で、.clasprc.jsonの認証情報形式(tokens.<profile>)を
+      # そこから抽出しているため、CI側もv2系ではなく同じv3系を使う(2026-09-12、実際にv2で
+      # "Error retrieving access token"が発生し原因判明——バージョン間で認証情報の形式が異なる)
       - name: Install clasp
-        run: npm install -g @google/clasp@2
+        run: npm install -g @google/clasp@3.3.0
 
       - name: Configure clasp credentials
         env:
