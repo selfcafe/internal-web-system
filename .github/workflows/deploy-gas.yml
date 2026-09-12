@@ -1,0 +1,79 @@
+name: deploy gas backend
+
+# clasp push/deployはGoogle自身のAPI(script.googleapis.com)への認証付きAPI呼び出しのみで、
+# ブラウザ操作を伴わない(stera-daily-import.yml/kaihipay_pipeline.ymlとは違い、IPブロックや
+# セッション状態保持の心配が無い)。そのため自己ホストランナーは不要、ubuntu-latestで完結させる。
+# 手動実行(workflow_dispatch)のみ。本番Apps Scriptへの書き込みを伴うため自動トリガーは付けない。
+on:
+  workflow_dispatch:
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Install clasp
+        run: npm install -g @google/clasp@2
+
+      - name: Configure clasp credentials
+        env:
+          CLASP_CREDENTIALS: ${{ secrets.CLASP_CREDENTIALS }}
+        run: |
+          printf '{"tokens":{"default":%s}}' "$CLASP_CREDENTIALS" > "$HOME/.clasprc.json"
+
+      - name: Prepare deploy workspace with real IDs
+        env:
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          INVENTORY_SHEET_ID: ${{ secrets.INVENTORY_SHEET_ID }}
+          DELIVERY_HISTORY_SHEET_ID: ${{ secrets.DELIVERY_HISTORY_SHEET_ID }}
+          CLASP_SCRIPT_ID: ${{ secrets.CLASP_SCRIPT_ID }}
+        run: |
+          set -eu
+          mkdir -p gas-deploy
+          cp gas_backend.gs gas-deploy/gas_backend.js
+          cp appsscript.json gas-deploy/appsscript.json
+
+          # リポジトリ側は伏せ字(空文字)のまま維持するルール([[project_clasp_gas_deploy]])。
+          # ここでだけ実IDに置換する。置換前に置換対象の行が存在することを確認し、
+          # 置換後は空文字のままになっていないか(=置換に失敗していないか)を検証してから進める。
+          grep -qF "const SHEET_ID        = '';" gas-deploy/gas_backend.js
+          grep -qF "const INVENTORY_SHEET_ID = '';" gas-deploy/gas_backend.js
+          grep -qF "const DELIVERY_HISTORY_SHEET_ID = '';" gas-deploy/gas_backend.js
+
+          sed -i "s|const SHEET_ID        = '';|const SHEET_ID        = '${SHEET_ID}';|" gas-deploy/gas_backend.js
+          sed -i "s|const INVENTORY_SHEET_ID = '';|const INVENTORY_SHEET_ID = '${INVENTORY_SHEET_ID}';|" gas-deploy/gas_backend.js
+          sed -i "s|const DELIVERY_HISTORY_SHEET_ID = '';|const DELIVERY_HISTORY_SHEET_ID = '${DELIVERY_HISTORY_SHEET_ID}';|" gas-deploy/gas_backend.js
+
+          grep -qF "const SHEET_ID        = '';" gas-deploy/gas_backend.js && { echo "::error::SHEET_ID置換に失敗しました"; exit 1; }
+          grep -qF "const INVENTORY_SHEET_ID = '';" gas-deploy/gas_backend.js && { echo "::error::INVENTORY_SHEET_ID置換に失敗しました"; exit 1; }
+          grep -qF "const DELIVERY_HISTORY_SHEET_ID = '';" gas-deploy/gas_backend.js && { echo "::error::DELIVERY_HISTORY_SHEET_ID置換に失敗しました"; exit 1; }
+
+          printf '{"scriptId":"%s","rootDir":"."}' "$CLASP_SCRIPT_ID" > gas-deploy/.clasp.json
+
+      - name: clasp push
+        working-directory: gas-deploy
+        run: clasp push -f
+
+      - name: clasp deploy
+        working-directory: gas-deploy
+        env:
+          CLASP_DEPLOYMENT_ID: ${{ secrets.CLASP_DEPLOYMENT_ID }}
+        run: clasp deploy -i "$CLASP_DEPLOYMENT_ID" -d "GitHub Actions deploy $(date -u +%FT%TZ)"
+
+      - name: Smoke test (getSettings疎通確認)
+        env:
+          CLASP_DEPLOYMENT_ID: ${{ secrets.CLASP_DEPLOYMENT_ID }}
+        run: |
+          sleep 5
+          code=$(curl -s -o /dev/null -w "%{http_code}" -L "https://script.google.com/macros/s/${CLASP_DEPLOYMENT_ID}/exec?action=getSettings")
+          echo "HTTP status: $code"
+          if [ "$code" != "200" ]; then
+            echo "::error::デプロイ後の疎通確認に失敗しました(HTTP $code)"
+            exit 1
+          fi
