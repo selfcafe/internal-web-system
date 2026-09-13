@@ -1,0 +1,40 @@
+name: stera cloud login diagnose
+
+on:
+  workflow_dispatch:
+
+# 2026-09-13追加: ステラダッシュボードへのログインを、クラウド(ubuntu-latest、データセンターIP)
+# から、kaihipayのe-MOSS対応と同じ自動化検知回避策(実Chromeチャンネル+navigator.webdriver隠蔽)
+# で試す読み取り専用の診断。ログイン以外の操作(CSV Export等)は一切行わない。
+# project_stera_realtime_sales_display.mdの「reCAPTCHAがデータセンターIPをブロックする」という
+# 2026-08-08の結論が、この対策なしでのテストだった可能性を検証する。
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --quiet playwright python-dotenv
+          python -m playwright install --with-deps chrome
+          sudo apt-get update && sudo apt-get install -y xvfb
+
+      - name: Run stera login diagnose (read-only, no CSV export)
+        env:
+          STERA_EMAIL: ${{ secrets.STERA_EMAIL }}
+          STERA_PASSWORD: ${{ secrets.STERA_PASSWORD }}
+        run: xvfb-run -a python scripts/diagnose_cloud_stera_login.py
+
+      - name: Upload screenshot
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: stera-login-screenshot
+          path: scripts/_downloads/diagnose_cloud_stera_login.png
+          if-no-files-found: ignore
