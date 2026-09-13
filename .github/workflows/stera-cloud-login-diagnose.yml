@@ -36,5 +36,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: stera-login-screenshot
-          path: scripts/_downloads/diagnose_cloud_stera_login.png
+          path: |
+            scripts/_downloads/diagnose_cloud_stera_login.png
+            scripts/_downloads/diagnose_cloud_stera_login.html
           if-no-files-found: ignore

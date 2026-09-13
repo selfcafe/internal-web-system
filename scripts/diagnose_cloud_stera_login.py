@@ -52,15 +52,34 @@ def main():
         context.add_init_script("Object.defineProperty(navigator, 'webdriver', {get: () => undefined});")
         page = context.new_page()
 
+        console_messages = []
+        page.on("console", lambda msg: console_messages.append(f"[{msg.type}] {msg.text}"))
+        page.on("pageerror", lambda exc: console_messages.append(f"[pageerror] {exc}"))
+
         page.goto(STERA_BASE_URL + "/")
         page.wait_for_load_state("domcontentloaded")
-
-        email_input = page.get_by_placeholder("メールアドレス")
         try:
-            email_input.wait_for(state="visible", timeout=8000)
+            page.wait_for_load_state("networkidle", timeout=15000)
         except Exception:
-            print("結果: ログインフォームが出現しませんでした(予期しない状態)")
+            print("networkidleがタイムアウトしました(無視して続行)")
+
+        # 2026-09-13追記: 初回試行でスプラッシュ画面(ブランドロゴのみ)から先に進まなかった。
+        # e-MOSSの「タイミングレース」前例と同様、単に読み込みが遅いだけの可能性があるため、
+        # 8秒では足りないかもしれないと考え、最大60秒(3秒間隔)まで粘り強くポーリングする。
+        email_input = page.get_by_placeholder("メールアドレス")
+        found = False
+        for _ in range(20):
+            if email_input.count() > 0 and email_input.is_visible():
+                found = True
+                break
+            page.wait_for_timeout(3000)
+        if not found:
+            print("結果: 60秒待ってもログインフォームが出現しませんでした(予期しない状態)")
             page.screenshot(path=str(SCREENSHOT_PATH))
+            (SCREENSHOT_PATH.parent / "diagnose_cloud_stera_login.html").write_text(page.content(), encoding="utf-8")
+            print("--- console/pageerror ---")
+            for m in console_messages:
+                print(m)
             browser.close()
             return
 
