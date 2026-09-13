@@ -447,6 +447,13 @@ function doGet(e) {
       try { result = renameProductName(e.parameter.code, e.parameter.newName); }
       finally { _renameLock.releaseLock(); }
     }
+    else if (a === 'findProductNameOccurrences') result = findProductNameOccurrences(e.parameter.productName);
+    else if (a === 'fixProductNameInLog') {
+      const _fixNameLock = LockService.getScriptLock();
+      _fixNameLock.waitLock(30000);
+      try { result = fixProductNameInLog(e.parameter.code, e.parameter.oldName, e.parameter.newName); }
+      finally { _fixNameLock.releaseLock(); }
+    }
     else if (a === 'mergeInventoryLogRemarksBlocks') result = mergeInventoryLogRemarksBlocks();
     else if (a === 'getSettingHistory')         result = getSettingHistory(e.parameter.key, e.parameter.limit);
     else if (a === 'getAttendance')             result = getAttendance(e.parameter.storeId);
@@ -2588,6 +2595,34 @@ function _periodLabelJa_(periodLabel) {
   return `${y}年${m}月`;
 }
 
+// 店舗タブ(A〜Q列)の中から、指定periodLabelのブロックが実際に占めている行範囲を探す
+// (buildStoreInventorySheetの重複削除で使っているブロック検出ロジックの共通化)。
+// 2026-09-13追加: buildStockCheckMonthly/buildSalesCategoryCostRatioは従来「一番上のブロックの
+// 期間と一致するかどうか」しか見ておらず、対象期間が一番上でなくなった(=もっと新しい月が
+// 棚卸提出された)後は、過去月を指定してもtop_block_period_mismatchで弾かれ二度と直せなかった
+// (2026-09-07以降、原価率が2026年7月分で止まっていた・ユーザー指摘で発覚)。ブロックを位置でなく
+// 内容(A列の期間表示)で探す方式にすることで、過去のブロックにも安全に書き込めるようにする——
+// 見つからなければ何も書かない(誤った行への書き込みは従来通り起きない)。
+function _findPeriodBlockRange_(sheet, periodLabel) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return null;
+  const colA = sheet.getRange(2, 1, lastRow - 1, 1).getValues();
+  const periodLabelJa = _periodLabelJa_(periodLabel);
+  const blocks = [];
+  colA.forEach((row, i) => {
+    const raw = row[0];
+    if (raw !== '' && raw !== null) {
+      const periodText = raw instanceof Date ? Utilities.formatDate(raw, _invSheetTz(), 'yyyy-MM') : String(raw);
+      blocks.push({ periodText, startIdx: i, endIdx: i });
+    } else if (blocks.length) {
+      blocks[blocks.length - 1].endIdx = i;
+    }
+  });
+  const found = blocks.find(b => b.periodText === periodLabelJa || b.periodText === String(periodLabel));
+  if (!found) return null;
+  return { startRow: found.startIdx + 2, endRow: found.endIdx + 2 };
+}
+
 // 商品名 -> {vendor, order, caseOnly, casePieces} のマップ。all_products設定(PRODUCTS配列のJSON)を
 // 1回だけパースし、buildStoreInventorySheetで使う商品分類(vendor)・並び順(order)・ケース単位情報を
 // まとめて引けるようにする（_productCaseInfo_と同じ発想だが、こちらはvendor/orderも持つ拡張版）
@@ -2650,6 +2685,63 @@ function renameProductName(code, newName) {
   products[idx].name = newName;
   saveSetting('all_products', JSON.stringify(products));
   return { ok: true, code: String(code), oldName: oldName, newName: newName };
+}
+
+// renameProductNameは意図的にinventory_logの過去データへ波及させない設計(コメント参照)だが、
+// その結果、旧名のまま残った過去の棚卸ログ行はステラ突合(buildStockCheckMonthly)・原価率
+// (buildSalesCategoryCostRatio)の集計から漏れ続ける(2026-09-13、プリングルス「うましお」の
+// 過去分原価率が合わない件で発覚)。まず影響範囲を確認するための読み取り専用の調査関数。
+// 現行年のinventory_logファイル(INVENTORY_SHEET_ID)のみを見る——年またぎ後は別途確認要。
+// ?action=findProductNameOccurrences&productName=プリングルス で実行。
+function findProductNameOccurrences(productName) {
+  if (!productName) return { error: 'productNameは必須です' };
+  const data = _inventoryLogRowsCached_(INVENTORY_SHEET_ID);
+  const idx = {};
+  INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
+  const hits = {};
+  for (let i = 1; i < data.length; i++) {
+    const r = data[i];
+    if (String(r[idx.product]) !== String(productName)) continue;
+    const key = r[idx.store_id] + '|' + _invMonthLabelStr(r[idx.period_label], INVENTORY_SHEET_ID);
+    hits[key] = (hits[key] || 0) + 1;
+  }
+  const matches = Object.keys(hits).map(k => {
+    const [storeId, periodLabel] = k.split('|');
+    return { storeId: storeId, periodLabel: periodLabel, rows: hits[k] };
+  });
+  return { ok: true, productName: productName, matches: matches };
+}
+
+// findProductNameOccurrencesで見つかった、旧名のまま残っているinventory_log行を現行の
+// 商品名に一括修正する(2026-09-13、ユーザー指示により実施。renameProductName本来の
+// 「過去ログは歴史的記録として残す」方針とは別に、今回はステラ突合・原価率の集計を
+// 過去分含めて正しくするための明示的な例外対応)。商品コード(code)も一致する行だけを
+// 対象にする(念のための安全確認、商品名の文字列一致だけに頼らない)。
+// ?action=fixProductNameInLog&code=20&oldName=プリングルス&newName=プリングルス　うましお で実行。
+function fixProductNameInLog(code, oldName, newName) {
+  if (!code || !oldName || !newName) return { error: 'code・oldName・newNameは必須です' };
+  const sheet = getInventorySheet(INVENTORY_SHEET_ID);
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { ok: true, updated: 0, touched: {} };
+  const idx = {};
+  INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
+  const range = sheet.getRange(2, 1, lastRow - 1, INVENTORY_COLS.length);
+  const values = range.getValues();
+  let updated = 0;
+  const touched = {};
+  values.forEach(r => {
+    if (String(r[idx.code]) === String(code) && String(r[idx.product]) === String(oldName)) {
+      r[idx.product] = newName;
+      updated++;
+      const key = r[idx.store_id] + '|' + String(r[idx.period_label]);
+      touched[key] = (touched[key] || 0) + 1;
+    }
+  });
+  if (updated > 0) {
+    range.setValues(values);
+    _invalidateInventoryLogCache_(INVENTORY_SHEET_ID);
+  }
+  return { ok: true, updated: updated, touched: touched };
 }
 
 // 2026-07-28、デイリーカウント・差異列を追加(ユーザーが先に手動でデイリーカウント列を渋谷神南タブに
@@ -3502,15 +3594,16 @@ function buildSalesCategoryCostRatio(storeId, periodLabel) {
       if (!sheet) throw e;
     }
   }
-  // 安全確認(2026-09-07追加、buildStockCheckMonthlyと同じ理由): この関数は常にシート2行目
-  // 以降(一番上のブロック)に書き込む設計のため、2行目の期間が指定periodLabelと一致しない場合は
-  // 書き込みを中止する。手動実行で「今月分を見たい」つもりで最新のperiodLabelを渡したが、
-  // その店舗タブにまだ該当期間のブロックが無い(棚卸未提出等)場合に、1つ上の別期間のブロックへ
-  // 誤って書き込んでしまう事故があったため(2026-09-07、渋谷神南の9月分実行時に実際に発生・発覚・
-  // 8月分で上書き修正済み)。新規タブでまだ何も無い場合はチェックをスキップする。
-  const topPeriodCell = sheet.getLastRow() >= 2 ? String(sheet.getRange(2, 1).getValue()) : '';
-  if (topPeriodCell && topPeriodCell !== _periodLabelJa_(periodLabel) && topPeriodCell !== String(periodLabel)) {
-    return { ok: true, skipped: 'top_block_period_mismatch', store: storeName, expected: periodLabel, found: topPeriodCell };
+  // このperiodLabelのブロックがシート上のどこにあるか(一番上とは限らない)を、位置でなく内容
+  // (A列の期間表示)で探す(2026-09-13、_findPeriodBlockRange_参照)。手動実行で「今月分を見たい」
+  // つもりで最新のperiodLabelを渡したが、その店舗タブにまだ該当期間のブロックが無い(棚卸未提出等)
+  // 場合や、指定した過去の期間が既に一番上ではなくなっている場合のどちらも、見つからなければ
+  // 何もしない(2026-09-07、渋谷神南の9月分実行時に別期間へ誤って書き込んだ事故の教訓——旧実装は
+  // 「一番上のブロックか」しか見ておらず、過去月を指定しても二度と直せなかった。2026-09-13、
+  // ユーザー指摘で原価率が2026年7月分のまま止まっていたことが発覚し、この制限を解消した)。
+  const block = _findPeriodBlockRange_(sheet, periodLabel);
+  if (!block) {
+    return { ok: true, skipped: 'period_block_not_found', store: storeName, period: periodLabel };
   }
 
   // 列位置は必ずSTORE_INVENTORY_HEADERS_JAの直後(間隔なし、STOCK_CHECK_START_COLとも隣接)に
@@ -3520,14 +3613,20 @@ function buildSalesCategoryCostRatio(storeId, periodLabel) {
   // 稀だったため実害が表面化していなかった)。今回月次自動トリガーに乗せるにあたり修正した。
   const startCol = STORE_INVENTORY_HEADERS_JA.length + 1; // 例: 基準値・発注数で17列ならR列から
   const headerRow = ['ステラ売上', '原価率(ステラ実売上ベース)'];
+  // ブロックの行数がSTERA_SALES_MAPPING.length(8)未満の店舗・月(取り扱い商品が少ない等)では、
+  // 固定8行分をそのまま書くと1つ下(=もっと過去)の期間ブロックにはみ出して壊してしまう。
+  // 2026-09-13、_findPeriodBlockRange_で任意のブロックへ書けるようにした際に追加した安全策
+  // (以前は常に一番上のブロック=十分な行数がある前提だったため気づかれていなかった)。
+  const rowsToWrite = Math.min(outRows.length, block.endRow - block.startRow + 1);
+  const writeRows = outRows.slice(0, rowsToWrite);
   sheet.getRange(1, startCol, 1, headerRow.length).setValues([headerRow]);
-  sheet.getRange(2, startCol, outRows.length, outRows[0].length).setValues(outRows);
-  sheet.getRange(2, startCol, outRows.length, 1).setNumberFormat(INVOICE_YEN_FORMAT);
-  sheet.getRange(2, startCol + 1, outRows.length, 1).setNumberFormat('0.0%');
+  sheet.getRange(block.startRow, startCol, rowsToWrite, writeRows[0].length).setValues(writeRows);
+  sheet.getRange(block.startRow, startCol, rowsToWrite, 1).setNumberFormat(INVOICE_YEN_FORMAT);
+  sheet.getRange(block.startRow, startCol + 1, rowsToWrite, 1).setNumberFormat('0.0%');
   // ステラ関連ブロックは緑(2026-09-07、ユーザー確定の店舗タブ配色ルール。[[_applyStoreInventoryColColors_]]参照)
-  sheet.getRange(2, startCol, outRows.length, headerRow.length).setBackground(STORE_INV_COLOR_GREEN);
+  sheet.getRange(block.startRow, startCol, rowsToWrite, headerRow.length).setBackground(STORE_INV_COLOR_GREEN);
 
-  return { ok: true, store: sheetName, period: periodLabel, rows: outRows.length };
+  return { ok: true, store: sheetName, period: periodLabel, rows: rowsToWrite, truncated: rowsToWrite < outRows.length };
 }
 
 // ----------------------------------------------------------------
@@ -4360,49 +4459,35 @@ function buildStockCheckMonthly(storeId, periodLabel) {
       if (!sheet) throw e;
     }
   }
-  // 安全確認(2026-09-06追加): この関数は常にシート2行目以降(一番上のブロック)に書き込む設計
-  // のため、2行目の期間が指定periodLabelと一致しない場合は書き込みを中止する。月次バックストップ
-  // の自動再実行(runMonthlyStockCheckBackstop)等、呼び出しタイミングによっては一番上のブロックが
-  // 既に別の(より新しい)期間になっている可能性があるため、誤って別期間のブロックを
-  // 上書きしてしまう事故を防ぐ(新規タブでまだ何も無い場合はチェックをスキップする)。
-  const topPeriodCell = sheet.getLastRow() >= 2 ? String(sheet.getRange(2, 1).getValue()) : '';
-  if (topPeriodCell && topPeriodCell !== _periodLabelJa_(periodLabel) && topPeriodCell !== String(periodLabel)) {
-    return { ok: true, skipped: 'top_block_period_mismatch', store: storeName, expected: periodLabel, found: topPeriodCell };
-  }
-  // メイン商品一覧(A〜Q列)の「一番上のブロック」(=このperiodLabel)が占める行範囲を求める。
-  // 期間列(A列)はブロック先頭行だけ非空(2行目以降は見た目だけ結合、実セルは空)なので、
-  // 3行目以降で最初に非空セルが現れた行の1つ手前までが当ブロックの範囲(buildStoreInventorySheetの
-  // ブロック検出と同じ考え方)。無ければ最終行まで全部が当ブロック。
-  const lastRow = sheet.getLastRow();
-  let blockEndRow = lastRow;
-  if (lastRow >= 3) {
-    const colAValues = sheet.getRange(3, 1, lastRow - 2, 1).getValues();
-    for (let i = 0; i < colAValues.length; i++) {
-      if (colAValues[i][0] !== '' && colAValues[i][0] !== null) { blockEndRow = 2 + i; break; }
-    }
+  // このperiodLabelのブロックがシート上のどこにあるか(一番上とは限らない)を、位置でなく内容
+  // (A列の期間表示)で探す(2026-09-13、_findPeriodBlockRange_参照——過去月を狙って直せるように
+  // 「一番上のブロックのみ」前提だった旧チェックを置き換えた)。見つからなければ何もしない。
+  const block = _findPeriodBlockRange_(sheet, periodLabel);
+  if (!block) {
+    return { ok: true, skipped: 'period_block_not_found', store: storeName, period: periodLabel };
   }
   // 代表商品(m.ourProducts[0])→行番号、の対応表をこのブロック範囲から作る。商品名列(C列)の
   // 位置はSTORE_INVENTORY_HEADERS_JAの並びから動的に求める(列追加でズレても追従できるように)。
   const productNameCol = STORE_INVENTORY_HEADERS_JA.indexOf('商品名') + 1;
   const rowNumByProduct = {};
-  if (lastRow >= 2 && blockEndRow >= 2) {
-    const productNames = sheet.getRange(2, productNameCol, blockEndRow - 2 + 1, 1).getValues().map(r => r[0]);
-    productNames.forEach((name, i) => { if (name) rowNumByProduct[name] = 2 + i; });
-  }
+  const productNames = sheet.getRange(block.startRow, productNameCol, block.endRow - block.startRow + 1, 1).getValues().map(r => r[0]);
+  productNames.forEach((name, i) => { if (name) rowNumByProduct[name] = block.startRow + i; });
 
   // 確認状況は管理者が手入力するメモなので、再実行のたびに消してしまわないよう既存値を読んでおく。
   // 行番号ではなく商品グループ名(ラベル)で引き継ぐ——行位置は今回の変更で月ごと・実行ごとに
-  // 動きうるため、位置ベースだと簡単に取り違える。読んだ後、この範囲(旧・固定8行だった名残も
-  // 含めて広めに)を一旦クリアしてから、新しい行位置に書き直す(そうしないと、グループの代表行が
-  // 変わった場合に古い位置のラベル・数値が消えずゴミとして残る)。
-  const scanEndRow = Math.min(Math.max(blockEndRow, 1 + STERA_SALES_MAPPING.length), sheet.getMaxRows());
-  const scanRowCount = Math.max(scanEndRow - 2 + 1, 0);
+  // 動きうるため、位置ベースだと簡単に取り違える。読んだ後、この範囲を一旦クリアしてから、
+  // 新しい行位置に書き直す(そうしないと、グループの代表行が変わった場合に古い位置のラベル・
+  // 数値が消えずゴミとして残る)。クリア範囲は必ずこのブロック自身(block.endRow)まで——
+  // 2026-09-13、任意の(一番上とは限らない)ブロックへ書けるようにしたため、ブロックより下に
+  // はみ出すと1つ過去の(隣接する)期間ブロックを壊してしまう。以前の「固定8行だった名残の
+  // クリーンアップ」目的の余分な範囲は、隣ブロックを壊すリスクの方が大きいため廃止した。
+  const scanRowCount = block.endRow - block.startRow + 1;
   const existingStatusByLabel = {};
   if (scanRowCount > 0) {
-    sheet.getRange(2, STOCK_CHECK_START_COL, scanRowCount, STOCK_CHECK_HEADERS.length).getValues()
+    sheet.getRange(block.startRow, STOCK_CHECK_START_COL, scanRowCount, STOCK_CHECK_HEADERS.length).getValues()
       .forEach(r => { if (r[0]) existingStatusByLabel[r[0]] = r[3]; });
-    sheet.getRange(2, STOCK_CHECK_START_COL, scanRowCount, STOCK_CHECK_HEADERS.length).clearContent();
-    sheet.getRange(2, STOCK_CHECK_START_COL, scanRowCount, STOCK_CHECK_HEADERS.length).setBackground(null);
+    sheet.getRange(block.startRow, STOCK_CHECK_START_COL, scanRowCount, STOCK_CHECK_HEADERS.length).clearContent();
+    sheet.getRange(block.startRow, STOCK_CHECK_START_COL, scanRowCount, STOCK_CHECK_HEADERS.length).setBackground(null);
   }
 
   sheet.getRange(1, STOCK_CHECK_START_COL, 1, STOCK_CHECK_HEADERS.length).setValues([STOCK_CHECK_HEADERS]);
