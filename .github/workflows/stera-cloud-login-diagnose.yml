@@ -29,6 +29,8 @@ jobs:
         env:
           STERA_EMAIL: ${{ secrets.STERA_EMAIL }}
           STERA_PASSWORD: ${{ secrets.STERA_PASSWORD }}
+          GMAIL_ADDRESS: ${{ secrets.STERA_EMAIL }}
+          GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
         run: xvfb-run -a python scripts/diagnose_cloud_stera_login.py
 
       - name: Upload screenshot
@@ -39,4 +41,7 @@ jobs:
           path: |
             scripts/_downloads/diagnose_cloud_stera_login.png
             scripts/_downloads/diagnose_cloud_stera_login.html
+            scripts/_downloads/diagnose_cloud_stera_2fa_form.png
+            scripts/_downloads/diagnose_cloud_stera_2fa_form.html
+            scripts/_downloads/diagnose_cloud_stera_final.png
           if-no-files-found: ignore

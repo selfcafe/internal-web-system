@@ -23,6 +23,9 @@ from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright
 
 SCRIPT_DIR = Path(__file__).parent
+sys.path.insert(0, str(SCRIPT_DIR))
+from gmail_otp import get_baseline_uid, get_otp_from_gmail  # noqa: E402
+
 load_dotenv(SCRIPT_DIR.parent / ".env")
 
 STERA_BASE_URL = "https://dashboard.sterasmartone.com"
@@ -89,16 +92,84 @@ def main():
 
         try:
             page.get_by_placeholder("メールアドレス").wait_for(state="detached", timeout=15000)
-            print("結果: ログイン成功(reCAPTCHAは出ませんでした)")
+            print("結果: ID/PWログイン成功(reCAPTCHAは出ませんでした)")
             print(f"到達URL: {page.url}")
         except Exception:
             body_text = page.inner_text("body")
             has_captcha_text = "ロボットではありません" in body_text or "recaptcha" in body_text.lower()
             print(f"結果: ログインフォームが消えず失敗しました(reCAPTCHA文言の検出: {has_captcha_text})")
             print(f"URL: {page.url}")
+            page.screenshot(path=str(SCREENSHOT_PATH))
+            browser.close()
+            return
 
-        page.screenshot(path=str(SCREENSHOT_PATH))
-        print(f"スクリーンショット保存: {SCREENSHOT_PATH}")
+        # 2026-09-13追加: ID/PWログイン後に出る二要素認証(メール認証コード)を、
+        # kaihipay-downloaderと同じGmail IMAP監視方式で突破する。
+        send_code_btn = page.get_by_role("button", name="メール認証コードを送信")
+        try:
+            send_code_btn.wait_for(state="visible", timeout=10000)
+        except Exception:
+            print("結果: 「メール認証コードを送信」ボタンが見つかりません(2FA画面の構造が想定と違う可能性)")
+            page.screenshot(path=str(SCREENSHOT_PATH))
+            (SCREENSHOT_PATH.parent / "diagnose_cloud_stera_login.html").write_text(page.content(), encoding="utf-8")
+            browser.close()
+            return
+
+        baseline_uid = get_baseline_uid()
+        send_code_btn.click()
+        print("メール認証コードの送信をクリックしました。Gmailを監視します…")
+
+        try:
+            otp = get_otp_from_gmail(timeout=120, log=print, baseline_uid=baseline_uid)
+        except Exception as e:
+            print(f"結果: Gmailからの認証コード取得に失敗しました: {e}")
+            page.screenshot(path=str(SCREENSHOT_PATH))
+            (SCREENSHOT_PATH.parent / "diagnose_cloud_stera_login.html").write_text(page.content(), encoding="utf-8")
+            browser.close()
+            return
+        print(f"認証コード取得: {otp}")
+
+        # コード入力欄のplaceholder/構造が未確認のため、まずスクリーンショット/HTMLを保存してから
+        # 汎用的に「表示されているテキスト入力欄」を探して埋める(placeholder名に依存しない)。
+        page.screenshot(path=str(SCREENSHOT_PATH.with_name("diagnose_cloud_stera_2fa_form.png")))
+        (SCREENSHOT_PATH.parent / "diagnose_cloud_stera_2fa_form.html").write_text(page.content(), encoding="utf-8")
+
+        code_input = None
+        for loc in [
+            page.get_by_placeholder("認証コード"),
+            page.get_by_placeholder("コード"),
+            page.locator('input[type="text"]:visible'),
+            page.locator('input[type="tel"]:visible'),
+            page.locator('input[type="number"]:visible'),
+        ]:
+            try:
+                if loc.count() > 0 and loc.first.is_visible():
+                    code_input = loc.first
+                    break
+            except Exception:
+                continue
+
+        if code_input is None:
+            print("結果: 認証コード入力欄が見つかりませんでした(2fa_form.png/htmlで構造確認が必要)")
+            browser.close()
+            return
+
+        code_input.fill(otp)
+        submit_btn = None
+        for name in ["認証", "確認", "送信", "ログイン"]:
+            candidate = page.get_by_role("button", name=name)
+            if candidate.count() > 0:
+                submit_btn = candidate.first
+                break
+        if submit_btn is not None:
+            submit_btn.click()
+        else:
+            print("結果: 認証コード送信後の確定ボタンが見つからず、Enterキーで代替します")
+            code_input.press("Enter")
+
+        page.wait_for_timeout(5000)
+        print(f"最終到達URL: {page.url}")
+        page.screenshot(path=str(SCREENSHOT_PATH.with_name("diagnose_cloud_stera_final.png")))
         browser.close()
 
 
