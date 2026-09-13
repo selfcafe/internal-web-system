@@ -4312,12 +4312,17 @@ function _hasSteraDailyDataForDate_(dateStr) {
 // 理由(基準値・発注数列の追加時にこの数値が更新されずズレて他列を壊す不具合があった)。
 // 販売品類原価率ブロック(2列: ステラ売上・原価率)の直後(間隔なし)に配置する。
 const STOCK_CHECK_START_COL = STORE_INVENTORY_HEADERS_JA.length + 1 + 2;
-// 先頭に商品グループ名(m.label)の列を追加(2026-09-05)。この一覧はSTERA_SALES_MAPPING単位
-// (販売品類のみ8グループ)の独立した小さな表で、隣接するA〜Q列のメイン商品一覧(全ベンダー・
-// 全商品、行数も並び順も別)とは行番号がたまたま重なっているだけで対応していない
-// (buildSalesCategoryCostRatioのP列ブロックと同じ設計)。ラベルが無いと「同じ行に写っている
-// アペックスの原料の数量か？」と誤解されるため(2026-09-05、ユーザー指摘で発覚)、
-// buildSalesCategoryCostRatioに合わせてラベル列を追加した。
+// 商品グループ名(m.label)の列を先頭に持つ(2026-09-05追加、経緯は下記参照)。
+// 2026-09-13、ユーザー指摘により行の対応関係を変更: 従来はSTERA_SALES_MAPPING順(8グループ)に
+// 上から詰めて書いており、隣接するA〜Q列のメイン商品一覧(全ベンダー・全商品、行数も並び順も別)
+// とは行番号がたまたま重なっているだけで対応していなかった(ラベルが無いと「同じ行に写っている
+// アペックスの原料の数量か？」と誤解される事故が2026-09-05に発覚し、ラベル列で応急対応していた)。
+// 今回、各グループの代表商品(ourProducts[0])がメイン商品一覧のどの行にいるかを毎回引き直し、
+// その行に直接書き込む方式に変更した——メイン商品一覧は月ごとにその月報告のあった商品だけを
+// order順で並べ直す作りなので行番号は月によって変わるが、"同じ行=同じ商品"を保証できる。
+// 複数商品を合算するグループ(レディーボーデン各種・プリングルス各種)は代表商品1つの行に揃える
+// (ユーザー確定、2026-09-13)。代表商品がその月の一覧に無い(棚卸未報告等)場合は書き込み先が
+// 無いためそのグループはスキップする(戻り値のskippedで確認可能)。
 const STOCK_CHECK_HEADERS = ['商品(ステラ突合対象)', 'ステラ数量(月間)', '差異(消費量-処分数量-ステラ数量)', '確認状況(手入力可)'];
 // 年またぎ対応(2026-09-12): periodLabelの年からファイルを解決する。getSteraDailyTotal_は
 // 自身で日付範囲から対象ファイルを解決する(_steraSheetIdsForRange_)ため呼び出し側の変更不要。
@@ -4364,33 +4369,63 @@ function buildStockCheckMonthly(storeId, periodLabel) {
   if (topPeriodCell && topPeriodCell !== _periodLabelJa_(periodLabel) && topPeriodCell !== String(periodLabel)) {
     return { ok: true, skipped: 'top_block_period_mismatch', store: storeName, expected: periodLabel, found: topPeriodCell };
   }
-  // 確認状況は管理者が手入力するメモなので、再実行のたびに消してしまわないよう既存値を読んでおき、
-  // 新しい行にもそのまま引き継ぐ(他の3列=ラベル・ステラ数量・差異は毎回の再計算値で上書きしてよい)。
-  // 列番号を固定せず、既存の見出し行から「確認状況(手入力可)」列を毎回探す(2026-09-05、
-  // ラベル列追加でこの列の位置が1つ右にズレたため——固定列番号のままだと、この変更の直後に
-  // 実行した回だけ既存メモを見失って消してしまうところだった)。
-  const existingHeaderRow = sheet.getLastRow() >= 1 && sheet.getLastColumn() >= 1
-    ? sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0] : [];
-  const existingStatusColIdx = existingHeaderRow.indexOf('確認状況(手入力可)'); // 0-based、無ければ-1
-  const existingStatus = (existingStatusColIdx >= 0 && sheet.getLastRow() >= 2)
-    ? sheet.getRange(2, existingStatusColIdx + 1, STERA_SALES_MAPPING.length, 1).getValues().map(r => r[0])
-    : [];
+  // メイン商品一覧(A〜Q列)の「一番上のブロック」(=このperiodLabel)が占める行範囲を求める。
+  // 期間列(A列)はブロック先頭行だけ非空(2行目以降は見た目だけ結合、実セルは空)なので、
+  // 3行目以降で最初に非空セルが現れた行の1つ手前までが当ブロックの範囲(buildStoreInventorySheetの
+  // ブロック検出と同じ考え方)。無ければ最終行まで全部が当ブロック。
+  const lastRow = sheet.getLastRow();
+  let blockEndRow = lastRow;
+  if (lastRow >= 3) {
+    const colAValues = sheet.getRange(3, 1, lastRow - 2, 1).getValues();
+    for (let i = 0; i < colAValues.length; i++) {
+      if (colAValues[i][0] !== '' && colAValues[i][0] !== null) { blockEndRow = 2 + i; break; }
+    }
+  }
+  // 代表商品(m.ourProducts[0])→行番号、の対応表をこのブロック範囲から作る。商品名列(C列)の
+  // 位置はSTORE_INVENTORY_HEADERS_JAの並びから動的に求める(列追加でズレても追従できるように)。
+  const productNameCol = STORE_INVENTORY_HEADERS_JA.indexOf('商品名') + 1;
+  const rowNumByProduct = {};
+  if (lastRow >= 2 && blockEndRow >= 2) {
+    const productNames = sheet.getRange(2, productNameCol, blockEndRow - 2 + 1, 1).getValues().map(r => r[0]);
+    productNames.forEach((name, i) => { if (name) rowNumByProduct[name] = 2 + i; });
+  }
 
-  const outRows = STERA_SALES_MAPPING.map((m, i) => {
+  // 確認状況は管理者が手入力するメモなので、再実行のたびに消してしまわないよう既存値を読んでおく。
+  // 行番号ではなく商品グループ名(ラベル)で引き継ぐ——行位置は今回の変更で月ごと・実行ごとに
+  // 動きうるため、位置ベースだと簡単に取り違える。読んだ後、この範囲(旧・固定8行だった名残も
+  // 含めて広めに)を一旦クリアしてから、新しい行位置に書き直す(そうしないと、グループの代表行が
+  // 変わった場合に古い位置のラベル・数値が消えずゴミとして残る)。
+  const scanEndRow = Math.min(Math.max(blockEndRow, 1 + STERA_SALES_MAPPING.length), sheet.getMaxRows());
+  const scanRowCount = Math.max(scanEndRow - 2 + 1, 0);
+  const existingStatusByLabel = {};
+  if (scanRowCount > 0) {
+    sheet.getRange(2, STOCK_CHECK_START_COL, scanRowCount, STOCK_CHECK_HEADERS.length).getValues()
+      .forEach(r => { if (r[0]) existingStatusByLabel[r[0]] = r[3]; });
+    sheet.getRange(2, STOCK_CHECK_START_COL, scanRowCount, STOCK_CHECK_HEADERS.length).clearContent();
+    sheet.getRange(2, STOCK_CHECK_START_COL, scanRowCount, STOCK_CHECK_HEADERS.length).setBackground(null);
+  }
+
+  sheet.getRange(1, STOCK_CHECK_START_COL, 1, STOCK_CHECK_HEADERS.length).setValues([STOCK_CHECK_HEADERS]);
+
+  const skipped = [];
+  let writtenCount = 0;
+  STERA_SALES_MAPPING.forEach(m => {
+    const representative = m.ourProducts[0];
+    const row = rowNumByProduct[representative];
+    if (!row) { skipped.push(m.label); return; }
     const hasConsumption = m.ourProducts.some(name => consumptionByProduct[name] !== undefined);
     const netConsumption = m.ourProducts.reduce((sum, name) =>
       sum + (consumptionByProduct[name] || 0) - (disposedByProduct[name] || 0), 0);
     const steraQty = getSteraDailyTotal_(storeId, m.prdId, fromDateExclusive, toDateInclusive);
     const diff = hasConsumption ? netConsumption - steraQty : '';
-    return [m.label, steraQty, diff, existingStatus[i] || ''];
+    const status = existingStatusByLabel[m.label] || '';
+    sheet.getRange(row, STOCK_CHECK_START_COL, 1, STOCK_CHECK_HEADERS.length).setValues([[m.label, steraQty, diff, status]]);
+    // ステラ関連ブロックは緑(2026-09-07、ユーザー確定の店舗タブ配色ルール。[[_applyStoreInventoryColColors_]]参照)
+    sheet.getRange(row, STOCK_CHECK_START_COL, 1, STOCK_CHECK_HEADERS.length).setBackground(STORE_INV_COLOR_GREEN);
+    writtenCount++;
   });
 
-  sheet.getRange(1, STOCK_CHECK_START_COL, 1, STOCK_CHECK_HEADERS.length).setValues([STOCK_CHECK_HEADERS]);
-  sheet.getRange(2, STOCK_CHECK_START_COL, outRows.length, outRows[0].length).setValues(outRows);
-  // ステラ関連ブロックは緑(2026-09-07、ユーザー確定の店舗タブ配色ルール。[[_applyStoreInventoryColColors_]]参照)
-  sheet.getRange(2, STOCK_CHECK_START_COL, outRows.length, STOCK_CHECK_HEADERS.length).setBackground(STORE_INV_COLOR_GREEN);
-
-  return { ok: true, store: storeName, period: periodLabel, rows: outRows.length };
+  return { ok: true, store: storeName, period: periodLabel, rows: writtenCount, skipped: skipped };
 }
 
 // 盗難検知②月次バックストップの「翌月1日朝」再実行(2026-09-06追加、ユーザー要望)。
