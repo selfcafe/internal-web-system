@@ -4543,6 +4543,21 @@ async function changeBugReportStatus(issueId, newStatus) {
   }
 }
 
+async function deleteBugReportAdmin(issueId) {
+  if (!confirm('この投稿を削除します。よろしいですか？(元に戻せません)')) return;
+  try {
+    const r = await gasPost('deleteBugReport', { issueId });
+    if (r.error) throw new Error(r.error);
+    adminBugReports = adminBugReports.filter(i => i.id !== issueId);
+    delete _bugReportAdminThreadCache[issueId];
+    if (adminBugReportSelectedId === issueId) adminBugReportSelectedId = null;
+    renderBugReportAdminBody();
+  } catch(e) {
+    console.error('deleteBugReport error:', e);
+    alert('削除に失敗しました: ' + e.message);
+  }
+}
+
 let _bugReportAdminDetailThreadId = null;
 const _bugReportAdminThreadCache = {};
 
@@ -4585,6 +4600,8 @@ function buildBugReportAdminDetail(issue) {
       <span style="font-size:11.5px;font-weight:700;color:#22703d;background:#eaf3ec;padding:2px 8px;border-radius:99px">${esc(storeLabel)}</span>
       <span style="font-size:12px;font-weight:700;color:${kindColor}">${kindLabel}</span>
       <span style="font-size:11px;font-weight:700;color:#6b7280">${esc(posterLabel)}</span>
+      <button onclick="deleteBugReportAdmin('${esc(issue.id)}')" title="この投稿を削除"
+        style="margin-left:auto;background:#fff;color:#ef4444;border:1.5px solid #ef4444;border-radius:6px;padding:4px 10px;font-size:11.5px;font-weight:700;font-family:inherit;cursor:pointer">削除</button>
     </div>
     <div style="font-size:11.5px;color:#999;margin-bottom:14px">投稿: ${esc(issue.created_at)} ／ 更新: ${esc(issue.updated_at||issue.created_at)}</div>
     <div style="font-size:13.5px;line-height:1.65;color:#333;background:#f8f4e7;border-radius:8px;padding:12px 14px;margin-bottom:16px;white-space:pre-wrap">${esc(issue.content)}</div>

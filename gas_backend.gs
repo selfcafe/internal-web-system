@@ -547,6 +547,7 @@ function doPost(e) {
     else if (b.action === 'submitBugReport')      result = submitBugReport(b.storeId, b.kind, b.content, b.posterType, b.posterName);
     else if (b.action === 'addBugReportComment')  result = addBugReportComment(b.issueId, b.posterType, b.posterName, b.storeId, b.text);
     else if (b.action === 'updateBugReportStatus') result = updateBugReportStatus(b.issueId, b.newStatus, b.adminName);
+    else if (b.action === 'deleteBugReport')      result = deleteBugReport(b.issueId);
     else result = { error: 'Unknown action: ' + b.action };
   } catch(err) {
     result = { error: err.message };
@@ -1153,6 +1154,29 @@ function _touchBugReportUpdatedAt_(issueId, when) {
     }
   }
   _invalidateBugReportsCache_();
+}
+
+// issue本体と、紐づくコメント(スレッド)を丸ごと削除する(誤投稿・テスト投稿の削除用)
+function deleteBugReport(issueId) {
+  const sheet = getSheet(SHEET_BUGREPORT);
+  const data = sheet.getDataRange().getValues();
+  const idIdx = data[0].indexOf('id');
+  let found = false;
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][idIdx]) === String(issueId)) { sheet.deleteRow(i + 1); found = true; break; }
+  }
+  if (!found) return { error: '指定のissueが見つかりません' };
+  _invalidateBugReportsCache_();
+
+  const commentSheet = getSheet(SHEET_BUGREPORT_COMMENTS);
+  if (commentSheet.getLastRow() > 1) {
+    const cData = commentSheet.getDataRange().getValues();
+    const cIssueIdx = cData[0].indexOf('issue_id');
+    for (let i = cData.length - 1; i >= 1; i--) {
+      if (String(cData[i][cIssueIdx]) === String(issueId)) commentSheet.deleteRow(i + 1);
+    }
+  }
+  return { ok: true };
 }
 
 // ----------------------------------------------------------------
