@@ -121,6 +121,15 @@ const ATTENDANCE_THRESHOLD_M = 300;
 const SHEET_ATTENDANCE_LEAVE = 'attendance_leave';
 const ATTENDANCE_LEAVE_COLS = ['id','store_id','name','leave_date','submitted_at'];
 
+// バグ報告・修正依頼掲示板（2026-09-15追加）。issue1件=bug_reportsの1行、スレッドの
+// コメント・返信・ステータス変更ログはbug_report_commentsにissue_idで紐づく別行として追記する
+// （ステータス変更もposter_type='system'の1行として追記し、対応履歴を別テーブルを持たずに
+// スレッド表示だけで自然に見える化する設計。[[project_portal_bug_report_board]]参照）
+const SHEET_BUGREPORT = 'bug_reports';
+const BUGREPORT_COLS = ['id','store_id','store_name','kind','content','poster_type','poster_name','status','created_at','updated_at'];
+const SHEET_BUGREPORT_COMMENTS = 'bug_report_comments';
+const BUGREPORT_COMMENT_COLS = ['id','issue_id','poster_type','poster_name','store_id','text','created_at'];
+
 // エリア別店舗ID（デフォルト割り当て。フロントのREGIONS定数と同じ内容。管理者が「店舗管理」画面の
 // 「店舗のエリア変更」で個別に上書きした場合は、app_settingsの'store_regions'キー(_areaForStore_内で
 // 参照)の方が優先される——このデフォルト自体は基本的に変わらないため、_areaForStore_を通さない
@@ -473,6 +482,8 @@ function doGet(e) {
     else if (a === 'migrateMachinePhotoColumns') result = migrateMachinePhotoColumns();
     else if (a === 'checkNewStoresFromMasterSheet') result = checkNewStoresFromMasterSheet();
     else if (a === 'setNewStoreCheckTrigger')   { setNewStoreCheckTrigger(); result = { ok: true }; }
+    else if (a === 'getBugReports')      result = getBugReports(e.parameter.storeId);
+    else if (a === 'getBugReportThread') result = getBugReportThread(e.parameter.issueId);
     else result = { error: 'Unknown action: ' + a };
     return json(result);
   } catch(err) {
@@ -533,6 +544,9 @@ function doPost(e) {
     else if (b.action === 'saveDeliveryHistory') result = saveDeliveryHistory(b.storeId, b.row);
     else if (b.action === 'clearDeliveryHistory') result = clearDeliveryHistory(b.storeId);
     else if (b.action === 'saveMachinePhotoSet') result = saveMachinePhotoSet(b.storeId, b.machineIndex, b.imagesByCategory, b.imageMime);
+    else if (b.action === 'submitBugReport')      result = submitBugReport(b.storeId, b.kind, b.content, b.posterType, b.posterName);
+    else if (b.action === 'addBugReportComment')  result = addBugReportComment(b.issueId, b.posterType, b.posterName, b.storeId, b.text);
+    else if (b.action === 'updateBugReportStatus') result = updateBugReportStatus(b.issueId, b.newStatus, b.adminName);
     else result = { error: 'Unknown action: ' + b.action };
   } catch(err) {
     result = { error: err.message };
@@ -564,6 +578,7 @@ function doPost(e) {
       else if (n.type === 'leaveRequestToday')     notifyLeaveRequestToday_(n.storeId, n.name, n.leaveDate);
       else if (n.type === 'leaveRequestCancelled') notifyLeaveRequestCancelled_(n.storeId, n.name, n.leaveDate);
       else if (n.type === 'stockInquiryReply')     sendStockBotNotification_(n.message, n.userId);
+      else if (n.type === 'bugReportNew')          sendBugReportBotNotification_(n.message);
     } catch (e) {
       console.error('LINE WORKS通知エラー(ロック解放後):', e.message);
     }
@@ -1018,6 +1033,126 @@ function _trashDriveImages(imageUrlList) {
       if (m) DriveApp.getFileById(m[1]).setTrashed(true);
     } catch(e) {}
   });
+}
+
+// ----------------------------------------------------------------
+// bug_reports / bug_report_comments（バグ報告・修正依頼掲示板、2026-09-15追加）
+// ----------------------------------------------------------------
+// パートナー/管理者/社員が投稿し、スレッド形式でコメントを積み重ねる。lost_itemsと同じ
+// 「25秒キャッシュ＋書き込み側で都度invalidate」のパターンを踏襲する。
+
+const BUGREPORT_CACHE_KEY = 'bug_reports_rows_v1';
+function _bugReportsRowsCached_() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(BUGREPORT_CACHE_KEY);
+  if (cached) return JSON.parse(cached);
+  const rows = sheetRows(getSheet(SHEET_BUGREPORT), BUGREPORT_COLS).map(r => ({
+    ...r,
+    created_at: _dateTimeStr(r.created_at),
+    updated_at: _dateTimeStr(r.updated_at)
+  }));
+  try { cache.put(BUGREPORT_CACHE_KEY, JSON.stringify(rows), 25); } catch (e) {}
+  return rows;
+}
+function _invalidateBugReportsCache_() {
+  try { CacheService.getScriptCache().remove(BUGREPORT_CACHE_KEY); } catch (e) {}
+}
+
+// 一覧取得。storeId指定時はパートナー側（自店舗のみ）、省略時は管理者側（全店舗横断）。
+// 新しい投稿が先頭に来るようcreated_at降順で返す
+function getBugReports(storeId) {
+  let rows = _bugReportsRowsCached_();
+  if (storeId) rows = rows.filter(r => String(r.store_id) === String(storeId));
+  return rows.sort((a, b) => String(b.created_at || '').localeCompare(String(a.created_at || '')));
+}
+
+// 1件のスレッド（コメント＋ステータス変更のシステム発言）を時系列順で返す
+function getBugReportThread(issueId) {
+  const rows = sheetRows(getSheet(SHEET_BUGREPORT_COMMENTS), BUGREPORT_COMMENT_COLS)
+    .map(r => ({ ...r, created_at: _dateTimeStr(r.created_at) }))
+    .filter(r => String(r.issue_id) === String(issueId));
+  rows.sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
+  return rows;
+}
+
+// storeId省略可（社員投稿の「全店舗共通」等）。店舗名は_storeNames_()でサーバー側が解決するため、
+// クライアントからは信頼せずstoreIdだけ受け取る
+function submitBugReport(storeId, kind, content, posterType, posterName) {
+  if (!content) return { error: '内容を入力してください' };
+  const storeName = storeId ? (_storeNames_()[storeId] || String(storeId)) : '';
+  const sheet = getSheet(SHEET_BUGREPORT);
+  ensureHeaders(sheet, BUGREPORT_COLS);
+  const id = Utilities.getUuid();
+  const now = new Date();
+  sheet.appendRow([
+    id, storeId || '', storeName, kind === 'request' ? 'request' : 'bug', content,
+    posterType || 'partner', posterName || '', 'open', now, now
+  ]);
+  _invalidateBugReportsCache_();
+  const kindLabel = kind === 'request' ? '修正依頼' : 'バグ報告';
+  const storeLabel = storeName ? '【' + storeName + '】' : '【全店舗共通/社内】';
+  return {
+    ok: true, id,
+    _notify: { type: 'bugReportNew', message: '【新規' + kindLabel + '】' + storeLabel + '\n' + content }
+  };
+}
+
+// issueに1コメント追記する（返信・スレッドのやり取り用）
+function addBugReportComment(issueId, posterType, posterName, storeId, text) {
+  if (!text) return { error: 'コメントを入力してください' };
+  const sheet = getSheet(SHEET_BUGREPORT_COMMENTS);
+  ensureHeaders(sheet, BUGREPORT_COMMENT_COLS);
+  const now = new Date();
+  sheet.appendRow([Utilities.getUuid(), issueId, posterType || 'partner', posterName || '', storeId || '', text, now]);
+  _touchBugReportUpdatedAt_(issueId, now);
+  return { ok: true };
+}
+
+// 管理者がステータス(open/doing/done)を変更する。変更内容はシステム発言としてスレッドにも
+// 残す（別のステータス変更ログ用シートを作らずスレッド表示だけで対応履歴を追えるようにするため）
+const BUGREPORT_STATUS_LABELS = { open: '未対応', doing: '対応中', done: '完了' };
+function updateBugReportStatus(issueId, newStatus, adminName) {
+  if (!BUGREPORT_STATUS_LABELS[newStatus]) return { error: '不正なステータスです: ' + newStatus };
+  const sheet = getSheet(SHEET_BUGREPORT);
+  const data = sheet.getDataRange().getValues();
+  const hdrs = data[0].map(String);
+  const idIdx = hdrs.indexOf('id');
+  const statusIdx = hdrs.indexOf('status');
+  const updatedIdx = hdrs.indexOf('updated_at');
+  const now = new Date();
+  let found = false;
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][idIdx]) === String(issueId)) {
+      sheet.getRange(i + 1, statusIdx + 1).setValue(newStatus);
+      sheet.getRange(i + 1, updatedIdx + 1).setValue(now);
+      found = true;
+      break;
+    }
+  }
+  if (!found) return { error: '指定のissueが見つかりません' };
+  _invalidateBugReportsCache_();
+  const commentSheet = getSheet(SHEET_BUGREPORT_COMMENTS);
+  ensureHeaders(commentSheet, BUGREPORT_COMMENT_COLS);
+  commentSheet.appendRow([
+    Utilities.getUuid(), issueId, 'system', adminName || '管理者', '',
+    'ステータスを「' + BUGREPORT_STATUS_LABELS[newStatus] + '」に変更しました', now
+  ]);
+  return { ok: true };
+}
+
+function _touchBugReportUpdatedAt_(issueId, when) {
+  const sheet = getSheet(SHEET_BUGREPORT);
+  const data = sheet.getDataRange().getValues();
+  const hdrs = data[0].map(String);
+  const idIdx = hdrs.indexOf('id');
+  const updatedIdx = hdrs.indexOf('updated_at');
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][idIdx]) === String(issueId)) {
+      sheet.getRange(i + 1, updatedIdx + 1).setValue(when);
+      break;
+    }
+  }
+  _invalidateBugReportsCache_();
 }
 
 // ----------------------------------------------------------------
@@ -4935,6 +5070,90 @@ function sendStockBotNotification_(message, userIdOverride) {
       payload: body
     });
   }
+}
+
+// ----------------------------------------------------------------
+// バグ報告・修正依頼掲示板専用Bot（2026-09-13新規作成、2026-09-15再構築）。既存の
+// 「社内ポータル通知」Bot・在庫差異検知Botとは完全に独立。認証情報一式はLW_CLIENT_ID_BUGREPORT等、
+// 別のScript Propertiesキーで持つ専用Bot「バグ報告（社内ポータル）」（Bot ID 13130517）。
+// 送信先は在庫差異検知Botと同じく1:1トーク(userId宛)——グループのchannelIdではない。
+// ⚠️2026-09-15、このコードだけgit未コミットのままclaspで直接本番投入していたため、翌々日の
+// GitHub Actions経由デプロイ(gas_backend.gsの内容でclasp push)で本番から消える事故が発生した。
+// 以後、この種のBotコードは必ずここ(gas_backend.gs)にコミットしてからデプロイすること。
+function createBugReportBotJWT_() {
+  var props = PropertiesService.getScriptProperties();
+  var clientId = props.getProperty('LW_CLIENT_ID_BUGREPORT');
+  var serviceAccount = props.getProperty('LW_SERVICE_ACCT_BUGREPORT');
+  var rawKey = props.getProperty('LW_PRIVATE_KEY_BUGREPORT');
+  var base64Body = rawKey
+    .replace(/-*BEGIN PRIVATE KEY-*/gi, '')
+    .replace(/-*END PRIVATE KEY-*/gi, '')
+    .replace(/[^A-Za-z0-9+/=]/g, '');
+  var lines = [];
+  var i = 0;
+  while (i < base64Body.length) {
+    lines.push(base64Body.substring(i, i + 64));
+    i += 64;
+  }
+  var privateKey = '-----BEGIN PRIVATE KEY-----\n' + lines.join('\n') + '\n-----END PRIVATE KEY-----';
+  var header = Utilities.base64EncodeWebSafe(JSON.stringify({alg:'RS256',typ:'JWT'})).replace(/=+$/, '');
+  var now = Math.floor(new Date().getTime() / 1000);
+  var payload = JSON.stringify({iss:clientId, sub:serviceAccount, iat:now, exp:now+3600});
+  var claim = Utilities.base64EncodeWebSafe(payload).replace(/=+$/, '');
+  var sigInput = header + '.' + claim;
+  var sig = Utilities.base64EncodeWebSafe(Utilities.computeRsaSha256Signature(sigInput, privateKey)).replace(/=+$/, '');
+  return sigInput + '.' + sig;
+}
+
+function getBugReportBotAccessToken_(forceRefresh) {
+  var cache = CacheService.getScriptCache();
+  if (!forceRefresh) {
+    var cached = cache.get('LW_BUGREPORT_ACCESS_TOKEN');
+    if (cached) return cached;
+  }
+  var props = PropertiesService.getScriptProperties();
+  var jwt = createBugReportBotJWT_();
+  var payload = 'assertion=' + encodeURIComponent(jwt)
+    + '&grant_type=' + encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer')
+    + '&client_id=' + encodeURIComponent(props.getProperty('LW_CLIENT_ID_BUGREPORT'))
+    + '&client_secret=' + encodeURIComponent(props.getProperty('LW_CLIENT_SECRET_BUGREPORT'))
+    + '&scope=bot';
+  var res = UrlFetchApp.fetch('https://auth.worksmobile.com/oauth2/v2.0/token', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/x-www-form-urlencoded'},
+    payload: payload
+  });
+  var token = JSON.parse(res.getContentText()).access_token;
+  try { cache.put('LW_BUGREPORT_ACCESS_TOKEN', token, 3000); } catch (e) {}
+  return token;
+}
+
+// userIdOverride省略時はLW_USER_ID_BUGREPORT(既定の通知先)宛に送る
+function sendBugReportBotNotification_(message, userIdOverride) {
+  var props = PropertiesService.getScriptProperties();
+  var botId  = props.getProperty('LW_BOT_ID_BUGREPORT');
+  var userId = userIdOverride || props.getProperty('LW_USER_ID_BUGREPORT');
+  var url = 'https://www.worksapis.com/v1.0/bots/' + botId + '/users/' + userId + '/messages';
+  var body = JSON.stringify({content: {type: 'text', text: message}});
+  var token = getBugReportBotAccessToken_();
+  var res = UrlFetchApp.fetch(url, {
+    method: 'POST',
+    headers: {'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'},
+    payload: body,
+    muteHttpExceptions: true
+  });
+  if (res.getResponseCode() === 401) {
+    token = getBugReportBotAccessToken_(true);
+    UrlFetchApp.fetch(url, {
+      method: 'POST',
+      headers: {'Authorization': 'Bearer ' + token, 'Content-Type': 'application/json'},
+      payload: body
+    });
+  }
+}
+
+function testBugReportBotNotification() {
+  sendBugReportBotNotification_('【テスト】バグ報告Botの接続テストです。');
 }
 
 // ----------------------------------------------------------------
