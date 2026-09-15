@@ -421,6 +421,7 @@ function doGet(e) {
     else if (a === 'fixReorderRulesColumnLetters') result = fixReorderRulesColumnLetters();
     else if (a === 'pruneBlankStoreInventoryRows') result = pruneBlankStoreInventoryRows(e.parameter.storeId);
     else if (a === 'buildSalesCategoryCostRatio') result = buildSalesCategoryCostRatio(e.parameter.storeId, e.parameter.periodLabel);
+    else if (a === 'backfillSalesCategoryCostRatio') result = backfillSalesCategoryCostRatio(e.parameter.periodLabels);
     else if (a === 'migrateSteraDailySalesColumns') result = migrateSteraDailySalesColumns();
     else if (a === 'buildStockCheckMonthly')    result = buildStockCheckMonthly(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'runMonthlyStockCheckBackstop') result = runMonthlyStockCheckBackstop();
@@ -453,6 +454,12 @@ function doGet(e) {
       _fixNameLock.waitLock(30000);
       try { result = fixProductNameInLog(e.parameter.code, e.parameter.oldName, e.parameter.newName); }
       finally { _fixNameLock.releaseLock(); }
+    }
+    else if (a === 'fixProductNameInStoreTab') {
+      const _fixTabNameLock = LockService.getScriptLock();
+      _fixTabNameLock.waitLock(30000);
+      try { result = fixProductNameInStoreTab(e.parameter.storeId, e.parameter.code, e.parameter.oldName, e.parameter.newName); }
+      finally { _fixTabNameLock.releaseLock(); }
     }
     else if (a === 'mergeInventoryLogRemarksBlocks') result = mergeInventoryLogRemarksBlocks();
     else if (a === 'getSettingHistory')         result = getSettingHistory(e.parameter.key, e.parameter.limit);
@@ -2744,6 +2751,35 @@ function fixProductNameInLog(code, oldName, newName) {
   return { ok: true, updated: updated, touched: touched };
 }
 
+// fixProductNameInLogはinventory_log側の修正のみで、既にbuildStoreInventorySheetで生成済みの
+// 店舗タブ(A〜Q列)の商品名列(C列)には反映されない——buildStockCheckMonthlyの代表商品マッチングは
+// この店舗タブ側のC列を見るため、ログだけ直しても過去のブロックでは引き続きスキップされてしまう
+// (2026-09-13、プリングルスの過去分修正時に発覚)。店舗タブを丸ごと再生成すると
+// (buildStoreInventorySheetは常に一番上へ新規挿入する設計のため)期間の並び順が崩れてしまうので、
+// 該当セルのテキストだけをピンポイントで書き換える。全期間ブロックを対象にする(商品コードも
+// 一致する行のみ、念のための安全確認)。
+function fixProductNameInStoreTab(storeId, code, oldName, newName) {
+  if (!storeId || !code || !oldName || !newName) return { error: 'storeId・code・oldName・newNameは必須です' };
+  const storeName = _storeNames_()[storeId] || storeId;
+  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const sheet = ss.getSheetByName(storeName);
+  if (!sheet) return { error: `店舗タブ「${storeName}」が見つかりません` };
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return { ok: true, store: storeName, updated: 0 };
+  const codeCol = STORE_INVENTORY_HEADERS_JA.indexOf('商品コード') + 1;
+  const nameCol = STORE_INVENTORY_HEADERS_JA.indexOf('商品名') + 1;
+  const codes = sheet.getRange(2, codeCol, lastRow - 1, 1).getValues();
+  const names = sheet.getRange(2, nameCol, lastRow - 1, 1).getValues();
+  let updated = 0;
+  for (let i = 0; i < names.length; i++) {
+    if (String(codes[i][0]) === String(code) && String(names[i][0]) === String(oldName)) {
+      sheet.getRange(2 + i, nameCol).setValue(newName);
+      updated++;
+    }
+  }
+  return { ok: true, store: storeName, updated: updated };
+}
+
 // 2026-07-28、デイリーカウント・差異列を追加(ユーザーが先に手動でデイリーカウント列を渋谷神南タブに
 // 追加していたため、それに揃える形でコードを更新)。ヘッダー行は毎回書き直す(下記参照)ため、
 // 手動で追加された列があっても次の実行でこの並び順に揃い直す
@@ -3289,7 +3325,7 @@ function ensureReorderRulesSheet_() {
     ['■ 原価率が2種類ある理由'],
     ['H列「原価率(在庫消費ベース)」: 期首在庫額・期末在庫額(棚卸データ×単価)だけから出す疑似指標。月消費額÷期首在庫額。実売上とは無関係。'],
     ['S列「原価率(ステラ実売上ベース)」: stera_daily_sales(ステラの実売上、日次自動蓄積)を使った本当の原価率。対象は「販売品類」(水・レディーボーデン等、STERA_SALES_MAPPINGで定義した8グループ)のみで、他の商品は空欄。'],
-    ['S・T(ステラ売上・原価率)は行の商品名とは対応していません。8グループ分の集計を、たまたま同じ行位置に並べているだけの別表です。'],
+    ['S・Tは各グループの代表商品(グループ内の1商品目)の行に書き込まれます(2026-09-15〜)。複数商品を合算するグループ(レディーボーデン各種・プリングルス各種等)は代表商品以外の行では空欄のままです。'],
     [''],
     ['■ 基準値(P列)'],
     ['「目標在庫数」を商品コードごとに手入力した値。管理者ポータルの「発注基準値設定(月初発注)」画面から設定・変更します。'],
@@ -3368,7 +3404,7 @@ function fixReorderRulesColumnLetters() {
     ['■ 原価率が2種類ある理由'],
     ['I列「原価率(在庫消費ベース)」: 期首在庫額・期末在庫額(棚卸データ×単価)だけから出す疑似指標。月消費額÷期首在庫額。実売上とは無関係。'],
     ['T列「原価率(ステラ実売上ベース)」: stera_daily_sales(ステラの実売上、日次自動蓄積)を使った本当の原価率。対象は「販売品類」(水・レディーボーデン等、STERA_SALES_MAPPINGで定義した8グループ)のみで、他の商品は空欄。'],
-    ['S・T(ステラ売上・原価率)は行の商品名とは対応していません。8グループ分の集計を、たまたま同じ行位置に並べているだけの別表です。'],
+    ['S・Tは各グループの代表商品(グループ内の1商品目)の行に書き込まれます(2026-09-15〜)。複数商品を合算するグループ(レディーボーデン各種・プリングルス各種等)は代表商品以外の行では空欄のままです。'],
     [''],
     ['■ 基準値(Q列)'],
     ['「目標在庫数」を商品コードごとに手入力した値。管理者ポータルの「発注基準値設定(月初発注)」画面から設定・変更します。'],
@@ -3574,14 +3610,6 @@ function buildSalesCategoryCostRatio(storeId, periodLabel) {
     costByProduct[r[idx.product]] = price * consumption;
   });
 
-  const outRows = STERA_SALES_MAPPING.map(m => {
-    const revenue = revenueByPrdId[m.prdId];
-    const cost = m.ourProducts.reduce((sum, name) => sum + (costByProduct[name] || 0), 0);
-    const hasCost = m.ourProducts.some(name => costByProduct[name] !== undefined);
-    const rate = (revenue && hasCost) ? cost / revenue : '';
-    return [revenue, rate];
-  });
-
   const sheetName = storeName;
   // buildStoreInventorySheet/buildStockCheckMonthlyと同じ理由(新規店舗の初回実行時の競合)
   // でここも同じフォールバックを入れる(2026-08-31、他機能での実例を受けて予防的に適用)。
@@ -3613,20 +3641,74 @@ function buildSalesCategoryCostRatio(storeId, periodLabel) {
   // 稀だったため実害が表面化していなかった)。今回月次自動トリガーに乗せるにあたり修正した。
   const startCol = STORE_INVENTORY_HEADERS_JA.length + 1; // 例: 基準値・発注数で17列ならR列から
   const headerRow = ['ステラ売上', '原価率(ステラ実売上ベース)'];
-  // ブロックの行数がSTERA_SALES_MAPPING.length(8)未満の店舗・月(取り扱い商品が少ない等)では、
-  // 固定8行分をそのまま書くと1つ下(=もっと過去)の期間ブロックにはみ出して壊してしまう。
-  // 2026-09-13、_findPeriodBlockRange_で任意のブロックへ書けるようにした際に追加した安全策
-  // (以前は常に一番上のブロック=十分な行数がある前提だったため気づかれていなかった)。
-  const rowsToWrite = Math.min(outRows.length, block.endRow - block.startRow + 1);
-  const writeRows = outRows.slice(0, rowsToWrite);
   sheet.getRange(1, startCol, 1, headerRow.length).setValues([headerRow]);
-  sheet.getRange(block.startRow, startCol, rowsToWrite, writeRows[0].length).setValues(writeRows);
-  sheet.getRange(block.startRow, startCol, rowsToWrite, 1).setNumberFormat(INVOICE_YEN_FORMAT);
-  sheet.getRange(block.startRow, startCol + 1, rowsToWrite, 1).setNumberFormat('0.0%');
-  // ステラ関連ブロックは緑(2026-09-07、ユーザー確定の店舗タブ配色ルール。[[_applyStoreInventoryColColors_]]参照)
-  sheet.getRange(block.startRow, startCol, rowsToWrite, headerRow.length).setBackground(STORE_INV_COLOR_GREEN);
 
-  return { ok: true, store: sheetName, period: periodLabel, rows: rowsToWrite, truncated: rowsToWrite < outRows.length };
+  // 商品名列(C列)の位置から、代表商品(m.ourProducts[0])がこのブロックのどの行にいるかを引き、
+  // その行に直接書き込む(buildStockCheckMonthlyのSTOCK_CHECK_HEADERS書き込みと同じ手法へ統一、
+  // 2026-09-15)。旧実装はSTERA_SALES_MAPPING順(8グループ)に上からブロック内へ詰めて書いており、
+  // 隣接するA〜Q列のメイン商品一覧(全ベンダー・全商品、行数も並び順も別)とは行番号がたまたま
+  // 重なっているだけで対応していなかった——U列以降(buildStockCheckMonthly)は2026-09-13に
+  // 代表行揃えへ直したのに対し、この関数(S・T列)は直し漏れており、同じ行にステラ売上と無関係な
+  // 商品が並んで見える不具合が残っていた(ユーザー指摘、2026-09-15)。
+  const productNameCol = STORE_INVENTORY_HEADERS_JA.indexOf('商品名') + 1;
+  const rowNumByProduct = {};
+  const productNames = sheet.getRange(block.startRow, productNameCol, block.endRow - block.startRow + 1, 1).getValues().map(r => r[0]);
+  productNames.forEach((name, i) => { if (name) rowNumByProduct[name] = block.startRow + i; });
+
+  // 旧実装(ブロック先頭から詰め書き)の名残が残っていると、代表行以外にステラ売上の値が
+  // ゴミとして残り続けるため、書き直す前にこのブロック全体をクリアする。
+  const scanRowCount = block.endRow - block.startRow + 1;
+  if (scanRowCount > 0) {
+    sheet.getRange(block.startRow, startCol, scanRowCount, headerRow.length).clearContent();
+    sheet.getRange(block.startRow, startCol, scanRowCount, headerRow.length).setBackground(null);
+  }
+
+  const skipped = [];
+  let writtenCount = 0;
+  STERA_SALES_MAPPING.forEach(m => {
+    const representative = m.ourProducts[0];
+    const row = rowNumByProduct[representative];
+    if (!row) { skipped.push(m.label); return; }
+    const revenue = revenueByPrdId[m.prdId];
+    const cost = m.ourProducts.reduce((sum, name) => sum + (costByProduct[name] || 0), 0);
+    const hasCost = m.ourProducts.some(name => costByProduct[name] !== undefined);
+    const rate = (revenue && hasCost) ? cost / revenue : '';
+    sheet.getRange(row, startCol, 1, headerRow.length).setValues([[revenue, rate]]);
+    sheet.getRange(row, startCol, 1, 1).setNumberFormat(INVOICE_YEN_FORMAT);
+    sheet.getRange(row, startCol + 1, 1, 1).setNumberFormat('0.0%');
+    // ステラ関連ブロックは緑(2026-09-07、ユーザー確定の店舗タブ配色ルール。[[_applyStoreInventoryColColors_]]参照)
+    sheet.getRange(row, startCol, 1, headerRow.length).setBackground(STORE_INV_COLOR_GREEN);
+    writtenCount++;
+  });
+
+  return { ok: true, store: sheetName, period: periodLabel, rows: writtenCount, skipped: skipped };
+}
+
+// 上記の代表行揃え修正(2026-09-15)を、過去に既にbuildSalesCategoryCostRatioが実行済みの
+// 全店舗×全期間へ一括反映するための使い捨てバックフィル。periodLabelsCsvは"2026-07,2026-08,2026-09"
+// のようなカンマ区切り文字列(呼び出し側で対象期間を把握している前提、このリポジトリでは
+// 棚卸自体が2026-07開始のためそれ以前は存在しない)。?action=backfillSalesCategoryCostRatio&
+// periodLabels=2026-07,2026-08,2026-09 で実行、一度実行すれば十分(fixReorderRulesColumnLetters
+// と同じ位置づけ)。store側にperiod_block_not_found(その店舗・期間の棚卸提出自体が無い)は
+// 想定内でありエラー扱いにしない。
+function backfillSalesCategoryCostRatio(periodLabelsCsv) {
+  if (!periodLabelsCsv) return { error: 'periodLabelsは必須です（例: 2026-07,2026-08,2026-09）' };
+  const periodLabels = String(periodLabelsCsv).split(',').map(s => s.trim()).filter(Boolean);
+  const storeIds = _allStoreIds_();
+  const results = [];
+  storeIds.forEach(storeId => {
+    periodLabels.forEach(periodLabel => {
+      try {
+        const r = buildSalesCategoryCostRatio(storeId, periodLabel);
+        if (r && (r.rows > 0 || (r.skipped && r.skipped !== 'period_block_not_found'))) {
+          results.push(Object.assign({ storeId, periodLabel }, r));
+        }
+      } catch (e) {
+        results.push({ storeId, periodLabel, error: e.message });
+      }
+    });
+  });
+  return { ok: true, storesChecked: storeIds.length, periods: periodLabels, results: results };
 }
 
 // ----------------------------------------------------------------
