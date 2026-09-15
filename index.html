@@ -580,6 +580,7 @@
     <button class="partner-tab"        id="ptab-lost"      onclick="switchPartnerTab('lost')">忘れ物</button>
     <button class="partner-tab"        id="ptab-inventory" onclick="switchPartnerTab('inventory')">棚卸表<span class="ptab-badge ptab-badge-prep">準備中</span></button>
     <button class="partner-tab"        id="ptab-checklist" onclick="switchPartnerTab('checklist')">チェック<br class="sp-only">シート</button>
+    <button class="partner-tab"        id="ptab-bugreport" onclick="switchPartnerTab('bugreport')">バグ報告</button>
   </div>
 
   <!-- 発注タブ -->
@@ -740,6 +741,28 @@
     </div>
   </div>
 
+  <!-- バグ報告・修正依頼掲示板タブ -->
+  <div id="partner-tab-bugreport" class="partner-tab-content">
+    <div style="max-width:700px">
+      <div class="note-box">
+        ポータルの不具合や「こうしてほしい」というご意見をこちらから投稿できます。投稿すると自動的に店舗名が記録されるので、店舗名の記入は不要です。
+      </div>
+      <div style="display:flex;gap:8px;margin-bottom:10px">
+        <button type="button" id="bugreport-kind-bug" onclick="setBugReportKind('bug')"
+          style="flex:1;padding:10px;border-radius:8px;font-size:13px;font-weight:700;font-family:inherit;cursor:pointer;background:#fee2e2;color:#dc2626;border:1.5px solid #dc2626">バグ報告</button>
+        <button type="button" id="bugreport-kind-request" onclick="setBugReportKind('request')"
+          style="flex:1;padding:10px;border-radius:8px;font-size:13px;font-weight:700;font-family:inherit;cursor:pointer;background:#fff;color:#6b7280;border:1.5px solid #d1d5db">修正依頼</button>
+      </div>
+      <textarea id="bugreport-content-input" placeholder="不具合の内容や、直してほしい点を具体的に書いてください（発生した操作・画面名があると助かります）" rows="4" oninput="autoGrow(this)"
+        style="border:1px solid #ddd;border-radius:6px;padding:10px 12px;font-size:13.5px;font-family:inherit;width:100%;resize:none;overflow-y:hidden;line-height:1.5;margin-bottom:10px;box-sizing:border-box"></textarea>
+      <div style="display:flex;justify-content:flex-end;margin-bottom:22px">
+        <button id="bugreport-submit-btn" onclick="submitBugReportFromPartner()"
+          style="background:#22703d;color:white;padding:9px 20px;font-size:13.5px;font-weight:700;border-radius:6px;border:none;cursor:pointer;font-family:inherit">投稿する</button>
+      </div>
+      <div style="font-weight:700;font-size:15px;color:#374151;margin-bottom:10px">自店舗の投稿一覧</div>
+      <div id="bugreport-list"></div>
+    </div>
+  </div>
 
 </div>
 
@@ -781,6 +804,7 @@
           <div class="admin-menu-item" id="menu-history"   onclick="menuSelect('view','history')">履歴</div>
           <div class="admin-menu-item" id="menu-lost"      onclick="menuSelect('view','lost')">忘れ物一覧</div>
           <div class="admin-menu-item" id="menu-machinePhoto" onclick="menuSelect('view','machinePhoto')">機械内写真</div>
+          <div class="admin-menu-item" id="menu-bugreport" onclick="menuSelect('view','bugreport')">バグ報告<span class="menu-badge" id="mbadge-bugreport" style="display:none"></span></div>
         </div>
       </div>
       <button class="admin-settings-btn" id="admin-settings-btn" onclick="menuSelect('view','settings')" title="設定"><span class="menu-label">設定</span></button>
@@ -802,6 +826,7 @@
     <button class="sub-tab"        id="sub-history"  onclick="switchAdminView('history')">履歴</button>
     <button class="sub-tab"        id="sub-lost"     onclick="switchAdminView('lost')">忘れ物一覧</button>
     <button class="sub-tab"        id="sub-machinePhoto" onclick="switchAdminView('machinePhoto')">機械内写真</button>
+    <button class="sub-tab"        id="sub-bugreport" onclick="switchAdminView('bugreport')">バグ報告<span class="tab-badge" id="badge-bugreport" style="display:none"></span></button>
   </div>
 
   <div class="summary" id="admin-summary"></div>
@@ -3612,10 +3637,15 @@ function updateChecksheetTotals(period) {
 let partnerTabCurrent = 'order';
 async function switchPartnerTab(tab) {
   partnerTabCurrent = tab;
-  ['order','inventory','checklist','lost','attendance'].forEach(t => {
+  ['order','inventory','checklist','lost','attendance','bugreport'].forEach(t => {
     document.getElementById('ptab-'+t)?.classList.toggle('active', t===tab);
     document.getElementById('partner-tab-'+t)?.classList.toggle('active', t===tab);
   });
+  if (tab === 'bugreport') {
+    renderBugReports(true);
+    await loadBugReportsFromDb(storeTab);
+    renderBugReports();
+  }
   if (tab === 'lost') {
     const di = document.getElementById('lost-date-input');
     if (di && !di.value) di.value = new Date().toLocaleDateString('sv');
@@ -4272,6 +4302,380 @@ function renderLostItems(loading = false) {
   if (loading) { container.innerHTML = '<div style="color:#aaa;font-size:13px;padding:10px 0">読み込み中…</div>'; return; }
   const items = getLostItems(storeTab).slice().sort((a,b) => (b.foundDate||'').localeCompare(a.foundDate||''));
   container.innerHTML = buildLostTable(items, storeTab);
+}
+
+/* ===== バグ報告・修正依頼掲示板 =====
+   パートナー側(自店舗のみ)・管理者側(全店舗横断)の両方からこのブロックの関数群を使う。
+   issue一覧はgetBugReports、1件のスレッド(コメント＋ステータス変更のシステム発言)は
+   getBugReportThreadで都度取得する(lost_itemsのような25秒キャッシュはバックエンド側で
+   既に行っているため、クライアント側はシンプルにタブ表示・投稿の都度読み直すだけでよい) */
+const BUGREPORT_STATUS_LABELS = { open: '未対応', doing: '対応中', done: '完了' };
+const BUGREPORT_STATUS_STYLE = {
+  open:  'background:#fee2e2;color:#dc2626',
+  doing: 'background:#ffedd5;color:#c2410c',
+  done:  'background:#d4edde;color:#1a5c30',
+};
+function _bugReportKindStyle(active, color, bg, border) {
+  return `flex:1;padding:10px;border-radius:8px;font-size:13px;font-weight:700;font-family:inherit;cursor:pointer;` +
+    (active ? `background:${bg};color:${color};border:1.5px solid ${border}` : 'background:#fff;color:#6b7280;border:1.5px solid #d1d5db');
+}
+
+/* ---- パートナー側 ---- */
+const BUGREPORT_CACHE = {}; // { [storeId]: [issues] }
+const _bugReportThreadCache = {}; // { [issueId]: comments }
+let _bugReportKind = 'bug';
+let _bugReportOpenThreadId = null; // パートナー側は同時に1件だけスレッドを開く
+
+function getBugReports(storeId) {
+  return BUGREPORT_CACHE[storeId] || [];
+}
+
+async function loadBugReportsFromDb(storeId) {
+  try {
+    const data = await gasGet('getBugReports', { storeId });
+    BUGREPORT_CACHE[storeId] = data || [];
+  } catch(e) { console.error('loadBugReports error:', e); BUGREPORT_CACHE[storeId] = []; }
+}
+
+function setBugReportKind(kind) {
+  _bugReportKind = kind;
+  const bugBtn = document.getElementById('bugreport-kind-bug');
+  const reqBtn = document.getElementById('bugreport-kind-request');
+  if (bugBtn) bugBtn.style.cssText = _bugReportKindStyle(kind==='bug', '#dc2626', '#fee2e2', '#dc2626');
+  if (reqBtn) reqBtn.style.cssText = _bugReportKindStyle(kind==='request', '#1a5c30', '#dbeee1', '#1a5c30');
+}
+
+async function submitBugReportFromPartner() {
+  const input = document.getElementById('bugreport-content-input');
+  const btn = document.getElementById('bugreport-submit-btn');
+  const content = input?.value.trim() || '';
+  if (!content) { alert('内容を入力してください。'); return; }
+  if (btn) { btn.disabled = true; btn.textContent = '投稿中…'; }
+  try {
+    const r = await gasPost('submitBugReport', { storeId: storeTab, kind: _bugReportKind, content, posterType: 'partner', posterName: '' });
+    if (r.error) throw new Error(r.error);
+    if (input) input.value = '';
+    await loadBugReportsFromDb(storeTab);
+    renderBugReports();
+  } catch(e) {
+    console.error('submitBugReport error:', e);
+    alert('投稿に失敗しました: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '投稿する'; }
+  }
+}
+
+function _bugReportRoleLabel(c) {
+  if (c.poster_type === 'system') return 'システム';
+  if (c.poster_type === 'admin' || c.poster_type === 'staff') return c.poster_name || '管理者';
+  return c.store_id ? (STORES[c.store_id] || c.store_id) : (c.poster_name || 'パートナー');
+}
+
+function buildBugReportThreadHtml(issueId, comments, replyFn) {
+  const bubbles = comments.map(c => {
+    const mine = c.poster_type === 'admin' || c.poster_type === 'staff' || c.poster_type === 'system';
+    const roleLabel = _bugReportRoleLabel(c);
+    return `<div style="display:flex;margin-bottom:10px;${mine ? 'justify-content:flex-end' : ''}">
+      <div style="max-width:82%;padding:9px 13px;border-radius:12px;font-size:13px;line-height:1.55;${mine ? 'background:#dbeee1;color:#1a5c30;border-top-right-radius:3px' : 'background:#f4f2e4;color:#333;border-top-left-radius:3px'}">
+        <span style="display:block;font-size:10.5px;font-weight:700;margin-bottom:3px;${mine ? 'text-align:right;color:#1a5c30' : 'color:#6b7280'}">${esc(roleLabel)}</span>
+        ${esc(c.text).replace(/\n/g, '<br>')}
+      </div>
+    </div>`;
+  }).join('') || '<div style="color:#aaa;font-size:12px;padding:6px 0 10px">まだコメントはありません</div>';
+  return `<div style="margin-top:12px;padding-top:2px;border-top:1px solid #f0ede0">
+    ${bubbles}
+    <div style="display:flex;gap:8px;margin-top:4px">
+      <input type="text" id="bugreport-reply-input-${esc(issueId)}" placeholder="返信を入力…"
+        style="flex:1;border:1px solid #ddd;border-radius:6px;padding:8px 11px;font-size:13px;font-family:inherit">
+      <button onclick="${replyFn}('${esc(issueId)}')"
+        style="background:#22703d;color:#fff;border:none;border-radius:6px;padding:0 16px;font-size:12.5px;font-weight:700;font-family:inherit;cursor:pointer">送信</button>
+    </div>
+  </div>`;
+}
+
+async function toggleBugReportThread(issueId) {
+  _bugReportOpenThreadId = (_bugReportOpenThreadId === issueId) ? null : issueId;
+  renderBugReports();
+  if (_bugReportOpenThreadId === issueId && !_bugReportThreadCache[issueId]) {
+    try { _bugReportThreadCache[issueId] = await gasGet('getBugReportThread', { issueId }) || []; }
+    catch(e) { console.error('getBugReportThread error:', e); _bugReportThreadCache[issueId] = []; }
+    if (_bugReportOpenThreadId === issueId) renderBugReports();
+  }
+}
+
+async function submitBugReportReply(issueId) {
+  const input = document.getElementById('bugreport-reply-input-' + issueId);
+  const text = input?.value.trim() || '';
+  if (!text) return;
+  input.disabled = true;
+  try {
+    const r = await gasPost('addBugReportComment', { issueId, posterType: 'partner', posterName: '', storeId: storeTab, text });
+    if (r.error) throw new Error(r.error);
+    _bugReportThreadCache[issueId] = await gasGet('getBugReportThread', { issueId }) || [];
+    await loadBugReportsFromDb(storeTab); // updated_atの更新を一覧側にも反映
+    renderBugReports();
+  } catch(e) {
+    console.error('submitBugReportReply error:', e);
+    alert('返信に失敗しました: ' + e.message);
+  } finally {
+    if (input) input.disabled = false;
+  }
+}
+
+function renderBugReports(loading = false) {
+  const container = document.getElementById('bugreport-list');
+  if (!container) return;
+  if (loading) { container.innerHTML = '<div style="color:#aaa;font-size:13px;padding:10px 0">読み込み中…</div>'; return; }
+  const issues = getBugReports(storeTab);
+  if (!issues.length) { container.innerHTML = '<div style="color:#aaa;font-size:13px;padding:10px 0">投稿はまだありません</div>'; return; }
+  container.innerHTML = issues.map(issue => {
+    const isOpen = _bugReportOpenThreadId === issue.id;
+    const kindLabel = issue.kind === 'request' ? '依頼' : 'バグ';
+    const kindColor = issue.kind === 'request' ? '#3d8154' : '#dc2626';
+    const statusStyle = BUGREPORT_STATUS_STYLE[issue.status] || BUGREPORT_STATUS_STYLE.open;
+    const statusLabel = BUGREPORT_STATUS_LABELS[issue.status] || issue.status;
+    const threadHtml = isOpen ? buildBugReportThreadHtml(issue.id, _bugReportThreadCache[issue.id] || [], 'submitBugReportReply') : '';
+    return `<div style="background:#fff;border-radius:10px;box-shadow:0 2px 8px rgba(34,112,61,.1);padding:14px 16px;margin-bottom:12px">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+        <span style="font-size:12px;font-weight:700;color:${kindColor}">${kindLabel}</span>
+        <span style="font-size:11.5px;font-weight:700;padding:3px 10px;border-radius:99px;${statusStyle}">${esc(statusLabel)}</span>
+        <span style="margin-left:auto;font-size:11.5px;color:#999">${esc(issue.created_at)}</span>
+      </div>
+      <div style="font-size:13.5px;color:#333;line-height:1.6;margin-bottom:8px;white-space:pre-wrap">${esc(issue.content)}</div>
+      <div onclick="toggleBugReportThread('${esc(issue.id)}')" style="font-size:12px;color:#22703d;font-weight:600;cursor:pointer;padding-top:8px;border-top:1px solid #f0ede0">
+        ${isOpen ? 'スレッドを閉じる ▲' : 'スレッドを開く ▼'}
+      </div>
+      ${threadHtml}
+    </div>`;
+  }).join('');
+}
+
+/* ---- 管理者側 ---- */
+let adminBugReports = [];
+let adminBugReportSelectedId = null;
+let adminBugReportFilters = { store: '', status: '', kind: '', q: '' };
+let _bugReportAdminForceRefresh = true;
+let _bugReportAdminKind = 'bug';
+let _bugReportAdminStore = '';
+let _bugReportAdminPosterType = 'admin';
+
+async function renderBugReportAdmin() {
+  document.querySelector('#page-admin .table-wrap').style.display = 'none';
+  document.getElementById('pagination').style.display = 'none';
+  document.getElementById('admin-thead').innerHTML = '';
+  document.getElementById('admin-tbody').innerHTML = '';
+  document.getElementById('admin-summary').innerHTML = '';
+
+  const container = document.getElementById('settings-container');
+  container.style.display = 'block';
+
+  if (_bugReportAdminForceRefresh) {
+    _bugReportAdminForceRefresh = false;
+    container.innerHTML = '<div style="color:#aaa;font-size:13px;padding:20px 0">読み込み中…</div>';
+    try { adminBugReports = await gasGet('getBugReports', {}) || []; }
+    catch(e) { console.error('getBugReports error:', e); adminBugReports = []; }
+  }
+  renderBugReportAdminBody();
+}
+
+function _bugReportFilteredList() {
+  const f = adminBugReportFilters;
+  return adminBugReports.filter(issue => {
+    if (f.store && issue.store_id !== f.store) return false;
+    if (f.status && issue.status !== f.status) return false;
+    if (f.kind && issue.kind !== f.kind) return false;
+    if (f.q && !String(issue.content||'').includes(f.q)) return false;
+    return true;
+  });
+}
+
+function updateBugReportAdminFilter(key, value) {
+  adminBugReportFilters[key] = value;
+  renderBugReportAdminBody();
+}
+
+function buildBugReportAdminTable(issues) {
+  if (!issues.length) return '<div style="color:#aaa;font-size:13px;padding:20px;text-align:center">該当する投稿はありません</div>';
+  const rows = issues.map(issue => {
+    const selected = issue.id === adminBugReportSelectedId;
+    const kindLabel = issue.kind === 'request' ? '依頼' : 'バグ';
+    const kindColor = issue.kind === 'request' ? '#3d8154' : '#dc2626';
+    const statusStyle = BUGREPORT_STATUS_STYLE[issue.status] || BUGREPORT_STATUS_STYLE.open;
+    const statusLabel = BUGREPORT_STATUS_LABELS[issue.status] || issue.status;
+    const storeLabel = issue.store_name || '全店舗共通';
+    return `<tr onclick="selectBugReportAdmin('${esc(issue.id)}')" style="cursor:pointer;${selected ? 'background:#fffde0' : ''}">
+      <td style="padding:10px;font-size:12.5px;border-bottom:1px solid #f0ede0;white-space:nowrap"><span style="font-size:11.5px;font-weight:700;color:#22703d;background:#eaf3ec;padding:2px 8px;border-radius:99px">${esc(storeLabel)}</span></td>
+      <td style="padding:10px;font-size:12.5px;border-bottom:1px solid #f0ede0;white-space:nowrap"><span style="font-weight:700;color:${kindColor}">${kindLabel}</span></td>
+      <td style="padding:10px;font-size:12.5px;border-bottom:1px solid #f0ede0;max-width:220px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${esc(issue.content)}</td>
+      <td style="padding:10px;font-size:12.5px;border-bottom:1px solid #f0ede0;white-space:nowrap"><span style="font-size:11.5px;font-weight:700;padding:3px 10px;border-radius:99px;${statusStyle}">${esc(statusLabel)}</span></td>
+      <td style="padding:10px;font-size:12.5px;border-bottom:1px solid #f0ede0;color:#888;white-space:nowrap">${esc(issue.updated_at||issue.created_at)}</td>
+    </tr>`;
+  }).join('');
+  return `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
+    <thead><tr style="background:#22703d"><th style="padding:10px;text-align:left;font-size:12px;color:#f8f4e7">店舗</th><th style="padding:10px;text-align:left;font-size:12px;color:#f8f4e7">種別</th><th style="padding:10px;text-align:left;font-size:12px;color:#f8f4e7">内容</th><th style="padding:10px;text-align:left;font-size:12px;color:#f8f4e7">ステータス</th><th style="padding:10px;text-align:left;font-size:12px;color:#f8f4e7">更新日</th></tr></thead>
+    <tbody>${rows}</tbody></table></div>`;
+}
+
+function selectBugReportAdmin(issueId) {
+  adminBugReportSelectedId = issueId;
+  renderBugReportAdminBody();
+}
+
+async function changeBugReportStatus(issueId, newStatus) {
+  const issue = adminBugReports.find(i => i.id === issueId);
+  if (issue) { issue.status = newStatus; renderBugReportAdminBody(); } // 即座に見た目へ反映(サーバー応答待ちしない)
+  try {
+    const r = await gasPost('updateBugReportStatus', { issueId, newStatus, adminName: '' });
+    if (r.error) throw new Error(r.error);
+    if (_bugReportAdminDetailThreadId === issueId) await loadBugReportAdminThread(issueId, true);
+  } catch(e) {
+    console.error('updateBugReportStatus error:', e);
+    alert('ステータス変更に失敗しました: ' + e.message);
+    _bugReportAdminForceRefresh = true;
+    renderBugReportAdmin();
+  }
+}
+
+let _bugReportAdminDetailThreadId = null;
+const _bugReportAdminThreadCache = {};
+
+async function loadBugReportAdminThread(issueId, force) {
+  _bugReportAdminDetailThreadId = issueId;
+  if (force || !_bugReportAdminThreadCache[issueId]) {
+    try { _bugReportAdminThreadCache[issueId] = await gasGet('getBugReportThread', { issueId }) || []; }
+    catch(e) { console.error('getBugReportThread error:', e); _bugReportAdminThreadCache[issueId] = []; }
+  }
+  const el = document.getElementById('bugreport-admin-thread');
+  if (el && _bugReportAdminDetailThreadId === issueId) {
+    el.innerHTML = buildBugReportThreadHtml(issueId, _bugReportAdminThreadCache[issueId] || [], 'submitBugReportAdminReply');
+  }
+}
+
+async function submitBugReportAdminReply(issueId) {
+  const input = document.getElementById('bugreport-reply-input-' + issueId);
+  const text = input?.value.trim() || '';
+  if (!text) return;
+  input.disabled = true;
+  try {
+    const r = await gasPost('addBugReportComment', { issueId, posterType: 'admin', posterName: '', storeId: '', text });
+    if (r.error) throw new Error(r.error);
+    await loadBugReportAdminThread(issueId, true);
+  } catch(e) {
+    console.error('submitBugReportAdminReply error:', e);
+    alert('返信に失敗しました: ' + e.message);
+  } finally {
+    if (input) input.disabled = false;
+  }
+}
+
+function buildBugReportAdminDetail(issue) {
+  const kindLabel = issue.kind === 'request' ? '依頼' : 'バグ';
+  const kindColor = issue.kind === 'request' ? '#3d8154' : '#dc2626';
+  const storeLabel = issue.store_name || '全店舗共通';
+  const posterLabel = issue.poster_type === 'staff' ? '社員' : issue.poster_type === 'admin' ? '管理者' : 'パートナー';
+  return `<div style="background:#fff;border-radius:10px;box-shadow:0 2px 8px rgba(34,112,61,.1);padding:18px 20px">
+    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+      <span style="font-size:11.5px;font-weight:700;color:#22703d;background:#eaf3ec;padding:2px 8px;border-radius:99px">${esc(storeLabel)}</span>
+      <span style="font-size:12px;font-weight:700;color:${kindColor}">${kindLabel}</span>
+      <span style="font-size:11px;font-weight:700;color:#6b7280">${esc(posterLabel)}</span>
+    </div>
+    <div style="font-size:11.5px;color:#999;margin-bottom:14px">投稿: ${esc(issue.created_at)} ／ 更新: ${esc(issue.updated_at||issue.created_at)}</div>
+    <div style="font-size:13.5px;line-height:1.65;color:#333;background:#f8f4e7;border-radius:8px;padding:12px 14px;margin-bottom:16px;white-space:pre-wrap">${esc(issue.content)}</div>
+    <div style="display:flex;gap:6px;margin-bottom:18px">
+      ${['open','doing','done'].map(s => {
+        const on = issue.status === s;
+        const c = { open:'#dc2626', doing:'#c2410c', done:'#1a5c30' }[s];
+        return `<button onclick="changeBugReportStatus('${esc(issue.id)}','${s}')"
+          style="flex:1;padding:8px 6px;font-size:12.5px;font-weight:700;border-radius:7px;font-family:inherit;cursor:pointer;${on ? `background:${c};color:#fff;border:1.5px solid ${c}` : `background:#fff;color:${c};border:1.5px solid ${c}`}">${BUGREPORT_STATUS_LABELS[s]}</button>`;
+      }).join('')}
+    </div>
+    <div id="bugreport-admin-thread"><div style="color:#aaa;font-size:12px;padding:6px 0">読み込み中…</div></div>
+  </div>`;
+}
+
+function buildBugReportAdminNewPostForm() {
+  const storeOptions = ['<option value="">全店舗共通/社内</option>']
+    .concat(Object.entries(STORES).map(([sid, sname]) => `<option value="${esc(sid)}" ${_bugReportAdminStore===sid?'selected':''}>${esc(sname)}</option>`)).join('');
+  return `<div style="background:#fff;border-radius:10px;box-shadow:0 2px 8px rgba(34,112,61,.1);padding:16px 18px">
+    <div style="font-weight:700;font-size:14px;color:#374151;margin-bottom:10px">新規投稿（管理者・社員の意見/依頼）</div>
+    <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+      <select id="bugreport-admin-poster" onchange="_bugReportAdminPosterType=this.value" style="border:1px solid #ddd;border-radius:5px;padding:7px 10px;font-size:12.5px;font-family:inherit">
+        <option value="admin">管理者として投稿</option>
+        <option value="staff">社員として投稿</option>
+      </select>
+      <select id="bugreport-admin-store" onchange="_bugReportAdminStore=this.value" style="border:1px solid #ddd;border-radius:5px;padding:7px 10px;font-size:12.5px;font-family:inherit">${storeOptions}</select>
+      <button type="button" id="bugreport-admin-kind-bug" onclick="_bugReportAdminKind='bug';document.getElementById('bugreport-admin-kind-bug').style.cssText=_bugReportKindStyle(true,'#dc2626','#fee2e2','#dc2626');document.getElementById('bugreport-admin-kind-request').style.cssText=_bugReportKindStyle(false);"
+        style="${_bugReportKindStyle(true,'#dc2626','#fee2e2','#dc2626')}">バグ報告</button>
+      <button type="button" id="bugreport-admin-kind-request" onclick="_bugReportAdminKind='request';document.getElementById('bugreport-admin-kind-request').style.cssText=_bugReportKindStyle(true,'#1a5c30','#dbeee1','#1a5c30');document.getElementById('bugreport-admin-kind-bug').style.cssText=_bugReportKindStyle(false);"
+        style="${_bugReportKindStyle(false)}">修正依頼</button>
+    </div>
+    <textarea id="bugreport-admin-content" placeholder="内容を入力" rows="3" oninput="autoGrow(this)"
+      style="border:1px solid #ddd;border-radius:6px;padding:9px 11px;font-size:13px;font-family:inherit;width:100%;resize:none;overflow-y:hidden;line-height:1.5;margin-bottom:10px;box-sizing:border-box"></textarea>
+    <div style="display:flex;justify-content:flex-end">
+      <button onclick="submitBugReportFromAdmin()" style="background:#22703d;color:white;padding:8px 18px;font-size:13px;font-weight:700;border-radius:6px;border:none;cursor:pointer;font-family:inherit">投稿する</button>
+    </div>
+  </div>`;
+}
+
+async function submitBugReportFromAdmin() {
+  const input = document.getElementById('bugreport-admin-content');
+  const content = input?.value.trim() || '';
+  if (!content) { alert('内容を入力してください。'); return; }
+  try {
+    const r = await gasPost('submitBugReport', {
+      storeId: _bugReportAdminStore || '', kind: _bugReportAdminKind, content,
+      posterType: _bugReportAdminPosterType, posterName: '',
+    });
+    if (r.error) throw new Error(r.error);
+    if (input) input.value = '';
+    _bugReportAdminForceRefresh = true;
+    renderBugReportAdmin();
+  } catch(e) {
+    console.error('submitBugReport(admin) error:', e);
+    alert('投稿に失敗しました: ' + e.message);
+  }
+}
+
+function renderBugReportAdminBody() {
+  const container = document.getElementById('settings-container');
+  if (!container || adminView !== 'bugreport') return;
+  const f = adminBugReportFilters;
+  const filtered = _bugReportFilteredList();
+  if (!adminBugReportSelectedId || !filtered.find(i => i.id === adminBugReportSelectedId)) {
+    adminBugReportSelectedId = filtered[0]?.id || null;
+  }
+  const selected = adminBugReports.find(i => i.id === adminBugReportSelectedId);
+  const storeOptions = ['<option value="">全店舗</option>']
+    .concat(Object.entries(STORES).map(([sid, sname]) => `<option value="${esc(sid)}" ${f.store===sid?'selected':''}>${esc(sname)}</option>`)).join('');
+
+  container.innerHTML = `
+    <div style="background:#fff;border-radius:10px;box-shadow:0 2px 8px rgba(34,112,61,.1);padding:12px 14px;margin-bottom:14px;display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+      <span style="font-size:12px;font-weight:700;color:#888">店舗</span>
+      <select onchange="updateBugReportAdminFilter('store', this.value)" style="border:1px solid #ddd;border-radius:5px;padding:7px 10px;font-size:12.5px;font-family:inherit">${storeOptions}</select>
+      <span style="font-size:12px;font-weight:700;color:#888">ステータス</span>
+      <select onchange="updateBugReportAdminFilter('status', this.value)" style="border:1px solid #ddd;border-radius:5px;padding:7px 10px;font-size:12.5px;font-family:inherit">
+        <option value="">すべて</option>
+        <option value="open" ${f.status==='open'?'selected':''}>未対応</option>
+        <option value="doing" ${f.status==='doing'?'selected':''}>対応中</option>
+        <option value="done" ${f.status==='done'?'selected':''}>完了</option>
+      </select>
+      <span style="font-size:12px;font-weight:700;color:#888">種別</span>
+      <select onchange="updateBugReportAdminFilter('kind', this.value)" style="border:1px solid #ddd;border-radius:5px;padding:7px 10px;font-size:12.5px;font-family:inherit">
+        <option value="">すべて</option>
+        <option value="bug" ${f.kind==='bug'?'selected':''}>バグ</option>
+        <option value="request" ${f.kind==='request'?'selected':''}>依頼</option>
+      </select>
+      <input type="text" placeholder="内容を検索" value="${esc(f.q)}" oninput="updateBugReportAdminFilter('q', this.value)"
+        style="border:1px solid #ddd;border-radius:5px;padding:7px 10px;font-size:12.5px;font-family:inherit;flex:1;min-width:140px">
+      <span style="margin-left:auto;font-size:12px;color:#888;white-space:nowrap">全${adminBugReports.length}件中${filtered.length}件表示</span>
+    </div>
+    <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:16px;align-items:start">
+      <div style="background:#fff;border-radius:10px;box-shadow:0 2px 8px rgba(34,112,61,.1);overflow:hidden">${buildBugReportAdminTable(filtered)}</div>
+      <div>${selected ? buildBugReportAdminDetail(selected) : '<div style="color:#aaa;font-size:13px;padding:20px;text-align:center;background:#fff;border-radius:10px">左の一覧から選択してください</div>'}</div>
+    </div>
+    <div style="margin-top:20px">${buildBugReportAdminNewPostForm()}</div>
+  `;
+  if (selected) loadBugReportAdminThread(selected.id);
 }
 
 /* ===== 機械内点検写真（チェックシートタブ内の「アルバム」サブタブ） ===== */
@@ -5458,7 +5862,7 @@ function toggleAdminMenu() {
 
 function updateAdminMenuActive() {
   Object.keys(REGIONS).forEach(r => document.getElementById('menu-'+r)?.classList.toggle('active', r===adminRegion));
-  ['overview','history','lost','settings'].forEach(v => document.getElementById('menu-'+v)?.classList.toggle('active', v===adminView));
+  ['overview','history','lost','settings','bugreport'].forEach(v => document.getElementById('menu-'+v)?.classList.toggle('active', v===adminView));
   document.getElementById('admin-settings-btn')?.classList.toggle('active', adminView==='settings');
   document.querySelectorAll('.admin-attendance-btn').forEach(b => b.classList.toggle('active', adminView==='attendance'));
 }
@@ -5488,8 +5892,9 @@ function switchAdminView(v) {
   if (v === 'machinePhoto') _machinePhotoForceRefresh = true;
   if (v === 'lost') _lostForceRefresh = true;
   if (v === 'history') _historyForceRefresh = true;
-  ['overview','history','lost','machinePhoto'].forEach(k => document.getElementById('sub-'+k)?.classList.toggle('active', k===v));
-  document.getElementById('admin-region-nav')?.classList.toggle('nav-disabled', v === 'lost');
+  if (v === 'bugreport') _bugReportAdminForceRefresh = true;
+  ['overview','history','lost','machinePhoto','bugreport'].forEach(k => document.getElementById('sub-'+k)?.classList.toggle('active', k===v));
+  document.getElementById('admin-region-nav')?.classList.toggle('nav-disabled', v === 'lost' || v === 'bugreport');
   const hideFc = _fcTabHiddenForView_(v);
   const subFcEl = document.getElementById('sub-fc'), menuFcEl = document.getElementById('menu-fc');
   if (subFcEl) subFcEl.style.display = hideFc ? 'none' : '';
@@ -5505,6 +5910,7 @@ function renderAdmin() {
   else if (adminView==='lost')       renderLostAdmin();
   else if (adminView==='machinePhoto') renderMachinePhotoAdmin();
   else if (adminView==='attendance') renderAttendanceAdmin();
+  else if (adminView==='bugreport')  renderBugReportAdmin();
   else                                renderSettings();
 }
 
