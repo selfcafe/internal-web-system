@@ -4367,7 +4367,8 @@ async function submitBugReportFromPartner() {
 
 function _bugReportRoleLabel(c) {
   if (c.poster_type === 'system') return 'システム';
-  if (c.poster_type === 'admin' || c.poster_type === 'staff') return c.poster_name || '管理者';
+  if (c.poster_type === 'staff') return c.poster_name || '社員';
+  if (c.poster_type === 'admin') return c.poster_name || '管理者';
   return c.store_id ? (STORES[c.store_id] || c.store_id) : (c.poster_name || 'パートナー');
 }
 
@@ -4434,11 +4435,17 @@ function renderBugReports(loading = false) {
     const kindColor = issue.kind === 'request' ? '#3d8154' : '#dc2626';
     const statusStyle = BUGREPORT_STATUS_STYLE[issue.status] || BUGREPORT_STATUS_STYLE.open;
     const statusLabel = BUGREPORT_STATUS_LABELS[issue.status] || issue.status;
+    // 自店舗のパートナー自身の投稿ではなく、社員/管理者が代わりに投稿したものだと分かるようラベルを付ける
+    // (2026-09-15、社員が特定店舗宛に投稿した場合にパートナー側の一覧に見分けが付かなかったため追加)
+    const posterBadge = issue.poster_type === 'staff' ? '<span style="font-size:11px;font-weight:700;color:#6b7280;background:#f0f0f0;padding:2px 8px;border-radius:99px">社員投稿</span>'
+      : issue.poster_type === 'admin' ? '<span style="font-size:11px;font-weight:700;color:#6b7280;background:#f0f0f0;padding:2px 8px;border-radius:99px">管理者投稿</span>'
+      : '';
     const threadHtml = isOpen ? buildBugReportThreadHtml(issue.id, _bugReportThreadCache[issue.id] || [], 'submitBugReportReply') : '';
     return `<div style="background:#fff;border-radius:10px;box-shadow:0 2px 8px rgba(34,112,61,.1);padding:14px 16px;margin-bottom:12px">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
         <span style="font-size:12px;font-weight:700;color:${kindColor}">${kindLabel}</span>
         <span style="font-size:11.5px;font-weight:700;padding:3px 10px;border-radius:99px;${statusStyle}">${esc(statusLabel)}</span>
+        ${posterBadge}
         <span style="margin-left:auto;font-size:11.5px;color:#999">${esc(issue.created_at)}</span>
       </div>
       <div style="font-size:13.5px;color:#333;line-height:1.6;margin-bottom:8px;white-space:pre-wrap">${esc(issue.content)}</div>
