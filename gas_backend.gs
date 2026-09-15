@@ -4691,7 +4691,7 @@ const STOCK_CHECK_START_COL = STORE_INVENTORY_HEADERS_JA.length + 1 + 2;
 // 複数商品を合算するグループ(レディーボーデン各種・プリングルス各種)は代表商品1つの行に揃える
 // (ユーザー確定、2026-09-13)。代表商品がその月の一覧に無い(棚卸未報告等)場合は書き込み先が
 // 無いためそのグループはスキップする(戻り値のskippedで確認可能)。
-const STOCK_CHECK_HEADERS = ['商品(ステラ突合対象)', 'ステラ数量(月間)', '差異(消費量-処分数量-ステラ数量)', '確認状況(手入力可)'];
+const STOCK_CHECK_HEADERS = ['商品(ステラ突合対象)', 'ステラ数量(月間)', '差異(消費量-処分数量-ステラ数量)', 'メモ(手入力可)'];
 // 年またぎ対応(2026-09-12): periodLabelの年からファイルを解決する。getSteraDailyTotal_は
 // 自身で日付範囲から対象ファイルを解決する(_steraSheetIdsForRange_)ため呼び出し側の変更不要。
 function buildStockCheckMonthly(storeId, periodLabel) {
