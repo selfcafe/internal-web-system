@@ -4457,7 +4457,7 @@ let adminBugReportFilters = { store: '', status: '', kind: '', q: '' };
 let _bugReportAdminForceRefresh = true;
 let _bugReportAdminKind = 'bug';
 let _bugReportAdminStore = '';
-let _bugReportAdminPosterType = 'admin';
+const _bugReportAdminPosterType = 'staff'; // 新規投稿フォームは社員の意見/依頼専用(管理者としての投稿は不要のため固定)
 
 async function renderBugReportAdmin() {
   document.querySelector('#page-admin .table-wrap').style.display = 'none';
@@ -4597,12 +4597,8 @@ function buildBugReportAdminNewPostForm() {
   const storeOptions = ['<option value="">全店舗共通/社内</option>']
     .concat(Object.entries(STORES).map(([sid, sname]) => `<option value="${esc(sid)}" ${_bugReportAdminStore===sid?'selected':''}>${esc(sname)}</option>`)).join('');
   return `<div style="background:#fff;border-radius:10px;box-shadow:0 2px 8px rgba(34,112,61,.1);padding:16px 18px">
-    <div style="font-weight:700;font-size:14px;color:#374151;margin-bottom:10px">新規投稿（管理者・社員の意見/依頼）</div>
+    <div style="font-weight:700;font-size:14px;color:#374151;margin-bottom:10px">新規投稿（社員の意見/依頼）</div>
     <div style="display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap">
-      <select id="bugreport-admin-poster" onchange="_bugReportAdminPosterType=this.value" style="border:1px solid #ddd;border-radius:5px;padding:7px 10px;font-size:12.5px;font-family:inherit">
-        <option value="admin">管理者として投稿</option>
-        <option value="staff">社員として投稿</option>
-      </select>
       <select id="bugreport-admin-store" onchange="_bugReportAdminStore=this.value" style="border:1px solid #ddd;border-radius:5px;padding:7px 10px;font-size:12.5px;font-family:inherit">${storeOptions}</select>
       <button type="button" id="bugreport-admin-kind-bug" onclick="_bugReportAdminKind='bug';document.getElementById('bugreport-admin-kind-bug').style.cssText=_bugReportKindStyle(true,'#dc2626','#fee2e2','#dc2626');document.getElementById('bugreport-admin-kind-request').style.cssText=_bugReportKindStyle(false);"
         style="${_bugReportKindStyle(true,'#dc2626','#fee2e2','#dc2626')}">バグ報告</button>
