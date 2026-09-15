@@ -600,6 +600,30 @@ M.push({
   onAct(){}
 });
 
+/* ============ MODULE 04b: バグ報告・修正依頼掲示板 ============ */
+
+M.push({
+  id:'bugreport', eyebrow:'Status', title:'バグ報告・修正依頼掲示板', part:'ops',
+  state:{},
+  render(s){
+    return `
+    <div class="eyebrow">05 · Status</div>
+    <h3 class="stage-h">バグ報告・修正依頼掲示板</h3>
+    <ul style="font-size:13.5px;line-height:2;color:var(--ink-soft);padding-left:20px">
+      <li><b style="color:var(--ink)">一覧・フィルタ</b> — 店舗/ステータス(未対応・対応中・完了)/種別(バグ・依頼)で絞り込んで確認できます。</li>
+      <li><b style="color:var(--ink)">詳細・返信</b> — 一覧から1件選ぶと、内容とスレッド(店舗↔管理者のやり取り)が右側に表示されます。返信欄からそのまま返信できます。</li>
+      <li><b style="color:var(--ink)">ステータス変更</b> — 詳細パネルの「未対応/対応中/完了」ボタンで変更できます。変更内容は自動でスレッドにも記録されます。</li>
+      <li><b style="color:var(--ink)">新規投稿</b> — 詳細パネル下のフォームから、社員の意見・依頼を投稿できます(店舗を選ぶとその店舗宛、選ばなければ全店舗共通/社内向けになります)。</li>
+      <li><b style="color:var(--ink)">削除</b> — 詳細パネル右上の「削除」ボタンで、誤投稿やテスト投稿を削除できます(元に戻せません)。</li>
+    </ul>
+    <div class="note note-tip"><b>通知について</b>新規投稿があると、LINE WORKSの「バグ報告」Botへ自動で通知が届きます。</div>`;
+  },
+  steps:[
+    { target:null, expect:null, msg:'バグ報告・修正依頼掲示板は閲覧・返信・ステータス変更が中心の機能です。特別な設定は不要です。' },
+  ],
+  onAct(){}
+});
+
 /* ============ MODULE 05 (Part2-01): 商品設定と商品コード ============ */
 
 M.push({
@@ -894,7 +918,7 @@ M.push({
     if (!isFinished) return `
     <div class="eyebrow">07 · Wrap-up</div>
     <h3 class="stage-h">まとめ</h3>
-    <p class="section-lede">ここまでの8モジュールで、管理者ポータルの日常業務(発注対応・棚卸表の確認)と設定業務(商品/チェックシート設定・店舗別設定・業務開始管理設定)をひと通り練習しました。次へ進むと修了画面です。</p>
+    <p class="section-lede">ここまでの9モジュールで、管理者ポータルの日常業務(発注対応・棚卸表の確認・バグ報告掲示板)と設定業務(商品/チェックシート設定・店舗別設定・業務開始管理設定)をひと通り練習しました。次へ進むと修了画面です。</p>
     <div class="note note-tip"><b>「請求」ボタンについて</b>ヘッダーにある「請求」は実装予定の機能です（現時点では準備中）。</div>`;
     return `
     <div class="finish-hero">

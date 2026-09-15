@@ -410,6 +410,7 @@ footer{
       <li><a href="#orders"><span class="num">02</span>発注依頼への対応</a></li>
       <li><a href="#inventory"><span class="num">03</span>棚卸表の確認（試験段階）</a></li>
       <li><a href="#other-view"><span class="num">04</span>忘れ物一覧・請求書の確認</a></li>
+      <li><a href="#bugreport"><span class="num">05</span>バグ報告・修正依頼掲示板</a></li>
     </ol>
     <div class="toc-label" style="margin-top:22px">目次 — Part 2: 管理者が設定する項目</div>
     <ol>
@@ -622,6 +623,20 @@ footer{
         <li><span class="pill">忘れ物一覧</span>店舗からの忘れ物登録を一覧で確認できます。</li>
         <li><span class="pill">請求書（実装・本番稼働中）</span>管理者ポータル右上の<span class="chip">請求</span>ボタンから請求書管理画面に入れます。「請求一覧」（店舗ごとの提出状況確認）と「請求設定」（満額・基準日数・担当者・業者コード等をパートナーごとに設定）の2タブがあります。</li>
               </ul>
+    </section>
+
+    <section id="bugreport">
+      <div class="sec-eyebrow">Status</div>
+      <h2><span class="idx">05</span>バグ報告・修正依頼掲示板</h2>
+      <p class="lede">パートナー・社員から寄せられたポータルの不具合報告や修正依頼を、一箇所で確認・返信・ステータス管理できる機能です。</p>
+      <ul>
+        <li><span class="pill">一覧・フィルタ</span>店舗／ステータス（未対応・対応中・完了）／種別（バグ・依頼）で絞り込んで確認できます。</li>
+        <li><span class="pill">詳細・返信</span>一覧から1件選ぶと、内容とスレッド（店舗↔管理者のやり取り）が右側に表示されます。返信欄からそのまま返信できます。</li>
+        <li><span class="pill">ステータス変更</span>詳細パネルの「未対応／対応中／完了」ボタンで変更できます。変更内容は自動でスレッドにも記録されます。</li>
+        <li><span class="pill">新規投稿</span>詳細パネル下のフォームから、社員の意見・依頼を投稿できます。店舗を選ぶとその店舗宛、選ばなければ全店舗共通／社内向けになります。</li>
+        <li><span class="pill">削除</span>詳細パネル右上の「削除」ボタンで、誤投稿やテスト投稿を削除できます（元に戻せません）。</li>
+        <li><span class="pill">通知</span>新規投稿があると、LINE WORKSの「バグ報告」Botへ自動で通知が届きます。</li>
+      </ul>
     </section>
 
     <div class="part-divider warm">

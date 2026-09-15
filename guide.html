@@ -441,12 +441,13 @@
 <div class="container">
 
   <div class="intro-card">
-    <p>このガイドでは、パートナーポータルを使って<strong>発注依頼の送信</strong>・<strong>忘れ物の登録</strong>・<strong>チェックシートの記入</strong>を行う手順を説明します。</p>
+    <p>このガイドでは、パートナーポータルを使って<strong>発注依頼の送信</strong>・<strong>忘れ物の登録</strong>・<strong>チェックシートの記入</strong>・<strong>バグ報告・修正依頼の投稿</strong>を行う手順を説明します。</p>
     <p>スマートフォン（iPhone・Android）から操作できます。順番通りに進めれば、はじめての方でも迷わず使えます。</p>
     <div class="scope">
       <span class="scope-chip">📦 発注依頼</span>
       <span class="scope-chip">🔑 忘れ物</span>
       <span class="scope-chip">📝 チェックシート</span>
+      <span class="scope-chip">🐞 バグ報告</span>
     </div>
   </div>
 
@@ -459,7 +460,8 @@
       <li><a href="#order"><span class="toc-num">4</span>発注依頼の送り方・取り消し方</a></li>
       <li><a href="#lostitem"><span class="toc-num">5</span>忘れ物の登録方法</a></li>
       <li><a href="#checksheet"><span class="toc-num">6</span>チェックシートの記入方法・アルバム</a></li>
-      <li><a href="#tips"><span class="toc-num">7</span>困ったときのポイント</a></li>
+      <li><a href="#bugreport"><span class="toc-num">7</span>バグ報告・修正依頼の投稿</a></li>
+      <li><a href="#tips"><span class="toc-num">8</span>困ったときのポイント</a></li>
     </ol>
   </nav>
 
@@ -1275,7 +1277,102 @@
 
   <hr class="divider">
 
-  <!-- Section 7: Tips -->
+  <!-- Section 7: Bug report board -->
+  <section class="section" id="bugreport">
+    <div class="section-header">
+      <div class="section-icon">🐞</div>
+      <h2>バグ報告・修正依頼の投稿<small>ポータルの不具合や「こうしてほしい」を本部に伝える</small></h2>
+    </div>
+
+    <div class="rule-box">
+      <p class="rule-box-title">📋 投稿するときのルール</p>
+      <ul>
+        <li>投稿すると<b>自動的に自店舗の名前が記録される</b>ので、店舗名を書く必要はありません</li>
+        <li>発生した<b>操作・画面名・時刻</b>を書いてもらえると、本部が原因を調べやすくなります</li>
+        <li>投稿すると本部に通知が届きます。対応状況は「未対応」「対応中」「完了」で表示されます</li>
+      </ul>
+    </div>
+
+    <div class="steps">
+
+      <article class="step">
+        <div class="step-num-col"><span class="step-num">1</span></div>
+        <div class="step-body">
+          <p class="step-action">「バグ報告」タブをタップする</p>
+          <p class="step-desc">画面上部のタブから<b>「バグ報告」</b>を選択します。</p>
+        </div>
+        <div class="phone-wrap">
+          <div class="phone">
+            <div class="phone-screen">
+              <div class="phone-bar">Self Cafe Partner Portal</div>
+              <div class="phone-content">
+                <div class="phone-tabs">
+                  <div class="phone-tab">発注</div>
+                  <div class="phone-tab">忘れ物</div>
+                  <div class="phone-tab">棚卸表</div>
+                  <div class="phone-tab active">バグ報告</div>
+                </div>
+                <span class="tap-hint">👆 「バグ報告」をタップ</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="step">
+        <div class="step-num-col"><span class="step-num">2</span></div>
+        <div class="step-body">
+          <p class="step-action">種別を選び、内容を書いて投稿する</p>
+          <p class="step-desc">不具合の報告なら<b>「バグ報告」</b>、「こうしてほしい」という要望なら<b>「修正依頼」</b>を選び、内容を具体的に書いて「投稿する」をタップします。</p>
+        </div>
+        <div class="phone-wrap">
+          <div class="phone">
+            <div class="phone-screen">
+              <div class="phone-bar">バグ報告</div>
+              <div class="phone-content">
+                <div class="phone-tabs">
+                  <div class="phone-tab active" style="flex:1">バグ報告</div>
+                  <div class="phone-tab" style="flex:1">修正依頼</div>
+                </div>
+                <div class="phone-field active" style="flex-direction:column; align-items:flex-start; min-height:48px;">
+                  <span class="field-label">内容</span>
+                  <span>棚卸完了ボタンを押すと<br>たまに二重送信される</span>
+                </div>
+                <div class="phone-btn" style="margin-top:7px; text-align:center;">投稿する</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="step">
+        <div class="step-num-col"><span class="step-num">3</span></div>
+        <div class="step-body">
+          <p class="step-action">投稿一覧で状況を確認する・返信する</p>
+          <p class="step-desc">タブの下に自店舗の投稿一覧が表示されます。ステータス（未対応・対応中・完了）が変わったり本部から返信があったりすると、この一覧・スレッドで確認できます。「スレッドを開く」をタップすると、返信の入力欄も表示されます。</p>
+        </div>
+        <div class="phone-wrap">
+          <div class="phone">
+            <div class="phone-screen">
+              <div class="phone-bar">バグ報告</div>
+              <div class="phone-content">
+                <div class="phone-field" style="flex-direction:column; align-items:flex-start;">
+                  <span style="font-size:9px; color:#c2410c; font-weight:700;">対応中</span>
+                  <span style="font-size:10px;">棚卸完了ボタンの二重送信について</span>
+                </div>
+                <span class="tap-hint">👆 タップしてスレッドを開く・返信する</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- Section 8: Tips -->
   <section class="section" id="tips">
     <div class="section-header">
       <div class="section-icon">💡</div>
@@ -1341,7 +1438,7 @@
   <div class="container">
     <p><strong>Self Cafe パートナーポータル</strong><br>
     操作に関するご不明点は担当スタッフまでご連絡ください。<br>
-    発行：2026年6月／改訂：2026年7月（チェックシートの使い方を追加）</p>
+    発行：2026年6月／改訂：2026年7月（チェックシートの使い方を追加）／改訂：2026年9月（バグ報告・修正依頼の投稿方法を追加）</p>
   </div>
 </footer>
 
