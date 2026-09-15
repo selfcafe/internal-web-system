@@ -422,6 +422,7 @@ function doGet(e) {
     else if (a === 'pruneBlankStoreInventoryRows') result = pruneBlankStoreInventoryRows(e.parameter.storeId);
     else if (a === 'buildSalesCategoryCostRatio') result = buildSalesCategoryCostRatio(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'backfillSalesCategoryCostRatio') result = backfillSalesCategoryCostRatio(e.parameter.periodLabels);
+    else if (a === 'cleanupEmptyStoreTabs') result = cleanupEmptyStoreTabs(e.parameter.storeIds, e.parameter.dryRun);
     else if (a === 'migrateSteraDailySalesColumns') result = migrateSteraDailySalesColumns();
     else if (a === 'buildStockCheckMonthly')    result = buildStockCheckMonthly(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'runMonthlyStockCheckBackstop') result = runMonthlyStockCheckBackstop();
@@ -3685,16 +3686,26 @@ function buildSalesCategoryCostRatio(storeId, periodLabel) {
 }
 
 // 上記の代表行揃え修正(2026-09-15)を、過去に既にbuildSalesCategoryCostRatioが実行済みの
-// 全店舗×全期間へ一括反映するための使い捨てバックフィル。periodLabelsCsvは"2026-07,2026-08,2026-09"
+// 店舗×期間へ一括反映するための使い捨てバックフィル。periodLabelsCsvは"2026-07,2026-08,2026-09"
 // のようなカンマ区切り文字列(呼び出し側で対象期間を把握している前提、このリポジトリでは
 // 棚卸自体が2026-07開始のためそれ以前は存在しない)。?action=backfillSalesCategoryCostRatio&
 // periodLabels=2026-07,2026-08,2026-09 で実行、一度実行すれば十分(fixReorderRulesColumnLetters
-// と同じ位置づけ)。store側にperiod_block_not_found(その店舗・期間の棚卸提出自体が無い)は
-// 想定内でありエラー扱いにしない。
+// と同じ位置づけ)。
+// 対象店舗は_allStoreIds_()(存在しうる店舗IDの全一覧)ではなく、inventory_logに実際に
+// 提出履歴がある店舗IDだけに絞る——2026-09-15、_allStoreIds_()全件に対して実行した際、
+// buildSalesCategoryCostRatio内の「シートが無ければ作る」フォールバック(新規店舗の初回送信
+// 競合対策)が一度も棚卸提出の無い店舗でも発火し、空の店舗タブを大量に誤作成する事故が起きた
+// (ユーザー指摘で発覚、cleanupEmptyStoreTabsで復旧)。同じ事故を再発させないための修正。
 function backfillSalesCategoryCostRatio(periodLabelsCsv) {
   if (!periodLabelsCsv) return { error: 'periodLabelsは必須です（例: 2026-07,2026-08,2026-09）' };
   const periodLabels = String(periodLabelsCsv).split(',').map(s => s.trim()).filter(Boolean);
-  const storeIds = _allStoreIds_();
+  const sheetId = _inventorySheetIdForPeriod_(Utilities.formatDate(new Date(), _invSheetTz(), 'yyyy-MM'));
+  const invData = _inventoryLogRowsCached_(sheetId);
+  const idx = {};
+  INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
+  const storeIdSet = new Set();
+  invData.slice(1).forEach(r => { if (r[idx.store_id]) storeIdSet.add(String(r[idx.store_id])); });
+  const storeIds = Array.from(storeIdSet);
   const results = [];
   storeIds.forEach(storeId => {
     periodLabels.forEach(periodLabel => {
@@ -3709,6 +3720,47 @@ function backfillSalesCategoryCostRatio(periodLabelsCsv) {
     });
   });
   return { ok: true, storesChecked: storeIds.length, periods: periodLabels, results: results };
+}
+
+// backfillSalesCategoryCostRatioを全店舗ID(_allStoreIds_())に対して実行した際、
+// buildSalesCategoryCostRatio内の「シートが無ければinsertSheetで作る」フォールバック
+// (新規店舗が棚卸を初回送信した瞬間に複数リクエストが競合するケース向けの対策として
+// 元々存在するもの)が、一度も棚卸を送信したことのない店舗に対しても発火してしまい、
+// 空の店舗タブを意図せず大量作成する事故が起きた(2026-09-15、ユーザーが「棚卸ボタンを
+// 押したはずの無い店舗のシートがあるのは何故」と気づいて発覚)。この関数は、指定した
+// 店舗タブが「完全に空(データ0行)」かつ「inventory_logにもその店舗の行が一度も存在しない
+// (=本当に棚卸未送信)」の両方を満たす場合のみ削除する——どちらか一方でも成立しなければ
+// 何もしない(誤削除防止、既存の正当なタブを壊さないための安全策)。
+// ?action=cleanupEmptyStoreTabs&storeIds=sasashima,chikusa,...&dryRun=true でまず確認し、
+// 想定通りであればdryRun=falseで実削除する(既定はdryRun=true、安全側)。
+function cleanupEmptyStoreTabs(storeIdsCsv, dryRunStr) {
+  if (!storeIdsCsv) return { error: 'storeIdsは必須です' };
+  const dryRun = dryRunStr !== 'false';
+  const storeIds = String(storeIdsCsv).split(',').map(s => s.trim()).filter(Boolean);
+  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const storeNames = _storeNames_();
+
+  const sheetId = _inventorySheetIdForPeriod_(Utilities.formatDate(new Date(), _invSheetTz(), 'yyyy-MM'));
+  const invData = _inventoryLogRowsCached_(sheetId);
+  const idx = {};
+  INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
+  const storeIdsWithLog = new Set();
+  invData.slice(1).forEach(r => { storeIdsWithLog.add(String(r[idx.store_id])); });
+
+  const results = [];
+  storeIds.forEach(storeId => {
+    const storeName = storeNames[storeId] || storeId;
+    const sheet = ss.getSheetByName(storeName);
+    if (!sheet) { results.push({ storeId, store: storeName, action: 'not_found' }); return; }
+    const lastRow = sheet.getLastRow();
+    const hasLog = storeIdsWithLog.has(String(storeId));
+    if (lastRow > 0) { results.push({ storeId, store: storeName, action: 'skipped_not_empty', lastRow }); return; }
+    if (hasLog) { results.push({ storeId, store: storeName, action: 'skipped_has_inventory_log' }); return; }
+    if (dryRun) { results.push({ storeId, store: storeName, action: 'would_delete' }); return; }
+    ss.deleteSheet(sheet);
+    results.push({ storeId, store: storeName, action: 'deleted' });
+  });
+  return { ok: true, dryRun: dryRun, results: results };
 }
 
 // ----------------------------------------------------------------
