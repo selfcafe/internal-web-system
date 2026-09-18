@@ -126,7 +126,7 @@ const ATTENDANCE_LEAVE_COLS = ['id','store_id','name','leave_date','submitted_at
 // （ステータス変更もposter_type='system'の1行として追記し、対応履歴を別テーブルを持たずに
 // スレッド表示だけで自然に見える化する設計。[[project_portal_bug_report_board]]参照）
 const SHEET_BUGREPORT = 'bug_reports';
-const BUGREPORT_COLS = ['id','store_id','store_name','kind','content','poster_type','poster_name','status','created_at','updated_at','image_urls'];
+const BUGREPORT_COLS = ['id','store_id','store_name','kind','content','poster_type','poster_name','status','created_at','updated_at','image_urls','lineworks_user_id'];
 const SHEET_BUGREPORT_COMMENTS = 'bug_report_comments';
 const BUGREPORT_COMMENT_COLS = ['id','issue_id','poster_type','poster_name','store_id','text','created_at'];
 
@@ -1102,12 +1102,13 @@ function getBugReportThread(issueId) {
 // storeId省略可（社員投稿の「全店舗共通」等）。店舗名は_storeNames_()でサーバー側が解決するため、
 // クライアントからは信頼せずstoreIdだけ受け取る。画像はlost_items/announcementsと同じ方式
 // (Driveに保存しURLをカンマ区切りで1列に格納。2026-09-19追加)
-function submitBugReport(storeId, kind, content, posterType, posterName, imagesBase64, imageMime) {
+function submitBugReport(storeId, kind, content, posterType, posterName, imagesBase64, imageMime, lineworksUserId) {
   if (!content) return { error: '内容を入力してください' };
   const storeName = storeId ? (_storeNames_()[storeId] || String(storeId)) : '';
   const sheet = getSheet(SHEET_BUGREPORT);
   ensureHeaders(sheet, BUGREPORT_COLS);
   _ensureColumnExists_(sheet, 'image_urls');
+  _ensureColumnExists_(sheet, 'lineworks_user_id');
   const id = Utilities.getUuid();
   const now = new Date();
   const imageUrls = (imagesBase64 || [])
@@ -1115,7 +1116,7 @@ function submitBugReport(storeId, kind, content, posterType, posterName, imagesB
     .join(',');
   sheet.appendRow([
     id, storeId || '', storeName, kind === 'request' ? 'request' : 'bug', content,
-    posterType || 'partner', posterName || '', 'open', now, now, imageUrls
+    posterType || 'partner', posterName || '', 'open', now, now, imageUrls, lineworksUserId || ''
   ]);
   _invalidateBugReportsCache_();
   const kindLabel = kind === 'request' ? '修正依頼' : 'バグ報告';
@@ -1140,6 +1141,8 @@ function addBugReportComment(issueId, posterType, posterName, storeId, text) {
 // 管理者がステータス(open/doing/done)を変更する。変更内容はシステム発言としてスレッドにも
 // 残す（別のステータス変更ログ用シートを作らずスレッド表示だけで対応履歴を追えるようにするため）
 const BUGREPORT_STATUS_LABELS = { open: '未対応', doing: '対応中', done: '完了' };
+// LINE WORKS経由(poster_type='lineworks')の報告は、ステータス変更時に本人へLINE WORKSで
+// 結果を知らせる(2026-09-19追加。ポータル投稿はスレッドを開けば見えるため通知不要)
 function updateBugReportStatus(issueId, newStatus, adminName) {
   if (!BUGREPORT_STATUS_LABELS[newStatus]) return { error: '不正なステータスです: ' + newStatus };
   const sheet = getSheet(SHEET_BUGREPORT);
@@ -1148,12 +1151,20 @@ function updateBugReportStatus(issueId, newStatus, adminName) {
   const idIdx = hdrs.indexOf('id');
   const statusIdx = hdrs.indexOf('status');
   const updatedIdx = hdrs.indexOf('updated_at');
+  const posterTypeIdx = hdrs.indexOf('poster_type');
+  const lwUserIdx = hdrs.indexOf('lineworks_user_id');
+  const contentIdx = hdrs.indexOf('content');
   const now = new Date();
   let found = false;
+  let lwUserId = null, contentPreview = '';
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][idIdx]) === String(issueId)) {
       sheet.getRange(i + 1, statusIdx + 1).setValue(newStatus);
       sheet.getRange(i + 1, updatedIdx + 1).setValue(now);
+      if (posterTypeIdx >= 0 && lwUserIdx >= 0 && data[i][posterTypeIdx] === 'lineworks' && data[i][lwUserIdx]) {
+        lwUserId = data[i][lwUserIdx];
+      }
+      if (contentIdx >= 0) contentPreview = String(data[i][contentIdx] || '').slice(0, 40);
       found = true;
       break;
     }
@@ -1166,7 +1177,12 @@ function updateBugReportStatus(issueId, newStatus, adminName) {
     Utilities.getUuid(), issueId, 'system', adminName || '管理者', '',
     'ステータスを「' + BUGREPORT_STATUS_LABELS[newStatus] + '」に変更しました', now
   ]);
-  return { ok: true };
+  const result = { ok: true };
+  if (lwUserId) {
+    result._notify = { type: 'bugReportLineWorksAck', userId: lwUserId,
+      message: 'ご報告いただいた内容(「' + contentPreview + '」)のステータスが「' + BUGREPORT_STATUS_LABELS[newStatus] + '」になりました。' };
+  }
+  return result;
 }
 
 function _touchBugReportUpdatedAt_(issueId, when) {
@@ -5384,7 +5400,8 @@ function testStockBotNotification() {
 // LINE WORKSのX-WORKS-Signatureによる署名検証は実装できない(GASの既知の制約)。
 // このアプリの他のdoPostアクションも同様に認証なしで動いており、既存のリスク水準と同等。
 function isLineWorksCallback_(body) {
-  return !!(body && body.source && body.content && body.content.type === 'text' && !body.action);
+  return !!(body && body.source && body.content &&
+    (body.content.type === 'text' || body.content.type === 'image') && !body.action);
 }
 
 function handleLineWorksStockInquiry_(body) {
@@ -5430,7 +5447,11 @@ function handleLineWorksStockInquiry_(body) {
 function _routeLineWorksCallback_(body) {
   try {
     const bugBotId = PropertiesService.getScriptProperties().getProperty('LW_BOT_ID_BUGREPORT');
-    if (bugBotId && body.botId && String(body.botId) === String(bugBotId)) {
+    const isBugBot = !!(bugBotId && body.botId && String(body.botId) === String(bugBotId));
+    if (isBugBot && body.content && body.content.type === 'image') {
+      return handleLineWorksBugReportImage_(body);
+    }
+    if (isBugBot) {
       return handleLineWorksBugReport_(body);
     }
   } catch (e) {
@@ -5439,24 +5460,96 @@ function _routeLineWorksCallback_(body) {
   return handleLineWorksStockInquiry_(body);
 }
 
+// LINE WORKSはテキストと画像を1メッセージにまとめて送れず、必ず別イベントとして届くため、
+// 「直前(10分以内)にこの人がテキストで作った報告」をCacheServiceで覚えておき、続けて画像が
+// 来たらそこへ追加する簡易な紐付け(2026-09-19追加)
+const LW_BUGREPORT_PENDING_PREFIX_ = 'lwbug_pending_';
+function _rememberPendingBugReportForUser_(userId, issueId) {
+  try { CacheService.getScriptCache().put(LW_BUGREPORT_PENDING_PREFIX_ + userId, issueId, 600); } catch (e) {}
+}
+function _pendingBugReportForUser_(userId) {
+  try { return CacheService.getScriptCache().get(LW_BUGREPORT_PENDING_PREFIX_ + userId); } catch (e) { return null; }
+}
+
 // バグ報告Bot(LW_BOT_ID_BUGREPORT)への1:1メッセージをそのままバグ報告として登録する
 // (ポータルからの投稿と同じbug_reportsシートに集約。2026-09-19追加)。送信者がどの店舗か
 // 自動判定する手段が無いため、store_idは空("全店舗共通/社内"扱い、パートナー側には表示されない)
-// とし、poster_type='lineworks'で投稿経路を区別できるようにする。受付確認と管理者への新規報告
+// とし、poster_type='lineworks'で投稿経路を区別できるようにする。lineworksUserIdも保存し、
+// 後でステータス変更時に本人へ結果を通知できるようにする。受付確認と管理者への新規報告
 // 通知の2件をまとめて返す(doPost側で配列のnotifyに対応済み)
 function handleLineWorksBugReport_(body) {
   const userId = body.source && body.source.userId;
   const text = (body.content && body.content.text) || '';
   if (!userId || !text) return { ok: true, skipped: 'no_text_or_user' };
 
-  const r = submitBugReport('', 'bug', text, 'lineworks', '');
+  const r = submitBugReport('', 'bug', text, 'lineworks', '', null, null, userId);
   if (r.error) {
     return { ok: true, _notify: { type: 'bugReportLineWorksAck', userId, message: '報告の登録に失敗しました: ' + r.error } };
   }
+  _rememberPendingBugReportForUser_(userId, r.id);
   const notifies = [{ type: 'bugReportLineWorksAck', userId,
-    message: '報告を受け付けました。管理者ポータルの「バグ報告」一覧に登録されました。\n\n受け付けた内容:\n' + text }];
+    message: '報告を受け付けました。管理者ポータルの「バグ報告」一覧に登録されました。画像がある場合は続けて送っていただければ、この報告に追加されます(10分以内)。\n\n受け付けた内容:\n' + text }];
   if (r._notify) notifies.push(r._notify);
   return { ok: true, id: r.id, _notify: notifies };
+}
+
+// バグ報告Botへ画像が送られてきた場合の処理。★注意: LINE WORKSの添付ファイル取得API
+// (bots/{botId}/attachments/{fileId})の実際のレスポンス形状・content内のフィールド名
+// (fileId想定)はこのコードベースでは実機未検証。取得に失敗しても既存機能には影響しない
+// (送信者にエラーメッセージを返すだけ)
+function handleLineWorksBugReportImage_(body) {
+  const userId = body.source && body.source.userId;
+  const fileId = body.content && (body.content.fileId || body.content.attachmentId);
+  if (!userId || !fileId) return { ok: true, skipped: 'no_file_or_user' };
+
+  let base64;
+  try {
+    const botId = PropertiesService.getScriptProperties().getProperty('LW_BOT_ID_BUGREPORT');
+    const token = getBugReportBotAccessToken_();
+    const url = 'https://www.worksapis.com/v1.0/bots/' + botId + '/attachments/' + fileId;
+    const res = UrlFetchApp.fetch(url, { headers: { 'Authorization': 'Bearer ' + token }, muteHttpExceptions: true });
+    if (res.getResponseCode() >= 300) throw new Error('画像の取得に失敗しました(' + res.getResponseCode() + ')');
+    base64 = Utilities.base64Encode(res.getBlob().getBytes());
+  } catch (e) {
+    return { ok: true, _notify: { type: 'bugReportLineWorksAck', userId, message: '画像の取得に失敗しました。もう一度お試しください。' } };
+  }
+
+  const pendingId = _pendingBugReportForUser_(userId);
+  if (pendingId) {
+    const r = _appendBugReportImage_(pendingId, base64);
+    if (r && r.ok) {
+      return { ok: true, _notify: { type: 'bugReportLineWorksAck', userId, message: '画像を報告に追加しました。' } };
+    }
+  }
+  // 直前(10分以内)のテキスト報告が見つからない場合は、画像だけの新規報告として登録する
+  const r2 = submitBugReport('', 'bug', '(LINE WORKSから画像のみ送信)', 'lineworks', '', [base64], 'image/jpeg', userId);
+  if (r2.error) return { ok: true, _notify: { type: 'bugReportLineWorksAck', userId, message: '画像の登録に失敗しました: ' + r2.error } };
+  _rememberPendingBugReportForUser_(userId, r2.id);
+  const notifies = [{ type: 'bugReportLineWorksAck', userId,
+    message: '画像を受け付け、新規のバグ報告として登録しました。続けて内容の説明を送っていただけると助かります。' }];
+  if (r2._notify) notifies.push(r2._notify);
+  return { ok: true, id: r2.id, _notify: notifies };
+}
+
+// 既存のバグ報告(issueId)に画像を1枚追加する(LINE WORKS経由の後追い画像用、2026-09-19追加)
+function _appendBugReportImage_(issueId, base64) {
+  const sheet = getSheet(SHEET_BUGREPORT);
+  const data = sheet.getDataRange().getValues();
+  const hdrs = data[0].map(String);
+  const idIdx = hdrs.indexOf('id');
+  const imgIdx = hdrs.indexOf('image_urls');
+  if (imgIdx < 0) return { error: 'image_urls列が見つかりません' };
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][idIdx]) === String(issueId)) {
+      const existing = String(data[i][imgIdx] || '').split(',').filter(Boolean);
+      const newUrl = saveImageToDrive(base64, 'image/jpeg', issueId + '_' + existing.length);
+      existing.push(newUrl);
+      sheet.getRange(i + 1, imgIdx + 1).setValue(existing.join(','));
+      _invalidateBugReportsCache_();
+      return { ok: true };
+    }
+  }
+  return { error: '指定のissueが見つかりません' };
 }
 
 // 「御器所 水 8/1〜8/4で調べて」のようなテキストから店舗名・商品ラベル・日付範囲を抜き出す。
