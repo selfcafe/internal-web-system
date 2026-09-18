@@ -574,6 +574,11 @@
 
   <div id="time-msg-bar"></div>
 
+  <!-- 業務連絡ウィジェット(常時表示)・一覧/詳細(タブの上に被さって表示) -->
+  <div id="announce-widget-wrap"></div>
+  <div id="announce-drill-wrap" style="display:none"></div>
+
+  <div id="partner-tabs-area">
   <!-- パートナー機能タブ -->
   <div class="partner-tab-bar">
     <button class="partner-tab active" id="ptab-order"     onclick="switchPartnerTab('order')">発注<span id="ptab-order-badge" class="ptab-badge" style="display:none">NEW</span><span id="ptab-delivery-badge" class="ptab-badge ptab-badge-delivery" style="display:none">納品</span></button>
@@ -764,6 +769,7 @@
     </div>
   </div>
 
+  </div>
 </div>
 
 <!-- 管理者ポータル -->
@@ -813,6 +819,12 @@
 
   <div id="admin-time-msg-bar"></div>
 
+  <!-- 業務連絡ウィジェット(常時表示)・一覧/詳細/作成フォーム(通常の管理画面に被さって表示) -->
+  <div id="admin-announce-widget-wrap"></div>
+  <div id="admin-announce-drill-wrap" style="display:none"></div>
+  <div id="admin-announce-form-root"></div>
+
+  <div id="admin-main-content">
   <div class="sub-nav-wrap" id="admin-region-nav">
     <button class="sub-tab active" id="sub-tokai"  onclick="switchRegion('tokai')">東海<span class="tab-badge" id="badge-tokai"  style="display:none"></span></button>
     <button class="sub-tab"        id="sub-kansai" onclick="switchRegion('kansai')">関西<span class="tab-badge" id="badge-kansai" style="display:none"></span></button>
@@ -835,6 +847,7 @@
   </div>
   <div class="pagination" id="pagination" style="display:none"></div>
   <div id="settings-container" style="display:none"></div>
+  </div>
 </div>
 
 <div id="invoice-partner-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:2000;align-items:center;justify-content:center;padding:16px">
@@ -5459,6 +5472,7 @@ function updateInvoiceButtonVisibility() {
 }
 
 function renderStore() {
+  ensureAnnounceWidgetLoaded(storeTab);
   updateInvoiceButtonVisibility();
   const isMobile = window.innerWidth < 640;
   const table = document.getElementById('store-table');
@@ -5925,6 +5939,7 @@ function switchAdminView(v) {
 }
 
 function renderAdmin() {
+  ensureAdminAnnounceWidgetLoaded();
   if      (adminView==='overview')   renderOverview();
   else if (adminView==='history')    renderHistory();
   else if (adminView==='lost')       renderLostAdmin();
@@ -5932,6 +5947,361 @@ function renderAdmin() {
   else if (adminView==='attendance') renderAttendanceAdmin();
   else if (adminView==='bugreport')  renderBugReportAdmin();
   else                                renderSettings();
+}
+
+/* ===== 業務連絡（管理者が作成・公開するお知らせ。パートナー/管理者ポータル共通のウィジェット
+   ＋一覧・詳細に表示する。管理者は同じウィジェットから新規作成・編集・削除も行う。2026-09-18追加） ===== */
+
+const ANNOUNCE_AREAS = ['東海', '関西', '関東', '関東セルフ', 'FC', '業務委託'];
+
+// サーバー側は'yyyy-MM-dd'で返すため、店舗のdate表示("2026/09/18")と合わせて'/'区切りにする
+function _announceDateLabel(d) { return d ? String(d).replace(/-/g, '/') : ''; }
+
+function _announceScopeToAreas(scopeStr) {
+  if (!scopeStr || scopeStr === 'all') return [];
+  return String(scopeStr).split(',').filter(Boolean);
+}
+function _announceScopeLabel(scopeStr) {
+  if (!scopeStr || scopeStr === 'all') return '全店舗';
+  return _announceScopeToAreas(scopeStr).join('・');
+}
+
+/* ----- パートナー側: ヘッダー直下ウィジェット＋一覧/詳細ドリルダウン ----- */
+
+let announceItems = [];
+let announceLoadedForStore = null;
+
+// renderStore()の先頭から毎回呼ぶが、同じ店舗の間は再取得しない(ensureOrderConsumptionLoadedと同じ考え方)
+async function ensureAnnounceWidgetLoaded(storeId) {
+  if (announceLoadedForStore !== storeId) {
+    announceLoadedForStore = storeId;
+    try { announceItems = await gasGet('getAnnouncements', { storeId }) || []; }
+    catch (e) { console.error('getAnnouncements error:', e); announceItems = []; }
+  }
+  if (!document.getElementById('announce-drill-wrap') || document.getElementById('announce-drill-wrap').style.display === 'none') {
+    renderAnnounceWidget();
+  }
+}
+
+function renderAnnounceWidget() {
+  const wrap = document.getElementById('announce-widget-wrap');
+  if (!wrap) return;
+  const items = announceItems.slice(0, 5);
+  wrap.innerHTML = `
+    <div style="background:white;border-radius:10px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:14px;overflow:hidden">
+      <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid #f1eede">
+        <div style="width:36px;height:36px;border-radius:9px;background:#b5544a;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+          <svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M3 9v6h3l7 4V5L6 9H3z" fill="white"/><path d="M16 8a5 5 0 010 8" stroke="white" stroke-width="2" stroke-linecap="round"/><path d="M19 6a9 9 0 010 12" stroke="white" stroke-width="2" stroke-linecap="round" opacity=".55"/></svg>
+        </div>
+        <div style="font-weight:700;font-size:16px;color:#333;flex:1">業務連絡</div>
+        <span onclick="showAnnounceList()" style="font-size:12.5px;color:#22703d;cursor:pointer;white-space:nowrap">一覧を見る</span>
+      </div>
+      <div>${items.length ? items.map(it => `
+          <div onclick="showAnnounceDetail('${it.id}')" style="display:flex;gap:10px;align-items:flex-start;padding:11px 14px;border-bottom:1px solid #f5f3e8;cursor:pointer;box-sizing:border-box">
+            <div style="font-size:11px;color:#999;padding-top:2px;flex-shrink:0;width:58px">${esc(_announceDateLabel(it.publish_date))}</div>
+            <div style="flex:1;font-size:13px;color:#22703d;font-weight:600;line-height:1.5">${esc(it.title)}</div>
+          </div>`).join('') : '<div style="padding:14px 16px;color:#aaa;font-size:12.5px">現在、業務連絡はありません</div>'}
+      </div>
+    </div>`;
+}
+
+function _announceListHTML(items, onHome) {
+  return `
+    <div style="display:flex;align-items:center;gap:8px;padding:14px 4px 10px">
+      <button onclick="${onHome}" style="background:none;border:none;padding:4px;cursor:pointer;display:flex;align-items:center">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="#22703d" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+      <div style="font-weight:700;font-size:16px;color:#333">業務連絡 一覧</div>
+    </div>
+    <div style="background:white;border-radius:10px;box-shadow:0 1px 4px rgba(0,0,0,.08);overflow:hidden;margin-bottom:20px">
+      ${items.length ? items.map(it => `
+        <div onclick="showAnnounceDetail('${it.id}')" style="display:flex;gap:10px;align-items:flex-start;padding:12px 14px;border-bottom:1px solid #f5f3e8;cursor:pointer;box-sizing:border-box">
+          <div style="font-size:11px;color:#999;padding-top:2px;flex-shrink:0;width:58px">${esc(_announceDateLabel(it.publish_date))}</div>
+          <div style="flex:1;font-size:13px;color:#22703d;font-weight:600;line-height:1.5">${esc(it.title)}</div>
+        </div>`).join('') : '<div style="padding:14px 16px;color:#aaa;font-size:12.5px">現在、業務連絡はありません</div>'}
+    </div>`;
+}
+
+function _announceDetailHTML(it, onBack) {
+  return `
+    <div style="padding:14px 4px 24px">
+      <span onclick="${onBack}" style="display:inline-flex;align-items:center;gap:4px;font-size:12.5px;color:#22703d;cursor:pointer;margin-bottom:14px">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="#22703d" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        一覧に戻る
+      </span>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px">
+        <div style="width:26px;height:26px;border-radius:7px;background:#b5544a;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+          <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M3 9v6h3l7 4V5L6 9H3z" fill="white"/><path d="M16 8a5 5 0 010 8" stroke="white" stroke-width="2" stroke-linecap="round"/></svg>
+        </div>
+        <div style="font-size:13px;color:#8a8f7e;font-weight:600">業務連絡</div>
+      </div>
+      <div style="font-size:18px;font-weight:700;color:#333;line-height:1.5;margin-bottom:12px">${esc(it.title)}</div>
+      <div style="background:#f1eede;border-radius:6px;padding:7px 12px;font-size:12px;color:#888;margin-bottom:18px;display:inline-block">${esc(_announceDateLabel(it.publish_date))} 更新</div>
+      <div style="font-size:13.5px;color:#444;line-height:1.9;white-space:pre-wrap">${esc(it.body)}</div>
+    </div>`;
+}
+
+function showAnnounceList() {
+  document.getElementById('announce-widget-wrap').style.display = 'none';
+  document.getElementById('partner-tabs-area').style.display = 'none';
+  const drill = document.getElementById('announce-drill-wrap');
+  drill.style.display = '';
+  drill.innerHTML = _announceListHTML(announceItems, 'announceGoHome()');
+}
+
+function showAnnounceDetail(id) {
+  const it = announceItems.find(a => String(a.id) === String(id));
+  if (!it) return;
+  document.getElementById('announce-widget-wrap').style.display = 'none';
+  document.getElementById('partner-tabs-area').style.display = 'none';
+  const drill = document.getElementById('announce-drill-wrap');
+  drill.style.display = '';
+  drill.innerHTML = _announceDetailHTML(it, 'showAnnounceList()');
+}
+
+function announceGoHome() {
+  document.getElementById('announce-drill-wrap').style.display = 'none';
+  document.getElementById('announce-drill-wrap').innerHTML = '';
+  document.getElementById('announce-widget-wrap').style.display = '';
+  document.getElementById('partner-tabs-area').style.display = '';
+  renderAnnounceWidget();
+}
+
+/* ----- 管理者側: 同じ位置のウィジェット＋一覧/詳細(プレビュー)＋新規作成・編集・削除 ----- */
+
+let adminAnnounceItems = [];
+let adminAnnounceLoaded = false;
+let adminAnnounceDrillView = null; // null | 'list' | { detailId }
+
+// renderAdmin()から毎回呼ぶが、初回のみ取得する（各admin viewの切替のたびに取り直さない）
+async function ensureAdminAnnounceWidgetLoaded() {
+  if (!adminAnnounceLoaded) {
+    adminAnnounceLoaded = true;
+    try { adminAnnounceItems = await gasGet('getAnnouncements', {}) || []; }
+    catch (e) { console.error('getAnnouncements error:', e); adminAnnounceItems = []; }
+  }
+  if (!adminAnnounceDrillView) renderAdminAnnounceWidget();
+}
+
+function renderAdminAnnounceWidget() {
+  const wrap = document.getElementById('admin-announce-widget-wrap');
+  if (!wrap) return;
+  const items = adminAnnounceItems.filter(i => i.status === 'published').slice(0, 5);
+  wrap.innerHTML = `
+    <div style="background:white;border-radius:10px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:18px;overflow:hidden">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 16px;border-bottom:1px solid #f1eede">
+        <div style="width:38px;height:38px;border-radius:9px;background:#b5544a;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M3 9v6h3l7 4V5L6 9H3z" fill="white"/><path d="M16 8a5 5 0 010 8" stroke="white" stroke-width="2" stroke-linecap="round"/><path d="M19 6a9 9 0 010 12" stroke="white" stroke-width="2" stroke-linecap="round" opacity=".55"/></svg>
+        </div>
+        <div style="font-weight:700;font-size:17px;color:#333;flex:1">業務連絡</div>
+        <span onclick="showAdminAnnounceList()" style="font-size:12.5px;color:#22703d;cursor:pointer;white-space:nowrap">一覧を見る</span>
+        <button onclick="openAnnounceForm()" style="display:inline-flex;align-items:center;gap:5px;background:#22703d;color:white;border:none;border-radius:6px;padding:6px 12px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit">＋ 新規作成</button>
+      </div>
+      <div>${items.length ? items.map(it => `
+          <div onclick="showAdminAnnounceDetail('${it.id}')" style="display:flex;gap:10px;align-items:flex-start;padding:11px 16px;border-bottom:1px solid #f5f3e8;cursor:pointer;box-sizing:border-box">
+            <div style="font-size:11px;color:#999;padding-top:2px;flex-shrink:0;width:70px">${esc(_announceDateLabel(it.publish_date))}</div>
+            <div style="flex:1;font-size:13px;color:#22703d;font-weight:600;line-height:1.5">${esc(it.title)}</div>
+          </div>`).join('') : '<div style="padding:14px 16px;color:#aaa;font-size:12.5px">現在、業務連絡はありません</div>'}
+      </div>
+    </div>`;
+}
+
+function showAdminAnnounceList() {
+  adminAnnounceDrillView = 'list';
+  document.getElementById('admin-announce-widget-wrap').style.display = 'none';
+  document.getElementById('admin-main-content').style.display = 'none';
+  document.getElementById('admin-announce-drill-wrap').style.display = '';
+  renderAdminAnnounceDrill();
+}
+
+function showAdminAnnounceDetail(id) {
+  adminAnnounceDrillView = { detailId: id };
+  document.getElementById('admin-announce-widget-wrap').style.display = 'none';
+  document.getElementById('admin-main-content').style.display = 'none';
+  document.getElementById('admin-announce-drill-wrap').style.display = '';
+  renderAdminAnnounceDrill();
+}
+
+function adminAnnounceGoHome() {
+  adminAnnounceDrillView = null;
+  document.getElementById('admin-announce-drill-wrap').style.display = 'none';
+  document.getElementById('admin-announce-drill-wrap').innerHTML = '';
+  document.getElementById('admin-announce-widget-wrap').style.display = '';
+  document.getElementById('admin-main-content').style.display = '';
+  renderAdminAnnounceWidget();
+}
+
+function renderAdminAnnounceDrill() {
+  const drill = document.getElementById('admin-announce-drill-wrap');
+  if (!adminAnnounceDrillView) return;
+  if (adminAnnounceDrillView === 'list') {
+    drill.innerHTML = `
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px">
+        <div style="display:flex;align-items:center;gap:8px">
+          <button onclick="adminAnnounceGoHome()" style="background:none;border:none;padding:4px;cursor:pointer;display:flex;align-items:center">
+            <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="#22703d" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+          </button>
+          <div style="font-weight:700;font-size:22px;color:#333">業務連絡 一覧</div>
+        </div>
+        <button onclick="openAnnounceForm()" style="display:inline-flex;align-items:center;gap:6px;background:#22703d;color:white;border:none;border-radius:8px;padding:9px 16px;font-size:14px;font-weight:600;cursor:pointer;font-family:inherit">＋ 新規作成</button>
+      </div>
+      <div style="overflow-x:auto">
+        <table style="width:100%;border-collapse:collapse;background:white;border-radius:10px;overflow:hidden;box-shadow:0 2px 8px rgba(34,112,61,.1)">
+          <thead>
+            <tr style="background:#22703d;color:#f8f4e7">
+              <th style="padding:11px 10px;text-align:left;font-size:13px;font-weight:600;white-space:nowrap">公開日</th>
+              <th style="padding:11px 10px;text-align:left;font-size:13px;font-weight:600">タイトル</th>
+              <th style="padding:11px 10px;text-align:left;font-size:13px;font-weight:600;white-space:nowrap">対象</th>
+              <th style="padding:11px 10px;text-align:left;font-size:13px;font-weight:600;white-space:nowrap">状態</th>
+              <th style="padding:11px 10px;text-align:left;font-size:13px;font-weight:600;white-space:nowrap">操作</th>
+            </tr>
+          </thead>
+          <tbody>${adminAnnounceItems.length ? adminAnnounceItems.map(it => `
+              <tr style="border-bottom:1px solid #eee">
+                <td style="padding:9px 10px;font-size:13px;white-space:nowrap;color:#666">${it.status==='published' ? esc(_announceDateLabel(it.publish_date)) : '(未公開)'}</td>
+                <td onclick="showAdminAnnounceDetail('${it.id}')" style="padding:9px 10px;font-size:13px;color:#22703d;font-weight:600;cursor:pointer">${esc(it.title)}</td>
+                <td style="padding:9px 10px;font-size:13px;color:#666;white-space:nowrap">${esc(_announceScopeLabel(it.scope))}</td>
+                <td style="padding:9px 10px;white-space:nowrap">${it.status==='published'
+                    ? '<span style="display:inline-block;background:#e8f3ea;color:#22703d;font-size:11.5px;font-weight:700;border-radius:99px;padding:3px 10px">公開中</span>'
+                    : '<span style="display:inline-block;background:#f3f4f6;color:#6b7280;font-size:11.5px;font-weight:700;border-radius:99px;padding:3px 10px">下書き</span>'}</td>
+                <td style="padding:9px 10px;white-space:nowrap">
+                  <button onclick="openAnnounceForm('${it.id}')" style="background:#22703d;color:white;padding:6px 12px;font-size:12.5px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;margin-right:6px">編集</button>
+                  <button onclick="deleteAnnounceItem('${it.id}')" style="background:#ef4444;color:white;padding:6px 12px;font-size:12.5px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">削除</button>
+                </td>
+              </tr>`).join('') : '<tr><td colspan="5" style="padding:20px;text-align:center;color:#aaa;font-size:13px">業務連絡はありません</td></tr>'}
+          </tbody>
+        </table>
+      </div>`;
+    return;
+  }
+  const it = adminAnnounceItems.find(a => String(a.id) === String(adminAnnounceDrillView.detailId));
+  if (!it) { adminAnnounceGoHome(); return; }
+  drill.innerHTML = `
+    <div style="max-width:900px">
+      <span onclick="showAdminAnnounceList()" style="display:inline-flex;align-items:center;gap:4px;font-size:12.5px;color:#22703d;cursor:pointer;margin-bottom:16px">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none"><path d="M15 18l-6-6 6-6" stroke="#22703d" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        一覧に戻る
+      </span>
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:16px">
+        <div style="width:28px;height:28px;border-radius:7px;background:#b5544a;display:flex;align-items:center;justify-content:center;flex-shrink:0">
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none"><path d="M3 9v6h3l7 4V5L6 9H3z" fill="white"/><path d="M16 8a5 5 0 010 8" stroke="white" stroke-width="2" stroke-linecap="round"/></svg>
+        </div>
+        <div style="font-size:13px;color:#8a8f7e;font-weight:600">業務連絡（パートナーに表示される内容のプレビュー）</div>
+      </div>
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:12px">
+        <div style="font-size:19px;font-weight:700;color:#333;line-height:1.5">${esc(it.title)}</div>
+        <button onclick="openAnnounceForm('${it.id}')" style="background:#22703d;color:white;padding:8px 16px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap;flex-shrink:0">編集する</button>
+      </div>
+      <div style="background:#f1eede;border-radius:6px;padding:7px 12px;font-size:12px;color:#888;margin-bottom:18px;display:inline-block">${esc(_announceDateLabel(it.publish_date))} 更新</div>
+      <div style="font-size:13.5px;color:#444;line-height:1.9;white-space:pre-wrap">${esc(it.body)}</div>
+    </div>`;
+}
+
+/* ----- 管理者側: 新規作成・編集フォーム(モーダル) ----- */
+
+function openAnnounceForm(id) {
+  const item = id ? adminAnnounceItems.find(a => String(a.id) === String(id)) : null;
+  const areas = item ? _announceScopeToAreas(item.scope) : [];
+  const isAll = !item || !item.scope || item.scope === 'all';
+  const today = new Date().toLocaleDateString('sv');
+  const isDraft = item && item.status !== 'published';
+  document.getElementById('admin-announce-form-root').innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(20,20,20,.4);display:flex;align-items:flex-start;justify-content:center;padding:40px 16px;box-sizing:border-box;z-index:500;overflow-y:auto">
+      <div style="background:white;border-radius:12px;box-shadow:0 8px 30px rgba(0,0,0,.25);width:100%;max-width:540px;padding:22px 24px;box-sizing:border-box;position:relative">
+        <button onclick="closeAnnounceForm()" style="position:absolute;top:16px;right:16px;background:none;border:none;padding:4px;cursor:pointer">
+          <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><path d="M6 6l12 12M18 6L6 18" stroke="#999" stroke-width="2.2" stroke-linecap="round"/></svg>
+        </button>
+        <div style="font-weight:700;font-size:16px;color:#22703d;margin-bottom:16px">${item ? '業務連絡を編集' : '業務連絡を新規作成'}</div>
+
+        <div style="font-size:11px;color:#888;margin-bottom:4px">タイトル</div>
+        <input type="text" id="announce-form-title" value="${esc(item ? item.title : '')}" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:9px 10px;font-size:14px;font-family:inherit;box-sizing:border-box;margin-bottom:14px">
+
+        <div style="font-size:11px;color:#888;margin-bottom:4px">本文</div>
+        <textarea id="announce-form-body" rows="5" oninput="autoGrow(this)" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:9px 10px;font-size:13.5px;font-family:inherit;box-sizing:border-box;min-height:120px;line-height:1.6;margin-bottom:14px;resize:none">${esc(item ? item.body : '')}</textarea>
+
+        <div style="display:flex;gap:14px;margin-bottom:14px;flex-wrap:wrap">
+          <div style="flex:1;min-width:140px">
+            <div style="font-size:11px;color:#888;margin-bottom:4px">公開日</div>
+            <input type="date" id="announce-form-date" value="${esc(item ? item.publish_date : today)}" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:8px 9px;font-size:13px;font-family:inherit;box-sizing:border-box">
+          </div>
+          <div style="flex:1;min-width:140px">
+            <div style="font-size:11px;color:#888;margin-bottom:4px">公開範囲</div>
+            <select id="announce-form-scope-mode" onchange="_toggleAnnounceScopeAreas()" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:8px 9px;font-size:13px;font-family:inherit;box-sizing:border-box">
+              <option value="all" ${isAll ? 'selected' : ''}>全店舗</option>
+              <option value="areas" ${isAll ? '' : 'selected'}>エリア指定</option>
+            </select>
+          </div>
+        </div>
+
+        <div id="announce-form-areas-wrap" style="display:${isAll ? 'none' : 'flex'};flex-wrap:wrap;gap:6px 14px;margin-bottom:14px">
+          ${ANNOUNCE_AREAS.map(a => `
+            <label style="display:inline-flex;align-items:center;gap:5px;font-size:13px;color:#444;cursor:pointer">
+              <input type="checkbox" class="announce-form-area-cb" value="${esc(a)}" ${areas.indexOf(a) >= 0 ? 'checked' : ''}> ${esc(a)}
+            </label>`).join('')}
+        </div>
+
+        <div style="font-size:11px;color:#888;margin-bottom:6px">公開状態</div>
+        <div style="display:flex;gap:8px;margin-bottom:20px">
+          <button type="button" id="announce-form-status-draft" onclick="_setAnnounceFormStatus('draft')"
+            style="flex:1;padding:10px;border-radius:8px;font-size:13px;font-weight:700;font-family:inherit;cursor:pointer;background:${isDraft ? '#f3f4f6' : '#fff'};color:#6b7280;border:1.5px solid ${isDraft ? '#6b7280' : '#d1d5db'}">下書き</button>
+          <button type="button" id="announce-form-status-published" onclick="_setAnnounceFormStatus('published')"
+            style="flex:1;padding:10px;border-radius:8px;font-size:13px;font-weight:700;font-family:inherit;cursor:pointer;background:${isDraft ? '#fff' : '#e8f3ea'};color:#22703d;border:1.5px solid ${isDraft ? '#d1d5db' : '#22703d'}">公開する</button>
+        </div>
+        <input type="hidden" id="announce-form-status" value="${isDraft ? 'draft' : 'published'}">
+        <input type="hidden" id="announce-form-id" value="${item ? esc(item.id) : ''}">
+
+        <div style="display:flex;justify-content:flex-end;gap:8px">
+          <button onclick="closeAnnounceForm()" style="background:#f3f4f6;color:#555;padding:9px 18px;font-size:13.5px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">キャンセル</button>
+          <button onclick="saveAnnounceForm()" style="background:#22703d;color:white;padding:9px 20px;font-size:13.5px;font-weight:700;border-radius:6px;border:none;cursor:pointer;font-family:inherit">保存する</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function _toggleAnnounceScopeAreas() {
+  const mode = document.getElementById('announce-form-scope-mode').value;
+  document.getElementById('announce-form-areas-wrap').style.display = mode === 'areas' ? 'flex' : 'none';
+}
+
+function _setAnnounceFormStatus(status) {
+  document.getElementById('announce-form-status').value = status;
+  const draftBtn = document.getElementById('announce-form-status-draft');
+  const pubBtn = document.getElementById('announce-form-status-published');
+  draftBtn.style.background = status === 'draft' ? '#f3f4f6' : '#fff';
+  draftBtn.style.borderColor = status === 'draft' ? '#6b7280' : '#d1d5db';
+  pubBtn.style.background = status === 'published' ? '#e8f3ea' : '#fff';
+  pubBtn.style.borderColor = status === 'published' ? '#22703d' : '#d1d5db';
+}
+
+function closeAnnounceForm() {
+  document.getElementById('admin-announce-form-root').innerHTML = '';
+}
+
+async function saveAnnounceForm() {
+  const id = document.getElementById('announce-form-id').value || null;
+  const title = document.getElementById('announce-form-title').value.trim();
+  if (!title) { alert('タイトルを入力してください'); return; }
+  const body = document.getElementById('announce-form-body').value;
+  const publishDate = document.getElementById('announce-form-date').value;
+  const status = document.getElementById('announce-form-status').value;
+  const scopeMode = document.getElementById('announce-form-scope-mode').value;
+  const scope = scopeMode === 'all' ? ['all']
+    : Array.from(document.querySelectorAll('.announce-form-area-cb:checked')).map(cb => cb.value);
+  const r = await gasPost('saveAnnouncement', { id, title, body, publishDate, scope, status, adminName: '' });
+  if (r.error) { alert('保存に失敗しました: ' + r.error); return; }
+  closeAnnounceForm();
+  adminAnnounceLoaded = false;
+  await ensureAdminAnnounceWidgetLoaded();
+  if (adminAnnounceDrillView) renderAdminAnnounceDrill();
+}
+
+async function deleteAnnounceItem(id) {
+  if (!confirm('この業務連絡を削除しますか？')) return;
+  const r = await gasPost('deleteAnnouncement', { id });
+  if (r.error) { alert('削除に失敗しました: ' + r.error); return; }
+  adminAnnounceLoaded = false;
+  await ensureAdminAnnounceWidgetLoaded();
+  if (adminAnnounceDrillView) renderAdminAnnounceDrill();
 }
 
 let adminLostStore = '';

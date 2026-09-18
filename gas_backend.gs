@@ -130,6 +130,11 @@ const BUGREPORT_COLS = ['id','store_id','store_name','kind','content','poster_ty
 const SHEET_BUGREPORT_COMMENTS = 'bug_report_comments';
 const BUGREPORT_COMMENT_COLS = ['id','issue_id','poster_type','poster_name','store_id','text','created_at'];
 
+// 業務連絡（管理者が作成・公開するお知らせ。2026-09-18追加）。scopeは'all'または
+// _areaForStore_()が返すエリア名(AREA_STORES参照)をカンマ区切りで保持する
+const SHEET_ANNOUNCEMENTS = 'announcements';
+const ANNOUNCEMENT_COLS = ['id','title','body','publish_date','scope','status','created_at','updated_at'];
+
 // エリア別店舗ID（デフォルト割り当て。フロントのREGIONS定数と同じ内容。管理者が「店舗管理」画面の
 // 「店舗のエリア変更」で個別に上書きした場合は、app_settingsの'store_regions'キー(_areaForStore_内で
 // 参照)の方が優先される——このデフォルト自体は基本的に変わらないため、_areaForStore_を通さない
@@ -484,6 +489,7 @@ function doGet(e) {
     else if (a === 'setNewStoreCheckTrigger')   { setNewStoreCheckTrigger(); result = { ok: true }; }
     else if (a === 'getBugReports')      result = getBugReports(e.parameter.storeId);
     else if (a === 'getBugReportThread') result = getBugReportThread(e.parameter.issueId);
+    else if (a === 'getAnnouncements')   result = getAnnouncements(e.parameter.storeId);
     else result = { error: 'Unknown action: ' + a };
     return json(result);
   } catch(err) {
@@ -548,6 +554,8 @@ function doPost(e) {
     else if (b.action === 'addBugReportComment')  result = addBugReportComment(b.issueId, b.posterType, b.posterName, b.storeId, b.text);
     else if (b.action === 'updateBugReportStatus') result = updateBugReportStatus(b.issueId, b.newStatus, b.adminName);
     else if (b.action === 'deleteBugReport')      result = deleteBugReport(b.issueId);
+    else if (b.action === 'saveAnnouncement')   result = saveAnnouncement(b.id, b.title, b.body, b.publishDate, b.scope, b.status, b.adminName);
+    else if (b.action === 'deleteAnnouncement') result = deleteAnnouncement(b.id);
     else result = { error: 'Unknown action: ' + b.action };
   } catch(err) {
     result = { error: err.message };
@@ -1177,6 +1185,97 @@ function deleteBugReport(issueId) {
     }
   }
   return { ok: true };
+}
+
+// ----------------------------------------------------------------
+// announcements（業務連絡。管理者が作成・公開し、パートナー/管理者ポータルの
+// ヘッダー直下ウィジェットと一覧・詳細画面に表示する。2026-09-18追加）
+// ----------------------------------------------------------------
+// bug_reportsと同じ「25秒キャッシュ＋書き込み側で都度invalidate」のパターンを踏襲する。
+
+const ANNOUNCEMENT_CACHE_KEY = 'announcements_rows_v1';
+function _announcementsRowsCached_() {
+  const cache = CacheService.getScriptCache();
+  const cached = cache.get(ANNOUNCEMENT_CACHE_KEY);
+  if (cached) return JSON.parse(cached);
+  const rows = sheetRows(getSheet(SHEET_ANNOUNCEMENTS), ANNOUNCEMENT_COLS).map(r => ({
+    ...r,
+    publish_date: _dateStr(r.publish_date),
+    created_at: _dateTimeStr(r.created_at),
+    updated_at: _dateTimeStr(r.updated_at)
+  }));
+  try { cache.put(ANNOUNCEMENT_CACHE_KEY, JSON.stringify(rows), 25); } catch (e) {}
+  return rows;
+}
+function _invalidateAnnouncementsCache_() {
+  try { CacheService.getScriptCache().remove(ANNOUNCEMENT_CACHE_KEY); } catch (e) {}
+}
+
+// storeId指定時はパートナー側:「公開」状態かつ対象範囲(全店舗、または_areaForStore_()が
+// 返す自店舗のエリア)に一致するものだけを返す。省略時は管理者側:下書き含む全件を返す
+function getAnnouncements(storeId) {
+  let rows = _announcementsRowsCached_();
+  if (storeId) {
+    const area = _areaForStore_(storeId);
+    rows = rows.filter(r => r.status === 'published' &&
+      (!r.scope || r.scope === 'all' || String(r.scope).split(',').indexOf(area) >= 0));
+  }
+  return rows.sort((a, b) => String(b.publish_date || '').localeCompare(String(a.publish_date || '')));
+}
+
+// idを指定すると既存行を更新、省略すると新規作成する。scopeは配列で受け取り
+// ('all'、またはAREA_STORESのキーと一致するエリア名の配列)、カンマ区切り文字列にして保存する
+function saveAnnouncement(id, title, body, publishDate, scope, status, adminName) {
+  if (!title) return { error: 'タイトルを入力してください' };
+  const scopeStr = (!scope || scope.length === 0 || scope.indexOf('all') >= 0) ? 'all' : scope.join(',');
+  const statusVal = status === 'published' ? 'published' : 'draft';
+  const sheet = getSheet(SHEET_ANNOUNCEMENTS);
+  ensureHeaders(sheet, ANNOUNCEMENT_COLS);
+  const now = new Date();
+  const pubDate = publishDate ? new Date(publishDate) : now;
+
+  if (id) {
+    const data = sheet.getDataRange().getValues();
+    const hdrs = data[0].map(String);
+    const idIdx = hdrs.indexOf('id');
+    let found = false;
+    for (let i = 1; i < data.length; i++) {
+      if (String(data[i][idIdx]) === String(id)) {
+        const rowNum = i + 1;
+        sheet.getRange(rowNum, hdrs.indexOf('title') + 1).setValue(title);
+        sheet.getRange(rowNum, hdrs.indexOf('body') + 1).setValue(body || '');
+        sheet.getRange(rowNum, hdrs.indexOf('publish_date') + 1).setValue(pubDate);
+        sheet.getRange(rowNum, hdrs.indexOf('scope') + 1).setValue(scopeStr);
+        sheet.getRange(rowNum, hdrs.indexOf('status') + 1).setValue(statusVal);
+        sheet.getRange(rowNum, hdrs.indexOf('updated_at') + 1).setValue(now);
+        found = true;
+        break;
+      }
+    }
+    if (!found) return { error: '指定の業務連絡が見つかりません' };
+    _invalidateAnnouncementsCache_();
+    return { ok: true, id };
+  }
+
+  const newId = Utilities.getUuid();
+  sheet.appendRow([newId, title, body || '', pubDate, scopeStr, statusVal, now, now]);
+  _invalidateAnnouncementsCache_();
+  return { ok: true, id: newId };
+}
+
+function deleteAnnouncement(id) {
+  const sheet = getSheet(SHEET_ANNOUNCEMENTS);
+  const data = sheet.getDataRange().getValues();
+  const hdrs = data[0].map(String);
+  const idIdx = hdrs.indexOf('id');
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][idIdx]) === String(id)) {
+      sheet.deleteRow(i + 1);
+      _invalidateAnnouncementsCache_();
+      return { ok: true };
+    }
+  }
+  return { error: '指定の業務連絡が見つかりません' };
 }
 
 // ----------------------------------------------------------------
