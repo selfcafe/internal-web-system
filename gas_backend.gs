@@ -1223,6 +1223,19 @@ function getAnnouncements(storeId) {
   return rows.sort((a, b) => String(b.publish_date || '').localeCompare(String(a.publish_date || '')));
 }
 
+// 画像機能追加(2026-09-19)より前にヘッダーが書かれたannouncementsシートには'image_urls'列が
+// 無いため、無ければ末尾に1回だけ追記する(ensureHeadersは「シートが完全に空の時だけ」しか
+// 書かないため、既存ヘッダーへの追記はこちらで個別に行う。CLAUDE.mdの列は必ず末尾に追加する
+// ルールに従う。既にある場合は何もしない安全な処理)
+function _ensureAnnouncementImageColumn_(sheet) {
+  if (sheet.getLastRow() === 0) return; // この場合はensureHeadersが新しいCOLS通りに書くので不要
+  const lastCol = sheet.getLastColumn();
+  const hdrs = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(String);
+  if (hdrs.indexOf('image_urls') < 0) {
+    sheet.getRange(1, lastCol + 1).setValue('image_urls');
+  }
+}
+
 // idを指定すると既存行を更新、省略すると新規作成する。scopeは配列で受け取り
 // ('all'、またはAREA_STORESのキーと一致するエリア名の配列)、カンマ区切り文字列にして保存する。
 // 画像はlost_itemsと同じ方式(Driveに保存しURLをカンマ区切りで1列に格納)。keepImageUrlsは
@@ -1233,6 +1246,7 @@ function saveAnnouncement(id, title, body, publishDate, scope, status, adminName
   const statusVal = status === 'published' ? 'published' : 'draft';
   const sheet = getSheet(SHEET_ANNOUNCEMENTS);
   ensureHeaders(sheet, ANNOUNCEMENT_COLS);
+  _ensureAnnouncementImageColumn_(sheet);
   const now = new Date();
   const pubDate = publishDate ? new Date(publishDate) : now;
   const targetId = id || Utilities.getUuid();
