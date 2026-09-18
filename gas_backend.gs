@@ -133,7 +133,7 @@ const BUGREPORT_COMMENT_COLS = ['id','issue_id','poster_type','poster_name','sto
 // 業務連絡（管理者が作成・公開するお知らせ。2026-09-18追加）。scopeは'all'または
 // _areaForStore_()が返すエリア名(AREA_STORES参照)をカンマ区切りで保持する
 const SHEET_ANNOUNCEMENTS = 'announcements';
-const ANNOUNCEMENT_COLS = ['id','title','body','publish_date','scope','status','created_at','updated_at','image_urls'];
+const ANNOUNCEMENT_COLS = ['id','title','body','publish_date','scope','status','created_at','updated_at'];
 
 // エリア別店舗ID（デフォルト割り当て。フロントのREGIONS定数と同じ内容。管理者が「店舗管理」画面の
 // 「店舗のエリア変更」で個別に上書きした場合は、app_settingsの'store_regions'キー(_areaForStore_内で
@@ -554,7 +554,7 @@ function doPost(e) {
     else if (b.action === 'addBugReportComment')  result = addBugReportComment(b.issueId, b.posterType, b.posterName, b.storeId, b.text);
     else if (b.action === 'updateBugReportStatus') result = updateBugReportStatus(b.issueId, b.newStatus, b.adminName);
     else if (b.action === 'deleteBugReport')      result = deleteBugReport(b.issueId);
-    else if (b.action === 'saveAnnouncement')   result = saveAnnouncement(b.id, b.title, b.body, b.publishDate, b.scope, b.status, b.adminName, b.imagesBase64, b.imageMime, b.keepImageUrls);
+    else if (b.action === 'saveAnnouncement')   result = saveAnnouncement(b.id, b.title, b.body, b.publishDate, b.scope, b.status, b.adminName);
     else if (b.action === 'deleteAnnouncement') result = deleteAnnouncement(b.id);
     else result = { error: 'Unknown action: ' + b.action };
   } catch(err) {
@@ -1209,6 +1209,46 @@ function deleteBugReport(issueId) {
   return { ok: true };
 }
 
+// 「完了」になってから180日経過したissueを、添付画像・紐づくコメントごと削除する
+// (2026-09-19追加、ユーザー指示)。lost_items/delivery_history/machine_photosと同じく
+// 読み取りのたびではなくsendDailyOrderNotificationの日次バッチでのみ実行する。
+// 途中で再度open/doingに戻された場合はstatusが'done'でなくなるため対象から外れる
+function purgeOldBugReports() {
+  const sheet = getSheet(SHEET_BUGREPORT);
+  if (sheet.getLastRow() <= 1) return;
+  const limitStr = Utilities.formatDate(new Date(Date.now() - 180 * 24 * 60 * 60 * 1000), _sheetTz(), 'yyyy-MM-dd HH:mm:ss');
+  const data = sheet.getDataRange().getValues();
+  const hdrs = data[0].map(String);
+  const idIdx = hdrs.indexOf('id');
+  const statusIdx = hdrs.indexOf('status');
+  const updatedIdx = hdrs.indexOf('updated_at');
+  const imgIdx = hdrs.indexOf('image_urls');
+  if (statusIdx < 0 || updatedIdx < 0) return;
+
+  const purgeIds = [];
+  for (let i = data.length - 1; i >= 1; i--) {
+    if (data[i][statusIdx] !== 'done') continue;
+    const updated = _dateTimeStr(data[i][updatedIdx]);
+    if (!updated || updated >= limitStr) continue;
+    purgeIds.push(String(data[i][idIdx]));
+    if (imgIdx >= 0) _trashDriveImages(data[i][imgIdx]);
+    sheet.deleteRow(i + 1);
+  }
+  if (!purgeIds.length) return;
+  _invalidateBugReportsCache_();
+
+  const commentSheet = getSheet(SHEET_BUGREPORT_COMMENTS);
+  if (commentSheet.getLastRow() > 1) {
+    const cData = commentSheet.getDataRange().getValues();
+    const cIssueIdx = cData[0].indexOf('issue_id');
+    if (cIssueIdx >= 0) {
+      for (let i = cData.length - 1; i >= 1; i--) {
+        if (purgeIds.indexOf(String(cData[i][cIssueIdx])) >= 0) commentSheet.deleteRow(i + 1);
+      }
+    }
+  }
+}
+
 // ----------------------------------------------------------------
 // announcements（業務連絡。管理者が作成・公開し、パートナー/管理者ポータルの
 // ヘッダー直下ウィジェットと一覧・詳細画面に表示する。2026-09-18追加）
@@ -1245,55 +1285,25 @@ function getAnnouncements(storeId) {
   return rows.sort((a, b) => String(b.publish_date || '').localeCompare(String(a.publish_date || '')));
 }
 
-// 画像機能追加(2026-09-19)より前にヘッダーが書かれたannouncementsシートには'image_urls'列が
-// 無いため、無ければ末尾に1回だけ追記する(ensureHeadersは「シートが完全に空の時だけ」しか
-// 書かないため、既存ヘッダーへの追記はこちらで個別に行う。CLAUDE.mdの列は必ず末尾に追加する
-// ルールに従う。既にある場合は何もしない安全な処理)
-function _ensureAnnouncementImageColumn_(sheet) {
-  if (sheet.getLastRow() === 0) return; // この場合はensureHeadersが新しいCOLS通りに書くので不要
-  const lastCol = sheet.getLastColumn();
-  const hdrs = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(String);
-  if (hdrs.indexOf('image_urls') < 0) {
-    sheet.getRange(1, lastCol + 1).setValue('image_urls');
-  }
-}
-
 // idを指定すると既存行を更新、省略すると新規作成する。scopeは配列で受け取り
-// ('all'、またはAREA_STORESのキーと一致するエリア名の配列)、カンマ区切り文字列にして保存する。
-// 画像はlost_itemsと同じ方式(Driveに保存しURLをカンマ区切りで1列に格納)。keepImageUrlsは
-// 編集時に「残す」既存URLの配列(外された分はDriveからも削除する)、imagesBase64は新規追加分
-function saveAnnouncement(id, title, body, publishDate, scope, status, adminName, imagesBase64, imageMime, keepImageUrls) {
+// ('all'、またはAREA_STORESのキーと一致するエリア名の配列)、カンマ区切り文字列にして保存する
+function saveAnnouncement(id, title, body, publishDate, scope, status, adminName) {
   if (!title) return { error: 'タイトルを入力してください' };
   const scopeStr = (!scope || scope.length === 0 || scope.indexOf('all') >= 0) ? 'all' : scope.join(',');
   const statusVal = status === 'published' ? 'published' : 'draft';
   const sheet = getSheet(SHEET_ANNOUNCEMENTS);
   ensureHeaders(sheet, ANNOUNCEMENT_COLS);
-  _ensureAnnouncementImageColumn_(sheet);
   const now = new Date();
   const pubDate = publishDate ? new Date(publishDate) : now;
-  const targetId = id || Utilities.getUuid();
-
-  const kept = (keepImageUrls || []).filter(Boolean);
-  const uploaded = (imagesBase64 || []).map((b64, i) =>
-    saveImageToDrive(b64, imageMime || 'image/jpeg', targetId + '_' + (kept.length + i))
-  );
-  const imageUrlsStr = kept.concat(uploaded).join(',');
 
   if (id) {
     const data = sheet.getDataRange().getValues();
     const hdrs = data[0].map(String);
     const idIdx = hdrs.indexOf('id');
-    const imgIdx = hdrs.indexOf('image_urls');
     let found = false;
     for (let i = 1; i < data.length; i++) {
       if (String(data[i][idIdx]) === String(id)) {
         const rowNum = i + 1;
-        if (imgIdx >= 0) {
-          const oldUrls = String(data[i][imgIdx] || '').split(',').filter(Boolean);
-          const removed = oldUrls.filter(u => kept.indexOf(u) < 0);
-          if (removed.length) _trashDriveImages(removed.join(','));
-          sheet.getRange(rowNum, imgIdx + 1).setValue(imageUrlsStr);
-        }
         sheet.getRange(rowNum, hdrs.indexOf('title') + 1).setValue(title);
         sheet.getRange(rowNum, hdrs.indexOf('body') + 1).setValue(body || '');
         sheet.getRange(rowNum, hdrs.indexOf('publish_date') + 1).setValue(pubDate);
@@ -1306,12 +1316,13 @@ function saveAnnouncement(id, title, body, publishDate, scope, status, adminName
     }
     if (!found) return { error: '指定の業務連絡が見つかりません' };
     _invalidateAnnouncementsCache_();
-    return { ok: true, id, image_urls: imageUrlsStr };
+    return { ok: true, id };
   }
 
-  sheet.appendRow([targetId, title, body || '', pubDate, scopeStr, statusVal, now, now, imageUrlsStr]);
+  const newId = Utilities.getUuid();
+  sheet.appendRow([newId, title, body || '', pubDate, scopeStr, statusVal, now, now]);
   _invalidateAnnouncementsCache_();
-  return { ok: true, id: targetId, image_urls: imageUrlsStr };
+  return { ok: true, id: newId };
 }
 
 function deleteAnnouncement(id) {
@@ -1319,10 +1330,8 @@ function deleteAnnouncement(id) {
   const data = sheet.getDataRange().getValues();
   const hdrs = data[0].map(String);
   const idIdx = hdrs.indexOf('id');
-  const imgIdx = hdrs.indexOf('image_urls');
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][idIdx]) === String(id)) {
-      if (imgIdx >= 0) _trashDriveImages(data[i][imgIdx]);
       sheet.deleteRow(i + 1);
       _invalidateAnnouncementsCache_();
       return { ok: true };
@@ -5584,6 +5593,7 @@ function sendDailyOrderNotification() {
   // 止まってしまわないようtry/catchで囲む
   try { purgeOldDeliveryHistory(); } catch (e) { console.error('purgeOldDeliveryHistory error:', e.message); }
   try { purgeOldMachinePhotos(); } catch (e) { console.error('purgeOldMachinePhotos error:', e.message); }
+  try { purgeOldBugReports(); } catch (e) { console.error('purgeOldBugReports error:', e.message); }
   try { sendMachinePhotoReminder(); } catch (e) { console.error('sendMachinePhotoReminder error:', e.message); }
   var ss = SpreadsheetApp.openById(SHEET_ID);
   var sheet = ss.getSheetByName(SHEET_ORDERS);

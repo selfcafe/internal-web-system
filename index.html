@@ -6120,7 +6120,6 @@ function _announceDetailHTML(it, onBack) {
       <div style="font-size:18px;font-weight:700;color:#333;line-height:1.5;margin-bottom:12px">${esc(it.title)}</div>
       <div style="background:#f1eede;border-radius:6px;padding:7px 12px;font-size:12px;color:#888;margin-bottom:18px;display:inline-block">${esc(_announceDateLabel(it.publish_date))} 更新</div>
       <div style="font-size:13.5px;color:#444;line-height:1.9;white-space:pre-wrap">${esc(it.body)}</div>
-      ${it.image_urls ? `<div style="margin-top:18px">${buildLostImageCell(String(it.image_urls).split(',').filter(Boolean), 90)}</div>` : ''}
     </div>`;
 }
 
@@ -6279,54 +6278,13 @@ function renderAdminAnnounceDrill() {
       </div>
       <div style="background:#f1eede;border-radius:6px;padding:7px 12px;font-size:12px;color:#888;margin-bottom:18px;display:inline-block">${esc(_announceDateLabel(it.publish_date))} 更新</div>
       <div style="font-size:13.5px;color:#444;line-height:1.9;white-space:pre-wrap">${esc(it.body)}</div>
-      ${it.image_urls ? `<div style="margin-top:18px">${buildLostImageCell(String(it.image_urls).split(',').filter(Boolean), 90)}</div>` : ''}
     </div>`;
 }
 
 /* ----- 管理者側: 新規作成・編集フォーム(モーダル) ----- */
-/* 画像添付はlost_itemsと同じ方式(compressLostImage/_blobToBase64を流用し、Drive保存はサーバー側で実施)。
-   _announceFormImagesは今回新たに添付した画像、_announceFormExistingUrlsは編集時に残っている既存画像 */
-
-let _announceFormImages = [];
-let _announceFormExistingUrls = [];
-
-function previewAnnounceImage(input) {
-  const files = Array.from(input.files || []);
-  if (!files.length) return;
-  Promise.all(files.map(f => compressLostImage(f))).then(blobs => {
-    blobs.forEach(blob => _announceFormImages.push({ blob, url: URL.createObjectURL(blob) }));
-    renderAnnounceImagePreview();
-  });
-  input.value = '';
-}
-function removeAnnounceImage(idx) {
-  const it = _announceFormImages[idx];
-  if (it) URL.revokeObjectURL(it.url);
-  _announceFormImages.splice(idx, 1);
-  renderAnnounceImagePreview();
-}
-function removeAnnounceExistingImage(idx) {
-  _announceFormExistingUrls.splice(idx, 1);
-  renderAnnounceImagePreview();
-}
-function renderAnnounceImagePreview() {
-  const wrap = document.getElementById('announce-form-image-preview');
-  if (!wrap) return;
-  const thumb = (src, onRemove) => `
-    <div style="position:relative">
-      <img src="${esc(src)}" style="width:64px;height:64px;object-fit:cover;border-radius:6px;border:1px solid #ddd">
-      <button type="button" onclick="${onRemove}" style="position:absolute;top:-6px;right:-6px;width:20px;height:20px;border-radius:99px;background:#ef4444;color:white;border:none;font-size:12px;line-height:1;cursor:pointer">×</button>
-    </div>`;
-  wrap.innerHTML =
-    _announceFormExistingUrls.map((u, i) => thumb(u, `removeAnnounceExistingImage(${i})`)).join('') +
-    _announceFormImages.map((it, i) => thumb(it.url, `removeAnnounceImage(${i})`)).join('');
-}
 
 function openAnnounceForm(id) {
-  _announceFormImages.forEach(it => URL.revokeObjectURL(it.url));
-  _announceFormImages = [];
   const item = id ? adminAnnounceItems.find(a => String(a.id) === String(id)) : null;
-  _announceFormExistingUrls = item && item.image_urls ? String(item.image_urls).split(',').filter(Boolean) : [];
   const areas = item ? _announceScopeToAreas(item.scope) : [];
   const isAll = !item || !item.scope || item.scope === 'all';
   const today = new Date().toLocaleDateString('sv');
@@ -6344,19 +6302,6 @@ function openAnnounceForm(id) {
 
         <div style="font-size:11px;color:#888;margin-bottom:4px">本文</div>
         <textarea id="announce-form-body" rows="5" oninput="autoGrow(this)" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:9px 10px;font-size:13.5px;font-family:inherit;box-sizing:border-box;min-height:120px;line-height:1.6;margin-bottom:14px;resize:none">${esc(item ? item.body : '')}</textarea>
-
-        <div style="font-size:11px;color:#888;margin-bottom:4px">画像(複数可)</div>
-        <div style="display:flex;gap:8px;margin-bottom:8px">
-          <label style="display:inline-flex;align-items:center;gap:6px;background:#f0f7e8;border:1px solid #b8d4a0;border-radius:6px;padding:7px 12px;font-size:13px;cursor:pointer;font-family:inherit;white-space:nowrap">
-            📁 写真を添付
-            <input type="file" accept="image/*" multiple style="display:none" onchange="previewAnnounceImage(this)">
-          </label>
-          <label style="display:inline-flex;align-items:center;gap:6px;background:#f0f7e8;border:1px solid #b8d4a0;border-radius:6px;padding:7px 12px;font-size:13px;cursor:pointer;font-family:inherit;white-space:nowrap">
-            📷 撮影
-            <input type="file" accept="image/*" capture="environment" style="display:none" onchange="previewAnnounceImage(this)">
-          </label>
-        </div>
-        <div id="announce-form-image-preview" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px"></div>
 
         <div style="display:flex;gap:14px;margin-bottom:14px;flex-wrap:wrap">
           <div style="flex:1;min-width:140px">
@@ -6395,7 +6340,6 @@ function openAnnounceForm(id) {
         </div>
       </div>
     </div>`;
-  renderAnnounceImagePreview();
 }
 
 function _toggleAnnounceScopeAreas() {
@@ -6414,8 +6358,6 @@ function _setAnnounceFormStatus(status) {
 }
 
 function closeAnnounceForm() {
-  _announceFormImages.forEach(it => URL.revokeObjectURL(it.url));
-  _announceFormImages = [];
   document.getElementById('admin-announce-form-root').innerHTML = '';
 }
 
@@ -6436,19 +6378,14 @@ async function saveAnnounceForm() {
     : Array.from(document.querySelectorAll('.announce-form-area-cb:checked')).map(cb => cb.value);
   if (btn) { btn.disabled = true; btn.textContent = '保存中…'; }
   try {
-    const imagesBase64 = await Promise.all(_announceFormImages.map(it => _blobToBase64(it.blob)));
-    const r = await gasPost('saveAnnouncement', {
-      id, title, body, publishDate, scope, status, adminName: '',
-      imagesBase64, imageMime: 'image/jpeg', keepImageUrls: _announceFormExistingUrls
-    });
+    const r = await gasPost('saveAnnouncement', { id, title, body, publishDate, scope, status, adminName: '' });
     if (r.error) throw new Error(r.error);
     const scopeStr = scopeMode === 'all' ? 'all' : scope.join(',');
     const nowStr = new Date().toLocaleString('sv');
     const existing = adminAnnounceItems.find(a => String(a.id) === String(r.id));
     const savedItem = {
       id: r.id, title, body, publish_date: publishDate, scope: scopeStr, status,
-      created_at: existing ? existing.created_at : nowStr, updated_at: nowStr,
-      image_urls: r.image_urls || ''
+      created_at: existing ? existing.created_at : nowStr, updated_at: nowStr
     };
     if (existing) Object.assign(existing, savedItem);
     else adminAnnounceItems.unshift(savedItem);
