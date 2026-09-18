@@ -126,7 +126,7 @@ const ATTENDANCE_LEAVE_COLS = ['id','store_id','name','leave_date','submitted_at
 // （ステータス変更もposter_type='system'の1行として追記し、対応履歴を別テーブルを持たずに
 // スレッド表示だけで自然に見える化する設計。[[project_portal_bug_report_board]]参照）
 const SHEET_BUGREPORT = 'bug_reports';
-const BUGREPORT_COLS = ['id','store_id','store_name','kind','content','poster_type','poster_name','status','created_at','updated_at'];
+const BUGREPORT_COLS = ['id','store_id','store_name','kind','content','poster_type','poster_name','status','created_at','updated_at','image_urls'];
 const SHEET_BUGREPORT_COMMENTS = 'bug_report_comments';
 const BUGREPORT_COMMENT_COLS = ['id','issue_id','poster_type','poster_name','store_id','text','created_at'];
 
@@ -550,7 +550,7 @@ function doPost(e) {
     else if (b.action === 'saveDeliveryHistory') result = saveDeliveryHistory(b.storeId, b.row);
     else if (b.action === 'clearDeliveryHistory') result = clearDeliveryHistory(b.storeId);
     else if (b.action === 'saveMachinePhotoSet') result = saveMachinePhotoSet(b.storeId, b.machineIndex, b.imagesByCategory, b.imageMime);
-    else if (b.action === 'submitBugReport')      result = submitBugReport(b.storeId, b.kind, b.content, b.posterType, b.posterName);
+    else if (b.action === 'submitBugReport')      result = submitBugReport(b.storeId, b.kind, b.content, b.posterType, b.posterName, b.imagesBase64, b.imageMime);
     else if (b.action === 'addBugReportComment')  result = addBugReportComment(b.issueId, b.posterType, b.posterName, b.storeId, b.text);
     else if (b.action === 'updateBugReportStatus') result = updateBugReportStatus(b.issueId, b.newStatus, b.adminName);
     else if (b.action === 'deleteBugReport')      result = deleteBugReport(b.issueId);
@@ -1050,6 +1050,16 @@ function _trashDriveImages(imageUrlList) {
 // パートナー/管理者/社員が投稿し、スレッド形式でコメントを積み重ねる。lost_itemsと同じ
 // 「25秒キャッシュ＋書き込み側で都度invalidate」のパターンを踏襲する。
 
+// 既にヘッダー行があるシートに新しい列を追記する(ensureHeadersはシートが完全に空の時しか
+// 書かないため)。announcementsのimage_urls追加時に導入した個別関数を汎用化したもの
+// (2026-09-19、bug_reportsへの画像添付追加でも同じ状況が発生したため)
+function _ensureColumnExists_(sheet, colName) {
+  if (sheet.getLastRow() === 0) return;
+  const lastCol = sheet.getLastColumn();
+  const hdrs = sheet.getRange(1, 1, 1, lastCol).getValues()[0].map(String);
+  if (hdrs.indexOf(colName) < 0) sheet.getRange(1, lastCol + 1).setValue(colName);
+}
+
 const BUGREPORT_CACHE_KEY = 'bug_reports_rows_v1';
 function _bugReportsRowsCached_() {
   const cache = CacheService.getScriptCache();
@@ -1085,17 +1095,22 @@ function getBugReportThread(issueId) {
 }
 
 // storeId省略可（社員投稿の「全店舗共通」等）。店舗名は_storeNames_()でサーバー側が解決するため、
-// クライアントからは信頼せずstoreIdだけ受け取る
-function submitBugReport(storeId, kind, content, posterType, posterName) {
+// クライアントからは信頼せずstoreIdだけ受け取る。画像はlost_items/announcementsと同じ方式
+// (Driveに保存しURLをカンマ区切りで1列に格納。2026-09-19追加)
+function submitBugReport(storeId, kind, content, posterType, posterName, imagesBase64, imageMime) {
   if (!content) return { error: '内容を入力してください' };
   const storeName = storeId ? (_storeNames_()[storeId] || String(storeId)) : '';
   const sheet = getSheet(SHEET_BUGREPORT);
   ensureHeaders(sheet, BUGREPORT_COLS);
+  _ensureColumnExists_(sheet, 'image_urls');
   const id = Utilities.getUuid();
   const now = new Date();
+  const imageUrls = (imagesBase64 || [])
+    .map((b64, i) => saveImageToDrive(b64, imageMime || 'image/jpeg', id + '_' + i))
+    .join(',');
   sheet.appendRow([
     id, storeId || '', storeName, kind === 'request' ? 'request' : 'bug', content,
-    posterType || 'partner', posterName || '', 'open', now, now
+    posterType || 'partner', posterName || '', 'open', now, now, imageUrls
   ]);
   _invalidateBugReportsCache_();
   const kindLabel = kind === 'request' ? '修正依頼' : 'バグ報告';
@@ -1164,14 +1179,21 @@ function _touchBugReportUpdatedAt_(issueId, when) {
   _invalidateBugReportsCache_();
 }
 
-// issue本体と、紐づくコメント(スレッド)を丸ごと削除する(誤投稿・テスト投稿の削除用)
+// issue本体と、紐づくコメント(スレッド)を丸ごと削除する(誤投稿・テスト投稿の削除用)。
+// 添付画像がある場合はDriveからも削除する(2026-09-19、画像添付追加に合わせて対応)
 function deleteBugReport(issueId) {
   const sheet = getSheet(SHEET_BUGREPORT);
   const data = sheet.getDataRange().getValues();
   const idIdx = data[0].indexOf('id');
+  const imgIdx = data[0].indexOf('image_urls');
   let found = false;
   for (let i = 1; i < data.length; i++) {
-    if (String(data[i][idIdx]) === String(issueId)) { sheet.deleteRow(i + 1); found = true; break; }
+    if (String(data[i][idIdx]) === String(issueId)) {
+      if (imgIdx >= 0) _trashDriveImages(data[i][imgIdx]);
+      sheet.deleteRow(i + 1);
+      found = true;
+      break;
+    }
   }
   if (!found) return { error: '指定のissueが見つかりません' };
   _invalidateBugReportsCache_();

@@ -763,6 +763,17 @@
       </div>
       <textarea id="bugreport-content-input" placeholder="不具合の内容や、直してほしい点を具体的に書いてください（発生した操作・画面名があると助かります）" rows="4" oninput="autoGrow(this)"
         style="border:1px solid #ddd;border-radius:6px;padding:10px 12px;font-size:13.5px;font-family:inherit;width:100%;resize:none;overflow-y:hidden;line-height:1.5;margin-bottom:10px;box-sizing:border-box"></textarea>
+      <div style="display:flex;gap:8px;margin-bottom:8px">
+        <label style="display:inline-flex;align-items:center;gap:6px;background:#f0f7e8;border:1px solid #b8d4a0;border-radius:6px;padding:7px 12px;font-size:13px;cursor:pointer;font-family:inherit;white-space:nowrap">
+          📁 写真を添付
+          <input type="file" accept="image/*" multiple style="display:none" onchange="previewBugReportImage(this,'bugreport-image-preview')">
+        </label>
+        <label style="display:inline-flex;align-items:center;gap:6px;background:#f0f7e8;border:1px solid #b8d4a0;border-radius:6px;padding:7px 12px;font-size:13px;cursor:pointer;font-family:inherit;white-space:nowrap">
+          📷 撮影
+          <input type="file" accept="image/*" capture="environment" style="display:none" onchange="previewBugReportImage(this,'bugreport-image-preview')">
+        </label>
+      </div>
+      <div id="bugreport-image-preview" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px"></div>
       <div style="display:flex;justify-content:flex-end;margin-bottom:22px">
         <button id="bugreport-submit-btn" onclick="submitBugReportFromPartner()"
           style="background:#22703d;color:white;padding:9px 20px;font-size:13.5px;font-weight:700;border-radius:6px;border:none;cursor:pointer;font-family:inherit">投稿する</button>
@@ -4361,6 +4372,50 @@ function setBugReportKind(kind) {
   if (reqBtn) reqBtn.style.cssText = _bugReportKindStyle(kind==='request', '#1a5c30', '#dbeee1', '#1a5c30');
 }
 
+/* ===== バグ報告: 画像添付(2026-09-19追加)。lost_items/announcementsと同じくクライアント側で
+   圧縮してから送信し、Driveに保存したURLをカンマ区切りで1列に格納する。新規投稿フォームが
+   パートナー/社員(管理者ポータル)の2箇所あるため、previewの要素idをキーにして
+   ステージング中の画像を管理する(フォームごとに別々の配列を持てる) ===== */
+const _bugReportImageStore = new Map();
+function _bugReportImages(previewElId) {
+  if (!_bugReportImageStore.has(previewElId)) _bugReportImageStore.set(previewElId, []);
+  return _bugReportImageStore.get(previewElId);
+}
+function previewBugReportImage(input, previewElId) {
+  const files = Array.from(input.files || []);
+  if (!files.length) return;
+  Promise.all(files.map(f => compressLostImage(f))).then(blobs => {
+    const arr = _bugReportImages(previewElId);
+    blobs.forEach(blob => arr.push({ blob, url: URL.createObjectURL(blob) }));
+    renderBugReportImagePreview(previewElId);
+  });
+  input.value = '';
+}
+function removeBugReportImage(previewElId, idx) {
+  const arr = _bugReportImages(previewElId);
+  const it = arr[idx];
+  if (it) URL.revokeObjectURL(it.url);
+  arr.splice(idx, 1);
+  renderBugReportImagePreview(previewElId);
+}
+function renderBugReportImagePreview(previewElId) {
+  const wrap = document.getElementById(previewElId);
+  if (!wrap) return;
+  wrap.innerHTML = _bugReportImages(previewElId).map((it, i) => `
+    <div style="position:relative">
+      <img src="${it.url}" style="width:64px;height:64px;object-fit:cover;border-radius:6px;border:1px solid #ddd">
+      <button type="button" onclick="removeBugReportImage('${previewElId}',${i})" style="position:absolute;top:-6px;right:-6px;width:20px;height:20px;border-radius:99px;background:#ef4444;color:white;border:none;font-size:12px;line-height:1;cursor:pointer">×</button>
+    </div>`).join('');
+}
+async function _bugReportImagesBase64(previewElId) {
+  return Promise.all(_bugReportImages(previewElId).map(it => _blobToBase64(it.blob)));
+}
+function _clearBugReportImages(previewElId) {
+  _bugReportImages(previewElId).forEach(it => URL.revokeObjectURL(it.url));
+  _bugReportImageStore.set(previewElId, []);
+  renderBugReportImagePreview(previewElId);
+}
+
 async function submitBugReportFromPartner() {
   const input = document.getElementById('bugreport-content-input');
   const btn = document.getElementById('bugreport-submit-btn');
@@ -4368,9 +4423,11 @@ async function submitBugReportFromPartner() {
   if (!content) { alert('内容を入力してください。'); return; }
   if (btn) { btn.disabled = true; btn.textContent = '投稿中…'; }
   try {
-    const r = await gasPost('submitBugReport', { storeId: storeTab, kind: _bugReportKind, content, posterType: 'partner', posterName: '' });
+    const imagesBase64 = await _bugReportImagesBase64('bugreport-image-preview');
+    const r = await gasPost('submitBugReport', { storeId: storeTab, kind: _bugReportKind, content, posterType: 'partner', posterName: '', imagesBase64, imageMime: 'image/jpeg' });
     if (r.error) throw new Error(r.error);
     if (input) input.value = '';
+    _clearBugReportImages('bugreport-image-preview');
     await loadBugReportsFromDb(storeTab);
     renderBugReports();
   } catch(e) {
@@ -4465,6 +4522,7 @@ function renderBugReports(loading = false) {
         <span style="margin-left:auto;font-size:11.5px;color:#999">${esc(issue.created_at)}</span>
       </div>
       <div style="font-size:13.5px;color:#333;line-height:1.6;margin-bottom:8px;white-space:pre-wrap">${esc(issue.content)}</div>
+      ${issue.image_urls ? `<div style="margin-bottom:8px">${buildLostImageCell(String(issue.image_urls).split(',').filter(Boolean), 70)}</div>` : ''}
       <div onclick="toggleBugReportThread('${esc(issue.id)}')" style="font-size:12px;color:#22703d;font-weight:600;cursor:pointer;padding-top:8px;border-top:1px solid #f0ede0">
         ${isOpen ? 'スレッドを閉じる ▲' : 'スレッドを開く ▼'}
       </div>
@@ -4621,6 +4679,7 @@ function buildBugReportAdminDetail(issue) {
     </div>
     <div style="font-size:11.5px;color:#999;margin-bottom:14px">投稿: ${esc(issue.created_at)} ／ 更新: ${esc(issue.updated_at||issue.created_at)}</div>
     <div style="font-size:13.5px;line-height:1.65;color:#333;background:#f8f4e7;border-radius:8px;padding:12px 14px;margin-bottom:16px;white-space:pre-wrap">${esc(issue.content)}</div>
+    ${issue.image_urls ? `<div style="margin-bottom:16px">${buildLostImageCell(String(issue.image_urls).split(',').filter(Boolean), 80)}</div>` : ''}
     <div style="display:flex;gap:6px;margin-bottom:18px">
       ${['open','doing','done'].map(s => {
         const on = issue.status === s;
@@ -4647,28 +4706,45 @@ function buildBugReportAdminNewPostForm() {
     </div>
     <textarea id="bugreport-admin-content" placeholder="内容を入力" rows="3" oninput="autoGrow(this)"
       style="border:1px solid #ddd;border-radius:6px;padding:9px 11px;font-size:13px;font-family:inherit;width:100%;resize:none;overflow-y:hidden;line-height:1.5;margin-bottom:10px;box-sizing:border-box"></textarea>
+    <div style="display:flex;gap:8px;margin-bottom:8px">
+      <label style="display:inline-flex;align-items:center;gap:6px;background:#f0f7e8;border:1px solid #b8d4a0;border-radius:6px;padding:6px 11px;font-size:12.5px;cursor:pointer;font-family:inherit;white-space:nowrap">
+        📁 写真を添付
+        <input type="file" accept="image/*" multiple style="display:none" onchange="previewBugReportImage(this,'bugreport-admin-image-preview')">
+      </label>
+      <label style="display:inline-flex;align-items:center;gap:6px;background:#f0f7e8;border:1px solid #b8d4a0;border-radius:6px;padding:6px 11px;font-size:12.5px;cursor:pointer;font-family:inherit;white-space:nowrap">
+        📷 撮影
+        <input type="file" accept="image/*" capture="environment" style="display:none" onchange="previewBugReportImage(this,'bugreport-admin-image-preview')">
+      </label>
+    </div>
+    <div id="bugreport-admin-image-preview" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:10px"></div>
     <div style="display:flex;justify-content:flex-end">
-      <button onclick="submitBugReportFromAdmin()" style="background:#22703d;color:white;padding:8px 18px;font-size:13px;font-weight:700;border-radius:6px;border:none;cursor:pointer;font-family:inherit">投稿する</button>
+      <button id="bugreport-admin-submit-btn" onclick="submitBugReportFromAdmin()" style="background:#22703d;color:white;padding:8px 18px;font-size:13px;font-weight:700;border-radius:6px;border:none;cursor:pointer;font-family:inherit">投稿する</button>
     </div>
   </div>`;
 }
 
 async function submitBugReportFromAdmin() {
   const input = document.getElementById('bugreport-admin-content');
+  const btn = document.getElementById('bugreport-admin-submit-btn');
   const content = input?.value.trim() || '';
   if (!content) { alert('内容を入力してください。'); return; }
+  if (btn) { btn.disabled = true; btn.textContent = '投稿中…'; }
   try {
+    const imagesBase64 = await _bugReportImagesBase64('bugreport-admin-image-preview');
     const r = await gasPost('submitBugReport', {
       storeId: _bugReportAdminStore || '', kind: _bugReportAdminKind, content,
-      posterType: _bugReportAdminPosterType, posterName: '',
+      posterType: _bugReportAdminPosterType, posterName: '', imagesBase64, imageMime: 'image/jpeg',
     });
     if (r.error) throw new Error(r.error);
     if (input) input.value = '';
+    _clearBugReportImages('bugreport-admin-image-preview');
     _bugReportAdminForceRefresh = true;
     renderBugReportAdmin();
   } catch(e) {
     console.error('submitBugReport(admin) error:', e);
     alert('投稿に失敗しました: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '投稿する'; }
   }
 }
 
