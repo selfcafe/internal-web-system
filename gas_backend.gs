@@ -700,8 +700,12 @@ function provisionBugReportSheet_() {
 
 // バグ報告専用スプレッドシートに「使い方」タブと記入例を追加する(2026-09-19、メインDB側の
 // 元タブを削除した後、ユーザーから「セルを直接触ってもエラーにならないような記入例と、
-// 対応中/完了への変更方法の説明が欲しい」との要望)。何度実行しても増殖しないよう、
-// 既に「使い方」タブがあれば作り直さず、記入例も先頭に【記入例】が付く行が既にあれば追加しない。
+// 対応中/完了への変更方法の説明が欲しい」との要望)。
+// 2026-09-19追記: 「使い方」タブの説明文はガイドなので毎回内容を上書きして最新化する(データが
+// 入っているbug_reports/bug_report_commentsタブは触らない=事故リスクが無い箇所のみ)。また
+// このタイミングでstatus列にデータ入力規則(プルダウン)を設定し、旧値(open/doing/done)が
+// 残っていれば日本語ラベルへ移行する(このスプレッドシートは記入例1行しか無いため安全)。
+// 記入例行(先頭に【記入例】が付く行)は既にあれば増殖させない。
 // ?action=seedBugReportSheetGuide で実行
 function seedBugReportSheetGuide_() {
   const ss = SpreadsheetApp.openById(BUGREPORT_SHEET_ID);
@@ -712,57 +716,85 @@ function seedBugReportSheetGuide_() {
   if (!guide) {
     guideCreated = true;
     guide = ss.insertSheet('使い方', 0);
-    const lines = [
-      ['⚠️ このシートは表示・確認用です。セルを直接編集しても、ポータル側やLINE WORKSの動作には反映されません。'],
-      [''],
-      ['■ 新しいバグ報告・修正依頼を作るには'],
-      ['管理者ポータル(またはパートナーポータル)の「バグ報告」画面から投稿してください。'],
-      ['LINE WORKSのバグ報告Botに直接メッセージを送っても登録されます(主に社員向け)。'],
-      [''],
-      ['■ 対応中・完了への変更方法'],
-      ['① 管理者ポータルにログインする'],
-      ['② 「バグ報告」画面を開き、一覧から対象の投稿をクリックする'],
-      ['③ 詳細パネル下部の「未対応」「対応中」「完了」ボタンから、変更したいステータスをクリックする'],
-      ['※ このシートのstatus列を直接書き換えても、ポータルの表示は変わりません(次にポータル側で'],
-      ['　誰かが操作すると上書きされます)。必ず②③の手順で変更してください。'],
-      ['※ LINE WORKS経由の投稿の場合、ステータスを変更すると投稿者本人にLINE WORKSで自動通知されます。'],
-      [''],
-      ['■ 各列の意味'],
-      ['id: 投稿の一意なID(自動生成、編集不要)'],
-      ['store_id / store_name: 投稿元の店舗(空欄=全店舗共通/社内、またはLINE WORKS経由)'],
-      ['kind: bug(バグ報告) / request(修正依頼)'],
-      ['content: 投稿内容'],
-      ['poster_type: partner(パートナー) / staff(社員) / admin(管理者) / lineworks(LINE WORKS経由) / system(自動記録)'],
-      ['status: open(未対応) / doing(対応中) / done(完了) ※日本語ではなく必ずこの英語表記'],
-      ['image_urls: 添付画像のURL(カンマ区切り、Drive上に保存)'],
-      ['lineworks_user_id: LINE WORKS経由の投稿の場合、送信者のユーザーID(通知先として使用)'],
-      [''],
-      ['「bug_reports」タブ内の「' + marker + '」で始まる行は記入例です。管理者ポータルの'],
-      ['「バグ報告」画面からいつでも削除して構いません。'],
-    ];
-    guide.getRange(1, 1, lines.length, 1).setValues(lines);
-    guide.setColumnWidth(1, 720);
-    [1, 3, 7, 15].forEach(row => guide.getRange(row, 1).setFontWeight('bold'));
-    guide.getRange(1, 1).setFontColor('#dc2626');
-    guide.setFrozenRows(1);
   }
+  guide.clear();
+  const lines = [
+    ['⚠️ このシートは「表示・確認用」ですが、実データそのものです。セルを直接編集すると…'],
+    ['　✓ 最長25秒ほどでポータル側の表示にも反映されます(裏でこのシートを直接読んでいるため)'],
+    ['　✗ ただし「誰が/いつ変更したか」の履歴がbug_report_commentsタブに記録されません'],
+    ['　✗ LINE WORKS経由の投稿だと、投稿者への自動通知(「ステータスが〇〇になりました」)が送られません'],
+    ['　✗ status列は下の3つの表記以外を入れると、ポータル上の色分け表示が崩れます(エラーにはなりません)'],
+    ['　→ そのため通常は下記②③の手順(管理者ポータルの操作)で変更することを強く推奨します。'],
+    ['　同じことがbug_report_commentsタブ(対応履歴)にも当てはまります。'],
+    [''],
+    ['■ 新しいバグ報告・修正依頼を作るには'],
+    ['管理者ポータル(またはパートナーポータル)の「バグ報告」画面から投稿してください。'],
+    ['LINE WORKSのバグ報告Botに直接メッセージを送っても登録されます(主に社員向け)。'],
+    [''],
+    ['■ 対応中・完了への変更方法'],
+    ['① 管理者ポータルにログインする'],
+    ['② 「バグ報告」画面を開き、一覧から対象の投稿をクリックする'],
+    ['③ 詳細パネル下部の「未対応」「対応中」「完了」ボタンから、変更したいステータスをクリックする'],
+    [''],
+    ['■ 各列の意味'],
+    ['id: 投稿の一意なID(自動生成、編集不要)'],
+    ['store_id / store_name: 投稿元の店舗(空欄=全店舗共通/社内、またはLINE WORKS経由)'],
+    ['kind: bug(バグ報告) / request(修正依頼)'],
+    ['content: 投稿内容'],
+    ['poster_type: partner(パートナー) / staff(社員) / admin(管理者) / lineworks(LINE WORKS経由) / system(自動記録)'],
+    ['status: 未対応 / 対応中 / 完了 (bug_reportsタブのこの列はプルダウンから選択できます)'],
+    ['image_urls: 添付画像のURL(カンマ区切り、Drive上に保存)'],
+    ['lineworks_user_id: LINE WORKS経由の投稿の場合、送信者のユーザーID(通知先として使用)'],
+    [''],
+    ['「bug_reports」タブ内の「' + marker + '」で始まる行は記入例です。管理者ポータルの'],
+    ['「バグ報告」画面からいつでも削除して構いません。'],
+  ];
+  guide.getRange(1, 1, lines.length, 1).setValues(lines);
+  guide.setColumnWidth(1, 720);
+  [1, 9, 13, 18].forEach(row => guide.getRange(row, 1).setFontWeight('bold'));
+  guide.getRange(1, 1).setFontColor('#dc2626');
+  guide.setFrozenRows(1);
 
   const sheet = getBugReportSheetFile_(SHEET_BUGREPORT);
   ensureHeaders(sheet, BUGREPORT_COLS);
-  const contentIdx = BUGREPORT_COLS.indexOf('content');
+  const hdrs = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
+  const contentIdx = hdrs.indexOf('content');
+  const statusIdx = hdrs.indexOf('status');
   const data = sheet.getLastRow() > 1 ? sheet.getDataRange().getValues() : [];
+
+  // 旧値(open/doing/done)が残っていれば日本語ラベルへ移行する(記入例1行のみが対象の想定)
+  const legacyToNew = { open: '未対応', doing: '対応中', done: '完了' };
+  let migrated = 0;
+  if (statusIdx >= 0) {
+    for (let i = 1; i < data.length; i++) {
+      const cur = data[i][statusIdx];
+      if (legacyToNew[cur]) {
+        sheet.getRange(i + 1, statusIdx + 1).setValue(legacyToNew[cur]);
+        migrated++;
+      }
+    }
+    if (migrated > 0) _invalidateBugReportsCache_();
+  }
+
+  // status列にプルダウン(データ入力規則)を設定する。将来の行も見越して余裕を持った範囲に設定
+  if (statusIdx >= 0) {
+    const rule = SpreadsheetApp.newDataValidation().requireValueInList(BUGREPORT_STATUSES, true).build();
+    const numRows = Math.max(sheet.getMaxRows() - 1, 500);
+    sheet.getRange(2, statusIdx + 1, numRows, 1).setDataValidation(rule);
+  }
+
   const alreadySeeded = data.slice(1).some(r => String(r[contentIdx] || '').indexOf(marker) === 0);
   if (!alreadySeeded) {
     const now = new Date();
     sheet.appendRow([
       Utilities.getUuid(), '', '', 'bug',
       marker + 'これはサンプルの投稿です。「使い方」タブを確認したら、管理者ポータルの「バグ報告」画面から削除して構いません。',
-      'staff', '', 'open', now, now, '', ''
+      'staff', '', '未対応', now, now, '', ''
     ]);
     _invalidateBugReportsCache_();
   }
 
-  return { ok: true, guideCreated, exampleAdded: !alreadySeeded };
+  return { ok: true, guideCreated, exampleAdded: !alreadySeeded, statusMigrated: migrated };
 }
 
 // 調査用の一時的な読み取り専用ヘルパー(2026-07-28、「納品済み履歴」の実データがどのタブ・列構成
@@ -1230,7 +1262,7 @@ function submitBugReport(storeId, kind, content, posterType, posterName, imagesB
     .join(',');
   sheet.appendRow([
     id, storeId || '', storeName, kind === 'request' ? 'request' : 'bug', content,
-    posterType || 'partner', posterName || '', 'open', now, now, imageUrls, lineworksUserId || ''
+    posterType || 'partner', posterName || '', '未対応', now, now, imageUrls, lineworksUserId || ''
   ]);
   _invalidateBugReportsCache_();
   const kindLabel = kind === 'request' ? '修正依頼' : 'バグ報告';
@@ -1254,11 +1286,14 @@ function addBugReportComment(issueId, posterType, posterName, storeId, text) {
 
 // 管理者がステータス(open/doing/done)を変更する。変更内容はシステム発言としてスレッドにも
 // 残す（別のステータス変更ログ用シートを作らずスレッド表示だけで対応履歴を追えるようにするため）
-const BUGREPORT_STATUS_LABELS = { open: '未対応', doing: '対応中', done: '完了' };
+// 2026-09-19: statusの格納値そのものを日本語ラベルに変更(旧: open/doing/done)。
+// Sheets側にプルダウン(データ入力規則)を設定するため、表示ラベルと格納値を分ける方式は廃止した。
+// index.html側のBUGREPORT_STATUS_STYLEも同じ3値をキーにしている。
+const BUGREPORT_STATUSES = ['未対応', '対応中', '完了'];
 // LINE WORKS経由(poster_type='lineworks')の報告は、ステータス変更時に本人へLINE WORKSで
 // 結果を知らせる(2026-09-19追加。ポータル投稿はスレッドを開けば見えるため通知不要)
 function updateBugReportStatus(issueId, newStatus, adminName) {
-  if (!BUGREPORT_STATUS_LABELS[newStatus]) return { error: '不正なステータスです: ' + newStatus };
+  if (BUGREPORT_STATUSES.indexOf(newStatus) < 0) return { error: '不正なステータスです: ' + newStatus };
   const sheet = getBugReportSheetFile_(SHEET_BUGREPORT);
   const data = sheet.getDataRange().getValues();
   const hdrs = data[0].map(String);
@@ -1289,12 +1324,12 @@ function updateBugReportStatus(issueId, newStatus, adminName) {
   ensureHeaders(commentSheet, BUGREPORT_COMMENT_COLS);
   commentSheet.appendRow([
     Utilities.getUuid(), issueId, 'system', adminName || '管理者', '',
-    'ステータスを「' + BUGREPORT_STATUS_LABELS[newStatus] + '」に変更しました', now
+    'ステータスを「' + newStatus + '」に変更しました', now
   ]);
   const result = { ok: true };
   if (lwUserId) {
     result._notify = { type: 'bugReportLineWorksAck', userId: lwUserId,
-      message: 'ご報告いただいた内容(「' + contentPreview + '」)のステータスが「' + BUGREPORT_STATUS_LABELS[newStatus] + '」になりました。' };
+      message: 'ご報告いただいた内容(「' + contentPreview + '」)のステータスが「' + newStatus + '」になりました。' };
   }
   return result;
 }

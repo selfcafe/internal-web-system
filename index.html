@@ -4337,11 +4337,13 @@ function renderLostItems(loading = false) {
    issue一覧はgetBugReports、1件のスレッド(コメント＋ステータス変更のシステム発言)は
    getBugReportThreadで都度取得する(lost_itemsのような25秒キャッシュはバックエンド側で
    既に行っているため、クライアント側はシンプルにタブ表示・投稿の都度読み直すだけでよい) */
-const BUGREPORT_STATUS_LABELS = { open: '未対応', doing: '対応中', done: '完了' };
+// 2026-09-19: statusの格納値そのものを日本語ラベル(未対応/対応中/完了)に変更(Sheets側で
+// プルダウン表示するため、表示用ラベルと格納値を分ける旧方式(open/doing/done)を廃止)。
+// gas_backend.gs側もBUGREPORT_STATUSESとして同じ3値を正とする。
 const BUGREPORT_STATUS_STYLE = {
-  open:  'background:#fee2e2;color:#dc2626',
-  doing: 'background:#ffedd5;color:#c2410c',
-  done:  'background:#d4edde;color:#1a5c30',
+  '未対応': 'background:#fee2e2;color:#dc2626',
+  '対応中': 'background:#ffedd5;color:#c2410c',
+  '完了':  'background:#d4edde;color:#1a5c30',
 };
 function _bugReportKindStyle(active, color, bg, border) {
   return `flex:1;padding:10px;border-radius:8px;font-size:13px;font-weight:700;font-family:inherit;cursor:pointer;` +
@@ -4507,8 +4509,8 @@ function renderBugReports(loading = false) {
     const isOpen = _bugReportOpenThreadId === issue.id;
     const kindLabel = issue.kind === 'request' ? '依頼' : 'バグ';
     const kindColor = issue.kind === 'request' ? '#3d8154' : '#dc2626';
-    const statusStyle = BUGREPORT_STATUS_STYLE[issue.status] || BUGREPORT_STATUS_STYLE.open;
-    const statusLabel = BUGREPORT_STATUS_LABELS[issue.status] || issue.status;
+    const statusStyle = BUGREPORT_STATUS_STYLE[issue.status] || BUGREPORT_STATUS_STYLE['未対応'];
+    const statusLabel = issue.status || '未対応';
     // 自店舗のパートナー自身の投稿ではなく、社員/管理者が代わりに投稿したものだと分かるようラベルを付ける
     // (2026-09-15、社員が特定店舗宛に投稿した場合にパートナー側の一覧に見分けが付かなかったため追加)
     const posterBadge = issue.poster_type === 'staff' ? '<span style="font-size:11px;font-weight:700;color:#6b7280;background:#f0f0f0;padding:2px 8px;border-radius:99px">社員投稿</span>'
@@ -4583,8 +4585,8 @@ function buildBugReportAdminTable(issues) {
     const selected = issue.id === adminBugReportSelectedId;
     const kindLabel = issue.kind === 'request' ? '依頼' : 'バグ';
     const kindColor = issue.kind === 'request' ? '#3d8154' : '#dc2626';
-    const statusStyle = BUGREPORT_STATUS_STYLE[issue.status] || BUGREPORT_STATUS_STYLE.open;
-    const statusLabel = BUGREPORT_STATUS_LABELS[issue.status] || issue.status;
+    const statusStyle = BUGREPORT_STATUS_STYLE[issue.status] || BUGREPORT_STATUS_STYLE['未対応'];
+    const statusLabel = issue.status || '未対応';
     const storeLabel = issue.store_name || '全店舗共通';
     // 経路(ポータル投稿 or LINE WORKS投稿)を分析しやすいよう一覧にも出す(2026-09-19追加)
     const channelLabel = issue.poster_type === 'lineworks' ? 'LINE WORKS' : 'ポータル';
@@ -4689,11 +4691,11 @@ function buildBugReportAdminDetail(issue) {
     <div style="font-size:13.5px;line-height:1.65;color:#333;background:#f8f4e7;border-radius:8px;padding:12px 14px;margin-bottom:16px;white-space:pre-wrap">${esc(issue.content)}</div>
     ${issue.image_urls ? `<div style="margin-bottom:16px">${buildLostImageCell(String(issue.image_urls).split(',').filter(Boolean), 80)}</div>` : ''}
     <div style="display:flex;gap:6px;margin-bottom:18px">
-      ${['open','doing','done'].map(s => {
+      ${['未対応','対応中','完了'].map(s => {
         const on = issue.status === s;
-        const c = { open:'#dc2626', doing:'#c2410c', done:'#1a5c30' }[s];
+        const c = { '未対応':'#dc2626', '対応中':'#c2410c', '完了':'#1a5c30' }[s];
         return `<button onclick="changeBugReportStatus('${esc(issue.id)}','${s}')"
-          style="flex:1;padding:8px 6px;font-size:12.5px;font-weight:700;border-radius:7px;font-family:inherit;cursor:pointer;${on ? `background:${c};color:#fff;border:1.5px solid ${c}` : `background:#fff;color:${c};border:1.5px solid ${c}`}">${BUGREPORT_STATUS_LABELS[s]}</button>`;
+          style="flex:1;padding:8px 6px;font-size:12.5px;font-weight:700;border-radius:7px;font-family:inherit;cursor:pointer;${on ? `background:${c};color:#fff;border:1.5px solid ${c}` : `background:#fff;color:${c};border:1.5px solid ${c}`}">${s}</button>`;
       }).join('')}
     </div>
     <div id="bugreport-admin-thread"><div style="color:#aaa;font-size:12px;padding:6px 0">読み込み中…</div></div>
@@ -4775,9 +4777,9 @@ function renderBugReportAdminBody() {
       <span style="font-size:12px;font-weight:700;color:#888">ステータス</span>
       <select onchange="updateBugReportAdminFilter('status', this.value)" style="border:1px solid #ddd;border-radius:5px;padding:7px 10px;font-size:12.5px;font-family:inherit">
         <option value="">すべて</option>
-        <option value="open" ${f.status==='open'?'selected':''}>未対応</option>
-        <option value="doing" ${f.status==='doing'?'selected':''}>対応中</option>
-        <option value="done" ${f.status==='done'?'selected':''}>完了</option>
+        <option value="未対応" ${f.status==='未対応'?'selected':''}>未対応</option>
+        <option value="対応中" ${f.status==='対応中'?'selected':''}>対応中</option>
+        <option value="完了" ${f.status==='完了'?'selected':''}>完了</option>
       </select>
       <span style="font-size:12px;font-weight:700;color:#888">種別</span>
       <select onchange="updateBugReportAdminFilter('kind', this.value)" style="border:1px solid #ddd;border-radius:5px;padding:7px 10px;font-size:12.5px;font-family:inherit">
