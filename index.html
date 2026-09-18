@@ -5971,10 +5971,12 @@ function _announceScopeLabel(scopeStr) {
 let announceItems = [];
 let announceLoadedForStore = null;
 
-// renderStore()の先頭から毎回呼ぶが、同じ店舗の間は再取得しない(ensureOrderConsumptionLoadedと同じ考え方)
+// renderStore()の先頭から毎回呼ぶが、同じ店舗の間は再取得しない(ensureOrderConsumptionLoadedと同じ考え方)。
+// 表示までの体感速度対策として、取得中は即座に「読み込み中」を出し、空のまま待たせない(2026-09-19)
 async function ensureAnnounceWidgetLoaded(storeId) {
   if (announceLoadedForStore !== storeId) {
     announceLoadedForStore = storeId;
+    renderAnnounceWidget(true);
     try { announceItems = await gasGet('getAnnouncements', { storeId }) || []; }
     catch (e) { console.error('getAnnouncements error:', e); announceItems = []; }
   }
@@ -5983,7 +5985,7 @@ async function ensureAnnounceWidgetLoaded(storeId) {
   }
 }
 
-function renderAnnounceWidget() {
+function renderAnnounceWidget(loading) {
   const wrap = document.getElementById('announce-widget-wrap');
   if (!wrap) return;
   const items = announceItems.slice(0, 5);
@@ -5996,11 +5998,11 @@ function renderAnnounceWidget() {
         <div style="font-weight:700;font-size:16px;color:#333;flex:1">業務連絡</div>
         <span onclick="showAnnounceList()" style="font-size:12.5px;color:#22703d;cursor:pointer;white-space:nowrap">一覧を見る</span>
       </div>
-      <div>${items.length ? items.map(it => `
+      <div>${loading ? '<div style="padding:14px 16px;color:#aaa;font-size:12.5px">読み込み中…</div>' : (items.length ? items.map(it => `
           <div onclick="showAnnounceDetail('${it.id}')" style="display:flex;gap:10px;align-items:flex-start;padding:11px 14px;border-bottom:1px solid #f5f3e8;cursor:pointer;box-sizing:border-box">
             <div style="font-size:11px;color:#999;padding-top:2px;flex-shrink:0;width:58px">${esc(_announceDateLabel(it.publish_date))}</div>
             <div style="flex:1;font-size:13px;color:#22703d;font-weight:600;line-height:1.5">${esc(it.title)}</div>
-          </div>`).join('') : '<div style="padding:14px 16px;color:#aaa;font-size:12.5px">現在、業務連絡はありません</div>'}
+          </div>`).join('') : '<div style="padding:14px 16px;color:#aaa;font-size:12.5px">現在、業務連絡はありません</div>')}
       </div>
     </div>`;
 }
@@ -6038,6 +6040,7 @@ function _announceDetailHTML(it, onBack) {
       <div style="font-size:18px;font-weight:700;color:#333;line-height:1.5;margin-bottom:12px">${esc(it.title)}</div>
       <div style="background:#f1eede;border-radius:6px;padding:7px 12px;font-size:12px;color:#888;margin-bottom:18px;display:inline-block">${esc(_announceDateLabel(it.publish_date))} 更新</div>
       <div style="font-size:13.5px;color:#444;line-height:1.9;white-space:pre-wrap">${esc(it.body)}</div>
+      ${it.image_urls ? `<div style="margin-top:18px">${buildLostImageCell(String(it.image_urls).split(',').filter(Boolean), 90)}</div>` : ''}
     </div>`;
 }
 
@@ -6073,17 +6076,19 @@ let adminAnnounceItems = [];
 let adminAnnounceLoaded = false;
 let adminAnnounceDrillView = null; // null | 'list' | { detailId }
 
-// renderAdmin()から毎回呼ぶが、初回のみ取得する（各admin viewの切替のたびに取り直さない）
+// renderAdmin()から毎回呼ぶが、初回のみ取得する（各admin viewの切替のたびに取り直さない）。
+// 表示までの体感速度対策として、取得中は即座に「読み込み中」を出す(2026-09-19)
 async function ensureAdminAnnounceWidgetLoaded() {
   if (!adminAnnounceLoaded) {
     adminAnnounceLoaded = true;
+    renderAdminAnnounceWidget(true);
     try { adminAnnounceItems = await gasGet('getAnnouncements', {}) || []; }
     catch (e) { console.error('getAnnouncements error:', e); adminAnnounceItems = []; }
   }
   if (!adminAnnounceDrillView) renderAdminAnnounceWidget();
 }
 
-function renderAdminAnnounceWidget() {
+function renderAdminAnnounceWidget(loading) {
   const wrap = document.getElementById('admin-announce-widget-wrap');
   if (!wrap) return;
   const items = adminAnnounceItems.filter(i => i.status === 'published').slice(0, 5);
@@ -6097,11 +6102,11 @@ function renderAdminAnnounceWidget() {
         <span onclick="showAdminAnnounceList()" style="font-size:12.5px;color:#22703d;cursor:pointer;white-space:nowrap">一覧を見る</span>
         <button onclick="openAnnounceForm()" style="display:inline-flex;align-items:center;gap:5px;background:#22703d;color:white;border:none;border-radius:6px;padding:6px 12px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit">＋ 新規作成</button>
       </div>
-      <div>${items.length ? items.map(it => `
+      <div>${loading ? '<div style="padding:14px 16px;color:#aaa;font-size:12.5px">読み込み中…</div>' : (items.length ? items.map(it => `
           <div onclick="showAdminAnnounceDetail('${it.id}')" style="display:flex;gap:10px;align-items:flex-start;padding:11px 16px;border-bottom:1px solid #f5f3e8;cursor:pointer;box-sizing:border-box">
             <div style="font-size:11px;color:#999;padding-top:2px;flex-shrink:0;width:70px">${esc(_announceDateLabel(it.publish_date))}</div>
             <div style="flex:1;font-size:13px;color:#22703d;font-weight:600;line-height:1.5">${esc(it.title)}</div>
-          </div>`).join('') : '<div style="padding:14px 16px;color:#aaa;font-size:12.5px">現在、業務連絡はありません</div>'}
+          </div>`).join('') : '<div style="padding:14px 16px;color:#aaa;font-size:12.5px">現在、業務連絡はありません</div>')}
       </div>
     </div>`;
 }
@@ -6166,7 +6171,7 @@ function renderAdminAnnounceDrill() {
                     : '<span style="display:inline-block;background:#f3f4f6;color:#6b7280;font-size:11.5px;font-weight:700;border-radius:99px;padding:3px 10px">下書き</span>'}</td>
                 <td style="padding:9px 10px;white-space:nowrap">
                   <button onclick="openAnnounceForm('${it.id}')" style="background:#22703d;color:white;padding:6px 12px;font-size:12.5px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;margin-right:6px">編集</button>
-                  <button onclick="deleteAnnounceItem('${it.id}')" style="background:#ef4444;color:white;padding:6px 12px;font-size:12.5px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">削除</button>
+                  <button onclick="deleteAnnounceItem('${it.id}', this)" style="background:#ef4444;color:white;padding:6px 12px;font-size:12.5px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">削除</button>
                 </td>
               </tr>`).join('') : '<tr><td colspan="5" style="padding:20px;text-align:center;color:#aaa;font-size:13px">業務連絡はありません</td></tr>'}
           </tbody>
@@ -6194,13 +6199,54 @@ function renderAdminAnnounceDrill() {
       </div>
       <div style="background:#f1eede;border-radius:6px;padding:7px 12px;font-size:12px;color:#888;margin-bottom:18px;display:inline-block">${esc(_announceDateLabel(it.publish_date))} 更新</div>
       <div style="font-size:13.5px;color:#444;line-height:1.9;white-space:pre-wrap">${esc(it.body)}</div>
+      ${it.image_urls ? `<div style="margin-top:18px">${buildLostImageCell(String(it.image_urls).split(',').filter(Boolean), 90)}</div>` : ''}
     </div>`;
 }
 
 /* ----- 管理者側: 新規作成・編集フォーム(モーダル) ----- */
+/* 画像添付はlost_itemsと同じ方式(compressLostImage/_blobToBase64を流用し、Drive保存はサーバー側で実施)。
+   _announceFormImagesは今回新たに添付した画像、_announceFormExistingUrlsは編集時に残っている既存画像 */
+
+let _announceFormImages = [];
+let _announceFormExistingUrls = [];
+
+function previewAnnounceImage(input) {
+  const files = Array.from(input.files || []);
+  if (!files.length) return;
+  Promise.all(files.map(f => compressLostImage(f))).then(blobs => {
+    blobs.forEach(blob => _announceFormImages.push({ blob, url: URL.createObjectURL(blob) }));
+    renderAnnounceImagePreview();
+  });
+  input.value = '';
+}
+function removeAnnounceImage(idx) {
+  const it = _announceFormImages[idx];
+  if (it) URL.revokeObjectURL(it.url);
+  _announceFormImages.splice(idx, 1);
+  renderAnnounceImagePreview();
+}
+function removeAnnounceExistingImage(idx) {
+  _announceFormExistingUrls.splice(idx, 1);
+  renderAnnounceImagePreview();
+}
+function renderAnnounceImagePreview() {
+  const wrap = document.getElementById('announce-form-image-preview');
+  if (!wrap) return;
+  const thumb = (src, onRemove) => `
+    <div style="position:relative">
+      <img src="${esc(src)}" style="width:64px;height:64px;object-fit:cover;border-radius:6px;border:1px solid #ddd">
+      <button type="button" onclick="${onRemove}" style="position:absolute;top:-6px;right:-6px;width:20px;height:20px;border-radius:99px;background:#ef4444;color:white;border:none;font-size:12px;line-height:1;cursor:pointer">×</button>
+    </div>`;
+  wrap.innerHTML =
+    _announceFormExistingUrls.map((u, i) => thumb(u, `removeAnnounceExistingImage(${i})`)).join('') +
+    _announceFormImages.map((it, i) => thumb(it.url, `removeAnnounceImage(${i})`)).join('');
+}
 
 function openAnnounceForm(id) {
+  _announceFormImages.forEach(it => URL.revokeObjectURL(it.url));
+  _announceFormImages = [];
   const item = id ? adminAnnounceItems.find(a => String(a.id) === String(id)) : null;
+  _announceFormExistingUrls = item && item.image_urls ? String(item.image_urls).split(',').filter(Boolean) : [];
   const areas = item ? _announceScopeToAreas(item.scope) : [];
   const isAll = !item || !item.scope || item.scope === 'all';
   const today = new Date().toLocaleDateString('sv');
@@ -6218,6 +6264,19 @@ function openAnnounceForm(id) {
 
         <div style="font-size:11px;color:#888;margin-bottom:4px">本文</div>
         <textarea id="announce-form-body" rows="5" oninput="autoGrow(this)" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:9px 10px;font-size:13.5px;font-family:inherit;box-sizing:border-box;min-height:120px;line-height:1.6;margin-bottom:14px;resize:none">${esc(item ? item.body : '')}</textarea>
+
+        <div style="font-size:11px;color:#888;margin-bottom:4px">画像(複数可)</div>
+        <div style="display:flex;gap:8px;margin-bottom:8px">
+          <label style="display:inline-flex;align-items:center;gap:6px;background:#f0f7e8;border:1px solid #b8d4a0;border-radius:6px;padding:7px 12px;font-size:13px;cursor:pointer;font-family:inherit;white-space:nowrap">
+            📁 写真を添付
+            <input type="file" accept="image/*" multiple style="display:none" onchange="previewAnnounceImage(this)">
+          </label>
+          <label style="display:inline-flex;align-items:center;gap:6px;background:#f0f7e8;border:1px solid #b8d4a0;border-radius:6px;padding:7px 12px;font-size:13px;cursor:pointer;font-family:inherit;white-space:nowrap">
+            📷 撮影
+            <input type="file" accept="image/*" capture="environment" style="display:none" onchange="previewAnnounceImage(this)">
+          </label>
+        </div>
+        <div id="announce-form-image-preview" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:14px"></div>
 
         <div style="display:flex;gap:14px;margin-bottom:14px;flex-wrap:wrap">
           <div style="flex:1;min-width:140px">
@@ -6252,10 +6311,11 @@ function openAnnounceForm(id) {
 
         <div style="display:flex;justify-content:flex-end;gap:8px">
           <button onclick="closeAnnounceForm()" style="background:#f3f4f6;color:#555;padding:9px 18px;font-size:13.5px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">キャンセル</button>
-          <button onclick="saveAnnounceForm()" style="background:#22703d;color:white;padding:9px 20px;font-size:13.5px;font-weight:700;border-radius:6px;border:none;cursor:pointer;font-family:inherit">保存する</button>
+          <button id="announce-form-save-btn" onclick="saveAnnounceForm()" style="background:#22703d;color:white;padding:9px 20px;font-size:13.5px;font-weight:700;border-radius:6px;border:none;cursor:pointer;font-family:inherit">保存する</button>
         </div>
       </div>
     </div>`;
+  renderAnnounceImagePreview();
 }
 
 function _toggleAnnounceScopeAreas() {
@@ -6274,10 +6334,15 @@ function _setAnnounceFormStatus(status) {
 }
 
 function closeAnnounceForm() {
+  _announceFormImages.forEach(it => URL.revokeObjectURL(it.url));
+  _announceFormImages = [];
   document.getElementById('admin-announce-form-root').innerHTML = '';
 }
 
+// 保存中はボタンを無効化+ラベル変更する(バグ報告/忘れ物の投稿ボタンと同じパターン)。
+// GASの応答が数秒かかることがあり、無反応に見えて連打→重複作成される事故を防ぐ(2026-09-19)
 async function saveAnnounceForm() {
+  const btn = document.getElementById('announce-form-save-btn');
   const id = document.getElementById('announce-form-id').value || null;
   const title = document.getElementById('announce-form-title').value.trim();
   if (!title) { alert('タイトルを入力してください'); return; }
@@ -6287,21 +6352,38 @@ async function saveAnnounceForm() {
   const scopeMode = document.getElementById('announce-form-scope-mode').value;
   const scope = scopeMode === 'all' ? ['all']
     : Array.from(document.querySelectorAll('.announce-form-area-cb:checked')).map(cb => cb.value);
-  const r = await gasPost('saveAnnouncement', { id, title, body, publishDate, scope, status, adminName: '' });
-  if (r.error) { alert('保存に失敗しました: ' + r.error); return; }
-  closeAnnounceForm();
-  adminAnnounceLoaded = false;
-  await ensureAdminAnnounceWidgetLoaded();
-  if (adminAnnounceDrillView) renderAdminAnnounceDrill();
+  if (btn) { btn.disabled = true; btn.textContent = '保存中…'; }
+  try {
+    const imagesBase64 = await Promise.all(_announceFormImages.map(it => _blobToBase64(it.blob)));
+    const r = await gasPost('saveAnnouncement', {
+      id, title, body, publishDate, scope, status, adminName: '',
+      imagesBase64, imageMime: 'image/jpeg', keepImageUrls: _announceFormExistingUrls
+    });
+    if (r.error) throw new Error(r.error);
+    closeAnnounceForm();
+    adminAnnounceLoaded = false;
+    await ensureAdminAnnounceWidgetLoaded();
+    if (adminAnnounceDrillView) renderAdminAnnounceDrill();
+  } catch (e) {
+    alert('保存に失敗しました: ' + e.message);
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '保存する'; }
+  }
 }
 
-async function deleteAnnounceItem(id) {
+async function deleteAnnounceItem(id, btn) {
   if (!confirm('この業務連絡を削除しますか？')) return;
-  const r = await gasPost('deleteAnnouncement', { id });
-  if (r.error) { alert('削除に失敗しました: ' + r.error); return; }
-  adminAnnounceLoaded = false;
-  await ensureAdminAnnounceWidgetLoaded();
-  if (adminAnnounceDrillView) renderAdminAnnounceDrill();
+  if (btn) { btn.disabled = true; btn.textContent = '削除中…'; }
+  try {
+    const r = await gasPost('deleteAnnouncement', { id });
+    if (r.error) throw new Error(r.error);
+    adminAnnounceLoaded = false;
+    await ensureAdminAnnounceWidgetLoaded();
+    if (adminAnnounceDrillView) renderAdminAnnounceDrill();
+  } catch (e) {
+    alert('削除に失敗しました: ' + e.message);
+    if (btn) { btn.disabled = false; btn.textContent = '削除'; }
+  }
 }
 
 let adminLostStore = '';

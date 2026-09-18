@@ -133,7 +133,7 @@ const BUGREPORT_COMMENT_COLS = ['id','issue_id','poster_type','poster_name','sto
 // 業務連絡（管理者が作成・公開するお知らせ。2026-09-18追加）。scopeは'all'または
 // _areaForStore_()が返すエリア名(AREA_STORES参照)をカンマ区切りで保持する
 const SHEET_ANNOUNCEMENTS = 'announcements';
-const ANNOUNCEMENT_COLS = ['id','title','body','publish_date','scope','status','created_at','updated_at'];
+const ANNOUNCEMENT_COLS = ['id','title','body','publish_date','scope','status','created_at','updated_at','image_urls'];
 
 // エリア別店舗ID（デフォルト割り当て。フロントのREGIONS定数と同じ内容。管理者が「店舗管理」画面の
 // 「店舗のエリア変更」で個別に上書きした場合は、app_settingsの'store_regions'キー(_areaForStore_内で
@@ -554,7 +554,7 @@ function doPost(e) {
     else if (b.action === 'addBugReportComment')  result = addBugReportComment(b.issueId, b.posterType, b.posterName, b.storeId, b.text);
     else if (b.action === 'updateBugReportStatus') result = updateBugReportStatus(b.issueId, b.newStatus, b.adminName);
     else if (b.action === 'deleteBugReport')      result = deleteBugReport(b.issueId);
-    else if (b.action === 'saveAnnouncement')   result = saveAnnouncement(b.id, b.title, b.body, b.publishDate, b.scope, b.status, b.adminName);
+    else if (b.action === 'saveAnnouncement')   result = saveAnnouncement(b.id, b.title, b.body, b.publishDate, b.scope, b.status, b.adminName, b.imagesBase64, b.imageMime, b.keepImageUrls);
     else if (b.action === 'deleteAnnouncement') result = deleteAnnouncement(b.id);
     else result = { error: 'Unknown action: ' + b.action };
   } catch(err) {
@@ -1224,8 +1224,10 @@ function getAnnouncements(storeId) {
 }
 
 // idを指定すると既存行を更新、省略すると新規作成する。scopeは配列で受け取り
-// ('all'、またはAREA_STORESのキーと一致するエリア名の配列)、カンマ区切り文字列にして保存する
-function saveAnnouncement(id, title, body, publishDate, scope, status, adminName) {
+// ('all'、またはAREA_STORESのキーと一致するエリア名の配列)、カンマ区切り文字列にして保存する。
+// 画像はlost_itemsと同じ方式(Driveに保存しURLをカンマ区切りで1列に格納)。keepImageUrlsは
+// 編集時に「残す」既存URLの配列(外された分はDriveからも削除する)、imagesBase64は新規追加分
+function saveAnnouncement(id, title, body, publishDate, scope, status, adminName, imagesBase64, imageMime, keepImageUrls) {
   if (!title) return { error: 'タイトルを入力してください' };
   const scopeStr = (!scope || scope.length === 0 || scope.indexOf('all') >= 0) ? 'all' : scope.join(',');
   const statusVal = status === 'published' ? 'published' : 'draft';
@@ -1233,15 +1235,29 @@ function saveAnnouncement(id, title, body, publishDate, scope, status, adminName
   ensureHeaders(sheet, ANNOUNCEMENT_COLS);
   const now = new Date();
   const pubDate = publishDate ? new Date(publishDate) : now;
+  const targetId = id || Utilities.getUuid();
+
+  const kept = (keepImageUrls || []).filter(Boolean);
+  const uploaded = (imagesBase64 || []).map((b64, i) =>
+    saveImageToDrive(b64, imageMime || 'image/jpeg', targetId + '_' + (kept.length + i))
+  );
+  const imageUrlsStr = kept.concat(uploaded).join(',');
 
   if (id) {
     const data = sheet.getDataRange().getValues();
     const hdrs = data[0].map(String);
     const idIdx = hdrs.indexOf('id');
+    const imgIdx = hdrs.indexOf('image_urls');
     let found = false;
     for (let i = 1; i < data.length; i++) {
       if (String(data[i][idIdx]) === String(id)) {
         const rowNum = i + 1;
+        if (imgIdx >= 0) {
+          const oldUrls = String(data[i][imgIdx] || '').split(',').filter(Boolean);
+          const removed = oldUrls.filter(u => kept.indexOf(u) < 0);
+          if (removed.length) _trashDriveImages(removed.join(','));
+          sheet.getRange(rowNum, imgIdx + 1).setValue(imageUrlsStr);
+        }
         sheet.getRange(rowNum, hdrs.indexOf('title') + 1).setValue(title);
         sheet.getRange(rowNum, hdrs.indexOf('body') + 1).setValue(body || '');
         sheet.getRange(rowNum, hdrs.indexOf('publish_date') + 1).setValue(pubDate);
@@ -1254,13 +1270,12 @@ function saveAnnouncement(id, title, body, publishDate, scope, status, adminName
     }
     if (!found) return { error: '指定の業務連絡が見つかりません' };
     _invalidateAnnouncementsCache_();
-    return { ok: true, id };
+    return { ok: true, id, image_urls: imageUrlsStr };
   }
 
-  const newId = Utilities.getUuid();
-  sheet.appendRow([newId, title, body || '', pubDate, scopeStr, statusVal, now, now]);
+  sheet.appendRow([targetId, title, body || '', pubDate, scopeStr, statusVal, now, now, imageUrlsStr]);
   _invalidateAnnouncementsCache_();
-  return { ok: true, id: newId };
+  return { ok: true, id: targetId, image_urls: imageUrlsStr };
 }
 
 function deleteAnnouncement(id) {
@@ -1268,8 +1283,10 @@ function deleteAnnouncement(id) {
   const data = sheet.getDataRange().getValues();
   const hdrs = data[0].map(String);
   const idIdx = hdrs.indexOf('id');
+  const imgIdx = hdrs.indexOf('image_urls');
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][idIdx]) === String(id)) {
+      if (imgIdx >= 0) _trashDriveImages(data[i][imgIdx]);
       sheet.deleteRow(i + 1);
       _invalidateAnnouncementsCache_();
       return { ok: true };
