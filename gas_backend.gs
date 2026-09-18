@@ -1116,7 +1116,7 @@ function _bugReportsRowsCached_() {
   const cache = CacheService.getScriptCache();
   const cached = cache.get(BUGREPORT_CACHE_KEY);
   if (cached) return JSON.parse(cached);
-  const rows = sheetRows(getSheet(SHEET_BUGREPORT), BUGREPORT_COLS).map(r => ({
+  const rows = sheetRows(getBugReportSheetFile_(SHEET_BUGREPORT), BUGREPORT_COLS).map(r => ({
     ...r,
     created_at: _dateTimeStr(r.created_at),
     updated_at: _dateTimeStr(r.updated_at)
@@ -1138,7 +1138,7 @@ function getBugReports(storeId) {
 
 // 1件のスレッド（コメント＋ステータス変更のシステム発言）を時系列順で返す
 function getBugReportThread(issueId) {
-  const rows = sheetRows(getSheet(SHEET_BUGREPORT_COMMENTS), BUGREPORT_COMMENT_COLS)
+  const rows = sheetRows(getBugReportSheetFile_(SHEET_BUGREPORT_COMMENTS), BUGREPORT_COMMENT_COLS)
     .map(r => ({ ...r, created_at: _dateTimeStr(r.created_at) }))
     .filter(r => String(r.issue_id) === String(issueId));
   rows.sort((a, b) => String(a.created_at || '').localeCompare(String(b.created_at || '')));
@@ -1151,7 +1151,7 @@ function getBugReportThread(issueId) {
 function submitBugReport(storeId, kind, content, posterType, posterName, imagesBase64, imageMime, lineworksUserId) {
   if (!content) return { error: '内容を入力してください' };
   const storeName = storeId ? (_storeNames_()[storeId] || String(storeId)) : '';
-  const sheet = getSheet(SHEET_BUGREPORT);
+  const sheet = getBugReportSheetFile_(SHEET_BUGREPORT);
   ensureHeaders(sheet, BUGREPORT_COLS);
   _ensureColumnExists_(sheet, 'image_urls');
   _ensureColumnExists_(sheet, 'lineworks_user_id');
@@ -1176,7 +1176,7 @@ function submitBugReport(storeId, kind, content, posterType, posterName, imagesB
 // issueに1コメント追記する（返信・スレッドのやり取り用）
 function addBugReportComment(issueId, posterType, posterName, storeId, text) {
   if (!text) return { error: 'コメントを入力してください' };
-  const sheet = getSheet(SHEET_BUGREPORT_COMMENTS);
+  const sheet = getBugReportSheetFile_(SHEET_BUGREPORT_COMMENTS);
   ensureHeaders(sheet, BUGREPORT_COMMENT_COLS);
   const now = new Date();
   sheet.appendRow([Utilities.getUuid(), issueId, posterType || 'partner', posterName || '', storeId || '', text, now]);
@@ -1191,7 +1191,7 @@ const BUGREPORT_STATUS_LABELS = { open: '未対応', doing: '対応中', done: '
 // 結果を知らせる(2026-09-19追加。ポータル投稿はスレッドを開けば見えるため通知不要)
 function updateBugReportStatus(issueId, newStatus, adminName) {
   if (!BUGREPORT_STATUS_LABELS[newStatus]) return { error: '不正なステータスです: ' + newStatus };
-  const sheet = getSheet(SHEET_BUGREPORT);
+  const sheet = getBugReportSheetFile_(SHEET_BUGREPORT);
   const data = sheet.getDataRange().getValues();
   const hdrs = data[0].map(String);
   const idIdx = hdrs.indexOf('id');
@@ -1217,7 +1217,7 @@ function updateBugReportStatus(issueId, newStatus, adminName) {
   }
   if (!found) return { error: '指定のissueが見つかりません' };
   _invalidateBugReportsCache_();
-  const commentSheet = getSheet(SHEET_BUGREPORT_COMMENTS);
+  const commentSheet = getBugReportSheetFile_(SHEET_BUGREPORT_COMMENTS);
   ensureHeaders(commentSheet, BUGREPORT_COMMENT_COLS);
   commentSheet.appendRow([
     Utilities.getUuid(), issueId, 'system', adminName || '管理者', '',
@@ -1232,7 +1232,7 @@ function updateBugReportStatus(issueId, newStatus, adminName) {
 }
 
 function _touchBugReportUpdatedAt_(issueId, when) {
-  const sheet = getSheet(SHEET_BUGREPORT);
+  const sheet = getBugReportSheetFile_(SHEET_BUGREPORT);
   const data = sheet.getDataRange().getValues();
   const hdrs = data[0].map(String);
   const idIdx = hdrs.indexOf('id');
@@ -1249,7 +1249,7 @@ function _touchBugReportUpdatedAt_(issueId, when) {
 // issue本体と、紐づくコメント(スレッド)を丸ごと削除する(誤投稿・テスト投稿の削除用)。
 // 添付画像がある場合はDriveからも削除する(2026-09-19、画像添付追加に合わせて対応)
 function deleteBugReport(issueId) {
-  const sheet = getSheet(SHEET_BUGREPORT);
+  const sheet = getBugReportSheetFile_(SHEET_BUGREPORT);
   const data = sheet.getDataRange().getValues();
   const idIdx = data[0].indexOf('id');
   const imgIdx = data[0].indexOf('image_urls');
@@ -1265,7 +1265,7 @@ function deleteBugReport(issueId) {
   if (!found) return { error: '指定のissueが見つかりません' };
   _invalidateBugReportsCache_();
 
-  const commentSheet = getSheet(SHEET_BUGREPORT_COMMENTS);
+  const commentSheet = getBugReportSheetFile_(SHEET_BUGREPORT_COMMENTS);
   if (commentSheet.getLastRow() > 1) {
     const cData = commentSheet.getDataRange().getValues();
     const cIssueIdx = cData[0].indexOf('issue_id');
@@ -5587,7 +5587,7 @@ function handleLineWorksBugReportImage_(body) {
 
 // 既存のバグ報告(issueId)に画像を1枚追加する(LINE WORKS経由の後追い画像用、2026-09-19追加)
 function _appendBugReportImage_(issueId, base64) {
-  const sheet = getSheet(SHEET_BUGREPORT);
+  const sheet = getBugReportSheetFile_(SHEET_BUGREPORT);
   const data = sheet.getDataRange().getValues();
   const hdrs = data[0].map(String);
   const idIdx = hdrs.indexOf('id');

@@ -35,6 +35,7 @@ jobs:
           SHEET_ID: ${{ secrets.SHEET_ID }}
           INVENTORY_SHEET_ID: ${{ secrets.INVENTORY_SHEET_ID }}
           DELIVERY_HISTORY_SHEET_ID: ${{ secrets.DELIVERY_HISTORY_SHEET_ID }}
+          BUGREPORT_SHEET_ID: ${{ secrets.BUGREPORT_SHEET_ID }}
           CLASP_SCRIPT_ID: ${{ secrets.CLASP_SCRIPT_ID }}
           INVENTORY_SHEET_ID_ARCHIVE_JSON: ${{ vars.INVENTORY_SHEET_ID_ARCHIVE_JSON }}
         run: |
@@ -49,14 +50,17 @@ jobs:
           grep -qF "const SHEET_ID        = '';" gas-deploy/gas_backend.js
           grep -qF "const INVENTORY_SHEET_ID = '';" gas-deploy/gas_backend.js
           grep -qF "const DELIVERY_HISTORY_SHEET_ID = '';" gas-deploy/gas_backend.js
+          grep -qF "const BUGREPORT_SHEET_ID = '';" gas-deploy/gas_backend.js
 
           sed -i "s|const SHEET_ID        = '';|const SHEET_ID        = '${SHEET_ID}';|" gas-deploy/gas_backend.js
           sed -i "s|const INVENTORY_SHEET_ID = '';|const INVENTORY_SHEET_ID = '${INVENTORY_SHEET_ID}';|" gas-deploy/gas_backend.js
           sed -i "s|const DELIVERY_HISTORY_SHEET_ID = '';|const DELIVERY_HISTORY_SHEET_ID = '${DELIVERY_HISTORY_SHEET_ID}';|" gas-deploy/gas_backend.js
+          sed -i "s|const BUGREPORT_SHEET_ID = '';|const BUGREPORT_SHEET_ID = '${BUGREPORT_SHEET_ID}';|" gas-deploy/gas_backend.js
 
           grep -qF "const SHEET_ID        = '';" gas-deploy/gas_backend.js && { echo "::error::SHEET_ID置換に失敗しました"; exit 1; }
           grep -qF "const INVENTORY_SHEET_ID = '';" gas-deploy/gas_backend.js && { echo "::error::INVENTORY_SHEET_ID置換に失敗しました"; exit 1; }
           grep -qF "const DELIVERY_HISTORY_SHEET_ID = '';" gas-deploy/gas_backend.js && { echo "::error::DELIVERY_HISTORY_SHEET_ID置換に失敗しました"; exit 1; }
+          grep -qF "const BUGREPORT_SHEET_ID = '';" gas-deploy/gas_backend.js && { echo "::error::BUGREPORT_SHEET_ID置換に失敗しました"; exit 1; }
 
           # INVENTORY_SHEET_ID_ARCHIVE(年→旧ファイルIDのマップ)はGitHub Actions Variable
           # (vars.INVENTORY_SHEET_ID_ARCHIVE_JSON、rollover-inventory-year.ymlが更新する)から
