@@ -57,6 +57,11 @@ const MANUAL_DELIVERY_SHEET_ID = '';  // 手動納品入力スプレッドシー
 // 過去に複数回の事故（部署マスター誤上書き、注文データの巻き戻り削除、設定の競合消失）を起こしている
 // ため、消えては困る履歴ログはあえて別ファイルに分離する（この実行アカウントに編集権限で共有しておくこと）
 const DELIVERY_HISTORY_SHEET_ID = '';  // 発注履歴スプレッドシートのID
+// バグ報告(bug_reports/bug_report_comments)専用スプレッドシート(2026-09-19追加)。ユーザーの
+// 「データ量が増えても本番のメインDBに影響してほしくない・人が直接触るリスクを避けたい」との
+// 要望により、メインのSHEET_IDから分離した。provisionBugReportSheet_()で既存データを含めて
+// 新規作成し、このIDに切り替えてから使う(切替後はSHEET_ID側の元タブは手動で削除してよい)
+const BUGREPORT_SHEET_ID = '';  // バグ報告専用スプレッドシートのID
 // 請求書テンプレート（Googleスプレッドシート版）。このファイルをmakeCopy()で複製し、
 // セルに値を差し込んでからPDFエクスポートする。この実行アカウントに編集権限で共有しておくこと。
 const INVOICE_TEMPLATE_ID = '1GoprcmRPLAo5A7nAd1lWCSabDa1W8MkCuYy42P852ts'; // 2026-07-11: ユーザーが直接編集していた方の実ファイルに差し替え（旧IDは編集が反映されない別ファイルだった）
@@ -188,7 +193,7 @@ function _normalizeStoreId_(id) {
 function migrateStoreIdRenames() {
   // store_id列を持ちうる全スプレッドシートを対象にする(MANUAL_DELIVERY_SHEET_IDは
   // 現状未設定=空文字のため、設定済みのIDだけに絞る)
-  const spreadsheetIds = [SHEET_ID, INVENTORY_SHEET_ID, DELIVERY_HISTORY_SHEET_ID, MANUAL_DELIVERY_SHEET_ID].filter(Boolean);
+  const spreadsheetIds = [SHEET_ID, INVENTORY_SHEET_ID, DELIVERY_HISTORY_SHEET_ID, MANUAL_DELIVERY_SHEET_ID, BUGREPORT_SHEET_ID].filter(Boolean);
   const summary = [];
   spreadsheetIds.forEach(ssId => {
     const ss = SpreadsheetApp.openById(ssId);
@@ -421,6 +426,7 @@ function doGet(e) {
     else if (a === 'migrateStoreIdRenames')     result = migrateStoreIdRenames();
     else if (a === 'setupInventoryDisposedHighlight') result = setupInventoryDisposedHighlight();
     else if (a === 'provisionNewInventorySheet') result = provisionNewInventorySheet(e.parameter.label);
+    else if (a === 'provisionBugReportSheet')   result = provisionBugReportSheet_();
     else if (a === 'buildInventoryRollup')      result = buildInventoryRollup(e.parameter.periodLabel);
     else if (a === 'buildStoreInventorySheet')  result = buildStoreInventorySheet(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'buildReorderTestPlaySheet') result = buildReorderTestPlaySheet(e.parameter.storeId);
@@ -649,6 +655,46 @@ function provisionNewInventorySheet(label) {
   }
   const ss = SpreadsheetApp.create(name);
   return { ok: true, alreadyExisted: false, spreadsheetId: ss.getId(), url: ss.getUrl() };
+}
+
+// bug_reports/bug_report_commentsをメインのSHEET_IDから分離するための一度きりの移行用関数
+// (2026-09-19、ユーザーが「本番メインDBと同居させるリスクが怖い」ため分離を要望)。
+// _provisionDeliveryHistorySheet_と違い、こちらは既存データが既にあるため「空で新規作成」では
+// なく、メインのSHEET_ID側の現在のシートをcopyTo()でそのまま複製する(既存の投稿・スレッドを
+// 失わないため)。メインのSHEET_ID側の元タブは削除しない(このあと動作確認してから、必要なら
+// 手動で削除する)。
+// ?action=provisionBugReportSheet で実行。既に同名ファイルがあれば作り直さない(安全策)。
+// 実行後: 返ってきたspreadsheetIdをGitHub SecretsのBUGREPORT_SHEET_IDに設定し、
+// gas_backend.gs内のBUGREPORT_SHEET_ID(空文字のまま)がそのまま使われるよう再デプロイすること。
+function provisionBugReportSheet_() {
+  const name = 'セルフカフェ バグ報告データベース';
+  const existing = DriveApp.getFilesByName(name);
+  if (existing.hasNext()) {
+    const f = existing.next();
+    return { ok: true, alreadyExisted: true, spreadsheetId: f.getId(), url: f.getUrl() };
+  }
+  const ss = SpreadsheetApp.create(name);
+  const mainSs = SpreadsheetApp.openById(SHEET_ID);
+  const copiedNames = [];
+
+  [SHEET_BUGREPORT, SHEET_BUGREPORT_COMMENTS].forEach(sheetName => {
+    const src = mainSs.getSheetByName(sheetName);
+    if (src) {
+      const copied = src.copyTo(ss);
+      copied.setName(sheetName);
+      copiedNames.push(sheetName);
+    } else {
+      // 元シートが無ければ(=まだ1件も投稿が無い)ヘッダーだけの空シートを作る
+      ss.insertSheet(sheetName).appendRow(sheetName === SHEET_BUGREPORT ? BUGREPORT_COLS : BUGREPORT_COMMENT_COLS);
+    }
+  });
+
+  // SpreadsheetApp.create()直後は自動で空のデフォルトタブ(「シート1」等)が1枚残っているため、
+  // 他にシートがある場合のみ削除する(最後の1枚しかない状態で削除しようとするとエラーになる)
+  const defaultSheet = ss.getSheets().find(s => s.getName() === 'シート1' || s.getName() === 'Sheet1');
+  if (defaultSheet && ss.getSheets().length > 1) ss.deleteSheet(defaultSheet);
+
+  return { ok: true, alreadyExisted: false, spreadsheetId: ss.getId(), url: ss.getUrl(), copiedSheets: copiedNames };
 }
 
 // 調査用の一時的な読み取り専用ヘルパー(2026-07-28、「納品済み履歴」の実データがどのタブ・列構成
@@ -1901,6 +1947,14 @@ function getDeliveryHistorySheet() {
   const ss = SpreadsheetApp.openById(DELIVERY_HISTORY_SHEET_ID);
   return ss.getSheetByName(SHEET_DELIVERY_HISTORY) || ss.insertSheet(SHEET_DELIVERY_HISTORY);
 }
+
+// bug_reports/bug_report_comments用。getDeliveryHistorySheetと全く同じ考え方で、メインの
+// SHEET_IDとは別のBUGREPORT_SHEET_IDを開く(2026-09-19追加)
+function getBugReportSheetFile_(sheetName) {
+  const ss = SpreadsheetApp.openById(BUGREPORT_SHEET_ID);
+  return ss.getSheetByName(sheetName) || ss.insertSheet(sheetName);
+}
+
 // タイムゾーンはSHEET_ID側と共有せず、発注履歴スプレッドシート自体のものを使う
 // （_invSheetTzと同じ理由。別Driveのスプレッドシートなのでタイムゾーンが異なる可能性がある）
 let _cachedDelHistTz = null;
