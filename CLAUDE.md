@@ -122,3 +122,19 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 - 発火するとクラウドエージェントが`TZ=Asia/Tokyo date +%Y`でJST基準の年を取得し(発火時点で既にJSTは新年に入っているため、そのままの年を使う。`+1`しない・省略もしない)、GitHub MCPツール(`actions_run_trigger`、method: run_workflow)で`rollover-inventory-year.yml`を`year=<その年>, dry_run=false`で起動、完了まで監視して結果を報告する。失敗時は自動リトライせず報告のみ(本番Secrets操作のため)。
 - 事前にトリガー機構自体を`year=9999, dry_run=true`のデコイ値で実機テスト済み(2026-09-12、Run ID `34698834540`、success)——クラウド環境からのGitHub認証・workflow_dispatch起動が問題なく動くことを確認済み。
 - ルーティンの一覧・削除は https://claude.ai/code/routines から(API側に削除機能は無い)。プロンプト内容の変更は`/schedule`スキルの update アクションで行う。
+
+## 6. バグ報告機能・LINE WORKS Bot連携(2026-09-19時点)
+
+バグ報告/修正依頼機能は、専用スプレッドシート(`BUGREPORT_SHEET_ID`、`bug_reports`/`bug_report_comments`タブ)にデータを持つ。メインDB(`SHEET_ID`)とは分離済み(2026-09、リスク低減のため意図的に別ファイル化)。`status`列の格納値は2026-09-19に`open`/`doing`/`done`から**日本語ラベル(未対応/対応中/完了)そのもの**へ統一し、Sheets側にもプルダウン(データ入力規則)を設定した(`seedBugReportSheetGuide_`が「使い方」タブの整備・プルダウン設定・旧値移行を一括で行う、`?action=seedBugReportSheetGuide`で再実行可能・何度実行しても安全)。
+
+**投稿経路は2つ**:
+1. ポータル(パートナー/管理者/社員)からの投稿 — 画像添付対応済み(lost_itemsと同じDrive保存の仕組みを再利用)
+2. LINE WORKS Bot「バグ報告（社内ポータル）」(Bot ID 13130517)への1:1メッセージ — テキスト・画像とも受信対応済み(`handleLineWorksBugReport_`/`handleLineWorksBugReportImage_`)。認証情報は在庫差異Botとは別のScript Propertiesキー(`LW_CLIENT_ID_BUGREPORT`等)で独立管理。テキストと画像は別イベントで届くため、CacheServiceで10分間「直前の投稿」を紐付けて同じ報告にまとめる。
+
+**⚠️2026-09-19時点で未検証(実機テスト保留中、ユーザー指示「後日実装しよう」)**:
+- LINE WORKSコールバックで`body.botId`が実際にどの形で届くか(`_routeLineWorksCallback_`の振り分けロジック。botIdが一致しない場合は必ず既存の在庫差異Bot処理にフォールバックするため、テスト結果が想定外でも在庫差異Botの動作自体は壊れない設計)
+- 画像添付取得API(`bots/{botId}/attachments/{fileId}`)のレスポンス形状(`fileId`というフィールド名の想定で合っているか)
+
+次にこの機能を触るときは、まずLINE WORKSから実際にテキスト→画像→テキスト+画像の順で送ってもらい、`bug_reports`シートと`?action=getBugReports`の結果で正しく登録されたか確認するところから再開する。問題なければ、社内スタッフへのBot共有(LINE WORKS管理画面での公開範囲設定、GitHub Actions/claspでは操作不可のためユーザー側の作業)に進む。
+
+**過去の事故**: 2026-09-15、このBotのコードだけgit未コミットのままclaspで直接本番投入していたため、翌々日のGitHub Actions経由デプロイ(gas_backend.gsの内容でclasp push)で本番から消えた。以後、この種のBotコードは必ず`gas_backend.gs`にコミットしてからデプロイすること(`createBugReportBotJWT_`直上のコメント参照)。
