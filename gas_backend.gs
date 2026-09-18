@@ -521,7 +521,7 @@ function doPost(e) {
     if (b && b.storeId) b.storeId = _normalizeStoreId_(b.storeId);
     actionForErrorNotify_ = b && b.action;
     console.log('doPost action=' + (actionForErrorNotify_ || '(lineworks callback)') + ' storeId=' + (b.storeId || '') + ' lockWaitMs=' + _lockWaitMs);
-    if      (isLineWorksCallback_(b))           result = handleLineWorksStockInquiry_(b);
+    if      (isLineWorksCallback_(b))           result = _routeLineWorksCallback_(b);
     else if (b.action === 'saveOrders')         result = saveOrders(b.storeId, b.rows);
     else if (b.action === 'upsertOrders')       result = upsertOrderRows(b.storeId, b.rows);
     else if (b.action === 'deleteOrders')       result = deleteOrderRows(b.ids);
@@ -577,20 +577,25 @@ function doPost(e) {
   }
   // LINE WORKS通知はシートの読み書きと競合しないため、ロック解放後に送る（2026-07-24、
   // 打刻・休み申請の保存処理がロックを保持する時間を通知の通信時間分だけ短縮する狙い。
-  // 各保存関数がresult._notifyに要否を積んでおき、ここで種類ごとに振り分けて送信する）
+  // 各保存関数がresult._notifyに要否を積んでおき、ここで種類ごとに振り分けて送信する）。
+  // 1回の処理で複数件(例: 送信者への受信確認＋管理者への新規報告通知)送りたい場合は
+  // 配列で積んでおける(2026-09-19、LINE WORKS経由バグ報告の追加に合わせて対応)
   if (result && result._notify) {
-    const n = result._notify;
+    const notifies = Array.isArray(result._notify) ? result._notify : [result._notify];
     delete result._notify;
-    try {
-      if      (n.type === 'attendanceGpsIssue')    notifyAttendanceGpsIssue_(n.storeId, n.name);
-      else if (n.type === 'leaveRequestTomorrow')  notifyLeaveRequestTomorrow_(n.storeId, n.name, n.leaveDate);
-      else if (n.type === 'leaveRequestToday')     notifyLeaveRequestToday_(n.storeId, n.name, n.leaveDate);
-      else if (n.type === 'leaveRequestCancelled') notifyLeaveRequestCancelled_(n.storeId, n.name, n.leaveDate);
-      else if (n.type === 'stockInquiryReply')     sendStockBotNotification_(n.message, n.userId);
-      else if (n.type === 'bugReportNew')          sendBugReportBotNotification_(n.message);
-    } catch (e) {
-      console.error('LINE WORKS通知エラー(ロック解放後):', e.message);
-    }
+    notifies.forEach(n => {
+      try {
+        if      (n.type === 'attendanceGpsIssue')    notifyAttendanceGpsIssue_(n.storeId, n.name);
+        else if (n.type === 'leaveRequestTomorrow')  notifyLeaveRequestTomorrow_(n.storeId, n.name, n.leaveDate);
+        else if (n.type === 'leaveRequestToday')     notifyLeaveRequestToday_(n.storeId, n.name, n.leaveDate);
+        else if (n.type === 'leaveRequestCancelled') notifyLeaveRequestCancelled_(n.storeId, n.name, n.leaveDate);
+        else if (n.type === 'stockInquiryReply')     sendStockBotNotification_(n.message, n.userId);
+        else if (n.type === 'bugReportNew')          sendBugReportBotNotification_(n.message);
+        else if (n.type === 'bugReportLineWorksAck') sendBugReportBotNotification_(n.message, n.userId);
+      } catch (e) {
+        console.error('LINE WORKS通知エラー(ロック解放後):', e.message);
+      }
+    });
   }
   return json(result);
 }
@@ -5414,6 +5419,44 @@ function handleLineWorksStockInquiry_(body) {
       message: storeName + '・' + group.label + '(' + fromDate + '〜' + toDate + ')\n'
         + '補充: ' + inputQty + '個\nステラ実売上: ' + steraQty + '個\n差異: ' + diff + '個' }
   };
+}
+
+// このWebアプリのURLを複数のLINE WORKS Botのcallback URLに設定した場合、届いたメッセージが
+// どのBot宛かをbody.botIdで振り分ける(2026-09-19、バグ報告Bot「LW_BOT_ID_BUGREPORT」に
+// 受信機能を追加するために導入)。★注意: 実際のLINE WORKSコールバックにbotIdがどの形で
+// 入るかはこのコードベースではまだ実機未確認(これまで在庫差異Bot1つだけしか受信していな
+// かったため)。botIdが無い/一致しない場合は必ず従来通り在庫差異Bot側の処理に流し、
+// 既存の動作を絶対に壊さないようにしている
+function _routeLineWorksCallback_(body) {
+  try {
+    const bugBotId = PropertiesService.getScriptProperties().getProperty('LW_BOT_ID_BUGREPORT');
+    if (bugBotId && body.botId && String(body.botId) === String(bugBotId)) {
+      return handleLineWorksBugReport_(body);
+    }
+  } catch (e) {
+    console.error('_routeLineWorksCallback_ error:', e.message);
+  }
+  return handleLineWorksStockInquiry_(body);
+}
+
+// バグ報告Bot(LW_BOT_ID_BUGREPORT)への1:1メッセージをそのままバグ報告として登録する
+// (ポータルからの投稿と同じbug_reportsシートに集約。2026-09-19追加)。送信者がどの店舗か
+// 自動判定する手段が無いため、store_idは空("全店舗共通/社内"扱い、パートナー側には表示されない)
+// とし、poster_type='lineworks'で投稿経路を区別できるようにする。受付確認と管理者への新規報告
+// 通知の2件をまとめて返す(doPost側で配列のnotifyに対応済み)
+function handleLineWorksBugReport_(body) {
+  const userId = body.source && body.source.userId;
+  const text = (body.content && body.content.text) || '';
+  if (!userId || !text) return { ok: true, skipped: 'no_text_or_user' };
+
+  const r = submitBugReport('', 'bug', text, 'lineworks', '');
+  if (r.error) {
+    return { ok: true, _notify: { type: 'bugReportLineWorksAck', userId, message: '報告の登録に失敗しました: ' + r.error } };
+  }
+  const notifies = [{ type: 'bugReportLineWorksAck', userId,
+    message: '報告を受け付けました。管理者ポータルの「バグ報告」一覧に登録されました。\n\n受け付けた内容:\n' + text }];
+  if (r._notify) notifies.push(r._notify);
+  return { ok: true, id: r.id, _notify: notifies };
 }
 
 // 「御器所 水 8/1〜8/4で調べて」のようなテキストから店舗名・商品ラベル・日付範囲を抜き出す。
