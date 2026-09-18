@@ -111,7 +111,10 @@ function setOrderDate(id, v) {
 function confirmOne(id) {
   const it = items.find(x => x.id === id);
   if (!it) return;
-  if (!it.orderDate) { it.msg = '発注日を入力してください'; render(); return; }
+  if (!it.orderDate) {
+    if (!confirm('発注日が未入力です。本日の日付を自動入力して発注済みにしますか？')) return;
+    it.orderDate = toSlash(todayStr());
+  }
   it.status = 'ordered'; it.checked = false; it.msg = '';
   render();
 }

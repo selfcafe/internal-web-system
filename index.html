@@ -95,6 +95,9 @@
     .btn-unconfirm { background:#6b7280; color:white; padding:7px 11px; font-size:12px; }
     .btn-deny      { background:#ef4444; color:white; padding:7px 11px; font-size:12px; font-weight:700; }
     .btn-withdraw  { background:#dc2626; color:white; padding:6px 14px; font-size:13px; font-weight:700; border-radius:6px; border:none; cursor:pointer; font-family:inherit; }
+    .bulk-count { font-size:12.5px; color:#555; font-weight:600; }
+    .bulk-count.hint { color:#888; font-weight:400; }
+    .bulk-confirm-btn:disabled, .bulk-deny-btn:disabled { opacity:.4; cursor:not-allowed; }
     .action-wrap   { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
     .btn-history   { background:#fff; color:#374151; padding:10px 16px; font-size:14px; font-weight:600; border:1.5px solid #d1d5db; }
     .btn-history.active { background:#22703d; color:white; border-color:#22703d; }
@@ -6863,71 +6866,94 @@ function toggleOverviewStore(sid) {
 }
 
 function buildStoreOrderDetail(sid, groups) {
+  // 商品(行)単位で選択・発注済み/否認を行うため、一括操作バーの対象は「未対応(isNew&&!denied)」の
+  // 行idだけを集める(2026-09-19、商品別ボタン+一括操作の追加。依頼日はグループ共通表示のまま
+  // 維持するが、発注日・発注(操作)は行ごとに完全に独立させた)
+  const pendingIds = [];
+  groups.forEach(g => g.forEach(r => { if (r.isNew && !r.denied) pendingIds.push(r.id); }));
+
   let rows = '';
   groups.forEach((group, gi) => {
-    const first      = group[0];
-    const groupIsNew = group.some(r => r.isNew);
-    const reqDate    = first.requestDate;
-    const N          = group.length;
-    const isDenied   = group.some(r => r.denied);
-    const hasAllOrderDates = group.every(r => r.orderDate);
-    const msgId = `omsg-${sid}-${reqDate.replace(/-/g,'')}`;
-    const btn = isDenied
-      ? `<span style="font-size:12px;font-weight:700;color:#dc2626;background:#fee2e2;padding:4px 10px;border-radius:6px">否認済み</span>`
-      : groupIsNew
-        ? `<div>
-             <div style="display:flex;gap:4px;flex-wrap:wrap">
-               <button class="btn-confirm" onclick="confirmOrderCheck('${sid}','${esc(reqDate)}','${msgId}')">発注済み</button>
-               <button class="btn-deny" onclick="denyGroupCheck('${sid}','${esc(reqDate)}','${msgId}')"
-                 ${hasAllOrderDates ? 'style="opacity:0.4;cursor:not-allowed"' : ''}>否認</button>
-             </div>
-             <div id="${msgId}" style="font-size:11px;color:#ef4444;margin-top:4px;min-height:14px"></div>
-           </div>`
-        : `<span style="font-size:12px;font-weight:700;color:#22703d;background:#d4edde;padding:4px 10px;border-radius:6px">✓ 発注済み</span>`;
+    const first   = group[0];
+    const reqDate = first.requestDate;
+    const N       = group.length;
 
     group.forEach((row, i) => {
-      const pLabel  = prodByName(row.product)?.label || row.product || '—';
-      const cls     = groupIsNew ? 'new-req' : '';
-      const topBorder = gi > 0 && i === 0 ? 'border-top:2px solid #d1d5db;' : '';
+      const pLabel     = prodByName(row.product)?.label || row.product || '—';
+      const isPending  = row.isNew && !row.denied;
+      const isDenied   = !!row.denied;
+      const cls        = isPending ? 'new-req' : '';
+      const topBorder  = gi > 0 && i === 0 ? 'border-top:2px solid #d1d5db;' : '';
       const groupPhoto = first.imageUrl;
-      // 依頼日/発注日/発注(操作)の3列は同一グループ内で共通のため、テーブル表示ではrowspanで
-      // 先頭行にのみ描画してきたが、card-mode(モバイルの縦積みカード表示)では各<tr>が
-      // 独立したカードになりrowspanが機能しないため、2件目以降の行にも同じ内容を複製して
-      // data-labelで持たせ、テーブル表示時のみCSS(.grp-repeat)で非表示にする。
+      const msgId      = `omsg-${sid}-${row.id}`;
+
+      const checkboxCell = isPending
+        ? `<input type="checkbox" class="ordcb" data-sid="${esc(sid)}" data-rowid="${esc(row.id)}" onchange="toggleOrderRowCheck('${sid}','${row.id}',this.checked)">`
+        : '';
+      const orderDateCell = `<input type="date" value="${esc(row.orderDate)}" style="font-size:13px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-family:inherit" onchange="adminUpd('${sid}','${row.id}','orderDate',this.value)">`;
+      const actionCell = isDenied
+        ? `<span style="font-size:12px;font-weight:700;color:#dc2626;background:#fee2e2;padding:4px 10px;border-radius:6px">否認済み</span>`
+        : isPending
+          ? `<div>
+               <div style="display:flex;gap:4px;flex-wrap:wrap">
+                 <button class="btn-confirm" onclick="confirmOrderRowCheck('${sid}','${row.id}','${msgId}')">発注済み</button>
+                 <button class="btn-deny" onclick="denyOrderRowCheck('${sid}','${row.id}','${msgId}')"
+                   ${row.orderDate ? 'style="opacity:0.4;cursor:not-allowed"' : ''}>否認</button>
+               </div>
+               <div id="${msgId}" style="font-size:11px;color:#ef4444;margin-top:4px;min-height:14px"></div>
+             </div>`
+          : `<span style="font-size:12px;font-weight:700;color:#22703d;background:#d4edde;padding:4px 10px;border-radius:6px">✓ 発注済み</span>`;
+
+      // 依頼日(＋写真)は同一グループ内で共通のため、テーブル表示ではrowspan相当で先頭行にのみ
+      // 描画してきたが、card-mode(モバイルの縦積みカード表示)では各<tr>が独立したカードになり
+      // rowspanが機能しないため、2件目以降の行にも複製してdata-labelで持たせ、テーブル表示時のみ
+      // CSS(.grp-repeat)で非表示にする。発注日・発注(操作)は行ごとに独立した内容のため複製は不要。
       if (i === 0) {
         const photoCell = groupPhoto
           ? `<br><img src="${esc(groupPhoto)}" style="height:40px;border-radius:4px;cursor:pointer;margin-top:4px;border:1px solid #e5e7eb" onclick="showLostImage(this.src)" title="写真を拡大">`
           : '';
         rows += `<tr class="${cls}">
+          <td data-label="選択" style="vertical-align:middle;padding:8px 6px;${topBorder}">${checkboxCell}</td>
           <td data-label="依頼日" style="vertical-align:middle;padding:8px 10px;white-space:nowrap;${topBorder}">${esc(reqDate)||'—'}${photoCell}</td>
-          <td data-label="発注日" style="vertical-align:middle;padding:8px 10px;${topBorder}"><input type="date" value="${esc(first.orderDate)}" style="font-size:13px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-family:inherit" onchange="adminUpdGroup('${sid}','${esc(reqDate)}','orderDate',this.value)"></td>
+          <td data-label="発注日" style="vertical-align:middle;padding:8px 10px;${topBorder}">${orderDateCell}</td>
           <td data-label="納品予定日" style="padding:6px 8px;${topBorder}"><input type="date" value="${esc(row.deliveryDate)}" style="font-size:13px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-family:inherit" onchange="adminUpd('${sid}','${row.id}','deliveryDate',this.value)"></td>
           <td data-label="商品名" style="padding:8px 10px;${topBorder}">${esc(pLabel)}</td>
           <td data-label="数量" style="padding:8px 10px;white-space:nowrap;${topBorder}">${actualQtyCell(sid, row)}</td>
           <td data-label="備考" style="padding:6px 8px;${topBorder}"><textarea style="width:100%;min-width:100px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-size:12px;font-family:inherit;resize:vertical" placeholder="備考" onchange="adminUpd('${sid}','${row.id}','note',this.value)">${esc(row.note)}</textarea></td>
-          <td data-label="発注" style="vertical-align:middle;padding:8px 10px;white-space:nowrap;${topBorder}">${btn}</td>
+          <td data-label="発注" style="vertical-align:middle;padding:8px 10px;white-space:nowrap;${topBorder}">${actionCell}</td>
         </tr>`;
       } else {
         rows += `<tr class="${cls}">
+          <td data-label="選択" style="vertical-align:middle;padding:8px 6px">${checkboxCell}</td>
           <td data-label="依頼日" class="grp-repeat" style="vertical-align:middle;padding:8px 10px;white-space:nowrap">${esc(reqDate)||'—'}</td>
-          <td data-label="発注日" class="grp-repeat" style="vertical-align:middle;padding:8px 10px"><input type="date" value="${esc(first.orderDate)}" disabled style="font-size:13px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-family:inherit"></td>
+          <td data-label="発注日" style="vertical-align:middle;padding:8px 10px">${orderDateCell}</td>
           <td data-label="納品予定日" style="padding:6px 8px"><input type="date" value="${esc(row.deliveryDate)}" style="font-size:13px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-family:inherit" onchange="adminUpd('${sid}','${row.id}','deliveryDate',this.value)"></td>
           <td data-label="商品名" style="padding:8px 10px">${esc(pLabel)}</td>
           <td data-label="数量" style="padding:8px 10px;white-space:nowrap">${actualQtyCell(sid, row)}</td>
           <td data-label="備考" style="padding:6px 8px"><textarea style="width:100%;min-width:100px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-size:12px;font-family:inherit;resize:vertical" placeholder="備考" onchange="adminUpd('${sid}','${row.id}','note',this.value)">${esc(row.note)}</textarea></td>
-          <td data-label="発注" class="grp-repeat" style="vertical-align:middle;padding:8px 10px;white-space:nowrap">${btn}</td>
+          <td data-label="発注" style="vertical-align:middle;padding:8px 10px;white-space:nowrap">${actionCell}</td>
         </tr>`;
       }
       if (gi < groups.length - 1 && i === N - 1) {
-        rows += `<tr class="group-sep"><td colspan="7"></td></tr>`;
+        rows += `<tr class="group-sep"><td colspan="8"></td></tr>`;
       }
     });
   });
 
   const isMobileDetail = window.innerWidth < 640;
+  const bulkBar = pendingIds.length ? `
+    <div id="order-bulk-bar-${esc(sid)}" style="display:flex;align-items:center;gap:12px;background:#fff;border-radius:8px;padding:8px 12px;margin-bottom:8px;box-shadow:0 1px 4px rgba(0,0,0,.06);flex-wrap:wrap">
+      <span class="bulk-count hint">一括対応時は、チェックボックスにチェックを入れてください</span>
+      <div style="flex:1"></div>
+      <button class="btn-confirm bulk-confirm-btn" disabled onclick="bulkConfirmOrderRows('${esc(sid)}')" style="padding:7px 14px;font-size:12.5px">一括発注済み</button>
+      <button class="btn-deny bulk-deny-btn" disabled onclick="bulkDenyOrderRows('${esc(sid)}')" style="padding:7px 14px;font-size:12.5px">一括否認</button>
+    </div>` : '';
+
   return `<div style="padding:0 12px 12px;overflow-x:auto">
+    ${bulkBar}
     <table class="${isMobileDetail ? 'card-mode' : ''}" style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
       <thead><tr style="background:#22703d;color:#f8f4e7">
+        <th style="padding:9px 6px;font-size:13px">${pendingIds.length ? `<input type="checkbox" onchange="toggleOrderSelectAll('${esc(sid)}',this.checked)">` : ''}</th>
         <th style="padding:9px 10px;font-size:13px;white-space:nowrap">依頼日</th>
         <th style="padding:9px 10px;font-size:13px;white-space:nowrap">発注日</th>
         <th style="padding:9px 10px;font-size:13px;white-space:nowrap">納品予定日</th>
@@ -7112,14 +7138,6 @@ function setActualQty(storeId, rowId, value) {
   updateBadges();
 }
 
-/* グループ単位で備考を一括更新 */
-function adminUpdGroup(storeId, reqDate, field, value) {
-  const active = loadA(storeId);
-  active.filter(r => r.requestDate === reqDate).forEach(r => r[field] = value);
-  saveA(storeId, active);
-  updateBadges();
-}
-
 function showOrderMsg(msgId, text) {
   const el = document.getElementById(msgId);
   if (!el) return;
@@ -7128,33 +7146,44 @@ function showOrderMsg(msgId, text) {
   el._msgTimer = setTimeout(() => { if (el) el.textContent = ''; }, 3000);
 }
 
-function confirmOrderCheck(sid, reqDate, msgId) {
-  const rows = loadA(sid).filter(r => r.requestDate === reqDate);
-  if (!rows.every(r => r.orderDate)) {
-    showOrderMsg(msgId, '発注日を入力してください');
-    return;
+// 商品(行)単位で「発注済み」にする。発注日が未入力の場合は本日の日付を自動入力してよいか
+// 確認する(2026-09-19、商品ごとのボタン追加に合わせて導入。既に発注日が入っている場合は
+// 従来通り確認なしで即時反映する)
+function confirmOrderRowCheck(sid, rowId, msgId) {
+  const active = loadA(sid);
+  const row = active.find(r => r.id === rowId);
+  if (!row) return;
+  if (!row.orderDate) {
+    if (!confirm('発注日が未入力です。本日の日付を自動入力して発注済みにしますか？')) return;
+    row.orderDate = new Date().toLocaleDateString('sv');
   }
-  setNewGroup(sid, reqDate, false);
-}
-
-function denyGroupCheck(sid, reqDate, msgId) {
-  const rows = loadA(sid).filter(r => r.requestDate === reqDate);
-  if (rows.some(r => r.orderDate)) {
-    showOrderMsg(msgId, '発注日を削除してください');
-    return;
-  }
-  denyGroup(sid, reqDate);
-}
-
-/* グループ単位で確認状態を切替 */
-function setNewGroup(storeId, reqDate, makeNew) {
-  const active = loadA(storeId);
-  active.filter(r => r.requestDate === reqDate).forEach(r => r.isNew = makeNew);
-  saveA(storeId, active);
+  row.isNew = false;
+  adminOrderChecked.delete(sid + '|' + rowId);
+  saveA(sid, active);
   renderAdmin();
 }
 
-/* グループ単位で否認 */
+// 商品(行)単位で否認する。発注日が既に入っている場合は「発注済みにした後の否認」を防ぐため
+// 一旦ブロックする(グループ単位だった頃と同じ考え方)
+function denyOrderRowCheck(sid, rowId, msgId) {
+  const active = loadA(sid);
+  const row = active.find(r => r.id === rowId);
+  if (!row) return;
+  if (row.orderDate) {
+    showOrderMsg(msgId, '発注日を削除してください');
+    return;
+  }
+  if (!confirm('この商品を否認しますか？')) return;
+  row.denied = true;
+  row.isNew = true;
+  adminOrderChecked.delete(sid + '|' + rowId);
+  saveA(sid, active);
+  renderAdmin();
+  updateBadges();
+}
+
+/* グループ単位で否認(取り下げ)。パートナー側から否認済みの依頼自体を削除する操作で、
+   admin側の商品別ボタンとは別物のためそのまま維持する */
 function withdrawDenied(groupId) {
   if (!confirm('否認された依頼を取り下げますか？')) return;
   storeRows = storeRows.filter(r => (r.groupId || r.id) !== groupId);
@@ -7162,11 +7191,78 @@ function withdrawDenied(groupId) {
   renderStore();
 }
 
-function denyGroup(storeId, reqDate) {
-  if (!confirm('この依頼を否認しますか？')) return;
-  const active = loadA(storeId);
-  active.filter(r => r.requestDate === reqDate).forEach(r => { r.denied = true; r.isNew = true; });
-  saveA(storeId, active);
+/* ===== 発注依頼一覧: 商品別の一括発注済み/一括否認(2026-09-19追加) =====
+   選択中の行id(店舗id+'|'+行id)を保持するだけの軽量なSet。renderAdmin()で一覧を再描画すると
+   都度作り直されるチェックボックスと同期を取るため、都度こちらもクリアしていく */
+let adminOrderChecked = new Set();
+
+function toggleOrderRowCheck(sid, rowId, checked) {
+  const key = sid + '|' + rowId;
+  if (checked) adminOrderChecked.add(key); else adminOrderChecked.delete(key);
+  updateOrderBulkBar(sid);
+}
+
+function toggleOrderSelectAll(sid, checked) {
+  document.querySelectorAll('input.ordcb[data-sid="' + sid + '"]').forEach(cb => {
+    cb.checked = checked;
+    const key = sid + '|' + cb.dataset.rowid;
+    if (checked) adminOrderChecked.add(key); else adminOrderChecked.delete(key);
+  });
+  updateOrderBulkBar(sid);
+}
+
+function updateOrderBulkBar(sid) {
+  const bar = document.getElementById('order-bulk-bar-' + sid);
+  if (!bar) return;
+  const prefix = sid + '|';
+  const count = [...adminOrderChecked].filter(k => k.startsWith(prefix)).length;
+  const countEl = bar.querySelector('.bulk-count');
+  const confirmBtn = bar.querySelector('.bulk-confirm-btn');
+  const denyBtn = bar.querySelector('.bulk-deny-btn');
+  if (countEl) {
+    if (count) { countEl.textContent = count + '件選択中'; countEl.classList.remove('hint'); }
+    else { countEl.textContent = '一括対応時は、チェックボックスにチェックを入れてください'; countEl.classList.add('hint'); }
+  }
+  if (confirmBtn) confirmBtn.disabled = !count;
+  if (denyBtn) denyBtn.disabled = !count;
+}
+
+function bulkConfirmOrderRows(sid) {
+  const prefix = sid + '|';
+  const ids = [...adminOrderChecked].filter(k => k.startsWith(prefix)).map(k => k.slice(prefix.length));
+  if (!ids.length) return;
+  const active = loadA(sid);
+  const targets = active.filter(r => ids.includes(r.id));
+  if (!targets.length) return;
+  const missing = targets.filter(r => !r.orderDate);
+  const msg = missing.length
+    ? `選択した${targets.length}件のうち${missing.length}件は発注日が未入力です。本日の日付を自動入力して発注済みにしますか？`
+    : `選択した${targets.length}件を発注済みにします。よろしいですか？`;
+  if (!confirm(msg)) return;
+  const today = new Date().toLocaleDateString('sv');
+  targets.forEach(r => { if (!r.orderDate) r.orderDate = today; r.isNew = false; });
+  ids.forEach(id => adminOrderChecked.delete(prefix + id));
+  saveA(sid, active);
+  renderAdmin();
+  updateBadges();
+}
+
+function bulkDenyOrderRows(sid) {
+  const prefix = sid + '|';
+  const ids = [...adminOrderChecked].filter(k => k.startsWith(prefix)).map(k => k.slice(prefix.length));
+  if (!ids.length) return;
+  const active = loadA(sid);
+  const targets = active.filter(r => ids.includes(r.id));
+  if (!targets.length) return;
+  const alreadyOrdered = targets.filter(r => r.orderDate);
+  if (alreadyOrdered.length) {
+    alert(`選択した商品のうち${alreadyOrdered.length}件は発注日が入力済みのため一括否認できません。対象を外すか、発注日を削除してから再度お試しください。`);
+    return;
+  }
+  if (!confirm(`選択した${targets.length}件を否認します。よろしいですか？`)) return;
+  targets.forEach(r => { r.denied = true; r.isNew = true; });
+  ids.forEach(id => adminOrderChecked.delete(prefix + id));
+  saveA(sid, active);
   renderAdmin();
   updateBadges();
 }
