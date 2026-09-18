@@ -1209,46 +1209,6 @@ function deleteBugReport(issueId) {
   return { ok: true };
 }
 
-// 「完了」になってから180日経過したissueを、添付画像・紐づくコメントごと削除する
-// (2026-09-19追加、ユーザー指示)。lost_items/delivery_history/machine_photosと同じく
-// 読み取りのたびではなくsendDailyOrderNotificationの日次バッチでのみ実行する。
-// 途中で再度open/doingに戻された場合はstatusが'done'でなくなるため対象から外れる
-function purgeOldBugReports() {
-  const sheet = getSheet(SHEET_BUGREPORT);
-  if (sheet.getLastRow() <= 1) return;
-  const limitStr = Utilities.formatDate(new Date(Date.now() - 180 * 24 * 60 * 60 * 1000), _sheetTz(), 'yyyy-MM-dd HH:mm:ss');
-  const data = sheet.getDataRange().getValues();
-  const hdrs = data[0].map(String);
-  const idIdx = hdrs.indexOf('id');
-  const statusIdx = hdrs.indexOf('status');
-  const updatedIdx = hdrs.indexOf('updated_at');
-  const imgIdx = hdrs.indexOf('image_urls');
-  if (statusIdx < 0 || updatedIdx < 0) return;
-
-  const purgeIds = [];
-  for (let i = data.length - 1; i >= 1; i--) {
-    if (data[i][statusIdx] !== 'done') continue;
-    const updated = _dateTimeStr(data[i][updatedIdx]);
-    if (!updated || updated >= limitStr) continue;
-    purgeIds.push(String(data[i][idIdx]));
-    if (imgIdx >= 0) _trashDriveImages(data[i][imgIdx]);
-    sheet.deleteRow(i + 1);
-  }
-  if (!purgeIds.length) return;
-  _invalidateBugReportsCache_();
-
-  const commentSheet = getSheet(SHEET_BUGREPORT_COMMENTS);
-  if (commentSheet.getLastRow() > 1) {
-    const cData = commentSheet.getDataRange().getValues();
-    const cIssueIdx = cData[0].indexOf('issue_id');
-    if (cIssueIdx >= 0) {
-      for (let i = cData.length - 1; i >= 1; i--) {
-        if (purgeIds.indexOf(String(cData[i][cIssueIdx])) >= 0) commentSheet.deleteRow(i + 1);
-      }
-    }
-  }
-}
-
 // ----------------------------------------------------------------
 // announcements（業務連絡。管理者が作成・公開し、パートナー/管理者ポータルの
 // ヘッダー直下ウィジェットと一覧・詳細画面に表示する。2026-09-18追加）
@@ -5593,7 +5553,6 @@ function sendDailyOrderNotification() {
   // 止まってしまわないようtry/catchで囲む
   try { purgeOldDeliveryHistory(); } catch (e) { console.error('purgeOldDeliveryHistory error:', e.message); }
   try { purgeOldMachinePhotos(); } catch (e) { console.error('purgeOldMachinePhotos error:', e.message); }
-  try { purgeOldBugReports(); } catch (e) { console.error('purgeOldBugReports error:', e.message); }
   try { sendMachinePhotoReminder(); } catch (e) { console.error('sendMachinePhotoReminder error:', e.message); }
   var ss = SpreadsheetApp.openById(SHEET_ID);
   var sheet = ss.getSheetByName(SHEET_ORDERS);
