@@ -586,9 +586,10 @@
   <div class="partner-tab-bar">
     <button class="partner-tab active" id="ptab-order"     onclick="switchPartnerTab('order')">発注<span id="ptab-order-badge" class="ptab-badge" style="display:none">NEW</span><span id="ptab-delivery-badge" class="ptab-badge ptab-badge-delivery" style="display:none">納品</span></button>
     <button class="partner-tab"        id="ptab-lost"      onclick="switchPartnerTab('lost')">忘れ物</button>
-    <button class="partner-tab"        id="ptab-inventory" onclick="switchPartnerTab('inventory')">棚卸表<span class="ptab-badge ptab-badge-prep">準備中</span></button>
     <button class="partner-tab"        id="ptab-checklist" onclick="switchPartnerTab('checklist')">チェック<br class="sp-only">シート</button>
     <button class="partner-tab"        id="ptab-bugreport" onclick="switchPartnerTab('bugreport')">バグ報告</button>
+    <!-- 試験段階のため一番後ろに配置(2026-09-19、ユーザー指示) -->
+    <button class="partner-tab"        id="ptab-inventory" onclick="switchPartnerTab('inventory')">棚卸表<span class="ptab-badge ptab-badge-prep">準備中</span></button>
   </div>
 
   <!-- 発注タブ -->
