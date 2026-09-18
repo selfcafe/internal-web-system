@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>発注アクション テスト環境</title>
+<style>
+  body { margin:0; padding:0; font-family:'Segoe UI','Meiryo',sans-serif; background:#f8f4e7; color:#333; }
+  .wrap { max-width:1160px; margin:0 auto; padding:20px 16px 60px; }
+  h1 { font-size:22px; color:#333; margin:0 0 4px; }
+  .banner { background:#fef9c3; border:1px solid #fde68a; color:#854d0e; padding:12px 16px; border-radius:8px; margin-bottom:18px; font-size:13px; line-height:1.7; }
+  .summary { color:#b8860b; font-weight:bold; font-size:13px; margin-bottom:14px; }
+  .bulk-bar { display:flex; align-items:center; gap:12px; background:white; border-radius:8px; padding:10px 14px; margin-bottom:12px; box-shadow:0 1px 4px rgba(0,0,0,.06); flex-wrap:wrap; }
+  .bulk-bar .count { font-size:13px; color:#555; font-weight:600; }
+  .table-wrap { overflow-x:auto; }
+  table { width:100%; border-collapse:collapse; background:white; border-radius:10px; overflow:hidden; box-shadow:0 2px 8px rgba(34,112,61,.1); }
+  th { padding:11px 8px; text-align:left; font-size:12.5px; font-weight:600; white-space:nowrap; background:#22703d; color:#f8f4e7; }
+  td { padding:9px 8px; border-bottom:1px solid #eee; font-size:13px; vertical-align:middle; }
+  tr.group-first td { border-top:2px solid #d1d5db; }
+  tr.group-sep td { height:6px; background:#f5f5ea; padding:0; border:none; }
+  input[type="date"] { border:1px solid #ddd; border-radius:5px; padding:6px 7px; font-size:12.5px; font-family:inherit; width:100%; background:#fff; box-sizing:border-box; }
+  .order-date-filled { background:#d4edde !important; color:#1a5c30; font-weight:600; border-color:#86c9a3 !important; }
+  .delivery-date { display:inline-block; background:#fee2e2; color:#dc2626; font-weight:600; padding:5px 8px; border-radius:5px; font-size:12px; }
+  .btn-confirm { background:#22703d; color:white; padding:6px 10px; font-size:11.5px; font-weight:700; border:none; border-radius:5px; cursor:pointer; font-family:inherit; white-space:nowrap; }
+  .btn-confirm:disabled, .btn-deny:disabled { opacity:.4; cursor:not-allowed; }
+  .btn-deny { background:#ef4444; color:white; padding:6px 10px; font-size:11.5px; font-weight:700; border:none; border-radius:5px; cursor:pointer; font-family:inherit; white-space:nowrap; }
+  .btn-bulk { padding:8px 16px; font-size:13px; }
+  .badge-ordered { color:#22703d; background:#d4edde; padding:4px 10px; border-radius:6px; font-size:12px; font-weight:700; white-space:nowrap; }
+  .badge-denied { color:#dc2626; background:#fee2e2; padding:4px 10px; border-radius:6px; font-size:12px; font-weight:700; white-space:nowrap; }
+  input[type="checkbox"] { accent-color:#22703d; width:16px; height:16px; cursor:pointer; }
+  .row-msg { font-size:10.5px; color:#ef4444; margin-top:3px; min-height:13px; }
+  .reset-link { font-size:12px; color:#22703d; cursor:pointer; text-decoration:underline; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="banner">
+    ⚠️ これはテスト環境です。ダミーデータのみで動作し、実際の発注データには一切影響しません。<br>
+    この画面(商品ごとの「発注済み」「否認」ボタン＋一括操作)で問題なければ、同じ内容を本番の管理者ポータル(発注依頼一覧)に反映します。
+  </div>
+  <h1>発注依頼一覧(商品別ボタン・一括操作 試作)</h1>
+  <div class="summary">新着 <span id="new-count">0</span>件　<span class="reset-link" onclick="resetData()">ダミーデータを最初に戻す</span></div>
+
+  <div class="bulk-bar">
+    <span class="count" id="selected-count">0件選択中</span>
+    <div style="flex:1"></div>
+    <button class="btn-confirm btn-bulk" id="bulk-confirm-btn" onclick="bulkConfirm()">一括発注済み</button>
+    <button class="btn-deny btn-bulk" id="bulk-deny-btn" onclick="bulkDeny()">一括否認</button>
+  </div>
+
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th style="width:34px"><input type="checkbox" id="select-all-cb" onchange="toggleAll(this.checked)"></th>
+          <th>依頼日</th>
+          <th>発注日</th>
+          <th>納品予定日</th>
+          <th>商品名</th>
+          <th>数量</th>
+          <th>備考</th>
+          <th style="width:170px">発注</th>
+        </tr>
+      </thead>
+      <tbody id="order-tbody"></tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+const esc = s => (s == null ? '' : String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+
+const INITIAL_DATA = [
+  { id:'a1', store:'渋谷神南店', requestDate:'2026/09/18', product:'コーヒー豆', qty:'1ケース', note:'', deliveryDate:'2026/09/22', orderDate:'', status:'pending' },
+  { id:'a2', store:'渋谷神南店', requestDate:'2026/09/18', product:'紙コップ(S)', qty:'2ケース', note:'', deliveryDate:'2026/09/22', orderDate:'', status:'pending' },
+  { id:'a3', store:'渋谷神南店', requestDate:'2026/09/18', product:'フィルター', qty:'1本', note:'', deliveryDate:'2026/09/22', orderDate:'', status:'pending' },
+  { id:'a4', store:'渋谷神南店', requestDate:'2026/09/18', product:'砂糖', qty:'1袋', note:'', deliveryDate:'2026/09/22', orderDate:'2026/09/17', status:'ordered' },
+  { id:'b1', store:'大塚店', requestDate:'2026/09/17', product:'牛乳パック', qty:'3ケース', note:'消費期限に注意', deliveryDate:'2026/09/20', orderDate:'', status:'pending' },
+  { id:'b2', store:'大塚店', requestDate:'2026/09/17', product:'ストロー', qty:'1箱', note:'', deliveryDate:'2026/09/20', orderDate:'', status:'denied' },
+  { id:'c1', store:'巣鴨店', requestDate:'2026/09/16', product:'紅茶(粉末)', qty:'1ケース', note:'', deliveryDate:'2026/09/19', orderDate:'', status:'pending' },
+  { id:'c2', store:'巣鴨店', requestDate:'2026/09/16', product:'ホットカップ(M)', qty:'2ケース', note:'来月から発注ロット変更予定', deliveryDate:'2026/09/19', orderDate:'', status:'pending' },
+];
+
+let items = [];
+
+function resetData() {
+  items = INITIAL_DATA.map(it => ({ ...it, checked:false, msg:'' }));
+  render();
+}
+
+function todayStr() {
+  return new Date().toISOString().slice(0,10);
+}
+
+function toDash(d) { return d ? d.replace(/\//g,'-') : ''; }
+function toSlash(d) { return d ? d.replace(/-/g,'/') : ''; }
+
+function setChecked(id, v) {
+  const it = items.find(x => x.id === id);
+  if (it) it.checked = v;
+  render();
+}
+
+function setOrderDate(id, v) {
+  const it = items.find(x => x.id === id);
+  if (it) { it.orderDate = toSlash(v); it.msg = ''; }
+  render();
+}
+
+function confirmOne(id) {
+  const it = items.find(x => x.id === id);
+  if (!it) return;
+  if (!it.orderDate) { it.msg = '発注日を入力してください'; render(); return; }
+  it.status = 'ordered'; it.checked = false; it.msg = '';
+  render();
+}
+
+function denyOne(id) {
+  const it = items.find(x => x.id === id);
+  if (!it) return;
+  if (!confirm(`「${it.product}」を否認しますか？`)) return;
+  it.status = 'denied'; it.checked = false; it.msg = '';
+  render();
+}
+
+function toggleAll(checked) {
+  items.forEach(it => { if (it.status === 'pending') it.checked = checked; });
+  render();
+}
+
+function bulkConfirm() {
+  const targets = items.filter(it => it.status === 'pending' && it.checked);
+  if (!targets.length) return;
+  if (!confirm(`選択した${targets.length}件を発注済みにします。発注日が未入力のものは本日の日付を自動入力します。よろしいですか？`)) return;
+  targets.forEach(it => {
+    if (!it.orderDate) it.orderDate = toSlash(todayStr());
+    it.status = 'ordered'; it.checked = false; it.msg = '';
+  });
+  render();
+}
+
+function bulkDeny() {
+  const targets = items.filter(it => it.status === 'pending' && it.checked);
+  if (!targets.length) return;
+  if (!confirm(`選択した${targets.length}件を否認します。よろしいですか？`)) return;
+  targets.forEach(it => { it.status = 'denied'; it.checked = false; it.msg = ''; });
+  render();
+}
+
+function render() {
+  const pending = items.filter(it => it.status === 'pending');
+  const checked = pending.filter(it => it.checked);
+
+  document.getElementById('new-count').textContent = pending.length;
+  document.getElementById('selected-count').textContent = checked.length + '件選択中';
+  document.getElementById('bulk-confirm-btn').disabled = !checked.length;
+  document.getElementById('bulk-deny-btn').disabled = !checked.length;
+  document.getElementById('select-all-cb').checked = pending.length > 0 && checked.length === pending.length;
+
+  let prevGroupKey = null;
+  const html = [];
+  items.forEach(it => {
+    const groupKey = it.store + '|' + it.requestDate;
+    const isNewGroup = groupKey !== prevGroupKey;
+    if (isNewGroup && prevGroupKey !== null) html.push('<tr class="group-sep"><td colspan="8"></td></tr>');
+    prevGroupKey = groupKey;
+
+    const editable = it.status === 'pending';
+    const checkboxCell = editable
+      ? `<input type="checkbox" ${it.checked ? 'checked' : ''} onchange="setChecked('${it.id}', this.checked)">`
+      : '';
+    const requestDateCell = isNewGroup ? `${esc(it.store)}<br><span style="color:#888;font-size:11.5px">${esc(it.requestDate)}</span>` : '';
+
+    let orderDateCell;
+    if (editable) {
+      orderDateCell = `<input type="date" class="${it.orderDate ? 'order-date-filled' : ''}" value="${esc(toDash(it.orderDate))}" onchange="setOrderDate('${it.id}', this.value)">`;
+    } else {
+      orderDateCell = `<span style="color:#555">${esc(it.orderDate || '—')}</span>`;
+    }
+
+    let actionCell;
+    if (editable) {
+      actionCell = `
+        <div style="display:flex;gap:5px;flex-wrap:wrap">
+          <button class="btn-confirm" onclick="confirmOne('${it.id}')">発注済み</button>
+          <button class="btn-deny" onclick="denyOne('${it.id}')">否認</button>
+        </div>
+        <div class="row-msg">${esc(it.msg || '')}</div>`;
+    } else if (it.status === 'ordered') {
+      actionCell = '<span class="badge-ordered">✓ 発注済み</span>';
+    } else {
+      actionCell = '<span class="badge-denied">否認済み</span>';
+    }
+
+    html.push(`
+      <tr class="${isNewGroup ? 'group-first' : ''}">
+        <td>${checkboxCell}</td>
+        <td style="white-space:nowrap;color:#555">${requestDateCell}</td>
+        <td style="min-width:140px">${orderDateCell}</td>
+        <td style="white-space:nowrap"><span class="delivery-date">${esc(it.deliveryDate)}</span></td>
+        <td style="font-weight:600">${esc(it.product)}</td>
+        <td style="white-space:nowrap">${esc(it.qty)}</td>
+        <td style="color:#666">${esc(it.note)}</td>
+        <td>${actionCell}</td>
+      </tr>`);
+  });
+  document.getElementById('order-tbody').innerHTML = html.join('');
+}
+
+resetData();
+</script>
+</body>
+</html>
