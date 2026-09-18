@@ -6340,7 +6340,9 @@ function closeAnnounceForm() {
 }
 
 // 保存中はボタンを無効化+ラベル変更する(バグ報告/忘れ物の投稿ボタンと同じパターン)。
-// GASの応答が数秒かかることがあり、無反応に見えて連打→重複作成される事故を防ぐ(2026-09-19)
+// GASの応答が数秒かかることがあり、無反応に見えて連打→重複作成される事故を防ぐ(2026-09-19)。
+// 保存後にサーバーへ取り直しに行くと2回分の往復になり体感が遅いため、バグ報告のステータス変更
+// (changeBugReportStatus)と同じくレスポンスの内容でadminAnnounceItemsをその場で更新する
 async function saveAnnounceForm() {
   const btn = document.getElementById('announce-form-save-btn');
   const id = document.getElementById('announce-form-id').value || null;
@@ -6360,10 +6362,19 @@ async function saveAnnounceForm() {
       imagesBase64, imageMime: 'image/jpeg', keepImageUrls: _announceFormExistingUrls
     });
     if (r.error) throw new Error(r.error);
+    const scopeStr = scopeMode === 'all' ? 'all' : scope.join(',');
+    const nowStr = new Date().toLocaleString('sv');
+    const existing = adminAnnounceItems.find(a => String(a.id) === String(r.id));
+    const savedItem = {
+      id: r.id, title, body, publish_date: publishDate, scope: scopeStr, status,
+      created_at: existing ? existing.created_at : nowStr, updated_at: nowStr,
+      image_urls: r.image_urls || ''
+    };
+    if (existing) Object.assign(existing, savedItem);
+    else adminAnnounceItems.unshift(savedItem);
     closeAnnounceForm();
-    adminAnnounceLoaded = false;
-    await ensureAdminAnnounceWidgetLoaded();
     if (adminAnnounceDrillView) renderAdminAnnounceDrill();
+    else renderAdminAnnounceWidget();
   } catch (e) {
     alert('保存に失敗しました: ' + e.message);
   } finally {
@@ -6377,9 +6388,14 @@ async function deleteAnnounceItem(id, btn) {
   try {
     const r = await gasPost('deleteAnnouncement', { id });
     if (r.error) throw new Error(r.error);
-    adminAnnounceLoaded = false;
-    await ensureAdminAnnounceWidgetLoaded();
-    if (adminAnnounceDrillView) renderAdminAnnounceDrill();
+    adminAnnounceItems = adminAnnounceItems.filter(a => String(a.id) !== String(id));
+    if (adminAnnounceDrillView && adminAnnounceDrillView !== 'list' && String(adminAnnounceDrillView.detailId) === String(id)) {
+      adminAnnounceGoHome();
+    } else if (adminAnnounceDrillView) {
+      renderAdminAnnounceDrill();
+    } else {
+      renderAdminAnnounceWidget();
+    }
   } catch (e) {
     alert('削除に失敗しました: ' + e.message);
     if (btn) { btn.disabled = false; btn.textContent = '削除'; }
