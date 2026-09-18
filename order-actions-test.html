@@ -12,6 +12,7 @@
   .summary { color:#b8860b; font-weight:bold; font-size:13px; margin-bottom:14px; }
   .bulk-bar { display:flex; align-items:center; gap:12px; background:white; border-radius:8px; padding:10px 14px; margin-bottom:12px; box-shadow:0 1px 4px rgba(0,0,0,.06); flex-wrap:wrap; }
   .bulk-bar .count { font-size:13px; color:#555; font-weight:600; }
+  .bulk-bar .count.hint { color:#888; font-weight:400; }
   .table-wrap { overflow-x:auto; }
   table { width:100%; border-collapse:collapse; background:white; border-radius:10px; overflow:hidden; box-shadow:0 2px 8px rgba(34,112,61,.1); }
   th { padding:11px 8px; text-align:left; font-size:12.5px; font-weight:600; white-space:nowrap; background:#22703d; color:#f8f4e7; }
@@ -42,7 +43,7 @@
   <div class="summary">新着 <span id="new-count">0</span>件　<span class="reset-link" onclick="resetData()">ダミーデータを最初に戻す</span></div>
 
   <div class="bulk-bar">
-    <span class="count" id="selected-count">0件選択中</span>
+    <span class="count" id="selected-count"></span>
     <div style="flex:1"></div>
     <button class="btn-confirm btn-bulk" id="bulk-confirm-btn" onclick="bulkConfirm()">一括発注済み</button>
     <button class="btn-deny btn-bulk" id="bulk-deny-btn" onclick="bulkDeny()">一括否認</button>
@@ -152,7 +153,14 @@ function render() {
   const checked = pending.filter(it => it.checked);
 
   document.getElementById('new-count').textContent = pending.length;
-  document.getElementById('selected-count').textContent = checked.length + '件選択中';
+  const countEl = document.getElementById('selected-count');
+  if (checked.length) {
+    countEl.textContent = checked.length + '件選択中';
+    countEl.classList.remove('hint');
+  } else {
+    countEl.textContent = '一括対応時は、チェックボックスにチェックを入れてください';
+    countEl.classList.add('hint');
+  }
   document.getElementById('bulk-confirm-btn').disabled = !checked.length;
   document.getElementById('bulk-deny-btn').disabled = !checked.length;
   document.getElementById('select-all-cb').checked = pending.length > 0 && checked.length === pending.length;
@@ -178,6 +186,11 @@ function render() {
       orderDateCell = `<span style="color:#555">${esc(it.orderDate || '—')}</span>`;
     }
 
+    // 否認した商品は納品されないため、納品予定日は表示しない(2026-09-19、テスト環境でのご指摘を反映)
+    const deliveryDateCell = it.status === 'denied'
+      ? '<span style="color:#ccc">—</span>'
+      : `<span class="delivery-date">${esc(it.deliveryDate)}</span>`;
+
     let actionCell;
     if (editable) {
       actionCell = `
@@ -197,7 +210,7 @@ function render() {
         <td>${checkboxCell}</td>
         <td style="white-space:nowrap;color:#555">${requestDateCell}</td>
         <td style="min-width:140px">${orderDateCell}</td>
-        <td style="white-space:nowrap"><span class="delivery-date">${esc(it.deliveryDate)}</span></td>
+        <td style="white-space:nowrap">${deliveryDateCell}</td>
         <td style="font-weight:600">${esc(it.product)}</td>
         <td style="white-space:nowrap">${esc(it.qty)}</td>
         <td style="color:#666">${esc(it.note)}</td>
