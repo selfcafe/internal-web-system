@@ -452,13 +452,18 @@ M.push({
 M.push({
   id:'orders', eyebrow:'Daily operation', title:'発注依頼への対応', part:'ops',
   state:{ rows:[
-    {id:1, store:'渋谷神南', item:'ブレンドコーヒー豆', qty:'2ケース', status:'確認中', open:false, orderDate:'', actualQty:'2', unit:'ケース'},
-    {id:2, store:'ささしまライブ', item:'紅茶（粉末）', qty:'1ケース', status:'確認中', open:false, orderDate:'', actualQty:'1', unit:'ケース'},
+    {id:1, store:'渋谷神南', item:'ブレンドコーヒー豆', qty:'2ケース', status:'確認中', open:false, orderDate:'', actualQty:'2', unit:'ケース', checked:false},
+    {id:2, store:'ささしまライブ', item:'紅茶（粉末）', qty:'1ケース', status:'確認中', open:false, orderDate:'', actualQty:'1', unit:'ケース', checked:false},
   ]},
   render(s){
+    const pending = s.rows.filter(r => r.status === '確認中');
+    const checkedCount = pending.filter(r => r.checked).length;
     const rows = s.rows.map(r => `
       <div class="p-row" style="flex-direction:column;align-items:stretch;gap:8px">
         <div style="display:flex;align-items:center;gap:10px">
+          ${r.status==='確認中'
+            ? `<input type="checkbox" ${r.checked?'checked':''} onchange="Trainer.act('toggle-check-${r.id}')">`
+            : `<span style="width:16px;display:inline-block"></span>`}
           <span class="name">${esc(r.store)} — ${esc(r.item)} ${esc(r.qty)}</span>
           <span class="pill ${r.status==='確認中'?'pill-wait':r.status==='発注済み'?'pill-ok':'pill-no'}">${esc(r.status)}</span>
           <button class="p-btn2 ghost" onclick="Trainer.act('open-row-${r.id}')">${r.open ? '閉じる' : '詳細を開く'}</button>
@@ -482,17 +487,29 @@ M.push({
         </div>` : ''}
         ${r.status==='発注済み' ? '<div style="font-size:11.5px;color:var(--ink-soft)">✓ この依頼はパートナー側から取り下げできなくなりました。パートナー画面にNEW通知バッジが表示されます。</div>' : ''}
       </div>`).join('');
+    const bulkBar = `
+      <div class="p-row" style="justify-content:space-between;background:${checkedCount?'#eef6f0':'transparent'}">
+        <span style="font-size:12.5px;color:${checkedCount?'var(--ink)':'var(--ink-soft)'}">${checkedCount ? checkedCount+'件選択中' : '複数商品をまとめて処理する場合は、行のチェックボックスを選んでください'}</span>
+        <div style="display:flex;gap:8px">
+          <button class="p-btn2 bulk-confirm-btn" ${checkedCount?'':'disabled'} onclick="Trainer.act('bulk-confirm')">一括発注済み</button>
+          <button class="p-btn2 danger bulk-deny-btn" ${checkedCount?'':'disabled'} onclick="Trainer.act('bulk-deny')">一括否認</button>
+        </div>
+      </div>`;
     return `
     <div class="eyebrow">02 · Daily operation</div>
     <h3 class="stage-h">発注依頼への対応</h3>
-    <p class="section-lede">各店舗から届く発注依頼を確認し、発注済み／否認の対応をするのが日次の基本業務です。</p>
+    <p class="section-lede">各店舗から届く発注依頼を確認し、発注済み／否認の対応をするのが日次の基本業務です。2026年9月から、発注済み／否認は商品(行)ごとの個別ボタンになりました。</p>
     <div class="flow">
       <div class="node">パートナーが送信</div><div class="arrow">→</div>
       <div class="node accent">確認中</div><div class="arrow">→</div>
       <div class="node">発注済み／否認</div><div class="arrow">→</div>
       <div class="node">パートナー側にNEW通知</div>
     </div>
+    ${bulkBar}
     <div class="portal"><div class="p-body">${rows}</div></div>
+    <div class="note note-tip"><b>商品ごとの個別ボタン</b>「発注済み」「否認」は商品(行)ごとに独立しています。1件の依頼のうち一部の商品だけ先に発注し、残りは後日対応することもできます。</div>
+    <div class="note note-tip"><b>複数商品をまとめて処理したい場合</b>各行のチェックボックスにチェックを入れると、上のバーに「一括発注済み」「一括否認」ボタンが出ます。何も選んでいない間はボタンは押せません。</div>
+    <div class="note note-tip"><b>発注日が未入力の場合</b>「発注済み」(単発・一括とも)を発注日未入力のまま押すと、本日の日付を自動入力してよいか確認メッセージ(OK/キャンセル)が表示されます。発注日が入力済みの商品は「否認」できません(先に発注日を削除する必要があります)。</div>
     <div class="note note-tip"><b>実際数量と棚卸集計</b>ここで入力した実際数量は、棚卸表の「当月納品（自動）」集計にそのまま使われます。依頼数量と異なる場合は必ず修正してください。</div>
     <div class="note note-tip"><b>同じ商品を複数依頼したい場合</b>パートナー側には「追加」ボタンが無いため、一度取り下げてから同じグループに品目を追加し直す運用になります。</div>
     <div class="note note-tip"><b>NEW表示の既読は端末ごと</b>既読状態はサーバー側で共有されないため、同じ店舗でも別端末で開くと再度NEW表示が出ることがあります（仕様通りの動作です）。</div>`;
@@ -507,6 +524,10 @@ M.push({
       msg:'「実際数量」の単位を<b>バラ／ケースの切替ボタン</b>で<b>クリック</b>して変えてみましょう。棚卸の当月納品（自動）集計に使われる大事な項目です。' },
     { target:'.p-row:nth-child(1) .p-btn2:not(.ghost):not(.danger)', expect:'confirm-order-1',
       msg:'内容に問題なければ「<b>発注済みにする</b>」を<b>クリック</b>しましょう。この後はパートナー側から取り下げできなくなります。' },
+    { target:'.p-row:nth-child(2) input[type=checkbox]', expect:'toggle-check-2',
+      msg:'複数の商品をまとめて処理したい場合は、行の<b>チェックボックス</b>を<b>クリック</b>して選びます。ささしまライブ店の行で試してみましょう。' },
+    { target:'.bulk-confirm-btn', expect:'bulk-confirm',
+      msg:'チェックした商品だけ、上のバーの「<b>一括発注済み</b>」で<b>まとめて発注済みに</b>できます。<b>クリック</b>してみましょう(発注日が未入力なので、自動入力の確認メッセージが出ます)。' },
   ],
   onAct(id, s){
     const m = id.match(/^open-row-(\d+)$/);
@@ -517,6 +538,18 @@ M.push({
     if (c) { const r = s.rows.find(x=>x.id==+c[1]); r.status = '発注済み'; toast(`✓ ${r.store}の依頼を発注済みにしました`); }
     const d = id.match(/^deny-order-(\d+)$/);
     if (d) { const r = s.rows.find(x=>x.id==+d[1]); r.status = '否認'; toast(`${r.store}の依頼を否認しました`); }
+    const chk = id.match(/^toggle-check-(\d+)$/);
+    if (chk) { const r = s.rows.find(x=>x.id==+chk[1]); r.checked = !r.checked; }
+    if (id === 'bulk-confirm') {
+      const targets = s.rows.filter(r => r.status==='確認中' && r.checked);
+      targets.forEach(r => { if (!r.orderDate) r.orderDate = '2026-09-19'; r.status = '発注済み'; r.checked = false; });
+      if (targets.length) toast(`✓ ${targets.length}件を一括で発注済みにしました(発注日を自動入力)`);
+    }
+    if (id === 'bulk-deny') {
+      const targets = s.rows.filter(r => r.status==='確認中' && r.checked && !r.orderDate);
+      targets.forEach(r => { r.status = '否認'; r.checked = false; });
+      if (targets.length) toast(`${targets.length}件を一括で否認しました`);
+    }
   },
 });
 
