@@ -427,6 +427,7 @@ function doGet(e) {
     else if (a === 'setupInventoryDisposedHighlight') result = setupInventoryDisposedHighlight();
     else if (a === 'provisionNewInventorySheet') result = provisionNewInventorySheet(e.parameter.label);
     else if (a === 'provisionBugReportSheet')   result = provisionBugReportSheet_();
+    else if (a === 'seedBugReportSheetGuide')   result = seedBugReportSheetGuide_();
     else if (a === 'buildInventoryRollup')      result = buildInventoryRollup(e.parameter.periodLabel);
     else if (a === 'buildStoreInventorySheet')  result = buildStoreInventorySheet(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'buildReorderTestPlaySheet') result = buildReorderTestPlaySheet(e.parameter.storeId);
@@ -695,6 +696,73 @@ function provisionBugReportSheet_() {
   if (defaultSheet && ss.getSheets().length > 1) ss.deleteSheet(defaultSheet);
 
   return { ok: true, alreadyExisted: false, spreadsheetId: ss.getId(), url: ss.getUrl(), copiedSheets: copiedNames };
+}
+
+// バグ報告専用スプレッドシートに「使い方」タブと記入例を追加する(2026-09-19、メインDB側の
+// 元タブを削除した後、ユーザーから「セルを直接触ってもエラーにならないような記入例と、
+// 対応中/完了への変更方法の説明が欲しい」との要望)。何度実行しても増殖しないよう、
+// 既に「使い方」タブがあれば作り直さず、記入例も先頭に【記入例】が付く行が既にあれば追加しない。
+// ?action=seedBugReportSheetGuide で実行
+function seedBugReportSheetGuide_() {
+  const ss = SpreadsheetApp.openById(BUGREPORT_SHEET_ID);
+  const marker = '【記入例】';
+  let guideCreated = false;
+
+  let guide = ss.getSheetByName('使い方');
+  if (!guide) {
+    guideCreated = true;
+    guide = ss.insertSheet('使い方', 0);
+    const lines = [
+      ['⚠️ このシートは表示・確認用です。セルを直接編集しても、ポータル側やLINE WORKSの動作には反映されません。'],
+      [''],
+      ['■ 新しいバグ報告・修正依頼を作るには'],
+      ['管理者ポータル(またはパートナーポータル)の「バグ報告」画面から投稿してください。'],
+      ['LINE WORKSのバグ報告Botに直接メッセージを送っても登録されます(主に社員向け)。'],
+      [''],
+      ['■ 対応中・完了への変更方法'],
+      ['① 管理者ポータルにログインする'],
+      ['② 「バグ報告」画面を開き、一覧から対象の投稿をクリックする'],
+      ['③ 詳細パネル下部の「未対応」「対応中」「完了」ボタンから、変更したいステータスをクリックする'],
+      ['※ このシートのstatus列を直接書き換えても、ポータルの表示は変わりません(次にポータル側で'],
+      ['　誰かが操作すると上書きされます)。必ず②③の手順で変更してください。'],
+      ['※ LINE WORKS経由の投稿の場合、ステータスを変更すると投稿者本人にLINE WORKSで自動通知されます。'],
+      [''],
+      ['■ 各列の意味'],
+      ['id: 投稿の一意なID(自動生成、編集不要)'],
+      ['store_id / store_name: 投稿元の店舗(空欄=全店舗共通/社内、またはLINE WORKS経由)'],
+      ['kind: bug(バグ報告) / request(修正依頼)'],
+      ['content: 投稿内容'],
+      ['poster_type: partner(パートナー) / staff(社員) / admin(管理者) / lineworks(LINE WORKS経由) / system(自動記録)'],
+      ['status: open(未対応) / doing(対応中) / done(完了) ※日本語ではなく必ずこの英語表記'],
+      ['image_urls: 添付画像のURL(カンマ区切り、Drive上に保存)'],
+      ['lineworks_user_id: LINE WORKS経由の投稿の場合、送信者のユーザーID(通知先として使用)'],
+      [''],
+      ['「bug_reports」タブ内の「' + marker + '」で始まる行は記入例です。管理者ポータルの'],
+      ['「バグ報告」画面からいつでも削除して構いません。'],
+    ];
+    guide.getRange(1, 1, lines.length, 1).setValues(lines);
+    guide.setColumnWidth(1, 720);
+    [1, 3, 7, 15].forEach(row => guide.getRange(row, 1).setFontWeight('bold'));
+    guide.getRange(1, 1).setFontColor('#dc2626');
+    guide.setFrozenRows(1);
+  }
+
+  const sheet = getBugReportSheetFile_(SHEET_BUGREPORT);
+  ensureHeaders(sheet, BUGREPORT_COLS);
+  const contentIdx = BUGREPORT_COLS.indexOf('content');
+  const data = sheet.getLastRow() > 1 ? sheet.getDataRange().getValues() : [];
+  const alreadySeeded = data.slice(1).some(r => String(r[contentIdx] || '').indexOf(marker) === 0);
+  if (!alreadySeeded) {
+    const now = new Date();
+    sheet.appendRow([
+      Utilities.getUuid(), '', '', 'bug',
+      marker + 'これはサンプルの投稿です。「使い方」タブを確認したら、管理者ポータルの「バグ報告」画面から削除して構いません。',
+      'staff', '', 'open', now, now, '', ''
+    ]);
+    _invalidateBugReportsCache_();
+  }
+
+  return { ok: true, guideCreated, exampleAdded: !alreadySeeded };
 }
 
 // 調査用の一時的な読み取り専用ヘルパー(2026-07-28、「納品済み履歴」の実データがどのタブ・列構成
