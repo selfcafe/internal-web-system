@@ -4971,7 +4971,31 @@ function checkWaterStockMismatch(storeId, product) {
       notified = true;
     } catch (e) { console.error('水の盗難疑い通知エラー:', e.message); }
   }
-  return { ok: true, sinceDate, throughDate: today, inputQty, steraQty, diff, carryOver, thresholdMet, notified };
+
+  // 2026-09-19追加: 逆方向(ステラ実売上が補充数を大きく上回る)も検知する。盗難とは逆に、
+  // レジの実売上数が物理的な補充数を超えている異常(数え間違い・レジ操作ミス・不正の可能性)
+  // をユーザーから指摘されて追加した。閾値・比較期間の考え方は盗難疑い側と対称にし、
+  // 割合の分母だけsteraQty基準にする(steraQtyが超過側の基準になるため)。
+  const reverseDiff = steraQty - inputQty;
+  const reverseOverAbsolute = reverseDiff >= WATER_STOCK_MISMATCH_ABS_THRESHOLD;
+  const reverseOverPct = steraQty > 0 ? (reverseDiff / steraQty) >= WATER_STOCK_MISMATCH_PCT_THRESHOLD : reverseDiff > 0;
+  const reverseThresholdMet = reverseOverAbsolute && reverseOverPct;
+  let reverseNotified = false;
+  if (reverseThresholdMet) {
+    try {
+      sendStockBotNotification_(
+        '【在庫差異検知・売上超過】' + _storeIdLabel_(storeId) + '・' + group.label +
+        'でステラ実売上が補充数を上回る差異(補充' + inputQty + '個／ステラ実売上' + steraQty + '個、差' + reverseDiff + '個)を検知しました。' +
+        '(' + sinceDate + '〜本日分)。数え間違い・レジ操作・在庫記録の確認をお願いします。'
+      );
+      reverseNotified = true;
+    } catch (e) { console.error('水の売上超過通知エラー:', e.message); }
+  }
+
+  return {
+    ok: true, sinceDate, throughDate: today, inputQty, steraQty, diff, carryOver, thresholdMet, notified,
+    reverseDiff, reverseThresholdMet, reverseNotified,
+  };
 }
 
 // stera_daily_salesにdateStr当日の行が1件でもあれば、その日はCSV取込み済み(確定)とみなす
