@@ -408,6 +408,7 @@ function doGet(e) {
     if      (a === '_peekMainSheetTabByGid') result = _peekMainSheetTabByGid_(Number(e.parameter.gid), Number(e.parameter.rows) || 5);
     else if (a === '_listTriggers') result = _listTriggers_();
     else if (a === '_provisionDeliveryHistorySheet') result = _provisionDeliveryHistorySheet_();
+    else if (a === '_debugWaterStockMismatch') result = _debugWaterStockMismatch_(e.parameter.storeId, e.parameter.product);
     else if (a === 'getOrders')         result = getOrders();
     else if (a === 'getSettings')       result = getSettings();
     else if (a === 'getLostItems')      result = getLostItems(e.parameter.month, e.parameter.storeId);
@@ -4995,6 +4996,76 @@ function checkWaterStockMismatch(storeId, product) {
   return {
     ok: true, sinceDate, throughDate: today, inputQty, steraQty, diff, carryOver, thresholdMet, notified,
     reverseDiff, reverseThresholdMet, reverseNotified,
+  };
+}
+
+// 2026-09-22追加: checkWaterStockMismatchと全く同じ計算過程を、書き込み(チェックポイント更新)も
+// 通知送信も一切行わずに丸ごと可視化するための調査専用関数。実際の通知内容(steraQtyの内訳等)が
+// 直感と合わないという指摘があり、原因の切り分けに内部状態(sinceDate判定・carryOver・range内訳・
+// 当日速報の各値)を1回で見られる手段が無かったため追加した。GETの読み取り専用アクションなので
+// 何度呼んでも本番データに影響しない。?action=_debugWaterStockMismatch&storeId=...&product=... で実行。
+function _debugWaterStockMismatch_(storeId, product) {
+  if (!storeId || !product) return { error: 'storeId/productは必須です' };
+  const group = STERA_SALES_MAPPING.find(m => m.ourProducts.indexOf(product) >= 0);
+  if (!group) return { ok: true, skipped: 'not_tracked' };
+
+  const periods = getChecksheetData(storeId);
+  const allDays = {};
+  periods.forEach(p => Object.keys(p.data || {}).forEach(dayKey => {
+    allDays[dayKey] = Object.assign(allDays[dayKey] || {}, p.data[dayKey]);
+  }));
+  const today = Utilities.formatDate(new Date(), _invSheetTz(), 'yyyy-MM-dd');
+  const yesterday = Utilities.formatDate(new Date(Date.now() - 86400000), _invSheetTz(), 'yyyy-MM-dd');
+  const itemKeys = group.ourProducts.map(name => 'prod:' + name);
+
+  const priorDays = Object.keys(allDays).filter(d => d < today).sort().reverse();
+  let sinceDate = null;
+  for (let i = 0; i < priorDays.length; i++) {
+    const dayData = allDays[priorDays[i]];
+    if (itemKeys.some(k => dayData[k] !== undefined && dayData[k] !== '' && dayData[k] !== null)) {
+      sinceDate = priorDays[i];
+      break;
+    }
+  }
+  if (!sinceDate) return { ok: true, skipped: 'no_prior_entry', allInputDays: Object.keys(allDays).sort() };
+
+  const inputByDay = {};
+  Object.keys(allDays).forEach(dayKey => {
+    if (!(dayKey > sinceDate && dayKey <= today)) return;
+    let qty = 0;
+    itemKeys.forEach(k => { qty += Number(allDays[dayKey][k]) || 0; });
+    if (qty) inputByDay[dayKey] = qty;
+  });
+  const inputQty = Object.values(inputByDay).reduce((a, b) => a + b, 0);
+
+  const dailySheetIds = _steraSheetIdsForRange_(sinceDate, yesterday);
+  const dailyRows = dailySheetIds.reduce((rows, sid) => rows.concat(sheetRows(getSteraDailySheet_(sid), STERA_DAILY_COLS)), []);
+  const checkpointRowsCurrent = sheetRows(_getStockMismatchCheckpointSheet_(), STOCK_MISMATCH_CHECKPOINT_COLS);
+  const sinceDateSheetId = _inventorySheetIdForPeriod_(sinceDate);
+  const checkpointRowsForLookup = sinceDateSheetId === INVENTORY_SHEET_ID
+    ? checkpointRowsCurrent
+    : checkpointRowsCurrent.concat(sheetRows(_getStockMismatchCheckpointSheet_(sinceDateSheetId), STOCK_MISMATCH_CHECKPOINT_COLS));
+  const checkpointRow = checkpointRowsForLookup.find(r => String(r.store_id) === String(storeId) && String(r.prd_id) === String(group.prdId));
+  const sinceDateConfirmedRows = dailyRows.filter(r => String(r.store_id) === String(storeId) && String(r.prd_id) === String(group.prdId) && String(r.date) === sinceDate);
+  const carryOver = _stockMismatchCarryOverFromRows_(dailyRows, checkpointRowsForLookup, storeId, group.prdId, sinceDate);
+  const rangeRows = dailyRows.filter(r => String(r.store_id) === String(storeId) && String(r.prd_id) === String(group.prdId) &&
+    String(r.date) > sinceDate && String(r.date) <= yesterday);
+  const rangeByDay = {};
+  rangeRows.forEach(r => { rangeByDay[r.date] = (rangeByDay[r.date] || 0) + (Number(r.qty) || 0); });
+  const rangeQty = rangeRows.reduce((sum, r) => sum + (Number(r.qty) || 0), 0);
+  const realtimeRows = sheetRows(getSteraRealtimeSheet_(), STERA_REALTIME_COLS).filter(r => String(r.store_id) === String(storeId) && String(r.prd_id) === String(group.prdId));
+  const todayRealtimeQty = _getSteraRealtimeTodayMap_(storeId)[group.prdId] || 0;
+  const steraQty = carryOver + rangeQty + todayRealtimeQty;
+
+  return {
+    ok: true, storeId, product, prdId: group.prdId,
+    today, yesterday, sinceDate,
+    inputByDay, inputQty,
+    checkpointRow: checkpointRow || null,
+    sinceDateConfirmedRows,
+    carryOver, rangeByDay, rangeQty,
+    realtimeRows, todayRealtimeQty,
+    steraQty, diff: inputQty - steraQty, reverseDiff: steraQty - inputQty,
   };
 }
 
