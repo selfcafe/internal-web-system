@@ -4875,7 +4875,16 @@ function _getStockMismatchCheckpointSheet_(sheetId) {
 // 呼び出し側で事前に全件取得済みの配列を渡すこと(N+1回避)。
 function _stockMismatchCarryOverFromRows_(dailyRows, checkpointRows, storeId, prdId, sinceDate) {
   const checkpoint = checkpointRows.find(r => String(r.store_id) === String(storeId) && String(r.prd_id) === String(prdId));
-  if (!checkpoint || String(checkpoint.checkpoint_date) !== sinceDate) return 0;
+  if (!checkpoint) return 0;
+  // 2026-09-22修正: checkpoint_dateは"yyyy-MM-dd"のプレーン文字列で書き込んでいるつもりだったが、
+  // 書き込み側でsetNumberFormat('@')を掛けていなかったため、Sheetsが日付型セルへ自動変換していた
+  // (CLAUDE.md記載の既知の落とし穴と同型)。読み込むとDate型で返ってくるため、
+  // String(dateオブジェクト)は常に"yyyy-MM-dd"と一致せず、carryOverが常に0になっていた
+  // (実際に大塚駅南口の水で確認・再現した)。Date型/文字列型どちらで来ても比較できるよう正規化する。
+  const checkpointDateStr = checkpoint.checkpoint_date instanceof Date
+    ? Utilities.formatDate(checkpoint.checkpoint_date, _invSheetTz(), 'yyyy-MM-dd')
+    : String(checkpoint.checkpoint_date);
+  if (checkpointDateStr !== sinceDate) return 0;
   const sinceDateRows = dailyRows.filter(r => String(r.date) === sinceDate);
   if (!sinceDateRows.length) return 0; // まだCSV未取込み(確定していない)。次回以降に回収する
   const fullQty = sinceDateRows
@@ -4893,7 +4902,12 @@ function _batchUpsertStockMismatchCheckpoints_(existingRows, updates) {
   const rows = Object.values(map);
   const sheet = _getStockMismatchCheckpointSheet_();
   if (sheet.getLastRow() > 1) sheet.getRange(2, 1, sheet.getLastRow() - 1, STOCK_MISMATCH_CHECKPOINT_COLS.length).clearContent();
-  if (rows.length) sheet.getRange(2, 1, rows.length, STOCK_MISMATCH_CHECKPOINT_COLS.length).setValues(rows);
+  if (rows.length) {
+    // checkpoint_dateが"yyyy-MM-dd"に見えるとSheetsが日付型セルへ自動変換してしまうため、
+    // 他の日付文字列列と同じくプレーンテキスト固定してから書き込む(2026-09-22修正)
+    sheet.getRange(2, STOCK_MISMATCH_CHECKPOINT_COLS.indexOf('checkpoint_date') + 1, rows.length, 1).setNumberFormat('@');
+    sheet.getRange(2, 1, rows.length, STOCK_MISMATCH_CHECKPOINT_COLS.length).setValues(rows);
+  }
 }
 
 // チェックシートで水(補充数)を入力するたびに(デバウンス経由で)呼ばれる。productがSTERA_SALES_MAPPING
