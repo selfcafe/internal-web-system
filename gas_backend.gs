@@ -5964,7 +5964,7 @@ function sendDailyOrderNotification() {
   var storeIdx = headers.indexOf('store_id');
   var isNewIdx = headers.indexOf('is_new');
   var deniedIdx = headers.indexOf('denied');
-  var hasTokai = false, hasKansai = false, hasKanto = false;
+  var hasTokai = false, hasKansai = false, hasKanto = false, hasFC = false, hasGyomuItaku = false;
   for (var i = 1; i < data.length; i++) {
     var isNew = data[i][isNewIdx];
     if (isNew !== true && String(isNew) !== 'TRUE') continue;
@@ -5979,10 +5979,18 @@ function sendDailyOrderNotification() {
     if (area === '東海') hasTokai = true;
     if (area === '関西') hasKansai = true;
     if (area === '関東') hasKanto = true;
+    // FC/業務委託は基本的に発注機能を使わない想定だが、AREA_STORESに店舗が入っている以上
+    // 発注データが来る可能性はゼロではないため、見落とし防止の保険として他エリアと同じ
+    // 共通チャンネルへ通知する（2026-09-22追加。既存ループを流用するだけなのでデータ量・
+    // 処理コストは増えない。専用チャンネルが必要になれば別途LW_CHANNEL_ID_ORDER_FC等を追加する）
+    if (area === 'FC') hasFC = true;
+    if (area === '業務委託') hasGyomuItaku = true;
   }
   if (hasTokai) sendLineWorksNotification('東海エリアにて発注依頼があります。');
   if (hasKansai) sendLineWorksNotification('関西エリアにて発注依頼があります。');
   if (hasKanto) sendLineWorksNotification('関東エリアにて発注依頼があります。');
+  if (hasFC) sendLineWorksNotification('FCエリアにて発注依頼があります。');
+  if (hasGyomuItaku) sendLineWorksNotification('業務委託エリアにて発注依頼があります。');
 }
 
 // ----------------------------------------------------------------
