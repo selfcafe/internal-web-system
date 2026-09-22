@@ -5949,10 +5949,17 @@ function sendDailyOrderNotification() {
   var headers = data[0];
   var storeIdx = headers.indexOf('store_id');
   var isNewIdx = headers.indexOf('is_new');
+  var deniedIdx = headers.indexOf('denied');
   var hasTokai = false, hasKansai = false, hasKanto = false;
   for (var i = 1; i < data.length; i++) {
     var isNew = data[i][isNewIdx];
     if (isNew !== true && String(isNew) !== 'TRUE') continue;
+    // 否認済み(denied)の行は、パートナーが取り下げるまでis_new=trueのまま残るが、
+    // 管理画面の「新着」一覧側は isNew && !denied で絞り込んでおり否認済みは表示されない
+    // （2026-09-22、否認済みのまま毎朝通知され続け「消えた発注依頼」に見える不具合として発覚）。
+    // 通知側もdeniedを除外し、両者の判定基準を揃える
+    var denied = data[i][deniedIdx];
+    if (denied === true || String(denied) === 'TRUE') continue;
     var storeId = String(data[i][storeIdx]);
     var area = _areaForStore_(storeId);
     if (area === '東海') hasTokai = true;
