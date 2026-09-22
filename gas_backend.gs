@@ -4871,6 +4871,44 @@ function _getStockMismatchCheckpointSheet_(sheetId) {
   return sheet;
 }
 
+// 通知の重複送信防止(2026-09-22追加)。チェックシートの数量入力はデバウンス(3秒)はあるものの、
+// 実際にボトルを1本ずつ数えながら「＋1」を3秒より間隔を空けてタップするような入力の仕方をすると、
+// 数え終わる前の途中の値(1個、2個…)の時点でそれぞれ独立してcheckWaterStockMismatchが発火し、
+// 同じ根本原因(sinceDate)についてLINE WORKSへ何度も通知が飛んでしまうことが実際に起きた
+// (桜山店で6回連続実行・複数回通知)。store_id×prd_idにつき「直近どのsinceDate・方向(盗難疑い/
+// 売上超過)で通知済みか」を1行だけ保持し、同じsinceDate・同じ方向の間は再通知しないようにする。
+// sinceDateが進む(=新しい入力があり比較期間が動く)か、方向が変わればまた通知される。
+const SHEET_STOCK_MISMATCH_NOTIFIED = 'stock_mismatch_notified';
+const STOCK_MISMATCH_NOTIFIED_COLS = ['store_id', 'prd_id', 'since_date', 'direction'];
+
+function _getStockMismatchNotifiedSheet_() {
+  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const sheet = ss.getSheetByName(SHEET_STOCK_MISMATCH_NOTIFIED) || ss.insertSheet(SHEET_STOCK_MISMATCH_NOTIFIED);
+  ensureHeaders(sheet, STOCK_MISMATCH_NOTIFIED_COLS);
+  return sheet;
+}
+
+function _hasNotifiedStockMismatch_(rows, storeId, prdId, sinceDate, direction) {
+  return rows.some(r => String(r.store_id) === String(storeId) && String(r.prd_id) === String(prdId) &&
+    String(r.since_date) === sinceDate && String(r.direction) === direction);
+}
+
+// existingRowsは呼び出し側で事前に取得済みの全行(N+1回避、チェックポイントと同じパターン)。
+function _recordStockMismatchNotified_(existingRows, storeId, prdId, sinceDate, direction) {
+  const map = {};
+  existingRows.forEach(r => { map[r.store_id + '|' + r.prd_id] = [r.store_id, r.prd_id, r.since_date, r.direction]; });
+  map[storeId + '|' + prdId] = [storeId, prdId, sinceDate, direction];
+  const rows = Object.values(map);
+  const sheet = _getStockMismatchNotifiedSheet_();
+  if (sheet.getLastRow() > 1) sheet.getRange(2, 1, sheet.getLastRow() - 1, STOCK_MISMATCH_NOTIFIED_COLS.length).clearContent();
+  if (rows.length) {
+    // since_dateも他の日付文字列列と同じくSheetsの自動日付変換を避けるためプレーンテキスト固定する
+    // (checkpoint_dateで実際に起きた不具合と同型の事故を未然に防ぐ)
+    sheet.getRange(2, STOCK_MISMATCH_NOTIFIED_COLS.indexOf('since_date') + 1, rows.length, 1).setNumberFormat('@');
+    sheet.getRange(2, 1, rows.length, STOCK_MISMATCH_NOTIFIED_COLS.length).setValues(rows);
+  }
+}
+
 // sinceDateの「打ち切られた残り」を確定値から回収するcarryOverを計算する。dailyRows/checkpointRowsは
 // 呼び出し側で事前に全件取得済みの配列を渡すこと(N+1回避)。
 function _stockMismatchCarryOverFromRows_(dailyRows, checkpointRows, storeId, prdId, sinceDate) {
@@ -4975,8 +5013,9 @@ function checkWaterStockMismatch(storeId, product) {
   const overAbsolute = diff >= WATER_STOCK_MISMATCH_ABS_THRESHOLD;
   const overPct = inputQty > 0 ? (diff / inputQty) >= WATER_STOCK_MISMATCH_PCT_THRESHOLD : diff > 0;
   const thresholdMet = overAbsolute && overPct;
+  const notifiedRows = sheetRows(_getStockMismatchNotifiedSheet_(), STOCK_MISMATCH_NOTIFIED_COLS);
   let notified = false;
-  if (thresholdMet) {
+  if (thresholdMet && !_hasNotifiedStockMismatch_(notifiedRows, storeId, group.prdId, sinceDate, 'theft')) {
     try {
       sendStockBotNotification_(
         '【在庫差異検知・盗難疑い】' + _storeIdLabel_(storeId) + '・' + group.label +
@@ -4984,6 +5023,7 @@ function checkWaterStockMismatch(storeId, product) {
         '(' + sinceDate + '〜本日分)。監視カメラ映像とステラの購入履歴を突き合わせて確認してください。'
       );
       notified = true;
+      _recordStockMismatchNotified_(notifiedRows, storeId, group.prdId, sinceDate, 'theft');
     } catch (e) { console.error('水の盗難疑い通知エラー:', e.message); }
   }
 
@@ -4996,7 +5036,7 @@ function checkWaterStockMismatch(storeId, product) {
   const reverseOverPct = steraQty > 0 ? (reverseDiff / steraQty) >= WATER_STOCK_MISMATCH_PCT_THRESHOLD : reverseDiff > 0;
   const reverseThresholdMet = reverseOverAbsolute && reverseOverPct;
   let reverseNotified = false;
-  if (reverseThresholdMet) {
+  if (reverseThresholdMet && !_hasNotifiedStockMismatch_(notifiedRows, storeId, group.prdId, sinceDate, 'oversale')) {
     try {
       sendStockBotNotification_(
         '【在庫差異検知・売上超過】' + _storeIdLabel_(storeId) + '・' + group.label +
@@ -5004,6 +5044,7 @@ function checkWaterStockMismatch(storeId, product) {
         '(' + sinceDate + '〜本日分)。数え間違い・レジ操作・在庫記録の確認をお願いします。'
       );
       reverseNotified = true;
+      _recordStockMismatchNotified_(notifiedRows, storeId, group.prdId, sinceDate, 'oversale');
     } catch (e) { console.error('水の売上超過通知エラー:', e.message); }
   }
 
