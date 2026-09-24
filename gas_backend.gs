@@ -5755,12 +5755,10 @@ function _routeLineWorksCallback_(body) {
   try {
     const bugBotId = PropertiesService.getScriptProperties().getProperty('LW_BOT_ID_BUGREPORT');
     const isBugBot = !!(bugBotId && body.botId && String(body.botId) === String(bugBotId));
-    // 2026-09-24追加(一時的な調査用): 実際のコールバックのbotId等の形が想定と合っているか
-    // 初回実機テストで確認するためのログ。原因切り分けができたら削除する。
-    console.log('_routeLineWorksCallback_ debug: body.botId=' + JSON.stringify(body.botId) +
-      ' registered LW_BOT_ID_BUGREPORT=' + JSON.stringify(bugBotId) +
-      ' isBugBot=' + isBugBot + ' content.type=' + (body.content && body.content.type) +
-      ' source=' + JSON.stringify(body.source));
+    // 2026-09-24追加(一時的な調査用): body.botIdが実際には来ていない(undefined)ことが1回目の
+    // テストで判明したため、bot識別がどのフィールドに入っているのか特定するため生のbody全体を
+    // ログに出す。原因切り分けができたら削除する。
+    console.log('_routeLineWorksCallback_ raw body: ' + JSON.stringify(body));
     if (isBugBot && body.content && body.content.type === 'image') {
       return handleLineWorksBugReportImage_(body);
     }
