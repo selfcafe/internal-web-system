@@ -5803,13 +5803,15 @@ function _routeLineWorksCallback_(body, botParam) {
       return handleLineWorksBugReportImage_(body);
     }
     if (isBugBot && body.content && body.content.type === 'text') {
-      // 管理者(新規報告の通知先=LW_USER_ID_BUGREPORTと同一人物)が「12 返信本文」のように
-      // 先頭に報告番号を付けて送ってきた場合だけ、新規報告ではなく既存報告への返信として扱う
-      // (2026-09-24追加)。それ以外(番号無し、または管理者以外の送信)は従来通り新規報告
+      // 管理者(新規報告の通知先=LW_USER_ID_BUGREPORTと同一人物)が先頭に報告番号を付けて
+      // 送ってきた場合だけ、新規報告ではなく既存報告への返信として扱う(2026-09-24追加)。
+      // 通知文の表示形式「(No.2)」をそのまま真似て送ってくる想定で、"2 本文"のような素の
+      // 数字だけでなく「No.2」「(No.2)」等の書き方も受け付ける(実機テストで判明した揺れに対応)。
+      // それ以外(番号無し、または管理者以外の送信)は従来通り新規報告として扱う
       const userId = body.source && body.source.userId;
       const adminUserId = PropertiesService.getScriptProperties().getProperty('LW_USER_ID_BUGREPORT');
       const text = body.content.text || '';
-      const m = text.match(/^(\d+)\s+([\s\S]+)/);
+      const m = text.match(/^\(?\s*(?:no\.?\s*)?(\d+)\)?\s*([\s\S]+)/i);
       if (adminUserId && userId && userId === adminUserId && m) {
         return handleLineWorksBugReportAdminReply_(userId, m[1], m[2]);
       }
