@@ -5769,11 +5769,13 @@ function _routeLineWorksCallback_(body, botParam) {
 }
 
 // LINE WORKSはテキストと画像を1メッセージにまとめて送れず、必ず別イベントとして届くため、
-// 「直前(10分以内)にこの人がテキストで作った報告」をCacheServiceで覚えておき、続けて画像が
-// 来たらそこへ追加する簡易な紐付け(2026-09-19追加)
+// 「直前にこの人がテキストで作った報告」をCacheServiceで覚えておき、続けて画像が
+// 来たらそこへ追加する簡易な紐付け(2026-09-19追加、有効期限は2026-09-24に10分→3分へ短縮)。
+// メッセージ文言(handleLineWorksBugReport_)もこの値を参照するので、変更する場合はここだけでよい
 const LW_BUGREPORT_PENDING_PREFIX_ = 'lwbug_pending_';
+const LW_BUGREPORT_PENDING_TTL_SEC_ = 180;
 function _rememberPendingBugReportForUser_(userId, issueId) {
-  try { CacheService.getScriptCache().put(LW_BUGREPORT_PENDING_PREFIX_ + userId, issueId, 600); } catch (e) {}
+  try { CacheService.getScriptCache().put(LW_BUGREPORT_PENDING_PREFIX_ + userId, issueId, LW_BUGREPORT_PENDING_TTL_SEC_); } catch (e) {}
 }
 function _pendingBugReportForUser_(userId) {
   try { return CacheService.getScriptCache().get(LW_BUGREPORT_PENDING_PREFIX_ + userId); } catch (e) { return null; }
@@ -5796,7 +5798,8 @@ function handleLineWorksBugReport_(body) {
   }
   _rememberPendingBugReportForUser_(userId, r.id);
   const notifies = [{ type: 'bugReportLineWorksAck', userId,
-    message: '報告を受け付けました。管理者ポータルの「バグ報告」一覧に登録されました。画像がある場合は続けて送っていただければ、この報告に追加されます(10分以内)。\n\n受け付けた内容:\n' + text }];
+    message: '報告を受け付けました。管理者ポータルの「バグ報告」一覧に登録されました。画像がある場合は続けて送っていただければ、この報告に追加されます(' +
+      (LW_BUGREPORT_PENDING_TTL_SEC_ / 60) + '分以内)。\n\n受け付けた内容:\n' + text }];
   if (r._notify) notifies.push(r._notify);
   return { ok: true, id: r.id, _notify: notifies };
 }
@@ -5830,7 +5833,7 @@ function handleLineWorksBugReportImage_(body) {
         message: '画像を追加しました。以下の報告に含まれます:\n\n' + r.content } };
     }
   }
-  // 直前(10分以内)のテキスト報告が見つからない場合は、画像だけの新規報告として登録する
+  // 直前(LW_BUGREPORT_PENDING_TTL_SEC_以内)のテキスト報告が見つからない場合は、画像だけの新規報告として登録する
   const r2 = submitBugReport('', 'bug', '(LINE WORKSから画像のみ送信)', 'lineworks', '', [base64], 'image/jpeg', userId);
   if (r2.error) return { ok: true, _notify: { type: 'bugReportLineWorksAck', userId, message: '画像の登録に失敗しました: ' + r2.error } };
   _rememberPendingBugReportForUser_(userId, r2.id);
