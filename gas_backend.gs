@@ -131,7 +131,7 @@ const ATTENDANCE_LEAVE_COLS = ['id','store_id','name','leave_date','submitted_at
 // （ステータス変更もposter_type='system'の1行として追記し、対応履歴を別テーブルを持たずに
 // スレッド表示だけで自然に見える化する設計。[[project_portal_bug_report_board]]参照）
 const SHEET_BUGREPORT = 'bug_reports';
-const BUGREPORT_COLS = ['id','store_id','store_name','kind','content','poster_type','poster_name','status','created_at','updated_at','image_urls','lineworks_user_id'];
+const BUGREPORT_COLS = ['id','store_id','store_name','kind','content','poster_type','poster_name','status','created_at','updated_at','image_urls','lineworks_user_id','no'];
 const SHEET_BUGREPORT_COMMENTS = 'bug_report_comments';
 const BUGREPORT_COMMENT_COLS = ['id','issue_id','poster_type','poster_name','store_id','text','created_at'];
 
@@ -1265,22 +1265,56 @@ function submitBugReport(storeId, kind, content, posterType, posterName, imagesB
   ensureHeaders(sheet, BUGREPORT_COLS);
   _ensureColumnExists_(sheet, 'image_urls');
   _ensureColumnExists_(sheet, 'lineworks_user_id');
+  _ensureColumnExists_(sheet, 'no');
   const id = Utilities.getUuid();
+  const no = _nextBugReportNo_();
   const now = new Date();
   const imageUrls = (imagesBase64 || [])
     .map((b64, i) => saveImageToDrive(b64, imageMime || 'image/jpeg', id + '_' + i))
     .join(',');
   sheet.appendRow([
     id, storeId || '', storeName, kind === 'request' ? 'request' : 'bug', content,
-    posterType || 'partner', posterName || '', '未対応', now, now, imageUrls, lineworksUserId || ''
+    posterType || 'partner', posterName || '', '未対応', now, now, imageUrls, lineworksUserId || '', no
   ]);
   _invalidateBugReportsCache_();
   const kindLabel = kind === 'request' ? '修正依頼' : 'バグ報告';
   const storeLabel = storeName ? '【' + storeName + '】' : '【全店舗共通/社内】';
   return {
-    ok: true, id,
-    _notify: { type: 'bugReportNew', message: '【新規' + kindLabel + '】' + storeLabel + '\n' + content }
+    ok: true, id, no,
+    // (No.n)を含めるのは、管理者がLINE WORKSから返信する際に「n 返信本文」の形で
+    // 報告番号を指定できるようにするため(2026-09-24追加、handleLineWorksBugReportAdminReply_参照)
+    _notify: { type: 'bugReportNew', message: '【新規' + kindLabel + '】(No.' + no + ')' + storeLabel + '\n' + content }
   };
+}
+
+// バグ報告の連番(No.)を発行する。idは検索・紐付け用のUUIDで人間が入力するには不向きなため、
+// LINE WORKSから管理者が返信対象を指定する用に別途採番する短い整数(2026-09-24追加)。
+// 行削除で欠番が出ても構わない設計(採番順が保たれ、番号が使い回されないことだけが重要)。
+function _nextBugReportNo_() {
+  const props = PropertiesService.getScriptProperties();
+  const next = (Number(props.getProperty('BUGREPORT_NEXT_NO')) || 0) + 1;
+  props.setProperty('BUGREPORT_NEXT_NO', String(next));
+  return next;
+}
+
+// no(連番)からバグ報告1件を検索する(LINE WORKS管理者返信用、2026-09-24追加)
+function _findBugReportByNo_(no) {
+  const sheet = getBugReportSheetFile_(SHEET_BUGREPORT);
+  const data = sheet.getDataRange().getValues();
+  const hdrs = data[0].map(String);
+  const noIdx = hdrs.indexOf('no');
+  if (noIdx < 0) return null;
+  const idIdx = hdrs.indexOf('id'), contentIdx = hdrs.indexOf('content'),
+        posterTypeIdx = hdrs.indexOf('poster_type'), lwUserIdx = hdrs.indexOf('lineworks_user_id');
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][noIdx]) === String(no)) {
+      return {
+        id: data[i][idIdx], content: String(data[i][contentIdx] || ''),
+        posterType: data[i][posterTypeIdx], lineworksUserId: data[i][lwUserIdx],
+      };
+    }
+  }
+  return null;
 }
 
 // issueに1コメント追記する（返信・スレッドのやり取り用）
@@ -5768,6 +5802,18 @@ function _routeLineWorksCallback_(body, botParam) {
     if (isBugBot && body.content && body.content.type === 'image') {
       return handleLineWorksBugReportImage_(body);
     }
+    if (isBugBot && body.content && body.content.type === 'text') {
+      // 管理者(新規報告の通知先=LW_USER_ID_BUGREPORTと同一人物)が「12 返信本文」のように
+      // 先頭に報告番号を付けて送ってきた場合だけ、新規報告ではなく既存報告への返信として扱う
+      // (2026-09-24追加)。それ以外(番号無し、または管理者以外の送信)は従来通り新規報告
+      const userId = body.source && body.source.userId;
+      const adminUserId = PropertiesService.getScriptProperties().getProperty('LW_USER_ID_BUGREPORT');
+      const text = body.content.text || '';
+      const m = text.match(/^(\d+)\s+([\s\S]+)/);
+      if (adminUserId && userId && userId === adminUserId && m) {
+        return handleLineWorksBugReportAdminReply_(userId, m[1], m[2]);
+      }
+    }
     if (isBugBot) {
       return handleLineWorksBugReport_(body);
     }
@@ -5775,6 +5821,29 @@ function _routeLineWorksCallback_(body, botParam) {
     console.error('_routeLineWorksCallback_ error:', e.message);
   }
   return handleLineWorksStockInquiry_(body);
+}
+
+// 管理者からバグ報告Botへの返信を、報告番号(no)で紐づけて記録・転送する(2026-09-24追加)。
+// bug_report_commentsに残す(ポータルのスレッド表示にもそのまま出る)のに加え、元の報告が
+// LINE WORKS経由(poster_type='lineworks')なら投稿者本人へもLINE WORKSで転送する
+function handleLineWorksBugReportAdminReply_(adminUserId, reportNo, replyText) {
+  const report = _findBugReportByNo_(reportNo);
+  if (!report) {
+    return { ok: true, _notify: { type: 'bugReportLineWorksAck', userId: adminUserId,
+      message: '報告番号 No.' + reportNo + ' が見つかりませんでした。' } };
+  }
+  const c = addBugReportComment(report.id, 'admin', '管理者(LINE WORKS)', '', replyText);
+  if (c.error) {
+    return { ok: true, _notify: { type: 'bugReportLineWorksAck', userId: adminUserId,
+      message: '返信の記録に失敗しました: ' + c.error } };
+  }
+  const notifies = [{ type: 'bugReportLineWorksAck', userId: adminUserId,
+    message: 'No.' + reportNo + 'へ返信を記録しました。' }];
+  if (report.posterType === 'lineworks' && report.lineworksUserId) {
+    notifies.push({ type: 'bugReportLineWorksAck', userId: report.lineworksUserId,
+      message: 'ご報告いただいた内容(「' + report.content.slice(0, 40) + '」)に管理者から返信がありました:\n\n' + replyText });
+  }
+  return { ok: true, _notify: notifies };
 }
 
 // LINE WORKSはテキストと画像を1メッセージにまとめて送れず、必ず別イベントとして届くため、
