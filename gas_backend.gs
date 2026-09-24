@@ -529,7 +529,7 @@ function doPost(e) {
     if (b && b.storeId) b.storeId = _normalizeStoreId_(b.storeId);
     actionForErrorNotify_ = b && b.action;
     console.log('doPost action=' + (actionForErrorNotify_ || '(lineworks callback)') + ' storeId=' + (b.storeId || '') + ' lockWaitMs=' + _lockWaitMs);
-    if      (isLineWorksCallback_(b))           result = _routeLineWorksCallback_(b);
+    if      (isLineWorksCallback_(b))           result = _routeLineWorksCallback_(b, e.parameter.bot);
     else if (b.action === 'saveOrders')         result = saveOrders(b.storeId, b.rows);
     else if (b.action === 'upsertOrders')       result = upsertOrderRows(b.storeId, b.rows);
     else if (b.action === 'deleteOrders')       result = deleteOrderRows(b.ids);
@@ -5746,19 +5746,16 @@ function handleLineWorksStockInquiry_(body) {
 }
 
 // このWebアプリのURLを複数のLINE WORKS Botのcallback URLに設定した場合、届いたメッセージが
-// どのBot宛かをbody.botIdで振り分ける(2026-09-19、バグ報告Bot「LW_BOT_ID_BUGREPORT」に
-// 受信機能を追加するために導入)。★注意: 実際のLINE WORKSコールバックにbotIdがどの形で
-// 入るかはこのコードベースではまだ実機未確認(これまで在庫差異Bot1つだけしか受信していな
-// かったため)。botIdが無い/一致しない場合は必ず従来通り在庫差異Bot側の処理に流し、
-// 既存の動作を絶対に壊さないようにしている
-function _routeLineWorksCallback_(body) {
+// どのBot宛かを振り分ける。2026-09-19時点ではbody.botIdで判定する設計だったが、2026-09-24の
+// 実機テストで「LINE WORKSのコールバックペイロードにbotId相当のフィールドは一切含まれない」
+// ことが判明した(type/source{userId,domainId}/issuedTime/contentのみ)。同じCallback URLを
+// 複数Botで共有する限りペイロード側では区別不可能なため、Callback URL自体にクエリパラメータ
+// (?bot=bugreport)を付けて区別する方式に変更した。バグ報告BotのCallback URL設定側で
+// このパラメータを付けてもらう必要がある(付いていない=botParam未指定の場合は、既存の
+// 在庫差異Bot向けCallback URL(パラメータ無し)からの着信とみなし、従来通りの動作を維持する)。
+function _routeLineWorksCallback_(body, botParam) {
   try {
-    const bugBotId = PropertiesService.getScriptProperties().getProperty('LW_BOT_ID_BUGREPORT');
-    const isBugBot = !!(bugBotId && body.botId && String(body.botId) === String(bugBotId));
-    // 2026-09-24追加(一時的な調査用): body.botIdが実際には来ていない(undefined)ことが1回目の
-    // テストで判明したため、bot識別がどのフィールドに入っているのか特定するため生のbody全体を
-    // ログに出す。原因切り分けができたら削除する。
-    console.log('_routeLineWorksCallback_ raw body: ' + JSON.stringify(body));
+    const isBugBot = botParam === 'bugreport';
     if (isBugBot && body.content && body.content.type === 'image') {
       return handleLineWorksBugReportImage_(body);
     }
