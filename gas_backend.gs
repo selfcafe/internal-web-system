@@ -5829,6 +5829,10 @@ function handleLineWorksBugReportImage_(body) {
   if (pendingId) {
     const r = _appendBugReportImage_(pendingId, base64);
     if (r && r.ok) {
+      // 画像を追加できるたびに猶予を再スタートする(2026-09-24追加)。複数枚をゆっくり
+      // 時間をかけて送る場合に、最初のテキスト時刻からの固定カウントダウンだと後の方の
+      // 画像が別報告に分かれてしまう問題への対応
+      _rememberPendingBugReportForUser_(userId, pendingId);
       return { ok: true, _notify: { type: 'bugReportLineWorksAck', userId,
         message: '画像を追加しました。以下の報告に含まれます:\n\n' + r.content } };
     }
