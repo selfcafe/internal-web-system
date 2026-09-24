@@ -5826,7 +5826,8 @@ function handleLineWorksBugReportImage_(body) {
   if (pendingId) {
     const r = _appendBugReportImage_(pendingId, base64);
     if (r && r.ok) {
-      return { ok: true, _notify: { type: 'bugReportLineWorksAck', userId, message: '画像を報告に追加しました。' } };
+      return { ok: true, _notify: { type: 'bugReportLineWorksAck', userId,
+        message: '画像を追加しました。以下の報告に含まれます:\n\n' + r.content } };
     }
   }
   // 直前(10分以内)のテキスト報告が見つからない場合は、画像だけの新規報告として登録する
@@ -5839,13 +5840,16 @@ function handleLineWorksBugReportImage_(body) {
   return { ok: true, id: r2.id, _notify: notifies };
 }
 
-// 既存のバグ報告(issueId)に画像を1枚追加する(LINE WORKS経由の後追い画像用、2026-09-19追加)
+// 既存のバグ報告(issueId)に画像を1枚追加する(LINE WORKS経由の後追い画像用、2026-09-19追加)。
+// 戻り値にcontentを含める(2026-09-24追加) — どのテキスト報告に画像が紐付いたか送信者に
+// 分かるよう、LINE WORKSへの受付確認メッセージに元の報告内容を引用して返すため
 function _appendBugReportImage_(issueId, base64) {
   const sheet = getBugReportSheetFile_(SHEET_BUGREPORT);
   const data = sheet.getDataRange().getValues();
   const hdrs = data[0].map(String);
   const idIdx = hdrs.indexOf('id');
   const imgIdx = hdrs.indexOf('image_urls');
+  const contentIdx = hdrs.indexOf('content');
   if (imgIdx < 0) return { error: 'image_urls列が見つかりません' };
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][idIdx]) === String(issueId)) {
@@ -5854,7 +5858,7 @@ function _appendBugReportImage_(issueId, base64) {
       existing.push(newUrl);
       sheet.getRange(i + 1, imgIdx + 1).setValue(existing.join(','));
       _invalidateBugReportsCache_();
-      return { ok: true };
+      return { ok: true, content: String(data[i][contentIdx] || '') };
     }
   }
   return { error: '指定のissueが見つかりません' };
