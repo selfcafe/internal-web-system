@@ -784,6 +784,15 @@ function seedBugReportSheetGuide_() {
     sheet.getRange(2, statusIdx + 1, numRows, 1).setDataValidation(rule);
   }
 
+  // image_urls列を折り返し表示にする(2026-09-24追加)。複数枚の画像URLはカンマ区切りで
+  // 1セルに入るため、折り返しを付けないと列幅の都合で1枚目しか見えていないように見えてしまう
+  // (実データ自体は複数枚とも正しく入っている、実機テストで確認済み)
+  const imageUrlsIdx = hdrs.indexOf('image_urls');
+  if (imageUrlsIdx >= 0) {
+    const numRows = Math.max(sheet.getMaxRows() - 1, 500);
+    sheet.getRange(2, imageUrlsIdx + 1, numRows, 1).setWrap(true);
+  }
+
   const alreadySeeded = data.slice(1).some(r => String(r[contentIdx] || '').indexOf(marker) === 0);
   if (!alreadySeeded) {
     const now = new Date();
