@@ -146,6 +146,7 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 - **管理者の判定は`_isBugReportAdmin_`に集約**。バグ報告スプレッドシートの「管理者」タブ(`name`/`lineworks_user_id`/`memo`)が正で、行の追加・削除で即反映(デプロイ不要)。1人も登録が無い場合のみ`LW_USER_ID_BUGREPORT`を管理者とみなす。新規報告・追記の通知は管理者全員に送る。
 - シート操作は`onBugReportSheetEdit`(インストール型onEditトリガー、`?action=setupBugReportSheetTrigger`で登録・重複登録しない)が処理する。人の手による編集でしか発火しないので、スクリプトの書き込みと二重処理にならない。
 - 9/24以前の報告には`no`が無いため番号指定できない(ユーザー判断で対応不要)。
+- **列の並び(2026-09-25変更)**: 人がシートを見て報告を特定できるよう、`bug_reports`の`no`と`bug_report_comments`の`report_no`をA列へ移動済み(`_moveColumnToFront_`、seedBugReportSheetGuideで実行)。この2枚は例外的に**3章の「宣言順を正とする」ルールを適用せず、書き込みは全て`_appendRowByHeaders_`(ヘッダー名で列を引く)**にしてあるので、列を動かしてもズレない。この2枚に位置指定の`appendRow([...])`を新たに書かないこと。
 
 **将来構想(未実装)**: 完成後、Botを「バグ報告」グループトーク(報告者と管理者が同じグループ)へ移す予定。その場合も管理者判定はユーザーID方式(`_isBugReportAdmin_`)のまま使える。未確認事項: グループ内の全メッセージがBotに届くか、コールバックにchannelIdがどう入るか、グループ宛ての送信API。グループでは全発言が報告として登録される点(お礼等)の扱いも要検討。
 

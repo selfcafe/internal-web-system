@@ -131,9 +131,12 @@ const ATTENDANCE_LEAVE_COLS = ['id','store_id','name','leave_date','submitted_at
 // （ステータス変更もposter_type='system'の1行として追記し、対応履歴を別テーブルを持たずに
 // スレッド表示だけで自然に見える化する設計。[[project_portal_bug_report_board]]参照）
 const SHEET_BUGREPORT = 'bug_reports';
-const BUGREPORT_COLS = ['id','store_id','store_name','kind','content','poster_type','poster_name','status','created_at','updated_at','image_urls','lineworks_user_id','no'];
+// 2026-09-25: 報告番号(no/report_no)をシートの左端に置くため、このシート2枚への書き込みは
+// 全て_appendRowByHeaders_(ヘッダー名で列を引く)にした。シート上の列の並びはこの配列の順番と
+// 一致していなくてよい(この配列は空シートに最初のヘッダーを書く時の順番としてだけ使う)
+const BUGREPORT_COLS = ['no','id','store_id','store_name','kind','content','poster_type','poster_name','status','created_at','updated_at','image_urls','lineworks_user_id'];
 const SHEET_BUGREPORT_COMMENTS = 'bug_report_comments';
-const BUGREPORT_COMMENT_COLS = ['id','issue_id','poster_type','poster_name','store_id','text','created_at'];
+const BUGREPORT_COMMENT_COLS = ['report_no','id','issue_id','poster_type','poster_name','store_id','text','created_at'];
 // バグ報告Botの管理者(LINE WORKSから返信・ステータス変更できる人)一覧(2026-09-25追加)。
 // 行を足す/消すだけで管理者を追加・解除できるよう、Script Propertiesではなくシートで持つ。
 // 1行も登録が無い場合だけ、従来のLW_USER_ID_BUGREPORT(1人)を管理者として扱う
@@ -740,7 +743,7 @@ function seedBugReportSheetGuide_() {
     ['⚠️ このスプレッドシートは実データそのものです(ポータル・LINE WORKSと同じデータを見ています)'],
     ['　✓ 下の「シートから操作する」の方法なら、ポータルやLINE WORKSから操作したのと同じく履歴が残り、報告者にも通知されます'],
     ['　✗ それ以外の列(content・store_id等)を直接書き換えても、履歴・通知は残りません(表示だけが変わります)'],
-    ['　✗ id・issue_id・no列は書き換えないでください(報告とコメントの紐付けが切れます)'],
+    ['　✗ no・report_no・id・issue_id列は書き換えないでください(報告とコメントの紐付けが切れます)'],
     [''],
     ['■ 新しいバグ報告・修正依頼を作るには'],
     ['パートナー: ポータルの「バグ報告」タブから投稿します。'],
@@ -763,7 +766,7 @@ function seedBugReportSheetGuide_() {
     ['「管理者」タブに1人も登録が無い場合は、初期設定の管理者1名(スクリプトの設定値)だけが管理者として扱われます。'],
     [''],
     ['■ bug_reportsタブの各列'],
-    ['no: 報告番号(LINE WORKSで「No.5」のように指定する番号、自動採番)'],
+    ['no: 報告番号(A列。LINE WORKSで「No.5」のように指定する番号、自動採番)'],
     ['id: 投稿の一意なID(自動生成、編集不要)'],
     ['store_id / store_name: 投稿元の店舗(空欄=全店舗共通/社内、またはLINE WORKS経由)'],
     ['kind: bug(バグ報告) / request(修正依頼)'],
@@ -775,7 +778,8 @@ function seedBugReportSheetGuide_() {
     ['reply_input: 返信の入力欄(書くと返信として送られ、自動で空欄に戻ります)'],
     [''],
     ['■ bug_report_commentsタブの各列(1行=返信1件、またはステータス変更1回)'],
-    ['issue_id: どの報告へのコメントか(bug_reportsタブのid列の値)'],
+    ['report_no: どの報告(No.)へのコメントか(A列、自動記入。9/24以前の報告と記入例は空欄)'],
+    ['issue_id: どの報告へのコメントか(bug_reportsタブのid列の値、プログラムの紐付け用)'],
     ['poster_type: admin(管理者の返信) / partner(パートナーの返信) / lineworks(LINE WORKSでの追記) / system(ステータス変更の自動記録)'],
     ['poster_name: 返信した人の表示名 / text: 本文 / created_at: 日時'],
     ['このタブは自動で記録される場所です。返信は上の①〜③の方法で行い、このタブに直接行を追加しないでください。'],
@@ -805,6 +809,9 @@ function seedBugReportSheetGuide_() {
   ensureHeaders(sheet, BUGREPORT_COLS);
   _ensureColumnExists_(sheet, 'no');
   _ensureColumnExists_(sheet, BUGREPORT_REPLY_INPUT_COL);
+  // 報告番号をシート上で一目で分かるよう左端(A列)へ移す(2026-09-25、ユーザー要望)。書き込みは
+  // 全て_appendRowByHeaders_/ヘッダー名引きなので列の移動でズレない。移動済みなら何もしない
+  const movedNo = _moveColumnToFront_(sheet, 'no');
   const hdrs = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
   const contentIdx = hdrs.indexOf('content');
   const statusIdx = hdrs.indexOf('status');
@@ -847,31 +854,76 @@ function seedBugReportSheetGuide_() {
   if (!alreadySeeded) {
     const now = new Date();
     exampleIssueId = Utilities.getUuid();
-    sheet.appendRow([
-      exampleIssueId, '', '', 'bug',
-      marker + 'これはサンプルの投稿です。「使い方」タブを確認したら、管理者ポータルの「バグ報告」画面から削除して構いません。',
-      'staff', '', '未対応', now, now, '', ''
-    ]);
+    _appendRowByHeaders_(sheet, {
+      id: exampleIssueId, kind: 'bug',
+      content: marker + 'これはサンプルの投稿です。「使い方」タブを確認したら、管理者ポータルの「バグ報告」画面から削除して構いません。',
+      poster_type: 'staff', status: '未対応', created_at: now, updated_at: now
+    });
     _invalidateBugReportsCache_();
   }
 
-  // bug_report_commentsの記入例(2026-09-25追加)。上の記入例の報告に紐づく「管理者の返信」と
-  // 「ステータス変更の自動記録」の2行で、実際の運用で並ぶ行の見え方をそのまま示す
+  // bug_report_commentsにも報告番号(report_no)を左端に追加し、既存行はissue_idから番号を埋める
+  // (2026-09-25、issue_id(UUID)だけではどの報告へのコメントか人が見て分からなかったため)
   const commentSheet = getBugReportSheetFile_(SHEET_BUGREPORT_COMMENTS);
   ensureHeaders(commentSheet, BUGREPORT_COMMENT_COLS);
+  _ensureColumnExists_(commentSheet, 'report_no');
+  const movedReportNo = _moveColumnToFront_(commentSheet, 'report_no');
+  const reportNoFilled = _backfillCommentReportNo_(commentSheet, sheet);
+
+  // bug_report_commentsの記入例(2026-09-25追加)。上の記入例の報告に紐づく「管理者の返信」と
+  // 「ステータス変更の自動記録」の2行で、実際の運用で並ぶ行の見え方をそのまま示す
   const cHdrs = commentSheet.getRange(1, 1, 1, commentSheet.getLastColumn()).getValues()[0].map(String);
   const cTextIdx = cHdrs.indexOf('text');
   const cData = commentSheet.getLastRow() > 1 ? commentSheet.getDataRange().getValues() : [];
   const commentsSeeded = cData.slice(1).some(r => String(r[cTextIdx] || '').indexOf(marker) === 0);
   if (!commentsSeeded && exampleIssueId) {
     const now = new Date();
-    commentSheet.appendRow([Utilities.getUuid(), exampleIssueId, 'admin', '管理者', '',
-      marker + '確認しました。本日中に修正します。(管理者の返信の例。LINE WORKSで「No.5 確認しました…」と送る、reply_input列に書く、ポータルの返信欄から送る、のどれでもこの形で記録されます)', now]);
-    commentSheet.appendRow([Utilities.getUuid(), exampleIssueId, 'system', '管理者', '',
-      marker + 'ステータスを「対応中」に変更しました(ステータス変更の自動記録の例)', now]);
+    _appendRowByHeaders_(commentSheet, { id: Utilities.getUuid(), issue_id: exampleIssueId, poster_type: 'admin', poster_name: '管理者',
+      text: marker + '確認しました。本日中に修正します。(管理者の返信の例。LINE WORKSで「No.5 確認しました…」と送る、reply_input列に書く、ポータルの返信欄から送る、のどれでもこの形で記録されます)', created_at: now });
+    _appendRowByHeaders_(commentSheet, { id: Utilities.getUuid(), issue_id: exampleIssueId, poster_type: 'system', poster_name: '管理者',
+      text: marker + 'ステータスを「対応中」に変更しました(ステータス変更の自動記録の例)', created_at: now });
   }
 
-  return { ok: true, guideCreated, adminsCreated, exampleAdded: !alreadySeeded, commentExamplesAdded: !commentsSeeded && !!exampleIssueId, statusMigrated: migrated };
+  return { ok: true, guideCreated, adminsCreated, exampleAdded: !alreadySeeded, commentExamplesAdded: !commentsSeeded && !!exampleIssueId,
+    statusMigrated: migrated, movedNo, movedReportNo, reportNoFilled };
+}
+
+// 指定列をA列へ移動する。既にA列なら何もしない(戻り値: 移動したらtrue)。データ入力規則・
+// 書式も列ごと一緒に動く。移動中に別の書き込みが割り込まないようスクリプトロックを取る
+function _moveColumnToFront_(sheet, colName) {
+  const hdrs = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
+  const idx = hdrs.indexOf(colName);
+  if (idx <= 0) return false;
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  try {
+    sheet.moveColumns(sheet.getRange(1, idx + 1, 1, 1), 1);
+  } finally {
+    lock.releaseLock();
+  }
+  sheet.setFrozenColumns(1);
+  return true;
+}
+
+// bug_report_commentsのreport_noが空欄の行を、issue_idからbug_reportsのnoを引いて埋める。
+// 元の報告にnoが無い(9/24以前・記入例)行は空欄のまま(戻り値: 埋めた行数)
+function _backfillCommentReportNo_(commentSheet, reportSheet) {
+  if (commentSheet.getLastRow() <= 1) return 0;
+  const noById = {};
+  sheetRows(reportSheet, ['id', 'no']).forEach(r => { if (r.no) noById[String(r.id)] = r.no; });
+  const cData = commentSheet.getDataRange().getValues();
+  const cHdrs = cData[0].map(String);
+  const noIdx = cHdrs.indexOf('report_no'), issueIdx = cHdrs.indexOf('issue_id');
+  if (noIdx < 0 || issueIdx < 0) return 0;
+  let filled = 0;
+  for (let i = 1; i < cData.length; i++) {
+    const no = noById[String(cData[i][issueIdx])];
+    if (!cData[i][noIdx] && no) {
+      commentSheet.getRange(i + 1, noIdx + 1).setValue(no);
+      filled++;
+    }
+  }
+  return filled;
 }
 
 // 調査用の一時的な読み取り専用ヘルパー(2026-07-28、「納品済み履歴」の実データがどのタブ・列構成
@@ -1288,6 +1340,13 @@ function _ensureColumnExists_(sheet, colName) {
   if (hdrs.indexOf(colName) < 0) sheet.getRange(1, lastCol + 1).setValue(colName);
 }
 
+// ヘッダー行の列名に合わせて1行追記する(値はobjの同名キーから、無い列は空欄)。列の並び順を
+// 入れ替えても書き込みがズレないようにするため(2026-09-25、bug_reportsのno列を左端へ移した際に導入)
+function _appendRowByHeaders_(sheet, obj) {
+  const hdrs = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
+  sheet.appendRow(hdrs.map(h => (h in obj && obj[h] != null) ? obj[h] : ''));
+}
+
 const BUGREPORT_CACHE_KEY = 'bug_reports_rows_v1';
 function _bugReportsRowsCached_() {
   const cache = CacheService.getScriptCache();
@@ -1339,10 +1398,11 @@ function submitBugReport(storeId, kind, content, posterType, posterName, imagesB
   const imageUrls = (imagesBase64 || [])
     .map((b64, i) => saveImageToDrive(b64, imageMime || 'image/jpeg', id + '_' + i))
     .join(',');
-  sheet.appendRow([
-    id, storeId || '', storeName, kind === 'request' ? 'request' : 'bug', content,
-    posterType || 'partner', posterName || '', '未対応', now, now, imageUrls, lineworksUserId || '', no
-  ]);
+  _appendRowByHeaders_(sheet, {
+    no, id, store_id: storeId || '', store_name: storeName, kind: kind === 'request' ? 'request' : 'bug', content,
+    poster_type: posterType || 'partner', poster_name: posterName || '', status: '未対応',
+    created_at: now, updated_at: now, image_urls: imageUrls, lineworks_user_id: lineworksUserId || ''
+  });
   _invalidateBugReportsCache_();
   const kindLabel = kind === 'request' ? '修正依頼' : 'バグ報告';
   const storeLabel = storeName ? '【' + storeName + '】' : '【全店舗共通/社内】';
@@ -1431,11 +1491,15 @@ function addBugReportComment(issueId, posterType, posterName, storeId, text) {
   if (!text) return { error: 'コメントを入力してください' };
   const sheet = getBugReportSheetFile_(SHEET_BUGREPORT_COMMENTS);
   ensureHeaders(sheet, BUGREPORT_COMMENT_COLS);
+  _ensureColumnExists_(sheet, 'report_no');
   const now = new Date();
-  sheet.appendRow([Utilities.getUuid(), issueId, posterType || 'partner', posterName || '', storeId || '', text, now]);
+  const report = _findBugReport_('id', issueId);
+  _appendRowByHeaders_(sheet, {
+    report_no: report ? report.no : '', id: Utilities.getUuid(), issue_id: issueId, poster_type: posterType || 'partner',
+    poster_name: posterName || '', store_id: storeId || '', text, created_at: now
+  });
   _touchBugReportUpdatedAt_(issueId, now);
   const result = { ok: true };
-  const report = _findBugReport_('id', issueId);
   if (!report) return result;
   if (posterType === 'admin' || posterType === 'staff') {
     if (report.posterType === 'lineworks' && report.lineworksUserId) {
@@ -1492,10 +1556,11 @@ function updateBugReportStatus(issueId, newStatus, adminName, statusAlreadyWritt
   _invalidateBugReportsCache_();
   const commentSheet = getBugReportSheetFile_(SHEET_BUGREPORT_COMMENTS);
   ensureHeaders(commentSheet, BUGREPORT_COMMENT_COLS);
-  commentSheet.appendRow([
-    Utilities.getUuid(), issueId, 'system', adminName || '管理者', '',
-    'ステータスを「' + newStatus + '」に変更しました', now
-  ]);
+  _ensureColumnExists_(commentSheet, 'report_no');
+  _appendRowByHeaders_(commentSheet, {
+    report_no: reportNo, id: Utilities.getUuid(), issue_id: issueId, poster_type: 'system',
+    poster_name: adminName || '管理者', store_id: '', text: 'ステータスを「' + newStatus + '」に変更しました', created_at: now
+  });
   const result = { ok: true, no: reportNo };
   if (lwUserId) {
     result._notify = { type: 'bugReportLineWorksAck', userId: lwUserId,
