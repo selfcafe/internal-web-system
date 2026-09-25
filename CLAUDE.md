@@ -123,18 +123,30 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 - 事前にトリガー機構自体を`year=9999, dry_run=true`のデコイ値で実機テスト済み(2026-09-12、Run ID `34698834540`、success)——クラウド環境からのGitHub認証・workflow_dispatch起動が問題なく動くことを確認済み。
 - ルーティンの一覧・削除は https://claude.ai/code/routines から(API側に削除機能は無い)。プロンプト内容の変更は`/schedule`スキルの update アクションで行う。
 
-## 6. バグ報告機能・LINE WORKS Bot連携(2026-09-19時点)
+## 6. バグ報告機能・LINE WORKS Bot連携(2026-09-25更新)
 
 バグ報告/修正依頼機能は、専用スプレッドシート(`BUGREPORT_SHEET_ID`、`bug_reports`/`bug_report_comments`タブ)にデータを持つ。メインDB(`SHEET_ID`)とは分離済み(2026-09、リスク低減のため意図的に別ファイル化)。`status`列の格納値は2026-09-19に`open`/`doing`/`done`から**日本語ラベル(未対応/対応中/完了)そのもの**へ統一し、Sheets側にもプルダウン(データ入力規則)を設定した(`seedBugReportSheetGuide_`が「使い方」タブの整備・プルダウン設定・旧値移行を一括で行う、`?action=seedBugReportSheetGuide`で再実行可能・何度実行しても安全)。
 
 **投稿経路は2つ**:
 1. ポータル(パートナー/管理者/社員)からの投稿 — 画像添付対応済み(lost_itemsと同じDrive保存の仕組みを再利用)
-2. LINE WORKS Bot「バグ報告（社内ポータル）」(Bot ID 13130517)への1:1メッセージ — テキスト・画像とも受信対応済み(`handleLineWorksBugReport_`/`handleLineWorksBugReportImage_`)。認証情報は在庫差異Botとは別のScript Propertiesキー(`LW_CLIENT_ID_BUGREPORT`等)で独立管理。テキストと画像は別イベントで届くため、CacheServiceで10分間「直前の投稿」を紐付けて同じ報告にまとめる。
+2. LINE WORKS Bot「バグ報告（社内ポータル）」(Bot ID 13130517)への1:1メッセージ — テキスト・画像とも受信対応済み(`handleLineWorksBugReport_`/`handleLineWorksBugReportImage_`)。認証情報は在庫差異Botとは別のScript Propertiesキー(`LW_CLIENT_ID_BUGREPORT`等)で独立管理。テキストと画像は別イベントで届くため、CacheServiceで3分間(画像が届くたびに延長)「直前の投稿」を紐付けて同じ報告にまとめる。
 
-**⚠️2026-09-19時点で未検証(実機テスト保留中、ユーザー指示「後日実装しよう」)**:
-- LINE WORKSコールバックで`body.botId`が実際にどの形で届くか(`_routeLineWorksCallback_`の振り分けロジック。botIdが一致しない場合は必ず既存の在庫差異Bot処理にフォールバックするため、テスト結果が想定外でも在庫差異Botの動作自体は壊れない設計)
-- 画像添付取得API(`bots/{botId}/attachments/{fileId}`)のレスポンス形状(`fileId`というフィールド名の想定で合っているか)
+**Bot振り分け(2026-09-24実機確認済み)**: LINE WORKSのコールバックペイロードにはbotIdが含まれない(type/source{userId,domainId}/issuedTime/contentのみ)。そのためバグ報告BotのCallback URLには`?bot=bugreport`を付けて在庫差異Botと区別している(`_routeLineWorksCallback_`)。パラメータ無し=在庫差異Bot。画像添付取得も実機で動作確認済み。
 
-次にこの機能を触るときは、まずLINE WORKSから実際にテキスト→画像→テキスト+画像の順で送ってもらい、`bug_reports`シートと`?action=getBugReports`の結果で正しく登録されたか確認するところから再開する。問題なければ、社内スタッフへのBot共有(LINE WORKS管理画面での公開範囲設定、GitHub Actions/claspでは操作不可のためユーザー側の作業)に進む。
+**運用方針(2026-09-25確定、ユーザーと合意)**: 管理の中心はLINE WORKS。パートナーへの連絡はポータル経由(パートナーはLINE WORKSを使わない)。どこから操作しても同じ記録・通知になるよう、返信は`addBugReportComment`、ステータス変更は`updateBugReportStatus`に集約し、通知もこの2関数が`_notify`に積む。
+
+| 操作 | LINE WORKS(管理者) | シート | 管理者ポータル |
+|---|---|---|---|
+| 返信 | `No.5 本文` | bug_reportsの`reply_input`列に書く(自動で空欄に戻る) | スレッドの返信欄 |
+| ステータス変更 | `No.5 完了`(本文がステータス名だけ) | status列のプルダウン | ステータスボタン |
+
+- 報告番号は「No.」必須(`5 本文`のような素の数字は新規報告扱い。数字始まりの報告の誤認を防ぐため)。全角(`Ｎｏ．５`)・括弧付き(`(No.5)`)も可。
+- 管理者以外が`No.5 本文`と送ると、その報告への**追記**として記録し管理者全員へ通知(`handleLineWorksBugReportFollowUp_`)。パートナーがポータルのスレッドに書いた場合も同様に管理者全員へ通知。
+- 管理者の返信・ステータス変更 → LINE WORKS経由の報告なら報告者本人へLINE WORKSで転送。ポータル経由の報告はスレッドに記録され、パートナー側の一覧に「返信あり」バッジ(端末ごとのlocalStorageで既読管理、`_bugReportHasUnread`)。
+- **管理者の判定は`_isBugReportAdmin_`に集約**。バグ報告スプレッドシートの「管理者」タブ(`name`/`lineworks_user_id`/`memo`)が正で、行の追加・削除で即反映(デプロイ不要)。1人も登録が無い場合のみ`LW_USER_ID_BUGREPORT`を管理者とみなす。新規報告・追記の通知は管理者全員に送る。
+- シート操作は`onBugReportSheetEdit`(インストール型onEditトリガー、`?action=setupBugReportSheetTrigger`で登録・重複登録しない)が処理する。人の手による編集でしか発火しないので、スクリプトの書き込みと二重処理にならない。
+- 9/24以前の報告には`no`が無いため番号指定できない(ユーザー判断で対応不要)。
+
+**将来構想(未実装)**: 完成後、Botを「バグ報告」グループトーク(報告者と管理者が同じグループ)へ移す予定。その場合も管理者判定はユーザーID方式(`_isBugReportAdmin_`)のまま使える。未確認事項: グループ内の全メッセージがBotに届くか、コールバックにchannelIdがどう入るか、グループ宛ての送信API。グループでは全発言が報告として登録される点(お礼等)の扱いも要検討。
 
 **過去の事故**: 2026-09-15、このBotのコードだけgit未コミットのままclaspで直接本番投入していたため、翌々日のGitHub Actions経由デプロイ(gas_backend.gsの内容でclasp push)で本番から消えた。以後、この種のBotコードは必ず`gas_backend.gs`にコミットしてからデプロイすること(`createBugReportBotJWT_`直上のコメント参照)。

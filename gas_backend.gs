@@ -134,6 +134,14 @@ const SHEET_BUGREPORT = 'bug_reports';
 const BUGREPORT_COLS = ['id','store_id','store_name','kind','content','poster_type','poster_name','status','created_at','updated_at','image_urls','lineworks_user_id','no'];
 const SHEET_BUGREPORT_COMMENTS = 'bug_report_comments';
 const BUGREPORT_COMMENT_COLS = ['id','issue_id','poster_type','poster_name','store_id','text','created_at'];
+// バグ報告Botの管理者(LINE WORKSから返信・ステータス変更できる人)一覧(2026-09-25追加)。
+// 行を足す/消すだけで管理者を追加・解除できるよう、Script Propertiesではなくシートで持つ。
+// 1行も登録が無い場合だけ、従来のLW_USER_ID_BUGREPORT(1人)を管理者として扱う
+const SHEET_BUGREPORT_ADMINS = '管理者';
+const BUGREPORT_ADMIN_COLS = ['name','lineworks_user_id','memo'];
+// bug_reportsタブでこの列に文字を書くと、その報告への管理者返信として記録・通知して空欄に戻す
+// (onBugReportSheetEditトリガー、2026-09-25追加)。BUGREPORT_COLSの末尾より後ろに置く
+const BUGREPORT_REPLY_INPUT_COL = 'reply_input';
 
 // 業務連絡（管理者が作成・公開するお知らせ。2026-09-18追加）。scopeは'all'または
 // _areaForStore_()が返すエリア名(AREA_STORES参照)をカンマ区切りで保持する
@@ -429,6 +437,7 @@ function doGet(e) {
     else if (a === 'provisionNewInventorySheet') result = provisionNewInventorySheet(e.parameter.label);
     else if (a === 'provisionBugReportSheet')   result = provisionBugReportSheet_();
     else if (a === 'seedBugReportSheetGuide')   result = seedBugReportSheetGuide_();
+    else if (a === 'setupBugReportSheetTrigger') result = setupBugReportSheetTrigger();
     else if (a === 'buildInventoryRollup')      result = buildInventoryRollup(e.parameter.periodLabel);
     else if (a === 'buildStoreInventorySheet')  result = buildStoreInventorySheet(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'buildReorderTestPlaySheet') result = buildReorderTestPlaySheet(e.parameter.storeId);
@@ -588,24 +597,30 @@ function doPost(e) {
   // 各保存関数がresult._notifyに要否を積んでおき、ここで種類ごとに振り分けて送信する）。
   // 1回の処理で複数件(例: 送信者への受信確認＋管理者への新規報告通知)送りたい場合は
   // 配列で積んでおける(2026-09-19、LINE WORKS経由バグ報告の追加に合わせて対応)
-  if (result && result._notify) {
-    const notifies = Array.isArray(result._notify) ? result._notify : [result._notify];
-    delete result._notify;
-    notifies.forEach(n => {
-      try {
-        if      (n.type === 'attendanceGpsIssue')    notifyAttendanceGpsIssue_(n.storeId, n.name);
-        else if (n.type === 'leaveRequestTomorrow')  notifyLeaveRequestTomorrow_(n.storeId, n.name, n.leaveDate);
-        else if (n.type === 'leaveRequestToday')     notifyLeaveRequestToday_(n.storeId, n.name, n.leaveDate);
-        else if (n.type === 'leaveRequestCancelled') notifyLeaveRequestCancelled_(n.storeId, n.name, n.leaveDate);
-        else if (n.type === 'stockInquiryReply')     sendStockBotNotification_(n.message, n.userId);
-        else if (n.type === 'bugReportNew')          sendBugReportBotNotification_(n.message);
-        else if (n.type === 'bugReportLineWorksAck') sendBugReportBotNotification_(n.message, n.userId);
-      } catch (e) {
-        console.error('LINE WORKS通知エラー(ロック解放後):', e.message);
-      }
-    });
-  }
+  _dispatchNotifies_(result);
   return json(result);
+}
+
+// result._notifyに積まれた通知を送り、resultからは取り除く。doPostに加えて、シート編集トリガー
+// (onBugReportSheetEdit)からも同じ振り分けを使うため関数に切り出した(2026-09-25)
+function _dispatchNotifies_(result) {
+  if (!result || !result._notify) return;
+  const notifies = Array.isArray(result._notify) ? result._notify : [result._notify];
+  delete result._notify;
+  notifies.forEach(n => {
+    try {
+      if      (n.type === 'attendanceGpsIssue')    notifyAttendanceGpsIssue_(n.storeId, n.name);
+      else if (n.type === 'leaveRequestTomorrow')  notifyLeaveRequestTomorrow_(n.storeId, n.name, n.leaveDate);
+      else if (n.type === 'leaveRequestToday')     notifyLeaveRequestToday_(n.storeId, n.name, n.leaveDate);
+      else if (n.type === 'leaveRequestCancelled') notifyLeaveRequestCancelled_(n.storeId, n.name, n.leaveDate);
+      else if (n.type === 'stockInquiryReply')     sendStockBotNotification_(n.message, n.userId);
+      // 管理者向け(新規報告・追記)は登録済みの管理者全員へ送る(2026-09-25、管理者の複数人化に合わせて変更)
+      else if (n.type === 'bugReportNew')          _bugReportAdminUserIds_().forEach(uid => sendBugReportBotNotification_(n.message, uid));
+      else if (n.type === 'bugReportLineWorksAck') sendBugReportBotNotification_(n.message, n.userId);
+    } catch (e) {
+      console.error('LINE WORKS通知エラー(ロック解放後):', e.message);
+    }
+  });
 }
 
 function json(data) {
@@ -719,45 +734,77 @@ function seedBugReportSheetGuide_() {
     guide = ss.insertSheet('使い方', 0);
   }
   guide.clear();
+  // 2026-09-25: シート編集トリガー(onBugReportSheetEdit)の導入により、status列の変更・返信入力列
+  // への記入はポータル操作と同じく履歴記録・通知されるようになったため、説明文を全面的に書き直した
   const lines = [
-    ['⚠️ このシートは「表示・確認用」ですが、実データそのものです。セルを直接編集すると…'],
-    ['　✓ 最長25秒ほどでポータル側の表示にも反映されます(裏でこのシートを直接読んでいるため)'],
-    ['　✗ ただし「誰が/いつ変更したか」の履歴がbug_report_commentsタブに記録されません'],
-    ['　✗ LINE WORKS経由の投稿だと、投稿者への自動通知(「ステータスが〇〇になりました」)が送られません'],
-    ['　✗ status列は下の3つの表記以外を入れると、ポータル上の色分け表示が崩れます(エラーにはなりません)'],
-    ['　→ そのため通常は下記②③の手順(管理者ポータルの操作)で変更することを強く推奨します。'],
-    ['　同じことがbug_report_commentsタブ(対応履歴)にも当てはまります。'],
+    ['⚠️ このスプレッドシートは実データそのものです(ポータル・LINE WORKSと同じデータを見ています)'],
+    ['　✓ 下の「シートから操作する」の方法なら、ポータルやLINE WORKSから操作したのと同じく履歴が残り、報告者にも通知されます'],
+    ['　✗ それ以外の列(content・store_id等)を直接書き換えても、履歴・通知は残りません(表示だけが変わります)'],
+    ['　✗ id・issue_id・no列は書き換えないでください(報告とコメントの紐付けが切れます)'],
     [''],
     ['■ 新しいバグ報告・修正依頼を作るには'],
-    ['管理者ポータル(またはパートナーポータル)の「バグ報告」画面から投稿してください。'],
-    ['LINE WORKSのバグ報告Botに直接メッセージを送っても登録されます(主に社員向け)。'],
+    ['パートナー: ポータルの「バグ報告」タブから投稿します。'],
+    ['社員: LINE WORKSのバグ報告Botにメッセージを送ります(画像は続けて3分以内に送ると同じ報告にまとまります)。'],
+    ['どちらの経路でも、新しい報告は「管理者」タブに登録された全員のLINE WORKSへ「【新規バグ報告】(No.5)…」の形で通知されます。'],
     [''],
-    ['■ 対応中・完了への変更方法'],
-    ['① 管理者ポータルにログインする'],
-    ['② 「バグ報告」画面を開き、一覧から対象の投稿をクリックする'],
-    ['③ 詳細パネル下部の「未対応」「対応中」「完了」ボタンから、変更したいステータスをクリックする'],
+    ['■ 返信・ステータス変更のやり方(3通り、どれでも同じ結果になります)'],
+    ['① LINE WORKS(管理者のみ): バグ報告Botに「No.5 返信本文」と送る → No.5への返信'],
+    ['　　　　　　　　　　　　 「No.5 対応中」「No.5 完了」のように本文がステータス名だけ → ステータス変更'],
+    ['② シート: bug_reportsタブの報告の行で、reply_input列に返信を書く → 返信として記録され、セルは自動で空欄に戻ります'],
+    ['　　　　 status列をプルダウンで変える → ステータス変更として記録されます'],
+    ['③ 管理者ポータル: 「バグ報告」画面で対象の投稿をクリックし、返信欄・ステータスボタンから操作'],
+    ['→ 返信・ステータス変更はbug_report_commentsタブに記録され、ポータルのスレッドにも表示されます。'],
+    ['→ LINE WORKSから来た報告は、報告者本人にLINE WORKSで届きます。ポータルから来た報告は、ポータルの一覧に「返信あり」と表示されます。'],
+    ['→ 報告者が「No.5 追加情報…」(LINE WORKS)やポータルのスレッドで追記した場合は、管理者全員に通知されます。'],
     [''],
-    ['■ 各列の意味'],
+    ['■ 管理者の追加・解除'],
+    ['「管理者」タブに1人1行で、name(名前)とlineworks_user_id(LINE WORKSのユーザーID)を登録します。行を削除すれば解除です。'],
+    ['ユーザーIDが分からない場合は、その人にバグ報告Botへ何か1通送ってもらうと、bug_reportsタブのlineworks_user_id列で確認できます(確認後、その報告は削除して構いません)。'],
+    ['「管理者」タブに1人も登録が無い場合は、初期設定の管理者1名(スクリプトの設定値)だけが管理者として扱われます。'],
+    [''],
+    ['■ bug_reportsタブの各列'],
+    ['no: 報告番号(LINE WORKSで「No.5」のように指定する番号、自動採番)'],
     ['id: 投稿の一意なID(自動生成、編集不要)'],
     ['store_id / store_name: 投稿元の店舗(空欄=全店舗共通/社内、またはLINE WORKS経由)'],
     ['kind: bug(バグ報告) / request(修正依頼)'],
     ['content: 投稿内容'],
-    ['poster_type: partner(パートナー) / staff(社員) / admin(管理者) / lineworks(LINE WORKS経由) / system(自動記録)'],
-    ['status: 未対応 / 対応中 / 完了 (bug_reportsタブのこの列はプルダウンから選択できます)'],
+    ['poster_type: partner(パートナー) / staff(社員) / admin(管理者) / lineworks(LINE WORKS経由)'],
+    ['status: 未対応 / 対応中 / 完了 (プルダウンから選択)'],
     ['image_urls: 添付画像のURL(カンマ区切り、Drive上に保存)'],
     ['lineworks_user_id: LINE WORKS経由の投稿の場合、送信者のユーザーID(通知先として使用)'],
+    ['reply_input: 返信の入力欄(書くと返信として送られ、自動で空欄に戻ります)'],
     [''],
-    ['「bug_reports」タブ内の「' + marker + '」で始まる行は記入例です。管理者ポータルの'],
-    ['「バグ報告」画面からいつでも削除して構いません。'],
+    ['■ bug_report_commentsタブの各列(1行=返信1件、またはステータス変更1回)'],
+    ['issue_id: どの報告へのコメントか(bug_reportsタブのid列の値)'],
+    ['poster_type: admin(管理者の返信) / partner(パートナーの返信) / lineworks(LINE WORKSでの追記) / system(ステータス変更の自動記録)'],
+    ['poster_name: 返信した人の表示名 / text: 本文 / created_at: 日時'],
+    ['このタブは自動で記録される場所です。返信は上の①〜③の方法で行い、このタブに直接行を追加しないでください。'],
+    [''],
+    ['「' + marker + '」で始まる行(bug_reports・bug_report_commentsの両タブ)は記入例です。管理者ポータルの'],
+    ['「バグ報告」画面から記入例の報告を削除すると、記入例のコメントも一緒に消えます。'],
   ];
   guide.getRange(1, 1, lines.length, 1).setValues(lines);
   guide.setColumnWidth(1, 720);
-  [1, 9, 13, 18].forEach(row => guide.getRange(row, 1).setFontWeight('bold'));
-  guide.getRange(1, 1).setFontColor('#dc2626');
+  lines.forEach((l, i) => { if (/^■/.test(l[0])) guide.getRange(i + 1, 1).setFontWeight('bold'); });
+  guide.getRange(1, 1).setFontWeight('bold').setFontColor('#dc2626');
   guide.setFrozenRows(1);
+
+  // 管理者タブ。初回だけ作成し、既定の通知先(LW_USER_ID_BUGREPORT)を1行目の管理者として登録する
+  let adminsCreated = false;
+  let admins = ss.getSheetByName(SHEET_BUGREPORT_ADMINS);
+  if (!admins) {
+    adminsCreated = true;
+    admins = ss.insertSheet(SHEET_BUGREPORT_ADMINS);
+    admins.appendRow(BUGREPORT_ADMIN_COLS);
+    const defaultAdmin = PropertiesService.getScriptProperties().getProperty('LW_USER_ID_BUGREPORT');
+    if (defaultAdmin) admins.appendRow(['管理者(初期登録)', defaultAdmin, '既定の通知先から自動登録']);
+    admins.setFrozenRows(1);
+  }
 
   const sheet = getBugReportSheetFile_(SHEET_BUGREPORT);
   ensureHeaders(sheet, BUGREPORT_COLS);
+  _ensureColumnExists_(sheet, 'no');
+  _ensureColumnExists_(sheet, BUGREPORT_REPLY_INPUT_COL);
   const hdrs = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
   const contentIdx = hdrs.indexOf('content');
   const statusIdx = hdrs.indexOf('status');
@@ -793,18 +840,38 @@ function seedBugReportSheetGuide_() {
     sheet.getRange(2, imageUrlsIdx + 1, numRows, 1).setWrap(true);
   }
 
-  const alreadySeeded = data.slice(1).some(r => String(r[contentIdx] || '').indexOf(marker) === 0);
+  const idIdx = hdrs.indexOf('id');
+  const exampleRow = data.slice(1).find(r => String(r[contentIdx] || '').indexOf(marker) === 0);
+  const alreadySeeded = !!exampleRow;
+  let exampleIssueId = exampleRow ? exampleRow[idIdx] : null;
   if (!alreadySeeded) {
     const now = new Date();
+    exampleIssueId = Utilities.getUuid();
     sheet.appendRow([
-      Utilities.getUuid(), '', '', 'bug',
+      exampleIssueId, '', '', 'bug',
       marker + 'これはサンプルの投稿です。「使い方」タブを確認したら、管理者ポータルの「バグ報告」画面から削除して構いません。',
       'staff', '', '未対応', now, now, '', ''
     ]);
     _invalidateBugReportsCache_();
   }
 
-  return { ok: true, guideCreated, exampleAdded: !alreadySeeded, statusMigrated: migrated };
+  // bug_report_commentsの記入例(2026-09-25追加)。上の記入例の報告に紐づく「管理者の返信」と
+  // 「ステータス変更の自動記録」の2行で、実際の運用で並ぶ行の見え方をそのまま示す
+  const commentSheet = getBugReportSheetFile_(SHEET_BUGREPORT_COMMENTS);
+  ensureHeaders(commentSheet, BUGREPORT_COMMENT_COLS);
+  const cHdrs = commentSheet.getRange(1, 1, 1, commentSheet.getLastColumn()).getValues()[0].map(String);
+  const cTextIdx = cHdrs.indexOf('text');
+  const cData = commentSheet.getLastRow() > 1 ? commentSheet.getDataRange().getValues() : [];
+  const commentsSeeded = cData.slice(1).some(r => String(r[cTextIdx] || '').indexOf(marker) === 0);
+  if (!commentsSeeded && exampleIssueId) {
+    const now = new Date();
+    commentSheet.appendRow([Utilities.getUuid(), exampleIssueId, 'admin', '管理者', '',
+      marker + '確認しました。本日中に修正します。(管理者の返信の例。LINE WORKSで「No.5 確認しました…」と送る、reply_input列に書く、ポータルの返信欄から送る、のどれでもこの形で記録されます)', now]);
+    commentSheet.appendRow([Utilities.getUuid(), exampleIssueId, 'system', '管理者', '',
+      marker + 'ステータスを「対応中」に変更しました(ステータス変更の自動記録の例)', now]);
+  }
+
+  return { ok: true, guideCreated, adminsCreated, exampleAdded: !alreadySeeded, commentExamplesAdded: !commentsSeeded && !!exampleIssueId, statusMigrated: migrated };
 }
 
 // 調査用の一時的な読み取り専用ヘルパー(2026-07-28、「納品済み履歴」の実データがどのタブ・列構成
@@ -1299,25 +1366,67 @@ function _nextBugReportNo_() {
 
 // no(連番)からバグ報告1件を検索する(LINE WORKS管理者返信用、2026-09-24追加)
 function _findBugReportByNo_(no) {
+  return _findBugReport_('no', no);
+}
+
+// 指定列の値が一致するバグ報告1件を返す(2026-09-25、id検索と共通化)。見つからなければnull
+function _findBugReport_(colName, value) {
   const sheet = getBugReportSheetFile_(SHEET_BUGREPORT);
   const data = sheet.getDataRange().getValues();
   const hdrs = data[0].map(String);
-  const noIdx = hdrs.indexOf('no');
-  if (noIdx < 0) return null;
-  const idIdx = hdrs.indexOf('id'), contentIdx = hdrs.indexOf('content'),
-        posterTypeIdx = hdrs.indexOf('poster_type'), lwUserIdx = hdrs.indexOf('lineworks_user_id');
+  const keyIdx = hdrs.indexOf(colName);
+  if (keyIdx < 0) return null;
+  const col = name => hdrs.indexOf(name);
   for (let i = 1; i < data.length; i++) {
-    if (String(data[i][noIdx]) === String(no)) {
+    if (String(data[i][keyIdx]) === String(value)) {
+      const r = data[i];
       return {
-        id: data[i][idIdx], content: String(data[i][contentIdx] || ''),
-        posterType: data[i][posterTypeIdx], lineworksUserId: data[i][lwUserIdx],
+        id: r[col('id')], no: col('no') >= 0 ? r[col('no')] : '', content: String(r[col('content')] || ''),
+        storeName: String(r[col('store_name')] || ''), posterType: r[col('poster_type')],
+        lineworksUserId: col('lineworks_user_id') >= 0 ? r[col('lineworks_user_id')] : '',
       };
     }
   }
   return null;
 }
 
+// 通知文で報告を指し示す表記。「No.5「先頭40字」」の形(noが無い古い報告は本文だけ)
+function _bugReportRefLabel_(report) {
+  return (report.no ? 'No.' + report.no : '') + '「' + String(report.content || '').slice(0, 40) + '」';
+}
+
+// バグ報告Botの管理者のLINE WORKSユーザーID一覧(2026-09-25追加)。「管理者」タブが正で、
+// 1人も登録が無い(タブ未作成を含む)場合だけ従来のLW_USER_ID_BUGREPORTを管理者として扱う。
+// LINE WORKSからの着信時と通知送信時に数回読むだけなのでキャッシュはしない(タブを編集したら即反映)
+function _bugReportAdminUserIds_() {
+  let ids = [];
+  try {
+    const ss = SpreadsheetApp.openById(BUGREPORT_SHEET_ID);
+    const sheet = ss.getSheetByName(SHEET_BUGREPORT_ADMINS);
+    if (sheet) {
+      ids = sheetRows(sheet, BUGREPORT_ADMIN_COLS)
+        .map(r => String(r.lineworks_user_id || '').trim())
+        .filter(Boolean);
+    }
+  } catch (e) {
+    console.error('_bugReportAdminUserIds_ error:', e.message);
+  }
+  if (!ids.length) {
+    const fallback = PropertiesService.getScriptProperties().getProperty('LW_USER_ID_BUGREPORT');
+    if (fallback) ids = [fallback];
+  }
+  return ids.filter((id, i) => ids.indexOf(id) === i);
+}
+// 管理者判定はこの関数に集約する。将来Botをグループトークへ移す際も、判定方法の変更はここだけで済む
+function _isBugReportAdmin_(userId) {
+  return !!userId && _bugReportAdminUserIds_().indexOf(String(userId)) >= 0;
+}
+
 // issueに1コメント追記する（返信・スレッドのやり取り用）
+// 2026-09-25: どこから返信しても同じ結果になるよう、通知もここで積むようにした。
+// - 管理者/社員の返信 → 元の報告がLINE WORKS経由なら報告者本人へLINE WORKSで転送
+//   (ポータル経由の報告はスレッドに記録されるだけで、ポータル側に「返信あり」が出る)
+// - パートナー/LINE WORKS報告者の追記 → 管理者全員へLINE WORKSで通知
 function addBugReportComment(issueId, posterType, posterName, storeId, text) {
   if (!text) return { error: 'コメントを入力してください' };
   const sheet = getBugReportSheetFile_(SHEET_BUGREPORT_COMMENTS);
@@ -1325,7 +1434,20 @@ function addBugReportComment(issueId, posterType, posterName, storeId, text) {
   const now = new Date();
   sheet.appendRow([Utilities.getUuid(), issueId, posterType || 'partner', posterName || '', storeId || '', text, now]);
   _touchBugReportUpdatedAt_(issueId, now);
-  return { ok: true };
+  const result = { ok: true };
+  const report = _findBugReport_('id', issueId);
+  if (!report) return result;
+  if (posterType === 'admin' || posterType === 'staff') {
+    if (report.posterType === 'lineworks' && report.lineworksUserId) {
+      result._notify = { type: 'bugReportLineWorksAck', userId: report.lineworksUserId,
+        message: 'ご報告いただいた内容(' + _bugReportRefLabel_(report) + ')に管理者から返信がありました:\n\n' + text };
+    }
+  } else {
+    const storeLabel = report.storeName ? '【' + report.storeName + '】' : '【全店舗共通/社内】';
+    result._notify = { type: 'bugReportNew',
+      message: '【追記】(No.' + report.no + ')' + storeLabel + '\n' + text + '\n\n元の報告: ' + _bugReportRefLabel_(report) };
+  }
+  return result;
 }
 
 // 管理者がステータス(open/doing/done)を変更する。変更内容はシステム発言としてスレッドにも
@@ -1336,7 +1458,9 @@ function addBugReportComment(issueId, posterType, posterName, storeId, text) {
 const BUGREPORT_STATUSES = ['未対応', '対応中', '完了'];
 // LINE WORKS経由(poster_type='lineworks')の報告は、ステータス変更時に本人へLINE WORKSで
 // 結果を知らせる(2026-09-19追加。ポータル投稿はスレッドを開けば見えるため通知不要)
-function updateBugReportStatus(issueId, newStatus, adminName) {
+// statusAlreadyWritten: シートのプルダウンで既にstatusセルが書き換わった後に呼ぶ場合true
+// (onBugReportSheetEditから。セルは書き直さず、updated_at・履歴・通知だけ行う。2026-09-25追加)
+function updateBugReportStatus(issueId, newStatus, adminName, statusAlreadyWritten) {
   if (BUGREPORT_STATUSES.indexOf(newStatus) < 0) return { error: '不正なステータスです: ' + newStatus };
   const sheet = getBugReportSheetFile_(SHEET_BUGREPORT);
   const data = sheet.getDataRange().getValues();
@@ -1349,15 +1473,17 @@ function updateBugReportStatus(issueId, newStatus, adminName) {
   const contentIdx = hdrs.indexOf('content');
   const now = new Date();
   let found = false;
-  let lwUserId = null, contentPreview = '';
+  const noIdx = hdrs.indexOf('no');
+  let lwUserId = null, contentPreview = '', reportNo = '';
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][idIdx]) === String(issueId)) {
-      sheet.getRange(i + 1, statusIdx + 1).setValue(newStatus);
+      if (!statusAlreadyWritten) sheet.getRange(i + 1, statusIdx + 1).setValue(newStatus);
       sheet.getRange(i + 1, updatedIdx + 1).setValue(now);
       if (posterTypeIdx >= 0 && lwUserIdx >= 0 && data[i][posterTypeIdx] === 'lineworks' && data[i][lwUserIdx]) {
         lwUserId = data[i][lwUserIdx];
       }
       if (contentIdx >= 0) contentPreview = String(data[i][contentIdx] || '').slice(0, 40);
+      if (noIdx >= 0) reportNo = data[i][noIdx];
       found = true;
       break;
     }
@@ -1370,12 +1496,75 @@ function updateBugReportStatus(issueId, newStatus, adminName) {
     Utilities.getUuid(), issueId, 'system', adminName || '管理者', '',
     'ステータスを「' + newStatus + '」に変更しました', now
   ]);
-  const result = { ok: true };
+  const result = { ok: true, no: reportNo };
   if (lwUserId) {
     result._notify = { type: 'bugReportLineWorksAck', userId: lwUserId,
-      message: 'ご報告いただいた内容(「' + contentPreview + '」)のステータスが「' + newStatus + '」になりました。' };
+      message: 'ご報告いただいた内容(' + (reportNo ? 'No.' + reportNo : '') + '「' + contentPreview + '」)のステータスが「' + newStatus + '」になりました。' };
   }
   return result;
+}
+
+// ----------------------------------------------------------------
+// バグ報告スプレッドシートの編集トリガー(2026-09-25追加)
+// ----------------------------------------------------------------
+// シートから直接操作しても、ポータル/LINE WORKSから操作したのと同じ履歴記録・通知が行われる
+// ようにする。インストール型のonEditトリガーは「人の手による編集」でしか発火しない(スクリプトの
+// setValue/appendRowでは発火しない)ため、ポータル操作やこの関数自身の書き込みで二重処理は起きない。
+// - status列の変更 → updateBugReportStatus(statusAlreadyWritten=true)で履歴・通知
+// - reply_input列への記入 → 管理者の返信として記録・通知し、セルを空欄に戻す
+// トリガー名に_を付けないこと(末尾_の関数はトリガーのハンドラーに指定できない)
+function onBugReportSheetEdit(e) {
+  if (!e || !e.range) return;
+  const sheet = e.range.getSheet();
+  if (sheet.getName() !== SHEET_BUGREPORT) return;
+  const hdrs = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
+  const idCol = hdrs.indexOf('id') + 1;
+  const statusCol = hdrs.indexOf('status') + 1;
+  const replyCol = hdrs.indexOf(BUGREPORT_REPLY_INPUT_COL) + 1;
+  const r0 = e.range.getRow(), c0 = e.range.getColumn();
+  const nRows = e.range.getNumRows(), nCols = e.range.getNumColumns();
+  const touches = col => col > 0 && col >= c0 && col < c0 + nCols;
+  if (!touches(statusCol) && !touches(replyCol)) return;
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(30000);
+  const results = [];
+  try {
+    for (let row = Math.max(r0, 2); row < r0 + nRows; row++) {
+      const issueId = sheet.getRange(row, idCol).getValue();
+      if (!issueId) continue;
+      if (touches(statusCol)) {
+        const newStatus = String(sheet.getRange(row, statusCol).getValue() || '');
+        // 単一セル編集ならoldValueと比べて、実際に値が変わった時だけ記録する
+        const unchanged = nRows === 1 && nCols === 1 && e.oldValue === newStatus;
+        if (!unchanged && BUGREPORT_STATUSES.indexOf(newStatus) >= 0) {
+          results.push(updateBugReportStatus(issueId, newStatus, '管理者', true));
+        }
+      }
+      if (touches(replyCol)) {
+        const cell = sheet.getRange(row, replyCol);
+        const text = String(cell.getValue() || '').trim();
+        if (text) {
+          const r = addBugReportComment(issueId, 'admin', '管理者', '', text);
+          if (r.ok) cell.clearContent();
+          results.push(r);
+        }
+      }
+    }
+  } finally {
+    lock.releaseLock();
+  }
+  _invalidateBugReportsCache_();
+  results.forEach(r => _dispatchNotifies_(r));
+}
+
+// onBugReportSheetEditをバグ報告スプレッドシートの編集トリガーとして登録する。何度実行しても
+// 重複登録しない。?action=setupBugReportSheetTrigger で実行
+function setupBugReportSheetTrigger() {
+  const exists = ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'onBugReportSheetEdit');
+  if (exists) return { ok: true, alreadyExisted: true };
+  ScriptApp.newTrigger('onBugReportSheetEdit').forSpreadsheet(BUGREPORT_SHEET_ID).onEdit().create();
+  return { ok: true, alreadyExisted: false };
 }
 
 function _touchBugReportUpdatedAt_(issueId, when) {
@@ -5803,17 +5992,22 @@ function _routeLineWorksCallback_(body, botParam) {
       return handleLineWorksBugReportImage_(body);
     }
     if (isBugBot && body.content && body.content.type === 'text') {
-      // 管理者(新規報告の通知先=LW_USER_ID_BUGREPORTと同一人物)が先頭に報告番号を付けて
-      // 送ってきた場合だけ、新規報告ではなく既存報告への返信として扱う(2026-09-24追加)。
-      // 通知文の表示形式「(No.2)」をそのまま真似て送ってくる想定で、"2 本文"のような素の
-      // 数字だけでなく「No.2」「(No.2)」等の書き方も受け付ける(実機テストで判明した揺れに対応)。
-      // それ以外(番号無し、または管理者以外の送信)は従来通り新規報告として扱う
+      // 先頭に報告番号(No.n)が付いたメッセージは、新規報告ではなく既存報告への返信/追記として扱う
+      // (2026-09-24追加)。2026-09-25変更:
+      // - 「No.」を必須にした(素の数字"3 本文"も受け付けていたため、「3階のトイレが…」のような
+      //   数字始まりの新規報告が返信と誤認されていた)。通知文の「(No.2)」をそのまま真似る想定で、
+      //   「No.2 本文」「(No.2) 本文」、全角の「Ｎｏ．２」等も受け付ける
+      // - 管理者なら返信(本文がステータス名だけならステータス変更)、管理者以外なら報告者からの追記
       const userId = body.source && body.source.userId;
-      const adminUserId = PropertiesService.getScriptProperties().getProperty('LW_USER_ID_BUGREPORT');
-      const text = body.content.text || '';
-      const m = text.match(/^\(?\s*(?:no\.?\s*)?(\d+)\)?\s*([\s\S]+)/i);
-      if (adminUserId && userId && userId === adminUserId && m) {
-        return handleLineWorksBugReportAdminReply_(userId, m[1], m[2]);
+      const rawText = body.content.text || '';
+      // 全角→半角は1文字ずつの置換で長さが変わらないため、判定は変換後の文字列で行い、
+      // 本文は元の文字列から同じ位置で切り出す(返信本文の全角文字はそのまま残す)
+      const m = _toHalfWidthAlnum_(rawText).match(/^[(（]?\s*no\s*\.?\s*(\d+)\s*[)）]?[\s:：、,]*([\s\S]+)$/i);
+      if (userId && m) {
+        const replyText = rawText.slice(rawText.length - m[2].length).trim();
+        return _isBugReportAdmin_(userId)
+          ? handleLineWorksBugReportAdminReply_(userId, m[1], replyText)
+          : handleLineWorksBugReportFollowUp_(userId, m[1], replyText);
       }
     }
     if (isBugBot) {
@@ -5828,24 +6022,42 @@ function _routeLineWorksCallback_(body, botParam) {
 // 管理者からバグ報告Botへの返信を、報告番号(no)で紐づけて記録・転送する(2026-09-24追加)。
 // bug_report_commentsに残す(ポータルのスレッド表示にもそのまま出る)のに加え、元の報告が
 // LINE WORKS経由(poster_type='lineworks')なら投稿者本人へもLINE WORKSで転送する
+// 2026-09-25: 本文がステータス名(未対応/対応中/完了)だけならステータス変更として扱う。
+// 報告者への転送はaddBugReportComment/updateBugReportStatus側が積む通知をそのまま使う
+// (ポータル・シートから操作した場合と同じ経路にそろえるため)
 function handleLineWorksBugReportAdminReply_(adminUserId, reportNo, replyText) {
+  const ack = message => ({ type: 'bugReportLineWorksAck', userId: adminUserId, message });
   const report = _findBugReportByNo_(reportNo);
-  if (!report) {
-    return { ok: true, _notify: { type: 'bugReportLineWorksAck', userId: adminUserId,
-      message: '報告番号 No.' + reportNo + ' が見つかりませんでした。' } };
+  if (!report) return { ok: true, _notify: ack('報告番号 No.' + reportNo + ' が見つかりませんでした。') };
+
+  if (BUGREPORT_STATUSES.indexOf(replyText) >= 0) {
+    const s = updateBugReportStatus(report.id, replyText, '管理者');
+    if (s.error) return { ok: true, _notify: ack('ステータス変更に失敗しました: ' + s.error) };
+    return { ok: true, _notify: [ack('No.' + reportNo + 'のステータスを「' + replyText + '」に変更しました。')].concat(s._notify || []) };
   }
-  const c = addBugReportComment(report.id, 'admin', '管理者(LINE WORKS)', '', replyText);
-  if (c.error) {
-    return { ok: true, _notify: { type: 'bugReportLineWorksAck', userId: adminUserId,
-      message: '返信の記録に失敗しました: ' + c.error } };
-  }
-  const notifies = [{ type: 'bugReportLineWorksAck', userId: adminUserId,
-    message: 'No.' + reportNo + 'へ返信を記録しました。' }];
-  if (report.posterType === 'lineworks' && report.lineworksUserId) {
-    notifies.push({ type: 'bugReportLineWorksAck', userId: report.lineworksUserId,
-      message: 'ご報告いただいた内容(「' + report.content.slice(0, 40) + '」)に管理者から返信がありました:\n\n' + replyText });
-  }
-  return { ok: true, _notify: notifies };
+
+  const c = addBugReportComment(report.id, 'admin', '管理者', '', replyText);
+  if (c.error) return { ok: true, _notify: ack('返信の記録に失敗しました: ' + c.error) };
+  const forwarded = !!c._notify;
+  return { ok: true, _notify: [ack('No.' + reportNo + 'へ返信を記録しました。' +
+    (forwarded ? '報告者にLINE WORKSで届けました。' : 'ポータルのスレッドに表示されます。'))].concat(c._notify || []) };
+}
+
+// 管理者以外が「No.n 本文」と送ってきた場合は、その報告への追記(補足情報)として記録する
+// (2026-09-25追加)。管理者全員への通知はaddBugReportCommentが積む
+function handleLineWorksBugReportFollowUp_(userId, reportNo, text) {
+  const ack = message => ({ type: 'bugReportLineWorksAck', userId, message });
+  const report = _findBugReportByNo_(reportNo);
+  if (!report) return { ok: true, _notify: ack('報告番号 No.' + reportNo + ' が見つかりませんでした。新しい報告として送る場合は、先頭の「No.' + reportNo + '」を外して送ってください。') };
+  const c = addBugReportComment(report.id, 'lineworks', '', '', text);
+  if (c.error) return { ok: true, _notify: ack('追記の記録に失敗しました: ' + c.error) };
+  return { ok: true, _notify: [ack('No.' + reportNo + 'に追記しました。')].concat(c._notify || []) };
+}
+
+// 全角英数字・記号(！〜～)を半角にする。LINE WORKSで「Ｎｏ．５」のように全角入力された報告番号を
+// 読み取るため(2026-09-25追加)。1文字ずつの置換なので文字列長は変わらない
+function _toHalfWidthAlnum_(s) {
+  return String(s).replace(/[！-～]/g, ch => String.fromCharCode(ch.charCodeAt(0) - 0xFEE0));
 }
 
 // LINE WORKSはテキストと画像を1メッセージにまとめて送れず、必ず別イベントとして届くため、
@@ -5878,8 +6090,8 @@ function handleLineWorksBugReport_(body) {
   }
   _rememberPendingBugReportForUser_(userId, r.id);
   const notifies = [{ type: 'bugReportLineWorksAck', userId,
-    message: '報告を受け付けました。管理者ポータルの「バグ報告」一覧に登録されました。画像がある場合は続けて送っていただければ、この報告に追加されます(' +
-      (LW_BUGREPORT_PENDING_TTL_SEC_ / 60) + '分以内)。\n\n受け付けた内容:\n' + text }];
+    message: '報告を受け付けました(No.' + r.no + ')。画像がある場合は続けて送っていただければ、この報告に追加されます(' +
+      (LW_BUGREPORT_PENDING_TTL_SEC_ / 60) + '分以内)。あとから補足する場合は「No.' + r.no + ' 補足内容」の形で送ってください。\n\n受け付けた内容:\n' + text }];
   if (r._notify) notifies.push(r._notify);
   return { ok: true, id: r.id, _notify: notifies };
 }
@@ -5922,7 +6134,7 @@ function handleLineWorksBugReportImage_(body) {
   if (r2.error) return { ok: true, _notify: { type: 'bugReportLineWorksAck', userId, message: '画像の登録に失敗しました: ' + r2.error } };
   _rememberPendingBugReportForUser_(userId, r2.id);
   const notifies = [{ type: 'bugReportLineWorksAck', userId,
-    message: '画像を受け付け、新規のバグ報告として登録しました。続けて内容の説明を送っていただけると助かります。' }];
+    message: '画像を受け付け、新規のバグ報告(No.' + r2.no + ')として登録しました。続けて内容の説明を「No.' + r2.no + ' 説明」の形で送っていただけると助かります。' }];
   if (r2._notify) notifies.push(r2._notify);
   return { ok: true, id: r2.id, _notify: notifies };
 }

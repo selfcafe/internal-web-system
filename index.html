@@ -4445,6 +4445,7 @@ function _bugReportRoleLabel(c) {
   if (c.poster_type === 'system') return 'システム';
   if (c.poster_type === 'staff') return c.poster_name || '社員';
   if (c.poster_type === 'admin') return c.poster_name || '管理者';
+  if (c.poster_type === 'lineworks') return c.poster_name || 'LINE WORKS';
   return c.store_id ? (STORES[c.store_id] || c.store_id) : (c.poster_name || 'パートナー');
 }
 
@@ -4470,10 +4471,33 @@ function buildBugReportThreadHtml(issueId, comments, replyFn) {
   </div>`;
 }
 
+/* 「返信あり」表示(2026-09-25追加)。管理者はLINE WORKS・シート・管理者ポータルのどこからでも
+   返信/ステータス変更でき、いずれもupdated_atが更新される。パートナーがスレッドを最後に開いた時点の
+   updated_atを端末ごと(localStorage)に覚えておき、それより後に動きがあった報告に目印を付ける。
+   店舗の共有端末なら店舗単位で既読になるイメージ(サーバーに既読状態は持たない) */
+const BUGREPORT_SEEN_KEY = 'bugreport_seen_v1';
+function _bugReportSeenMap() {
+  try { return JSON.parse(localStorage.getItem(BUGREPORT_SEEN_KEY) || '{}') || {}; } catch(e) { return {}; }
+}
+function _markBugReportSeen(issueId) {
+  const issue = getBugReports(storeTab).find(i => i.id === issueId);
+  if (!issue) return;
+  const map = _bugReportSeenMap();
+  map[issueId] = issue.updated_at || '';
+  try { localStorage.setItem(BUGREPORT_SEEN_KEY, JSON.stringify(map)); } catch(e) {}
+}
+function _bugReportHasUnread(issue) {
+  if (!issue.updated_at || issue.updated_at === issue.created_at) return false; // 投稿後まだ誰も触っていない
+  return _bugReportSeenMap()[issue.id] !== issue.updated_at;
+}
+
 async function toggleBugReportThread(issueId) {
   _bugReportOpenThreadId = (_bugReportOpenThreadId === issueId) ? null : issueId;
+  // 「返信あり」の報告は前回開いた時のスレッドを覚えていても古いので、開き直す際に取り直す
+  const wasUnread = _bugReportOpenThreadId === issueId && _bugReportHasUnread(getBugReports(storeTab).find(i => i.id === issueId) || {});
+  if (_bugReportOpenThreadId === issueId) _markBugReportSeen(issueId);
   renderBugReports();
-  if (_bugReportOpenThreadId === issueId && !_bugReportThreadCache[issueId]) {
+  if (_bugReportOpenThreadId === issueId && (!_bugReportThreadCache[issueId] || wasUnread)) {
     try { _bugReportThreadCache[issueId] = await gasGet('getBugReportThread', { issueId }) || []; }
     catch(e) { console.error('getBugReportThread error:', e); _bugReportThreadCache[issueId] = []; }
     if (_bugReportOpenThreadId === issueId) renderBugReports();
@@ -4490,6 +4514,7 @@ async function submitBugReportReply(issueId) {
     if (r.error) throw new Error(r.error);
     _bugReportThreadCache[issueId] = await gasGet('getBugReportThread', { issueId }) || [];
     await loadBugReportsFromDb(storeTab); // updated_atの更新を一覧側にも反映
+    _markBugReportSeen(issueId); // 自分の返信で「返信あり」が付かないように
     renderBugReports();
   } catch(e) {
     console.error('submitBugReportReply error:', e);
@@ -4518,11 +4543,15 @@ function renderBugReports(loading = false) {
       : issue.poster_type === 'lineworks' ? '<span style="font-size:11px;font-weight:700;color:#1a5c30;background:#dbeee1;padding:2px 8px;border-radius:99px">LINE WORKS投稿</span>'
       : '';
     const threadHtml = isOpen ? buildBugReportThreadHtml(issue.id, _bugReportThreadCache[issue.id] || [], 'submitBugReportReply') : '';
+    const unreadBadge = !isOpen && _bugReportHasUnread(issue)
+      ? '<span style="font-size:11px;font-weight:700;color:#fff;background:#dc2626;padding:2px 8px;border-radius:99px">返信あり</span>' : '';
     return `<div style="background:#fff;border-radius:10px;box-shadow:0 2px 8px rgba(34,112,61,.1);padding:14px 16px;margin-bottom:12px">
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;flex-wrap:wrap">
+        ${issue.no ? `<span style="font-size:12px;font-weight:700;color:#555">No.${esc(issue.no)}</span>` : ''}
         <span style="font-size:12px;font-weight:700;color:${kindColor}">${kindLabel}</span>
         <span style="font-size:11.5px;font-weight:700;padding:3px 10px;border-radius:99px;${statusStyle}">${esc(statusLabel)}</span>
         ${posterBadge}
+        ${unreadBadge}
         <span style="margin-left:auto;font-size:11.5px;color:#999">${esc(issue.created_at)}</span>
       </div>
       <div style="font-size:13.5px;color:#333;line-height:1.6;margin-bottom:8px;white-space:pre-wrap">${esc(issue.content)}</div>
@@ -4593,6 +4622,7 @@ function buildBugReportAdminTable(issues) {
     const channelColor = issue.poster_type === 'lineworks' ? '#1a5c30' : '#6b7280';
     const channelBg = issue.poster_type === 'lineworks' ? '#dbeee1' : '#f0f0f0';
     return `<tr onclick="selectBugReportAdmin('${esc(issue.id)}')" style="cursor:pointer;${selected ? 'background:#fffde0' : ''}">
+      <td style="padding:10px;font-size:12.5px;border-bottom:1px solid #f0ede0;white-space:nowrap;color:#555;font-weight:700">${issue.no ? 'No.' + esc(issue.no) : '-'}</td>
       <td style="padding:10px;font-size:12.5px;border-bottom:1px solid #f0ede0;white-space:nowrap"><span style="font-size:11.5px;font-weight:700;color:#22703d;background:#eaf3ec;padding:2px 8px;border-radius:99px">${esc(storeLabel)}</span></td>
       <td style="padding:10px;font-size:12.5px;border-bottom:1px solid #f0ede0;white-space:nowrap"><span style="font-weight:700;color:${kindColor}">${kindLabel}</span></td>
       <td style="padding:10px;font-size:12.5px;border-bottom:1px solid #f0ede0;white-space:nowrap"><span style="font-size:11.5px;font-weight:700;color:${channelColor};background:${channelBg};padding:2px 8px;border-radius:99px">${esc(channelLabel)}</span></td>
@@ -4602,7 +4632,7 @@ function buildBugReportAdminTable(issues) {
     </tr>`;
   }).join('');
   return `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse">
-    <thead><tr style="background:#22703d"><th style="padding:10px;text-align:left;font-size:12px;color:#f8f4e7">店舗</th><th style="padding:10px;text-align:left;font-size:12px;color:#f8f4e7">種別</th><th style="padding:10px;text-align:left;font-size:12px;color:#f8f4e7">経路</th><th style="padding:10px;text-align:left;font-size:12px;color:#f8f4e7">内容</th><th style="padding:10px;text-align:left;font-size:12px;color:#f8f4e7">ステータス</th><th style="padding:10px;text-align:left;font-size:12px;color:#f8f4e7">更新日</th></tr></thead>
+    <thead><tr style="background:#22703d"><th style="padding:10px;text-align:left;font-size:12px;color:#f8f4e7">No.</th><th style="padding:10px;text-align:left;font-size:12px;color:#f8f4e7">店舗</th><th style="padding:10px;text-align:left;font-size:12px;color:#f8f4e7">種別</th><th style="padding:10px;text-align:left;font-size:12px;color:#f8f4e7">経路</th><th style="padding:10px;text-align:left;font-size:12px;color:#f8f4e7">内容</th><th style="padding:10px;text-align:left;font-size:12px;color:#f8f4e7">ステータス</th><th style="padding:10px;text-align:left;font-size:12px;color:#f8f4e7">更新日</th></tr></thead>
     <tbody>${rows}</tbody></table></div>`;
 }
 
@@ -4681,6 +4711,7 @@ function buildBugReportAdminDetail(issue) {
     : issue.poster_type === 'lineworks' ? 'LINE WORKS' : 'パートナー';
   return `<div style="background:#fff;border-radius:10px;box-shadow:0 2px 8px rgba(34,112,61,.1);padding:18px 20px">
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
+      ${issue.no ? `<span style="font-size:12px;font-weight:700;color:#333">No.${esc(issue.no)}</span>` : ''}
       <span style="font-size:11.5px;font-weight:700;color:#22703d;background:#eaf3ec;padding:2px 8px;border-radius:99px">${esc(storeLabel)}</span>
       <span style="font-size:12px;font-weight:700;color:${kindColor}">${kindLabel}</span>
       <span style="font-size:11px;font-weight:700;color:#6b7280">${esc(posterLabel)}</span>
