@@ -5337,7 +5337,6 @@ async function showPage(p) {
       storeTab = authedStore;
       storeRows = loadA(authedStore);
       ensureBlankDraftRow(authedStore);
-      ensureOrderConsumptionLoaded(authedStore);
       const lbl = document.getElementById('active-store-label');
       if (lbl) lbl.textContent = STORES[authedStore] + '店';
       updatePartnerAttendanceTabVisibility();
@@ -5458,14 +5457,9 @@ function selectProd(rowId, name, label) {
   const el = document.getElementById('pi-'+rowId);
   if (el) el.innerHTML = label ? esc(label) : '<span class="prod-placeholder">タップして選択</span>';
   document.getElementById('pd-'+rowId).classList.remove('open');
-  // 発注数量が未入力の場合のみ、商品コードで棚卸の消費量と紐づけて初期値を提案する
-  // (発注数量＝消費量×1.5、切り上げ。2026-08-11、ユーザー要望)。手入力はそのまま上書き可能
-  const row = storeRows.find(r => r.id === rowId);
-  if (row && (row.qty === '' || row.qty == null)) {
-    const code = prodByName(name)?.code;
-    const consumption = code ? _orderConsumptionByCode[code] : null;
-    if (consumption != null) row.qty = Math.ceil(consumption * 1.5);
-  }
+  // 発注数量の初期値は入れない。2026-08-11〜09-29は棚卸の消費量×1.5を自動で入れていたが、
+  // このタブは随時発注で、月初発注(基準値ベース、processMonthlyReorder)とは別物のため廃止した。
+  // ケース注文のみの商品に袋数のまま入り、ケース数として20倍で依頼される事故があった(渋谷神南)
   updStore(rowId, 'product', name);
 }
 
@@ -5537,19 +5531,7 @@ function switchStore(id) {
   if (lbl) lbl.textContent = STORES[id] || id;
   storeRows = loadA(id);
   ensureBlankDraftRow(id);
-  ensureOrderConsumptionLoaded(id);
   renderStore();
-}
-
-// 商品コード→直近棚卸消費量の対応表。selectProdで発注数量の初期値提案に使う(2026-08-11追加)。
-// 店舗を切り替えるたびに取れば十分なので、同じ店舗の間は再取得しない
-let _orderConsumptionByCode = {};
-let _orderConsumptionStoreId = null;
-async function ensureOrderConsumptionLoaded(storeId) {
-  if (_orderConsumptionStoreId === storeId) return;
-  _orderConsumptionStoreId = storeId;
-  try { _orderConsumptionByCode = await gasGet('getLatestConsumptionByCode', { storeId }) || {}; }
-  catch(e) { console.error('getLatestConsumptionByCode error:', e); _orderConsumptionByCode = {}; }
 }
 
 function filterStoreTabs() { openStoreDD(); }
@@ -6091,7 +6073,7 @@ function _announceScopeLabel(scopeStr) {
 let announceItems = [];
 let announceLoadedForStore = null;
 
-// renderStore()の先頭から毎回呼ぶが、同じ店舗の間は再取得しない(ensureOrderConsumptionLoadedと同じ考え方)。
+// renderStore()の先頭から毎回呼ぶが、同じ店舗の間は再取得しない。
 // 表示までの体感速度対策として、取得中は即座に「読み込み中」を出し、空のまま待たせない(2026-09-19)
 async function ensureAnnounceWidgetLoaded(storeId) {
   if (announceLoadedForStore !== storeId) {
