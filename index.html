@@ -1810,8 +1810,11 @@ function effectiveActualUnitMode(row, product) {
   if (row.actualUnitMode) return row.actualUnitMode;
   if (row.actualQty !== '' && row.actualQty != null) return 'piece';
   // caseOnly商品は依頼数量側と同じく「ケース」がデフォルトの解釈であるべき
-  // (2026-09-06、これがpieceのままだったため実際数量へのケース数入力がバラ数と誤解釈される事故があった)
-  return row.unitMode || (product && product.caseOnly ? 'case' : 'piece');
+  // (2026-09-06、これがpieceのままだったため実際数量へのケース数入力がバラ数と誤解釈される事故があった)。
+  // caseOnlyの判定はrow.unitModeより先に行う——行のunitModeは新規行・読み込み時とも常に'piece'が入るため、
+  // 後に置くとcaseOnly商品でも常にバラ表示になっていた(2026-09-29発覚)
+  if (product && product.caseOnly) return 'case';
+  return row.unitMode || 'piece';
 }
 
 // 実際数量のトグル（個数/ケース）。依頼側のunitToggleHTMLと違い、caseOnly商品でも
@@ -1855,7 +1858,7 @@ function actualQtyCell(sid, row) {
     <div style="display:flex;align-items:center;gap:5px;flex-wrap:wrap">
       <span style="font-size:12px;color:#555;font-weight:700;white-space:nowrap;display:inline-flex;align-items:center;gap:3px">実際数量<span class="qhint" tabindex="0" style="cursor:help;align-items:center;justify-content:center;width:13px;height:13px;border-radius:50%;background:#2563eb;color:#fff;font-size:9px;font-weight:700;font-style:normal;line-height:1">i<span class="qhint-tip">空欄の場合は依頼数量がそのまま使われます。実際が依頼と同じならここは未入力のままでOKです</span></span></span>
       <input type="number" min="0" value="${row.actualQty !== '' && row.actualQty != null ? esc(row.actualQty) : ''}"
-        placeholder="${actualMode === 'piece' && fallback != null ? esc(fallback) : ''}"
+        placeholder="${actualMode === 'piece' && fallback != null ? esc(fallback) : (actualMode === 'case' && effectiveMode === 'case' ? esc(row.qty) : '')}"
         style="width:72px;font-size:17px;font-weight:700;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-family:inherit"
         onchange="setActualQty('${sid}','${row.id}',this.value)">
       <span style="font-size:13px;font-weight:700;color:#333;display:inline-block;min-width:64px">${esc(actualUnitLabelText(product, actualMode))}</span>
