@@ -3700,6 +3700,20 @@ function _reorderQtyFormulaCore_(t, e, c, k, cap) {
   return `=IFERROR(IF(AND(${k}<>"",${base}<>""),${finalCases}*${k},${roundedBase}),"")`;
 }
 
+// _reorderQtyFormulaCore_のJS版(基準値が設定済みの商品専用、processMonthlyReorderの発注書PDF用)。
+// 2026-09-07に一度JS版を削除したが、発注書PDFは店舗タブの書き込みと並行して作られるためQ列の
+// 計算結果を読めない。簡易計算(基準値−期末在庫のみ)のままだとケース丸め・保管上限が効かず
+// 店舗タブと食い違うため(2026-09-29)、ルールを変える際は必ず_reorderQtyFormulaCore_と両方直すこと。
+// 基準値・期末在庫・戻り値はすべて個数(棚卸は個数で数えて入力するため)。
+function _reorderQtyPieces_(target, endStock, casePieces, capCases) {
+  const base = Math.max(0, target - endStock);
+  if (!casePieces) return Math.round(base);
+  let cases = Math.round(base / casePieces);
+  if (cases === 0 && base > 0 && endStock === 0) cases = 1;
+  if (capCases) cases = Math.min(cases, Math.max(0, Math.floor((capCases * casePieces - endStock) / casePieces)));
+  return cases * casePieces;
+}
+
 // _reorderQtyFormulaCore_のセル参照版(buildReorderTestPlaySheet専用)。targetCol=基準値セル列、
 // endStockCol=期末在庫列、consumptionCol=消費量列、caseSizeCol=ケースサイズ列、
 // capCasesCol=保管上限(ケース数、空欄なら上限なし)列。全て列文字を渡し、内部でrowと組み合わせる。
@@ -4101,8 +4115,8 @@ function ensureReorderRulesSheet_() {
     ['後から納品数やデイリーカウントを修正しても、P・Qは自動的には再計算されません。再度棚卸を提出し直すか、?action=buildStoreInventorySheetを再実行すると最新の値に更新されます。'],
     [''],
     ['■ 発注メール自動作成(現状は一部のみ)'],
-    ['渋谷神南のみ、アペックス向けに「発注数=max(0,基準値−期末在庫)」という簡易計算(ケース丸め等は考慮しない)でPDFを作成し、Gmail下書きを自動作成する仕組みが既にあります(processMonthlyReorder)。'],
-    ['↑これはQ列の発注数(ケース丸め・保管上限を考慮)とは計算式が異なる点に注意。今後メール作成等の発注自動化を広げる際は、この食い違いをどうするか(Q列のロジックに揃えるか等)検討が必要です。'],
+    ['渋谷神南のみ、アペックス向けに基準値が設定された商品の発注数でPDFを作成し、Gmail下書きを自動作成する仕組みがあります(processMonthlyReorder)。'],
+    ['発注数はQ列と同じルール(ケース丸め・売り切れ時最低1ケース・保管上限)で計算し、PDFには「○ケース（○個）」「○個」と単位を明記します(2026-09-29、単位の読み違いによる過剰発注防止)。'],
     [''],
     ['■ 今後追記予定'],
     [''],
@@ -4248,6 +4262,7 @@ function processMonthlyReorder(storeId, periodLabel) {
   const data = _inventoryLogRowsCached_(sheetId);
   const idx = {};
   INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
+  const meta = _productMeta_();
 
   const items = [];
   for (let i = 1; i < data.length; i++) {
@@ -4258,8 +4273,9 @@ function processMonthlyReorder(storeId, periodLabel) {
     if (!(code in targets)) continue;
     const endStock = r[idx.end_stock];
     if (endStock === '' || endStock === null) continue;
-    const qty = Math.max(0, Number(targets[code]) - Number(endStock));
-    if (qty > 0) items.push({ code, product: r[idx.product], qty });
+    const info = meta[r[idx.product]] || {};
+    const qty = _reorderQtyPieces_(Number(targets[code]), Number(endStock), info.casePieces, info.stockCapCases);
+    if (qty > 0) items.push({ code, product: r[idx.product], qty, casePieces: info.casePieces || null });
   }
   if (!items.length) return { ok: true, skipped: 'no_reorder_needed' };
 
@@ -4270,7 +4286,10 @@ function processMonthlyReorder(storeId, periodLabel) {
   const doc = DocumentApp.create(fileBaseName + '_作業用');
   const body = doc.getBody();
   body.appendParagraph(`${storeName}　発注書（${periodJa}分棚卸に基づく）`).setHeading(DocumentApp.ParagraphHeading.HEADING2);
-  const tableRows = [['商品コード', '商品名', '発注数']].concat(items.map(it => [it.code, it.product, String(it.qty)]));
+  // 発注数は単位を必ず明記する(数字だけだとケース注文の商品で先方がケース数と読み、何十倍も
+  // 届く恐れがあるため。随時発注で実際に20倍依頼になった事故(2026-09-29、渋谷神南)を受けて)
+  const qtyText = it => it.casePieces ? `${it.qty / it.casePieces}ケース（${it.qty}個）` : `${it.qty}個`;
+  const tableRows = [['商品コード', '商品名', '発注数']].concat(items.map(it => [it.code, it.product, qtyText(it)]));
   const table = body.appendTable(tableRows);
   table.getRow(0).editAsText().setBold(true);
   doc.saveAndClose();
