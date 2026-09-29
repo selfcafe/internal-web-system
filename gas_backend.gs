@@ -4110,13 +4110,13 @@ function ensureReorderRulesSheet_() {
     ['5. 保管上限(ケース数)が設定されている商品は、期末在庫+発注数がその上限を超えないよう発注数をさらに抑える(冷凍庫スペース対策等)。'],
     ['6. ケース単価必須でない商品は、四捨五入(0.5未満切り捨て・0.5以上切り上げ)で整数にする(2026-09-07確定、例: 渋谷神南の抹茶ラテ)。'],
     [''],
-    ['■ 注意: P列・Q列は数式ではありません'],
-    ['基準値(P)・発注数(Q)は、棚卸提出のタイミングでコード側が計算した「その時点のスナップショット値」です(他の列の多くは数式で常に最新の値を表示しますが、P・Qはケース単価等の商品マスタ情報がこのシート上に列として無いため数式化できていません)。'],
-    ['後から納品数やデイリーカウントを修正しても、P・Qは自動的には再計算されません。再度棚卸を提出し直すか、?action=buildStoreInventorySheetを再実行すると最新の値に更新されます。'],
+    ['■ 注意: 基準値(P列)は提出時点の値、発注数(Q列)は数式'],
+    ['基準値(P)は棚卸提出のタイミングで設定値を書き込んだ「その時点のスナップショット値」です。設定を変えた後は、再度棚卸を提出し直すか?action=buildStoreInventorySheetを再実行すると反映されます。'],
+    ['発注数(Q)は数式(2026-09-07〜)なので、期末在庫等を直すと自動で再計算されます。基準値が未設定の商品のQは消費量×1.2による参考値で、発注書PDFには載りません。'],
     [''],
     ['■ 発注メール自動作成(現状は一部のみ)'],
     ['渋谷神南のみ、アペックス向けに基準値が設定された商品の発注数でPDFを作成し、Gmail下書きを自動作成する仕組みがあります(processMonthlyReorder)。'],
-    ['発注数はQ列と同じルール(ケース丸め・売り切れ時最低1ケース・保管上限)で計算し、PDFには「○ケース（○個）」「○個」と単位を明記します(2026-09-29、単位の読み違いによる過剰発注防止)。'],
+    ['発注数はQ列と同じルール(ケース丸め・売り切れ時最低1ケース・保管上限)で計算し、PDFには「○ケース（○個）」「○個」と単位を明記します(2026-09-29)。棚卸を提出し直すと同じ月の下書きを最新の内容で置き換え、先方へ送信済みの月は新しい下書きを作りません。'],
     [''],
     ['■ 今後追記予定'],
     [''],
@@ -4277,11 +4277,23 @@ function processMonthlyReorder(storeId, periodLabel) {
     const qty = _reorderQtyPieces_(Number(targets[code]), Number(endStock), info.casePieces, info.stockCapCases);
     if (qty > 0) items.push({ code, product: r[idx.product], qty, casePieces: info.casePieces || null });
   }
-  if (!items.length) return { ok: true, skipped: 'no_reorder_needed' };
-
   const storeName = _storeNames_()[storeId] || storeId;
   const periodJa = _periodLabelJa_(periodLabel);
   const fileBaseName = `${storeName}_発注書_${periodLabel}`;
+  // 棚卸の再提出(訂正)のたびに下書きが増えないよう、同じ店舗×月の件名で重複を防ぐ(2026-09-29)。
+  // 送信済みなら新しい下書きは作らない(二重発注防止。訂正が必要なら人が先方へ連絡する)。
+  // 未送信の下書きがあれば、下で最新の内容に置き換える(訂正後の数量が反映されるように)。
+  const subject = `${storeName}　${periodJa}分　発注書`;
+  const existingDrafts = GmailApp.getDrafts().filter(d => d.getMessage().getSubject() === subject);
+  if (!items.length) {
+    // 訂正の結果発注不要になった場合、古い数量のままの下書きが残って送られないよう消しておく
+    existingDrafts.forEach(d => d.deleteDraft());
+    return { ok: true, skipped: 'no_reorder_needed', draftsDeleted: existingDrafts.length };
+  }
+  // 日本語の件名はGmail検索の分かち書きで漏れうるため、宛先で絞ってから件名を完全一致で見る
+  const alreadySent = GmailApp.search(`in:sent to:${recipient.to} newer_than:180d`, 0, 100).some(thread =>
+    thread.getMessages().some(msg => msg.getSubject() === subject));
+  if (alreadySent) return { ok: true, items: items.length, skipped: 'already_sent' };
 
   const doc = DocumentApp.create(fileBaseName + '_作業用');
   const body = doc.getBody();
@@ -4298,12 +4310,14 @@ function processMonthlyReorder(storeId, periodLabel) {
   const pdfBlob = docFile.getAs('application/pdf').setName(fileBaseName + '.pdf');
   docFile.setTrashed(true);
 
-  GmailApp.createDraft(
-    recipient.to,
-    `${storeName}　${periodJa}分　発注書`,
-    `いつもお世話になっております。\n${storeName}の${periodJa}分棚卸に基づく発注書を添付いたします。\nご確認のほど、よろしくお願いいたします。`,
-    { cc: recipient.cc, attachments: [pdfBlob] }
-  );
+  const draftBody = `いつもお世話になっております。\n${storeName}の${periodJa}分棚卸に基づく発注書を添付いたします。\nご確認のほど、よろしくお願いいたします。`;
+  const draftOptions = { cc: recipient.cc, attachments: [pdfBlob] };
+  if (existingDrafts.length) {
+    existingDrafts[0].update(recipient.to, subject, draftBody, draftOptions);
+    existingDrafts.slice(1).forEach(d => d.deleteDraft()); // この修正前に既にできていた重複の掃除
+    return { ok: true, items: items.length, draftUpdated: true };
+  }
+  GmailApp.createDraft(recipient.to, subject, draftBody, draftOptions);
 
   return { ok: true, items: items.length, draftCreated: true };
 }
