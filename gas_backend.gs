@@ -5324,30 +5324,13 @@ function checkWaterStockMismatch(storeId, product) {
     } catch (e) { console.error('水の盗難疑い通知エラー:', e.message); }
   }
 
-  // 2026-09-19追加: 逆方向(ステラ実売上が補充数を大きく上回る)も検知する。盗難とは逆に、
-  // レジの実売上数が物理的な補充数を超えている異常(数え間違い・レジ操作ミス・不正の可能性)
-  // をユーザーから指摘されて追加した。閾値・比較期間の考え方は盗難疑い側と対称にし、
-  // 割合の分母だけsteraQty基準にする(steraQtyが超過側の基準になるため)。
-  const reverseDiff = steraQty - inputQty;
-  const reverseOverAbsolute = reverseDiff >= WATER_STOCK_MISMATCH_ABS_THRESHOLD;
-  const reverseOverPct = steraQty > 0 ? (reverseDiff / steraQty) >= WATER_STOCK_MISMATCH_PCT_THRESHOLD : reverseDiff > 0;
-  const reverseThresholdMet = reverseOverAbsolute && reverseOverPct;
-  let reverseNotified = false;
-  if (reverseThresholdMet && !_hasNotifiedStockMismatch_(notifiedRows, storeId, group.prdId, sinceDate, 'oversale')) {
-    try {
-      sendStockBotNotification_(
-        '【在庫差異検知・売上超過】' + _storeIdLabel_(storeId) + '・' + group.label +
-        'でステラ実売上が補充数を上回る差異(補充' + inputQty + '個／ステラ実売上' + steraQty + '個、差' + reverseDiff + '個)を検知しました。' +
-        '(' + sinceDate + '〜本日分)。数え間違い・レジ操作・在庫記録の確認をお願いします。'
-      );
-      reverseNotified = true;
-      _recordStockMismatchNotified_(notifiedRows, storeId, group.prdId, sinceDate, 'oversale');
-    } catch (e) { console.error('水の売上超過通知エラー:', e.message); }
-  }
+  // 逆方向(ステラ実売上が補充数を上回る=売上超過)の通知は2026-09-19に追加したが、2026-10-01に廃止。
+  // 入力は「補充数」だけで補充は在庫が減った時だけ行う運用のため、補充0の日に売れるだけで必ず
+  // 閾値を超え(大塚駅南口: 補充0／実売上3など)、数え間違い等の本当の異常と区別できなかった。
+  // 棚卸表の本格始動後に「前回在庫+補充-売上≠現在在庫」の形で取り入れ直す予定。
 
   return {
     ok: true, sinceDate, throughDate: today, inputQty, steraQty, diff, carryOver, thresholdMet, notified,
-    reverseDiff, reverseThresholdMet, reverseNotified,
   };
 }
 

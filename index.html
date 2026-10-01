@@ -3341,6 +3341,10 @@ async function loadChecksheetOpeningStock(storeId) {
 // 一度も送信されないまま放置されているだけのケースでも同じように拾ってしまい、棚卸を
 // 一度も送信していない店舗で「残り在庫」が表示される不具合があった（大塚駅南口で発生）。
 // ここではサーバーに確定送信済みの行(_getInventoryPrevRow)だけを見て、無ければ必ずnullにする。
+// 2026-10-01: 「残り在庫」表示は全商品いったん停止。棚卸表が本格始動したら見直して復活させる
+// 可能性があるため、ロジックは残してこのフラグで表示だけ止めている(trueに戻せば元通り表示される)。
+// 水の盗難疑い判定(checkWaterStockMismatch)は補充数入力とステラ実売上だけを使うので影響しない。
+const CHECKSHEET_SHOW_REMAINING_STOCK = false;
 function checksheetRemainingStock(productName) {
   const period = getInventoryPeriod();
   const row = _getInventoryPrevRow(storeTab, period.label, productName);
@@ -3562,7 +3566,7 @@ function renderChecksheetTodayForm(wrap, subgroups) {
             </div>`;
         // 残り在庫（棚卸未着手の店舗/商品はnullのまま非表示＝現状の表示を維持。ステラ対象外の
         // 通常商品向け、上のreadonly分岐とは別物——checksheetRemainingStockの旧来ロジック）
-        const remain = col.id.startsWith('prod:') ? checksheetRemainingStock(col.id.slice(5)) : null;
+        const remain = CHECKSHEET_SHOW_REMAINING_STOCK && col.id.startsWith('prod:') ? checksheetRemainingStock(col.id.slice(5)) : null;
         const remainNote = remain !== null
           ? `<br><small id="cs-remain-${col.id}" style="color:#22703d;font-weight:600">残り在庫：${esc(remain)}個</small>`
           : '';
