@@ -1119,6 +1119,27 @@ let _ordersReady = Promise.resolve();
 // 上書きしてしまう事故になる。実際に発生した不具合への対応）
 let _ordersLoadFailed = false;
 
+// 設定を読み込めず、端末にも前回のチェック項目が残っていない状態(このときはチェックシートを出さない)
+let _checksheetItemsUnavailable = false;
+// 設定を読み込めず端末に残っている前回の設定で表示している間だけ、ログイン後の画面にも出す警告
+function _showSettingsSyncBanner() {
+  let el = document.getElementById('settings-sync-banner');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'settings-sync-banner';
+    el.style.cssText = 'position:sticky;top:0;z-index:9999;background:#fef2f2;border-bottom:1px solid #fca5a5;color:#b91c1c;font-size:13px;padding:10px 12px;line-height:1.5;text-align:center';
+    el.innerHTML = '⚠ 最新の設定を読み込めなかったため、前回の設定で表示しています。チェック項目などが足りない場合は、通信環境の良い場所で '
+      + '<button onclick="location.reload()" style="background:#b91c1c;color:white;border:none;border-radius:4px;padding:3px 10px;font-size:12.5px;cursor:pointer;font-family:inherit">再読み込み</button>'
+      + ' してください。';
+    document.body.prepend(el);
+  }
+  el.style.display = 'block';
+}
+function _hideSettingsSyncBanner() {
+  const el = document.getElementById('settings-sync-banner');
+  if (el) el.style.display = 'none';
+}
+
 async function initGas() {
   try {
     _ordersLoadFailed = false;
@@ -1130,9 +1151,39 @@ async function initGas() {
     }).catch(e => { console.error('getOrders error:', e); _ordersLoadFailed = true; });
 
     // ページ最上部で先行発火済みのgetSettingsがあればそれを使う（早く始まっている分だけ速い）
-    const settings = await (window.__earlySettings || gasGet('getSettings'));
-    const gasKeys = new Set((settings || []).map(r => r.key));
-    (settings || []).forEach(r => {
+    let settings = await (window.__earlySettings || gasGet('getSettings').catch(() => null));
+    // 2026-10-01: 取得失敗時(通信エラーでnull、GASエラーで{error}等の配列以外)は少し待って取り直す。
+    // 以前は失敗をそのまま「設定が空」と扱っていたため、①端末に前回分の設定が残っているのに
+    // コード内蔵の初期チェック項目だけで表示され(大塚駅南口で清掃5項目だけになった、バグ報告No.4)、
+    // ②下の「サーバーに無いキーを端末から補完する」処理が全キー分走り、端末の古い設定で
+    // サーバーを上書きしかけていた。
+    for (let i = 0; !Array.isArray(settings) && i < 2; i++) {
+      await new Promise(r => setTimeout(r, 1500 * (i + 1)));
+      settings = await gasGet('getSettings').catch(() => null);
+    }
+    if (!Array.isArray(settings)) {
+      // 取り直しても駄目なら、端末に残っている前回の設定で表示する。サーバーへの書き戻しは一切しない。
+      // 前回分も無い端末(初回・データ消去後)では、内蔵の初期リストは実際の店舗設定と違うため
+      // チェックシートを表示しない(renderChecksheet参照)。間違った項目のまま入力させないため
+      _checksheetItemsUnavailable = !localStorage.getItem(ALL_CHECKSHEET_ITEMS_KEY);
+      loadVendorConfig();
+      loadProductSettings();
+      loadChecksheetCategories();
+      loadChecksheetItemSettings();
+      loadCustomStores();
+      loadDeletedStores();
+      loadStoreRegions();
+      loadDeletedProducts();
+      updatePartnerAttendanceTabVisibility();
+      updatePartnerMachinePhotoTabVisibility();
+      updatePartnerOrderTabVisibility();
+      _showSettingsSyncBanner();
+      return false;
+    }
+    _hideSettingsSyncBanner();
+    _checksheetItemsUnavailable = false;
+    const gasKeys = new Set(settings.map(r => r.key));
+    settings.forEach(r => {
       const clean = v => String(v).replace(/[\x00-\x1f]/g, '');
       if (r.key === 'admin_pin')         _adminPin = r.value;
       if (r.key === 'store_passwords')   localStorage.setItem(STORE_PW_KEY,        clean(r.value));
@@ -3507,6 +3558,10 @@ function renderChecksheet() {
     return;
   }
 
+  if (_checksheetItemsUnavailable) {
+    wrap.innerHTML = '<div style="color:#b91c1c;padding:20px;line-height:1.6">チェック項目を読み込めませんでした。通信環境の良い場所で再読み込みしてください。</div>';
+    return;
+  }
   const groups = _checksheetColumnGroups(storeTab);
   const viewBtn = document.getElementById('checksheet-view-toggle');
   if (viewBtn) viewBtn.textContent = checksheetActiveView === 'today' ? '当月のチェックシート履歴' : '当日のチェックシート入力';
