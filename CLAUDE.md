@@ -140,6 +140,7 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 | 返信 | `No.5 本文` | bug_reportsの`reply_input`列に書く(自動で空欄に戻る) | スレッドの返信欄 |
 | ステータス変更 | `No.5 完了`(本文がステータス名だけ) | status列のプルダウン | ステータスボタン |
 
+- **Claude Codeセッションからも操作できる**(2026-10-04追加): `python scripts/bugreport.py list`(未対応・対応中の一覧、`--all`で完了も)/ `show 4` / `reply 4 "本文"` / `status 4 完了`。管理者ポータルと同じ`addBugReportComment`/`updateBugReportStatus`を呼ぶので、履歴・報告者への通知も同じになる。返信・ステータス変更は報告者に届くので、セッションから実行する前に内容をユーザーに確認すること。
 - 報告番号は「No.」必須(`5 本文`のような素の数字は新規報告扱い。数字始まりの報告の誤認を防ぐため)。全角(`Ｎｏ．５`)・括弧付き(`(No.5)`)も可。
 - 管理者以外が`No.5 本文`と送ると、その報告への**追記**として記録し管理者全員へ通知(`handleLineWorksBugReportFollowUp_`)。パートナーがポータルのスレッドに書いた場合も同様に管理者全員へ通知。
 - 管理者の返信・ステータス変更 → LINE WORKS経由の報告なら報告者本人へLINE WORKSで転送。ポータル経由の報告はスレッドに記録され、パートナー側の一覧に「返信あり」バッジ(端末ごとのlocalStorageで既読管理、`_bugReportHasUnread`)。
