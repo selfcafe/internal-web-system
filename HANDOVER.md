@@ -32,6 +32,28 @@
 - **「ステラ注文詳細」は日本語名でも使い捨ての作業用です。** ステラのCSVを取り込むたびに全部消して貼り直します。
 - `stock_mismatch_pending`・`stera_water_daily_count`は今は使っていない空のタブです(古い仕組みの残り)。
 
+### 1-2. ポータルが使っているスプレッドシート・スクリプト
+
+**スプレッドシートのURL(ID)は、このリポジトリには書きません**(公開リポジトリのため)。実際のURLは前任者から別途受け取ってください。どれも`selfcafe001@gmail.com`のGoogleドライブにあり、下の名前で検索すれば見つかります。コード上のIDはGitHub Secretsに入っています。
+
+| ファイル名(Googleドライブ) | 中身 | IDの置き場所 |
+|---|---|---|
+| セルフカフェ社内ポータル用データベース※セル内編集禁止 | ポータルのメインDB(発注・設定・チェックシート・出勤・休み申請・忘れ物など)。**人が直接セルを編集しない** | Secret `SHEET_ID` |
+| テスト　社内ポータル紐づけ棚卸表 | 棚卸集計(店舗タブ・全店舗棚卸集計・ステラ売上など。見方は1-1)。名前に「テスト」とあるが本番で使用中(仮運用) | Secret `INVENTORY_SHEET_ID` |
+| delivery_history（納品済み履歴・自動作成） | 発注の「納品済み」履歴 | Secret `DELIVERY_HISTORY_SHEET_ID` |
+| セルフカフェ バグ報告データベース | バグ報告・返信・管理者一覧(CLAUDE.md 6章) | Secret `BUGREPORT_SHEET_ID` |
+| ※編集不可　請求書作業用 テンプレート | 請求書PDFを作るためのテンプレート。**手で編集しない**(セル位置がずれてPDFが崩れる) | `gas_backend.gs`の`INVOICE_TEMPLATE_ID` |
+
+ドライブには、似た名前の古いコピー(「…のコピー」)や、年次切り替えテストの残り(「棚卸集計_9999」など)もあります。上の表にないものは使っていません。
+
+URLがすでにコード内で公開されているもの:
+
+| 種類 | URL / 場所 | 説明 |
+|---|---|---|
+| ポータル画面(GitHub Pages) | https://selfcafe.github.io/internal-web-system/ | パートナー・管理者が開く画面。`main`へpushすると反映 |
+| Apps Script(サーバー側)のWeb App | `index.html`の`GAS_URL` | 画面から呼ばれるAPI。`gas_backend.gs`をデプロイした先 |
+| Apps Scriptエディタ(プロジェクト名「社内ポータルスクリプト」) | `scripts/auto_reauthorize_portal.py`の`EDITOR_URL` | コードの確認・トリガー登録・手動実行はここから。`selfcafe001@gmail.com`でログインして開く |
+
 ## 2. 引き継ぐもの(アカウント・権限)
 
 実際のログイン情報は前任者から直接受け取ってください。
@@ -88,10 +110,7 @@
 - ポータルが認可切れになったときの自動検知・通知
 
 **引き継ぎ先で選ぶこと(どちらか)**
-1. **別のPCへ移す**: 引き継ぎ先が管理できる、常に電源が入っているWindows PCにタスクを移します。
-   - タスクの登録: `scripts/register_*.ps1`で行います。このスクリプトは`C:\Users\80000785`を決め打ちしているので、移す先に合わせて書き換えます。
-   - ログイン情報: ステラのログイン情報を`.env`に用意します(gitには入っていません)。
-   - ブラウザ: Chromeのプロファイル(`.chrome_stera_profile/`)を作り直します。
+1. **別のPCへ移す**: 引き継ぎ先が管理できる、常に電源が入っているWindows PCにタスクを移します。手順は[5章](#5-ステラ取り込み死活監視を別のpcへ移す手順)にまとめています。
 2. **商品別の数量が取れるAPIを入手して、PCなしにする**: ステラ(カード会社)に、商品別・店舗別の売上数量が取れるAPIの提供を依頼します。入手できれば、GitHub Actionsだけで動かせる見込みです。
    - 前任者がカード会社の担当者に問い合わせていましたが、結果は未確認です。
 
@@ -173,7 +192,54 @@
 
 ---
 
-## 5. 前任者の作業環境について
+## 5. ステラ取り込み・死活監視を別のPCへ移す手順
+
+4-1で「別のPCへ移す」を選んだ場合の手順です。今は前任者PC(`80000785`)で次の3つのタスクが動いています。
+
+| タスク名 | 間隔 | 中身 |
+|---|---|---|
+| `SteraDailySalesImport` | 毎朝6:03 | ステラの注文詳細CSV(直近3日)をダウンロードし、確定値として取り込む |
+| `SteraRealtimeSalesPoll` | 10分おき | ステラの当日売上(速報)を取り込む |
+| `InternalPortalHealthWatchdog` | 10分おき | ポータルの死活監視。認可切れなら自動で再認可し、LINE WORKSへ通知 |
+
+### 用意するもの
+- **常に電源が入っているWindows PC**: スリープ・休止は無効にします。**Windowsにログインしたままにしておく必要があります**(タスクは「ログオン中のみ実行」で、画面上でChromeを動かすため)。
+- **会社や家庭の回線**: データセンター・VPNの回線だと、ステラのログインがreCAPTCHAで止まります。
+- **ソフト**: Google Chrome、Python 3.12、Git。
+- **ログイン情報**(前任者から直接受け取る): ステラ管理画面のメールアドレスとパスワード、ポータルのWeb App URL(`GAS_URL`)、死活監視の通知先URL(`KAIHIPAY_APPROVAL_WEBHOOK_URL`、別のGASプロジェクト`kaihipay-gbp-approval-bot`のURL)。
+
+### 手順
+1. **リポジトリを取得する**: `git clone https://github.com/selfcafe/internal-web-system.git`を、ユーザーフォルダ直下(例`C:\Users\<ユーザー名>\internal-web-system`)で実行します。
+2. **Pythonのパッケージを入れる**: `pip install playwright python-dotenv requests`。Chromeは、PCに入っている本物のChromeを使います。
+3. **`.env`を作る**: リポジトリ直下に`.env`を作り、次の4行を書きます。gitには入りません。絶対にコミットしないでください。
+   ```
+   GAS_URL=<ポータルのWeb App URL>
+   STERA_EMAIL=<ステラのメールアドレス>
+   STERA_PASSWORD=<ステラのパスワード>
+   KAIHIPAY_APPROVAL_WEBHOOK_URL=<通知用GASのURL>
+   ```
+4. **初回だけ手で動かして、ログイン状態を作る**:
+   - `python scripts/import_stera_daily_sales.py`を実行します。専用のChromeプロファイル(`.chrome_stera_profile/`)が作られ、ステラにログインします。確認画面が出たら手で通します。
+   - `logs/`にエラーが無く、「GASへの取込み結果: {'ok': True …}」と出れば成功です。
+   - `python scripts/poll_stera_realtime_sales.py`も同じように1回動かします。
+5. **死活監視の自動再認可を用意する**: `scripts/auto_reauthorize_portal.py`は、`selfcafe001@gmail.com`でログイン済みの専用Chromeプロファイル(`.chrome_portal_admin_profile/`)を使います。
+   - 新しいPCでこのプロファイルを作るには、`--user-data-dir`にこのフォルダを指定してChromeを起動し、Googleに一度ログインします。
+   - 用意しなくても死活監視と通知は動きます。ただし自動再認可が失敗して、毎回手作業で直すことになります。
+6. **パスを書き換える**: 次の6ファイルは`C:\Users\80000785`やユーザー名を決め打ちしています。新しいPCのユーザー名・Pythonの場所に書き換えます。
+   - `scripts/register_stera_daily_import_task.ps1`、`scripts/register_stera_realtime_task.ps1`、`scripts/register_portal_watchdog_task.ps1`
+   - `scripts/run_import_stera_daily_sales.cmd`、`scripts/run_watchdog_portal_health.cmd`、`scripts/run_poll_stera_realtime_sales.cmd`
+   - `register_stera_realtime_task.ps1`には、さらに前のPC(`xxxun`)のパスが残っています。この書き換えはPC固有の内容なので、コミットせず手元だけで直します。
+7. **タスクを登録する**: PowerShellで3つの`register_*.ps1`を実行します。登録できたかは`Get-ScheduledTask -TaskName Stera*,InternalPortal*`で確認します。
+8. **前任者PCのタスクを止める**: 新しいPCで動くのを確かめてから、前任者PCの3タスクを無効にします(`Disable-ScheduledTask`)。二重に動くと、ステラへのログインが重なって失敗しやすくなります。同じPCにある`KaihipayRunnerWatchdog`は会費ペイ用なので、社内ポータルとは関係ありません。
+
+### 動いているかの確認
+- 翌朝、`?action=_debugSteraSalesHistory&storeId=shibuya&product=水`をブラウザで開き、`latestImportedDate`が前日になっていれば、毎朝の取り込みは動いています。
+- 当日の速報は、棚卸集計スプレッドシートの`stera_realtime_today`タブの`updated_at`が10分おきに更新されていればOKです。
+- 各スクリプトのログは`scripts/logs/`にあります。タスクスケジューラのイベントログは無効になっているので、ログファイルを見てください。
+
+GitHub Actionsの`stera-daily-import.yml`(手動の再実行用)は、前任者PCをself-hosted runnerとして使っています。新しいPCでも使うなら、GitHubのリポジトリ設定 → Actions → Runnersから新しいPCをrunnerとして登録し直します。
+
+## 6. 前任者の作業環境について
 
 - 前任者はClaude Code(AI)で開発していました。Claude Codeはリポジトリを開くと`CLAUDE.md`を自動で読むので、同じように使うなら`CLAUDE.md`を最新に保ってください。
 - 前任者PCのClaude Codeの「メモリ」(作業メモ)はそのPCの中にしかなく、引き継がれません。必要な情報は、このファイルと`CLAUDE.md`・`theft-detection-notes.md`・コード内のコメントに移してあります。
