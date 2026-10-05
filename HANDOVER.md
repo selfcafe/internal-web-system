@@ -37,6 +37,7 @@
 **スプレッドシートのURL(ID)は、このリポジトリには書きません**(公開リポジトリのため)。
 
 👉 **URLの一覧はこちら: [社内ポータル　運用各種(Googleドキュメント)](https://docs.google.com/document/d/14P5jF1IsI7KjiGrYHwCdAGxEYXHI_UadEg8X7Z1BQCg/edit)**
+👉 **ファイル一式のフォルダ: [社内ポータル（システム一式）(Googleドライブ)](https://drive.google.com/drive/folders/1clucdJh7gXCgML8HoC2Ol5xrvLuXx-98)** — 下の表のスプレッドシート・Apps Script・画像保存用フォルダ・請求書用フォルダ・上のドキュメントは、すべてこの中にあります。
 - `selfcafe001@gmail.com`でログインしないと開けません(共有はselfcafeアカウントのみ)。
 - スプレッドシートを増やしたり作り直したりしたら、このドキュメントも更新してください。
 
