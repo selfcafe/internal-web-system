@@ -452,6 +452,7 @@ function doGet(e) {
     else if (a === 'insertReorderCaseColumnsToAllStoreSheets') result = insertReorderCaseColumnsToAllStoreSheets();
     else if (a === 'relocateCaseSizeColumnAndDropExtraColumns') result = relocateCaseSizeColumnAndDropExtraColumns();
     else if (a === 'ensureReorderRulesSheet') result = ensureReorderRulesSheet_();
+    else if (a === 'rebuildReorderRulesSheet') result = rebuildReorderRulesSheet_();
     else if (a === 'updateReorderRulesQFormulaNote') result = updateReorderRulesQFormulaNote();
     else if (a === 'fixReorderRulesColumnLetters') result = fixReorderRulesColumnLetters();
     else if (a === 'pruneBlankStoreInventoryRows') result = pruneBlankStoreInventoryRows(e.parameter.storeId);
@@ -4125,30 +4126,32 @@ function ensureReorderRulesSheet_() {
     ['棚卸表(店舗タブ)の列の意味・発注数算出ルール'],
     ['(このタブはコードが自動更新しません。自由に書き足してください)'],
     [''],
+    // 列文字は2026-10-05時点のSTORE_INVENTORY_COLS(D=ケースサイズ…Q=基準値・R=発注数、S以降がステラ関連)に合わせてある。
+    // 列の並びを変えたらここも直すこと(タブ自体はコードから上書きしないので、既存タブは手で直すかrebuildReorderRulesSheetで作り直す)
     ['■ 原価率が2種類ある理由'],
-    ['H列「原価率(在庫消費ベース)」: 期首在庫額・期末在庫額(棚卸データ×単価)だけから出す疑似指標。月消費額÷期首在庫額。実売上とは無関係。'],
-    ['S列「原価率(ステラ実売上ベース)」: stera_daily_sales(ステラの実売上、日次自動蓄積)を使った本当の原価率。対象は「販売品類」(水・レディーボーデン等、STERA_SALES_MAPPINGで定義した8グループ)のみで、他の商品は空欄。'],
-    ['S・Tは各グループの代表商品(グループ内の1商品目)の行に書き込まれます(2026-09-15〜)。複数商品を合算するグループ(レディーボーデン各種・プリングルス各種等)は代表商品以外の行では空欄のままです。'],
+    ['I列「原価率(在庫消費ベース)」: 期首在庫額・期末在庫額(棚卸データ×単価)だけから出す疑似指標。月消費額÷期首在庫額。実売上とは無関係。'],
+    ['T列「原価率(ステラ実売上ベース)」: stera_daily_sales(ステラの実売上、日次自動蓄積)を使った本当の原価率。対象は「販売品類」(水・レディーボーデン等、STERA_SALES_MAPPINGで定義したグループ)のみで、他の商品は空欄。'],
+    ['S列(ステラ売上)・T列は各グループの代表商品(グループ内の1商品目)の行に書き込まれます(2026-09-15〜)。複数商品を合算するグループ(レディーボーデン各種・プリングルス各種等)は代表商品以外の行では空欄のままです。'],
     [''],
-    ['■ 基準値(P列)'],
-    ['「目標在庫数」を商品コードごとに手入力した値。管理者ポータルの「発注基準値設定(月初発注)」画面から設定・変更します。'],
-    ['P列のセルを棚卸表シート上で直接書き換えても、次に棚卸が提出されたタイミングで元の設定値に上書きされて消えます(P列は表示専用、実体はapp_settingsのreorder_targets)。'],
+    ['■ 基準値(Q列)'],
+    ['「目標在庫数」を商品コードごとに個数で設定した値(ケース数ではない)。管理者ポータルの「発注基準値設定(月初発注)」画面から設定・変更します。'],
+    ['Q列のセルを棚卸表シート上で直接書き換えても、次に棚卸が提出されたタイミングで元の設定値に上書きされて消えます(Q列は表示専用、実体はapp_settingsのreorder_targets)。'],
     [''],
-    ['■ 発注数(Q列)の計算ルール'],
-    ['1. 目標在庫数を決める: 基準値(P列)が設定されていればその値。未設定なら 消費量×1.2(安全在庫のバッファ)。'],
+    ['■ 発注数(R列)の計算ルール'],
+    ['1. 目標在庫数を決める: 基準値(Q列)が設定されていればその値。未設定なら 消費量×1.2(安全在庫のバッファ)。'],
     ['2. 発注数 = max(0, 目標在庫数 − 期末在庫)。在庫が目標を上回っていれば発注数は0。'],
-    ['3. ケース単価必須の商品は、結果をケースサイズの倍数に四捨五入(0.5ケース以上は切り上げ)。'],
-    ['4. 例外: ケース単価必須の商品で、丸めた結果が0ケースでも、丸める前の発注数が0より大きく、かつ期末在庫が実際に0(売り切れ)なら、最低1ケースは発注する(売り切れなのに発注数0と表示される事故を防ぐため)。'],
-    ['5. 保管上限(ケース数)が設定されている商品は、期末在庫+発注数がその上限を超えないよう発注数をさらに抑える(冷凍庫スペース対策等)。'],
-    ['6. ケース単価必須でない商品は、四捨五入(0.5未満切り捨て・0.5以上切り上げ)で整数にする(2026-09-07確定、例: 渋谷神南の抹茶ラテ)。'],
+    ['3. ケースサイズ(D列)が登録されている商品は、結果をケースサイズの倍数に四捨五入(0.5ケース以上は切り上げ)。'],
+    ['4. 例外: ケース丸め対象の商品で、丸めた結果が0ケースでも、丸める前の発注数が0より大きく、かつ期末在庫が実際に0(売り切れ)なら、最低1ケースは発注する(売り切れなのに発注数0と表示される事故を防ぐため)。'],
+    ['5. 保管上限(ケース数)が商品マスタに設定されている商品は、期末在庫+発注数がその上限を超えないよう発注数をさらに抑える(冷凍庫スペース対策等)。保管上限は数式内に値として埋め込まれ、シート上には列として表示されません。'],
+    ['6. ケースサイズが無い商品は、四捨五入(0.5未満切り捨て・0.5以上切り上げ)で整数にする(例: 渋谷神南の抹茶ラテ)。'],
     [''],
-    ['■ 注意: 基準値(P列)は提出時点の値、発注数(Q列)は数式'],
-    ['基準値(P)は棚卸提出のタイミングで設定値を書き込んだ「その時点のスナップショット値」です。設定を変えた後は、再度棚卸を提出し直すか?action=buildStoreInventorySheetを再実行すると反映されます。'],
-    ['発注数(Q)は数式(2026-09-07〜)なので、期末在庫等を直すと自動で再計算されます。基準値が未設定の商品のQは消費量×1.2による参考値で、発注書PDFには載りません。'],
+    ['■ 注意: 基準値(Q列)は提出時点の値、発注数(R列)は数式'],
+    ['基準値(Q)は棚卸提出のタイミングで設定値を書き込んだ「その時点のスナップショット値」です。設定を変えた後は、再度棚卸を提出し直すか?action=buildStoreInventorySheetを再実行すると反映されます。'],
+    ['発注数(R)は数式(2026-09-07〜)なので、期末在庫(K)・消費量(M)・ケースサイズ(D)等を直すと自動で再計算されます。基準値が未設定の商品のRは消費量×1.2による参考値で、発注書PDFには載りません。'],
     [''],
     ['■ 発注メール自動作成(現状は一部のみ)'],
     ['渋谷神南のみ、アペックス向けに基準値が設定された商品の発注数でPDFを作成し、Gmail下書きを自動作成する仕組みがあります(processMonthlyReorder)。'],
-    ['発注数はQ列と同じルール(ケース丸め・売り切れ時最低1ケース・保管上限)で計算し、PDFには「○ケース（○個）」「○個」と単位を明記します(2026-09-29)。棚卸を提出し直すと同じ月の下書きを最新の内容で置き換え、先方へ送信済みの月は新しい下書きを作りません。'],
+    ['発注数はR列と同じルール(ケース丸め・売り切れ時最低1ケース・保管上限)で計算し、PDFには「○ケース（○個）」「○個」と単位を明記します(2026-09-29)。棚卸を提出し直すと同じ月の下書きを最新の内容で置き換え、先方へ送信済みの月は新しい下書きを作りません。'],
     [''],
     ['■ 今後追記予定'],
     [''],
@@ -4156,11 +4159,28 @@ function ensureReorderRulesSheet_() {
   sheet.getRange(1, 1, rows.length, 1).setValues(rows);
   sheet.getRange(1, 1).setFontWeight('bold').setFontSize(13);
   sheet.getRange(2, 1).setFontStyle('italic').setFontColor('#666666');
-  [4, 9, 13, 21, 25, 29].forEach(r => sheet.getRange(r, 1).setFontWeight('bold'));
+  rows.forEach((r, i) => { if (String(r[0]).indexOf('■') === 0) sheet.getRange(i + 1, 1).setFontWeight('bold'); });
   sheet.setColumnWidth(1, 900);
   sheet.getRange(1, 1, rows.length, 1).setWrap(true);
 
   return { ok: true, created: true, url: ss.getUrl() };
+}
+
+// 「発注ルール」タブを最新の初期内容で作り直す(2026-10-05、ユーザー指示)。手で書き足された内容が
+// あっても失わないよう、既存タブは消さずに「発注ルール_旧_yyyyMMdd」へ改名して残し、その後
+// ensureReorderRulesSheet_で新しいタブを作る。旧タブが不要なら人が手で削除する。
+// ?action=rebuildReorderRulesSheet で実行。同じ日に2回実行すると改名先が衝突するのでエラーを返す。
+function rebuildReorderRulesSheet_() {
+  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const sheet = ss.getSheetByName('発注ルール');
+  let renamedTo = null;
+  if (sheet) {
+    renamedTo = '発注ルール_旧_' + Utilities.formatDate(new Date(), _invSheetTz(), 'yyyyMMdd');
+    if (ss.getSheetByName(renamedTo)) return { error: renamedTo + ' が既にあります(今日は実行済みの可能性)' };
+    sheet.setName(renamedTo);
+  }
+  const created = ensureReorderRulesSheet_();
+  return Object.assign({ renamedTo }, created);
 }
 
 // 「発注ルール」タブは一度作ったらコードから絶対に上書きしないルール(ensureReorderRulesSheet_
