@@ -4,7 +4,15 @@
 
 社内ポータル(internal-web-system)の作成・編集を引き継ぐ方向けの資料です。最初にこのファイル、次に [README.md](README.md)(機能と構成)、[CLAUDE.md](CLAUDE.md)(デプロイ手順・仕組みの詳細・過去の事故)の順に読んでください。
 
-> ⚠️ このリポジトリは**公開(Public)**です。パスワード・スプレッドシートID・APIキーなどの実値は絶対にコミットしないでください。実値はGitHub Secretsと、前任者から直接受け取る情報にだけあります(`gas_backend.gs`のID類が空欄なのは意図的です)。
+> ⚠️ このリポジトリは**公開(Public)**です(無料プランでGitHub Pagesを使うため)。パスワード・スプレッドシートID・APIキーなどの実値は絶対にコミットしないでください。実値は、GitHub Secrets・[URL一覧のドキュメント](https://docs.google.com/document/d/14P5jF1IsI7KjiGrYHwCdAGxEYXHI_UadEg8X7Z1BQCg/edit)(selfcafeアカウント限定)・前任者から直接受け取る情報にだけあります(`gas_backend.gs`のID類が空欄なのは意図的です)。
+
+## 0. 引き継いだら最初にやること
+
+1. **アカウントと権限を受け取る**(2章): GitHubの`selfcafe`組織、Googleアカウント`selfcafe001@gmail.com`、LINE WORKS、Firebase。
+2. **ファイルの場所を確認する**(1-2): [URL一覧のドキュメント](https://docs.google.com/document/d/14P5jF1IsI7KjiGrYHwCdAGxEYXHI_UadEg8X7Z1BQCg/edit)と、[ファイル一式のフォルダ](https://drive.google.com/drive/folders/1clucdJh7gXCgML8HoC2Ol5xrvLuXx-98)を開けるか確かめる。
+3. **前任者PCへの依存をなくす**(4-1・5章): **これだけは必ず対応が必要です。** 別のPCへ移すか、ステラから商品別の数量が取れるAPIを入手するかを決めます。
+4. **年次切り替えの定期実行を登録し直す**(2章・CLAUDE.md 5章): 前任者のClaudeアカウントに登録されています。次回の実行は2027-01-01です。
+5. **残っている課題を把握する**(4章): 優先度の高い順に並べています。
 
 ---
 
