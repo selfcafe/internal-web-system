@@ -5288,8 +5288,10 @@ const WATER_STOCK_MISMATCH_NOTIFY_ENABLED = false;
 // 対象外にする(ユーザー確認: 千種・ささしまライブ・神沢に自販機あり。鶴舞は自販機ではなく上記の理由で除外済み)。
 // 千種で「補充24／ステラ実売上0」の誤報が出て判明(直近90日のステラでの水の売上が0日)。
 const WATER_STOCK_MISMATCH_EXCLUDED_STORES = [
-  'tsurumai', 'akatsuka', 'tokoname', 'hotei', 'aratamabashi', 'kouta', 'toyota', 'kisomisaki',
+  'tsurumai', 'akatsuka', 'tokoname', 'hotei', 'aratamabashi', 'toyota', 'kisomisaki',
   'chikusa', 'sasashima', 'kamisawa', // 自販機で販売(2026-10-05)
+  // 2026-10-05: 幸田(kouta)は除外を解除(ユーザー確認)。直近90日でステラでの水の売上が67日あり、
+  // 個別に実売上が取れているため除外する理由が無かった
 ];
 
 // 盗難検知①-補助: 日またぎ取りこぼし対策のチェックポイント。従来はsinceDate(前回入力日)を
