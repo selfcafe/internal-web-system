@@ -233,6 +233,7 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 - **手動実行の注意**:
   - `buildSalesCategoryCostRatio`/`buildStockCheckMonthly`は、指定期間のブロックが店舗タブに無ければ何も書かない。
   - 原価率(ステラ実売上ベース)は、毎月1日8:00の`runMonthlyStockCheckBackstop`が前月分を書く。
+- **「発注ルール」タブ**: コードからは上書きしない(手で書き足す前提)。列の並びを変えたら`ensureReorderRulesSheet_`の初期文言も直し、`?action=rebuildReorderRulesSheet`で作り直す(既存タブは「発注ルール_旧_yyyyMMdd」に改名して残る。2026-10-05に一度実行済み)。
 - **「ステラ注文詳細」タブ**: 使い捨て(`importSteraOrdersCsv`が毎回全消去)。蓄積が要るデータは`stera_daily_sales`に持つ。
 - **在庫僅少**: ケースサイズが登録された商品で「期末在庫 ≦ 1ケース」なら「要確認」を立てる。
   - 消費量がマイナスのときの発注数は0(不足側に倒れる)。警告表示は不要(オーナー判断)。
