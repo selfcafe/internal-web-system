@@ -5,7 +5,7 @@
 ## 0. 全体アーキテクチャ
 
 ```
-index.html / admin-guide.html / invoice.html 等
+index.html / admin-guide.html / guide.html 等
   → GitHub Pages(https://selfcafe.github.io/internal-web-system/、mainブランチのルートを直接配信)
   → 通常のgit push origin mainだけで数秒後に自動反映(ビルド不要)
 
@@ -70,7 +70,7 @@ GitHub Secretsの値自体は招待した相手からは見えない(上書き�
 **完全に手放す場合**、GitHub権限を外すだけでは不十分。以下も洗い出しが必要:
 1. `selfcafe001@gmail.com`自体のログイン情報(パスワード・2段階認証)——Apps Scriptプロジェクト・各スプレッドシートの実質的な所有者
 2. `SHEET_ID`/`INVENTORY_SHEET_ID`/`DELIVERY_HISTORY_SHEET_ID`が指す各Googleスプレッドシートの共有設定(誰が編集者になっているか個別確認)
-3. 画像保存用Driveフォルダ・請求書テンプレート(`IMAGE_FOLDER_ID`/`INVOICE_TEMPLATE_ID`/`INVOICE_PDF_FOLDER_ID`、いずれも`gas_backend.gs`内で確認可能)
+3. 画像保存用Driveフォルダ(`IMAGE_FOLDER_ID`、`gas_backend.gs`内で確認可能)
 4. **80000785 PC自体へのアクセス**(状態確認は`selfcafe/pc-remote-ops`のself-hosted runner経由、8章「外部PC・Bot・clasp」参照)——stera日次取込み・在庫差異検知Bot・ポータル監視Botがここで動いている。GitHub権限とは完全に別系統
 5. LINE WORKS Bot(在庫差異検知Bot「佐藤テスト」等)の管理者アカウント
 6. **`SECRETS_ADMIN_TOKEN`(5章)** — GitHub Secrets/Variablesを書き換えられる強い権限のトークン。手放す際はGitHub側で無効化(Revoke)すること
@@ -306,17 +306,9 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 - **決定済み方針(未実装)**: 押し忘れブロックを作る場合も、デイリーカウントとチェックシートは対象外。記録が食い違ったら、GPSが正常な限り位置情報を優先する。
 - **休み申請**: 承認なしで即時確定。即時通知は「翌日分」だけで、送り先は`LW_CHANNEL_ID_LEAVE_*`(エリア別)。
 
-### 請求書
-- **テンプレート**:
-  - 不具合時はまず、`INVOICE_TEMPLATE_ID`が実際に編集しているファイルか確認する(別ファイルを指していた前例あり)。
-  - テンプレートを手で編集するとセル結合が変わる。見た目から推測で直さず、座標マップを取り直して`INVOICE_CELL_MAP`を直す。見た目の確認はPDFのテキスト層ではなく画像で行う。
-- **金額**: `floor(満額 ÷ 基準業務日数 × 実業務日数)` + その他行の合計(マイナス可)。
-- **まとめ請求**: 業者コードが同じ店舗は自動でまとめる。口座情報の連動は`index.html`の提出フォームだけで行う(`invoice.html`側で連動させると、空の口座で他店舗を上書きする)。
-- **その他**: `invoice.html`に認証が無いのはオーナーの指定。
-
 ### 設定・店舗管理
 - **店舗IDの改名**: `STORE_ID_ALIASES`(行データ用)だけでは足りない。settingsにある店舗IDキーのJSON blobを全て、旧キーから新キーへ移して旧キーを消す。
-  - 対象: `store_passwords`, `store_product_cfg`, `store_checksheet_cfg`, `store_regions`, `invoice_store_cfg`, `invoice_partners`, `attendance_*`, `reorder_targets`。
+  - 対象: `store_passwords`, `store_product_cfg`, `store_checksheet_cfg`, `store_regions`, `attendance_*`, `reorder_targets`。
   - ログインはパスワードの値が最初に一致したキーを使うので、旧キーが残ると誤った店舗になる(2026-08-04の御器所)。
 - **管理画面の設定が反映されないとき**: そのキーが`initGas()`の読み込み一覧と`syncAllStoreDataToGas()`の両方にあるか確認する。
 - **GAS側の店舗情報**: GASは公開中の`stores.js`を`UrlFetchApp`で取り、店舗名とFC判定(表示名が「FC 」始まり、または末尾`_fc`)に使う。エリア(`AREA_STORES`)はGAS側に複製を持っている。
@@ -339,9 +331,9 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
   - auto layoutのセル幅はJSで実測して`left`を合わせる。colspanのstickyは個別セルに分解する。
 - **`admin-guide.html`**: 100KB超の行(base64画像)があるので、Read/Grepで直接読まない。差し替えは固定の接頭辞文字列だけを置換する。
 - **ヘッダー配色**:
-  - マニュアル`#b5544a`、ログアウト`#6b7280`、請求`#8a8f7e`。
+  - マニュアル`#b5544a`、ログアウト`#6b7280`。
   - 業務管理は管理者が金グラデーション、パートナーが`#22703d`。
-  - パートナー側に請求ボタンを足すときは`#8a8f7e`(指示があるまで作らない)。
+  - スマホ幅のヘッダー(`partner-hdr-pinwheel`)は4ピース構成で、左上(`phw-tl`)は管理者・パートナーとも空き(背景色と同じ)。
 
 ### 外部PC・Bot・clasp
 - **80000785 PC**(前任者PC):

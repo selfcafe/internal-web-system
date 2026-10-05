@@ -8,8 +8,7 @@
 const SHEET_ID        = '';  // GoogleスプレッドシートのID
 // 画像保存用DriveフォルダのID。フォルダ自体の共有設定を「リンクを知っている全員：閲覧者」に
 // している（2026-08-12）ため、このフォルダ内に新しく作るファイルは何もしなくても
-// リンクで閲覧可能になる。請求書PDF等、非公開にしたいファイルは絶対にこのフォルダへ
-// 保存しないこと（別フォルダを使う。buildInvoiceReceiptPdf等が使うfolderは別物なので問題ない）
+// リンクで閲覧可能になる。非公開にしたいファイルは絶対にこのフォルダへ保存しないこと（別フォルダを使う）
 const IMAGE_FOLDER_ID = '1adg7TQIYXSkWIo19ohVo93raDY2HsTW_';
 // 棚卸完了の送信先（別Driveの「棚卸集計」スプレッドシート、この実行アカウントに編集権限で共有しておくこと）
 const INVENTORY_SHEET_ID = '';  // 棚卸集計スプレッドシートのID
@@ -62,25 +61,20 @@ const DELIVERY_HISTORY_SHEET_ID = '';  // 発注履歴スプレッドシート�
 // 要望により、メインのSHEET_IDから分離した。provisionBugReportSheet_()で既存データを含めて
 // 新規作成し、このIDに切り替えてから使う(切替後はSHEET_ID側の元タブは手動で削除してよい)
 const BUGREPORT_SHEET_ID = '';  // バグ報告専用スプレッドシートのID
-// 請求書テンプレート（Googleスプレッドシート版）。このファイルをmakeCopy()で複製し、
-// セルに値を差し込んでからPDFエクスポートする。この実行アカウントに編集権限で共有しておくこと。
-const INVOICE_TEMPLATE_ID = '1GoprcmRPLAo5A7nAd1lWCSabDa1W8MkCuYy42P852ts'; // 2026-07-11: ユーザーが直接編集していた方の実ファイルに差し替え（旧IDは編集が反映されない別ファイルだった）
-// 生成した請求書PDFの保存先Driveフォルダ（名称・場所は今後変わる可能性あり。移動した場合はこのIDだけ差し替える）
-const INVOICE_PDF_FOLDER_ID = '1ite8mdJR0HcSqeRdmsMNK1rnD4TydIRf';
 
 const SHEET_ORDERS     = 'orders';
 const SHEET_SETTINGS   = 'app_settings';
 const SHEET_LOST       = 'lost_items';
 const SHEET_CHECKSHEET = 'checksheet_data';
 const SHEET_INVENTORY  = 'inventory_log';
-const SHEET_INVOICE_LOG = 'invoice_log';
 const SHEET_ATTENDANCE = 'attendance';
 // app_settingsの上書き前の値を追記専用で残しておく履歴ログ。2026-07-14に消耗品カテゴリの
 // 商品データが保存の競合で丸ごと消え、Google Driveの古いコピーから手作業で復旧する羽目に
 // なったため追加。以後は同じ事故が起きても最新の履歴行から直前の値をすぐ確認・復元できる
 const SHEET_SETTINGS_HISTORY = 'settings_history';
 const SETTINGS_HISTORY_COLS = ['timestamp', 'key', 'old_value'];
-const INVOICE_LOG_COLS = ['id', 'store_id', 'store_name', 'partner_id', 'period', 'amount', 'pdf_url', 'submitted_at', 'receipt_pdf_url'];
+// 円表示の数値書式(棚卸集計シートの金額列など)。2026-10-05に請求書機能を削除した際、INVOICE_YEN_FORMATから改名
+const YEN_FORMAT = '¥#,##0';
 
 const ORDER_COLS = [
   'id','store_id','group_id','product','label','qty','actual_qty','unit',
@@ -244,7 +238,6 @@ const STORE_KEYED_SETTINGS_DICT_ = [
   'store_passwords', 'store_regions', 'store_product_cfg', 'store_checksheet_cfg',
   'machine_photo_machine_counts', 'reorder_targets', 'attendance_staff_list',
   'attendance_staff_schedule', 'attendance_store_coords', 'attendance_store_default_schedule',
-  'invoice_store_cfg',
 ];
 const STORE_KEYED_SETTINGS_ARRAY_ = [
   'machine_photo_disabled_stores', 'attendance_enabled_stores', 'deleted_stores',
@@ -434,7 +427,6 @@ function doGet(e) {
     else if (a === 'getInventoryDeliveryManual') result = getInventoryDeliveryManual(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'getInventoryTabData')       result = getInventoryTabData(e.parameter.storeId, e.parameter.periodLabel, e.parameter.prevPeriodLabel);
     else if (a === 'geocodeStoreAddress')       result = geocodeStoreAddress(e.parameter.query);
-    else if (a === 'getInvoiceLog')             result = getInvoiceLog();
     else if (a === 'migrateOrderColumns')       result = migrateOrderColumns();
     else if (a === 'migrateInventoryColumns')   result = migrateInventoryColumns();
     else if (a === 'migrateStoreIdRenames')     result = migrateStoreIdRenames();
@@ -565,8 +557,6 @@ function doPost(e) {
     else if (b.action === 'checkWaterStockMismatch') result = checkWaterStockMismatch(b.storeId, b.product);
     else if (b.action === 'reportScriptFailure') result = reportScriptFailure(b.message, b.key);
     else if (b.action === 'reportScriptRecovery') result = reportScriptRecovery(b.message, b.key);
-    else if (b.action === 'submitInvoice')       result = submitInvoice(b.payload);
-    else if (b.action === 'saveInvoiceReceiptImage') result = saveInvoiceReceiptImage(b.imageBase64, b.imageMime, b.filename);
     else if (b.action === 'saveAttendance')      result = saveAttendance(b.storeId, b.name, b.lat, b.lng);
     else if (b.action === 'saveLeaveRequest')    result = saveLeaveRequest(b.storeId, b.name, b.leaveDate);
     else if (b.action === 'deleteLeaveRequest')  result = deleteLeaveRequest(b.id);
@@ -3364,7 +3354,7 @@ function buildInventoryRollup(periodLabel) {
     ROLLUP_CATEGORIES.forEach(cat => {
       ['opening_amount', 'closing_amount', 'consumption_amount'].forEach(suf => {
         const col = INVENTORY_ROLLUP_COLS.indexOf(`${cat}_${suf}`) + 1;
-        sheet.getRange(2, col, outRows.length, 1).setNumberFormat(INVOICE_YEN_FORMAT);
+        sheet.getRange(2, col, outRows.length, 1).setNumberFormat(YEN_FORMAT);
       });
       const rateCol = INVENTORY_ROLLUP_COLS.indexOf(`${cat}_cost_rate`) + 1;
       sheet.getRange(2, rateCol, outRows.length, 1).setNumberFormat('0.0%');
@@ -3951,7 +3941,7 @@ function buildStoreInventorySheet(storeId, periodLabel) {
   const rateCol = STORE_INVENTORY_COLS.indexOf('cost_rate') + 1;
   sheet.getRange(startRow, rateCol, outRows.length, 1).setNumberFormat('0.0%');
   ['opening_amount', 'closing_amount', 'consumption_amount', 'price'].forEach(c => {
-    sheet.getRange(startRow, STORE_INVENTORY_COLS.indexOf(c) + 1, outRows.length, 1).setNumberFormat(INVOICE_YEN_FORMAT);
+    sheet.getRange(startRow, STORE_INVENTORY_COLS.indexOf(c) + 1, outRows.length, 1).setNumberFormat(YEN_FORMAT);
   });
   // 列の背景色分け(2026-09-07追加、ユーザー確定ルール参照)。この期間ブロック分の行だけ塗る——
   // 既存の他期間ブロックは配色ルール変更前に書かれた行でも、そのブロックが次回再構築される時に
@@ -4564,7 +4554,7 @@ function buildSalesCategoryCostRatio(storeId, periodLabel) {
     const hasCost = m.ourProducts.some(name => costByProduct[name] !== undefined);
     const rate = (revenue && hasCost) ? cost / revenue : '';
     sheet.getRange(row, startCol, 1, headerRow.length).setValues([[revenue, rate]]);
-    sheet.getRange(row, startCol, 1, 1).setNumberFormat(INVOICE_YEN_FORMAT);
+    sheet.getRange(row, startCol, 1, 1).setNumberFormat(YEN_FORMAT);
     sheet.getRange(row, startCol + 1, 1, 1).setNumberFormat('0.0%');
     // ステラ関連ブロックは緑(2026-09-07、ユーザー確定の店舗タブ配色ルール。[[_applyStoreInventoryColColors_]]参照)
     sheet.getRange(row, startCol, 1, headerRow.length).setBackground(STORE_INV_COLOR_GREEN);
@@ -5810,19 +5800,6 @@ function saveOrderImage(imageBase64, imageMime, filename) {
 // 画像 (Drive)
 // ----------------------------------------------------------------
 
-// 請求書「その他」項目の領収書写真。請求書PDF本体とは別ファイルとして扱うため、
-// アップロードした時点でDriveに保存し、file_id（後で領収書まとめPDFに埋め込む用）と
-// image_url（プレビュー表示用）の両方を返す。
-function saveInvoiceReceiptImage(imageBase64, imageMime, filename) {
-  if (!IMAGE_FOLDER_ID) return { error: 'IMAGE_FOLDER_IDが設定されていません' };
-  const folder = DriveApp.getFolderById(IMAGE_FOLDER_ID);
-  const blob = Utilities.newBlob(Utilities.base64Decode(imageBase64), imageMime || 'image/jpeg', (filename || 'invoice_receipt') + '.jpg');
-  // IMAGE_FOLDER_ID自体が「リンクを知っている全員：閲覧者」共有のため、ファイル個別のsetSharingは不要
-  // （2026-08-12、Drive API呼び出しを1枚あたり2回→1回に削減。IMAGE_FOLDER_IDのコメント参照）
-  const file = folder.createFile(blob);
-  return { ok: true, image_url: 'https://drive.google.com/thumbnail?id=' + file.getId() + '&sz=w800', file_id: file.getId() };
-}
-
 function saveImageToDrive(base64, mimeType, filename) {
   const folder = DriveApp.getFolderById(IMAGE_FOLDER_ID);
   const blob   = Utilities.newBlob(Utilities.base64Decode(base64), mimeType, filename + '.jpg');
@@ -6799,339 +6776,6 @@ function sendMonthlyAttendanceCheck() {
     const areaKey = area === '(エリア未設定)' ? null : area;
     const msg = '【' + area + '】\n【月末出勤チェック】' + monthLabel + 'の基準業務日数に届かなかった担当者:\n' + lines.join('\n');
     sendLineWorksNotification(msg, _attendanceChannelForArea_(areaKey));
-  });
-}
-
-// ----------------------------------------------------------------
-// 請求書PDF生成（テンプレート複製方式）
-// ----------------------------------------------------------------
-// セル位置は2026-07-11にINVOICE_TEMPLATE_IDのシート(gid=1628780517)を実測して確定。
-// テンプレートの行・列を作り直した場合はこのマップだけ直せばよい。
-// ※eraYear/eraMonth/eraDay・bankName・branchNameの3項目はテンプレートの構造上の推測を
-//   含むため、実際に生成したPDFを見て位置がずれていないか一度確認すること。
-// 2026-07-11: ユーザーのテンプレート編集で複数セルの結合状態が変化したため、
-// 「座標マップ」を再取得して以下を実測値に合わせて更新（座標マップの取得結果を正とする）。
-const INVOICE_CELL_MAP = {
-  bizCode: 'P3',
-  // 令和/年/月/日は独立した値セルが無く、ラベルセル自体を「N年」のように書き換える方式
-  eraYear: 'Q5', eraMonth: 'S5', eraDay: 'U5',
-  registrationDigits: 'M7', // 旧P7。M7:P7が結合されアンカーがM7になったため変更
-  taxExemptCheck: 'P7', // 旧Q7。テンプレート編集でチェックボックスセルがP7に移動（ラベルはQ7:U7に）
-  partnerName: 'L8',
-  storeNameCell: 'A9', // テンプレート編集時にA9:H9で結合され、アンカーがB9からA9に変わったため修正
-  address: 'L9',
-  tel: 'L10',
-  claimTotalIncl: 'C11', claimTotalExcl: 'B14', claimTax: 'F14',
-  bankName: 'O13', // 旧M13。銀行コード欄がL13:N13に拡張され、新たにO13:P14が空欄として確保されたため変更
-  bankCode: 'L14',
-  branchName: 'O15', // 旧M15。支店コード欄と同様の理由でO15:P16に変更
-  branchCode: 'L16',
-  accountType: 'L17', accountNumber: 'M17',
-  accountHolderKana: 'M18', // 旧K18。ラベルがJ18:L18に拡張され、新たにM18:P18が空欄として確保されたため変更
-  payTotalIncl: 'C16', payTotalExcl: 'B18', payTax: 'F18',
-  itemRowStart: 21, itemRowEnd: 40,
-  itemCols: { storeCode: 'A', storeName: 'C', staff: 'H', amount: 'K', note: 'O', category: 'T' },
-  grandTotal: 'K41',
-};
-const INVOICE_YEN_FORMAT = '¥#,##0';
-
-function submitInvoice(p) {
-  if (!p) return { error: 'payloadがありません' };
-  if (!INVOICE_TEMPLATE_ID)  return { error: 'INVOICE_TEMPLATE_IDが設定されていません' };
-  if (!INVOICE_PDF_FOLDER_ID) return { error: 'INVOICE_PDF_FOLDER_IDが設定されていません' };
-
-  // 業者コードが同じ複数店舗をまとめて1枚の請求書にする場合、storeLinesに対象店舗が複数入る
-  // （単独店舗の場合は1件のみ）。請求金額は端数切捨てが必須のため、クライアント値を信用せず
-  // サーバー側で店舗ごとに再計算する。
-  const storeLines = (p.storeLines || []).filter(sl => sl);
-  if (!storeLines.length) return { error: '対象店舗がありません' };
-  const storeDayRate = storeLines.map(sl => {
-    const fullAmount = Number(sl.fullAmount || 0);
-    const baseDays   = Number(sl.baseDays || 0);
-    const actualDays = Number(sl.actualDays || 0);
-    return { sl: sl, amount: baseDays > 0 ? Math.floor(fullAmount / baseDays * actualDays) : 0 };
-  });
-  const otherItems = (p.otherItems || []).filter(it => it && Number(it.amount) !== 0);
-  const perStoreOtherTotal = {};
-  otherItems.forEach(it => {
-    if (!it.pid) return;
-    perStoreOtherTotal[it.pid] = (perStoreOtherTotal[it.pid] || 0) + Math.floor(Number(it.amount));
-  });
-  const dayRateTotal = storeDayRate.reduce((s, r) => s + r.amount, 0);
-  const otherTotal = otherItems.reduce((s, it) => s + Math.floor(Number(it.amount)), 0);
-  const grandTotal = dayRateTotal + otherTotal;
-
-  const isCombined = storeLines.length > 1;
-  const primaryLabel = isCombined ? (p.partnerName || 'invoice') : (storeLines[0].storeName || storeLines[0].storeId || 'invoice');
-  const fileBaseName = primaryLabel + '_' + (p.invoiceDate || Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMM'));
-
-  const folder   = DriveApp.getFolderById(INVOICE_PDF_FOLDER_ID);
-  const copyFile = DriveApp.getFileById(INVOICE_TEMPLATE_ID).makeCopy(fileBaseName + '_作業用', folder);
-  const ss = SpreadsheetApp.openById(copyFile.getId());
-
-  // セル座標確認用に残っている可能性のある「座標マップ」タブは複製から取り除く
-  const leftover = ss.getSheetByName('座標マップ');
-  if (leftover) ss.deleteSheet(leftover);
-
-  const sheet = ss.getSheets().find(s => s.getSheetId() === 1628780517) || ss.getSheets()[0];
-  // テンプレートの実列数がU列(21)までしか無い場合、V列(22)の幅指定/結合が「範囲外」エラーになるため事前に列を追加する
-  // 追加した列はU列の書式（明細ヘッダー行の「科目」オレンジ背景など）を引き継いでしまうため、書式だけ消しておく
-  if (sheet.getMaxColumns() < 22) {
-    sheet.insertColumnsAfter(sheet.getMaxColumns(), 22 - sheet.getMaxColumns());
-    sheet.getRange(1, 22, sheet.getMaxRows(), 1).clearFormat();
-  }
-  const M = INVOICE_CELL_MAP;
-  const set = (a1, value) => sheet.getRange(a1).setValue(value);
-  // 枠からはみ出さないよう、文字数に応じてフォントサイズを自動で縮小する（narrow=幅の狭い列は早めに縮小）
-  // 文字数が少ない場合は通常サイズ(10pt)のまま、長い場合だけ段階的に縮小する
-  const setFit = (a1, value, narrow) => {
-    const len = String(value == null ? '' : value).length;
-    const t = narrow ? [22, 16, 10] : [32, 24, 16];
-    const size = len > t[0] ? 7 : len > t[1] ? 8 : len > t[2] ? 9 : 10;
-    sheet.getRange(a1).setValue(value).setFontSize(size);
-  };
-
-  // テンプレートに前回の値が残っていることがあるため、未設定でも空文字で必ず上書きする
-  sheet.getRange(M.bizCode).setNumberFormat('@').setValue(p.bizCode || ''); // 先頭0付きコードにも対応
-  // 令和/年/月/日：ラベルセルを書き換えるため、テンプレートの飾り文字フォントを引き継がず
-  // 標準フォントに揃える（数字が潰れて読み違えられるのを防ぐ）。列幅拡張などで空白が
-  // 目立つため左寄せにして、直前の文字（令和／年／月）との間隔を詰める
-  const eraFont = a1 => sheet.getRange(a1).setFontFamily('Arial').setFontSize(11).setHorizontalAlignment('left');
-  const era = p.era || {};
-  set(M.eraYear,  era.year  ? era.year  + '年' : ''); eraFont(M.eraYear);
-  set(M.eraMonth, era.month ? era.month + '月' : ''); eraFont(M.eraMonth);
-  // 「31日」のような2桁の日は他の日付(8年/7月)と同じ11ptだとU列だけでは幅が足りず見切れる。
-  // ただしU列自体を広げると「仕入/外注」枠(R:S列とT:U列で対になっている)の対称性が崩れるため、
-  // U列は他と揃えたまま、日付だけ隣のV列(他の用途で使っていない列)まで結合して幅を確保する
-  const eraDayRange = sheet.getRange(M.eraDay + ':' + M.eraDay.replace(/[A-Z]+/, 'V'));
-  if (!eraDayRange.isPartOfMerge()) eraDayRange.merge();
-  set(M.eraDay, era.day ? era.day + '日' : ''); eraFont(M.eraDay);
-  // 令和/年/月/日の間（P・Q列）の余白を詰める。Q列は明細の備考欄にも使われるが、
-  // 日付行を優先し、備考の長文対策はフォントサイズの自動縮小側に任せる
-  sheet.setColumnWidth(16, 20); // P列（純粋な余白。他の箇所と共有していない）
-  sheet.setColumnWidth(17, 35); // Q列（「8年」の表示にも使うため、余白列ほどは狭めない）
-  sheet.setColumnWidth(15, 70); // O列（明細の備考欄用。他の箇所と共有していない）
-  // R・S・T・U列（仕入/外注チェック枠、明細の確認印/科目列、担当者/事務欄で共有）は
-  // 見た目の四角い枠を揃えるため必ず同じ幅にする
-  [18, 19, 20, 21].forEach(col => sheet.setColumnWidth(col, 30)); // R・S・T・U列（均等）
-  sheet.setColumnWidth(22, 14); // V列（「31日」がU列だけでは見切れる分の逃がし。他箇所と共有していない）
-  // 課税事業者ではないチェックは、常に四角い枠が見える文字（☑/☐）で表現する
-  // （テンプレート側のそのセルはデータ入力規則＝ネイティブチェックボックスを解除してプレーンな文字セルにしておくこと）
-  // 列幅拡張(Q列)で「課税事業者ではない」の文字から離れて見えるため、右寄せにして隙間を詰める
-  // .setDataValidation(null)でチェックボックス設定を強制解除してから書き込む。
-  // テンプレート側でこのセルにネイティブチェックボックスが設定され直しても、常に文字表示に上書きされる
-  sheet.getRange(M.taxExemptCheck).setDataValidation(null).setValue(p.isTaxExempt ? '☑' : '☐').setHorizontalAlignment('right');
-  // 登録番号は「課税事業者ではない」がチェックされていない場合のみ表示する
-  // （両立を防ぐ入力チェックはクライアント側（index.html）で行っている）
-  if (!p.isTaxExempt && p.registrationNumber) {
-    // 列幅を広げ済みなので縮小せず、固定サイズ(11pt)で見やすく表示する。先頭0落ち防止でテキスト書式にする
-    sheet.getRange(M.registrationDigits).setNumberFormat('@').setValue(String(p.registrationNumber).replace(/^T/i, ''))
-      .setFontSize(11).setHorizontalAlignment('left');
-  }
-
-  // 「社名（名前）」ラベル（J8）は隣のL8に値が入ると右端の「）」が見切れるため縮小
-  sheet.getRange('J8').setFontSize(9);
-  sheet.getRange(M.partnerName).setValue(p.partnerName || '').setFontSize(11);
-  // 複数店舗まとめ請求の場合、店舗名セルは具体的な店名の代わりに「◯店」（対象店舗数）を表示する
-  sheet.getRange(M.storeNameCell)
-    .setValue(isCombined ? ('セルフカフェ　' + storeLines.length + '店') : ('セルフカフェ' + (storeLines[0].storeName || '') + '店'))
-    .setHorizontalAlignment('center');
-  // 住所は右端で見切れやすいため、折り返しを許可する（行の高さがテンプレート側で固定されている
-  // 場合は折り返し後も窮屈に見えることがあるため、必要なら住所欄の行の高さもテンプレート側で広げること）
-  sheet.getRange(M.address).setValue(p.address || '').setFontSize(10).setWrap(true);
-  set(M.tel, p.tel || '');
-
-  // 金額ボックスは値が右寄り/中央寄りでラベルと離れて見えるため、左寄せにして間を詰める
-  sheet.getRange(M.claimTotalIncl).setValue(grandTotal).setHorizontalAlignment('left');
-  sheet.getRange(M.payTotalIncl).setValue(grandTotal).setHorizontalAlignment('left');
-  // 消費税10%を前提に税抜・税額へ逆算（円未満切り上げ）
-  const taxExcl = Math.ceil(grandTotal / 1.1);
-  const tax = grandTotal - taxExcl;
-  set(M.claimTotalExcl, taxExcl);
-  set(M.claimTax, tax);
-  set(M.payTotalExcl, taxExcl);
-  set(M.payTax, tax);
-
-  setFit(M.bankName, p.bankName || '', true);
-  // setNumberFormat('@')でプレーンテキスト扱いにしてから書き込む。そうしないと「0005」のような
-  // 先頭0付きコードが数値として自動変換され、「5」のように先頭の0が消えて表示されてしまう
-  sheet.getRange(M.bankCode).setNumberFormat('@').setValue(p.bankCode || '')
-    .setFontSize(9).setVerticalAlignment('top').setHorizontalAlignment('left');
-  setFit(M.branchName, p.branchName || '', true);
-  sheet.getRange(M.branchCode).setNumberFormat('@').setValue(p.branchCode || '')
-    .setFontSize(9).setVerticalAlignment('top').setHorizontalAlignment('left');
-  // 前回の値が残らないよう、普通/当座どちらでも毎回明示的に上書きする
-  set(M.accountType, p.accountType === '当座' ? '当' : '普');
-  sheet.getRange(M.accountNumber).setNumberFormat('@').setValue(p.accountNumber || ''); // 口座番号も同様に先頭0が消えるのを防ぐ
-  setFit(M.accountHolderKana, p.accountHolderKana || '', true);
-  // 「口座名義（カナ）」ラベル（J18:L18）の表示を整える
-  sheet.getRange('J18').setFontSize(9);
-
-  // 明細：各店舗の日割り行を先に並べ、その後にその他項目（緊急出動・現地購入・割引等）を並べる。
-  // 複数店舗まとめ請求の実際の紙運用でもこの並び順（店舗の行→その他の行）だったため踏襲している。
-  // その他項目は対象店舗が選ばれていればその店舗名で、店舗指定なし（合計調整等）なら店舗名欄は空欄にする。
-  const lines = storeDayRate.map(r => ({
-    storeName: r.sl.storeName || '', storeCode: r.sl.storeCode || '', staff: r.sl.staffName || p.partnerName || '',
-    amount: r.amount, note: p.dayRateNote || '',
-  })).concat(otherItems.map(it => ({
-    storeName: it.storeName || '', storeCode: it.storeCode || '', staff: it.staffName || p.partnerName || '',
-    amount: Math.floor(Number(it.amount)), note: it.note || '',
-  })));
-  const maxRows = M.itemRowEnd - M.itemRowStart + 1;
-  if (lines.length > maxRows) {
-    return { error: '明細行が' + maxRows + '行を超えています（' + lines.length + '行）。その他の項目数を減らしてください。' };
-  }
-  lines.forEach((line, i) => {
-    const row = M.itemRowStart + i;
-    setFit(M.itemCols.storeName + row, line.storeName ? ('セルフカフェ' + line.storeName + '店') : '');
-    sheet.getRange(M.itemCols.storeName + row).setHorizontalAlignment('center');
-    sheet.getRange(M.itemCols.storeCode + row).setValue(line.storeCode).setHorizontalAlignment('center');
-    // 担当者欄は幅が狭く、6文字程度でも折り返してしまうため、折り返しを禁止した上で小さめの固定サイズにする
-    sheet.getRange(M.itemCols.staff + row).setValue(line.staff).setFontSize(8).setWrap(false);
-    sheet.getRange(M.itemCols.amount    + row).setValue(line.amount).setNumberFormat(INVOICE_YEN_FORMAT).setHorizontalAlignment('right');
-    setFit(M.itemCols.note + row, line.note, true);
-    sheet.getRange(M.itemCols.category  + row).setValue('');
-  });
-  set(M.grandTotal, grandTotal);
-
-  // 金額セルの表示形式をテンプレートの書式ゆれに関わらず統一する
-  [M.claimTotalIncl, M.claimTotalExcl, M.claimTax, M.payTotalIncl, M.payTotalExcl, M.payTax, M.grandTotal]
-    .forEach(a1 => sheet.getRange(a1).setNumberFormat(INVOICE_YEN_FORMAT));
-
-  SpreadsheetApp.flush();
-
-  // PDFエクスポート（対象シートのgidを指定。scale=4で縦横とも1ページに収める）
-  // 印刷範囲をA1:V41に明示的に絞り、それ以降の空列が印刷範囲に含まれて右側に余白ができるのを防ぐ
-  // ※scale=2（幅に合わせて拡大）にすると1ページに収まらず2ページに分かれてしまうため、
-  //   1ページ厳守を優先してscale=4（縦横ともページに収める）に戻す
-  const token = ScriptApp.getOAuthToken();
-  const exportUrl = 'https://docs.google.com/spreadsheets/d/' + ss.getId() + '/export'
-    + '?format=pdf&gid=' + sheet.getSheetId()
-    + '&size=A4&portrait=true&scale=4&gridlines=false&printtitle=false&sheetnames=false'
-    + '&top_margin=0.3&bottom_margin=0.3&left_margin=0.3&right_margin=0.3'
-    + '&r1=0&r2=41&c1=0&c2=22';
-  const pdfResp = UrlFetchApp.fetch(exportUrl, { headers: { Authorization: 'Bearer ' + token } });
-  const pdfBlob = pdfResp.getBlob().setName(fileBaseName + '.pdf');
-  const pdfFile = folder.createFile(pdfBlob);
-
-  // レイアウト調査用に一時的に残していた中間生成物のシートコピーを削除する（原因特定・解消済みのため復活）
-  copyFile.setTrashed(true);
-
-  // 「その他」項目に添付された領収書写真は、請求書PDF本体とは別ファイル（1枚1ページの領収書
-  // まとめPDF）としてまとめる。Apps Scriptにはシートごとの印刷設定APIも複数PDFの結合機能も
-  // 無いため、請求書本体（Sheet経由）とは別に、Google Docsを経由してPDF化する。
-  const receiptPdfUrl = buildInvoiceReceiptPdf(otherItems, fileBaseName, folder);
-
-  // 提出履歴（請求一覧の提出済み/未提出判定）は、まとめ請求でも店舗ごとに1件ずつ記録する。
-  // 見た目は1枚のPDFでも、対象の全店舗がそれぞれ正しく「提出済み」と判定されるようにするため。
-  const period = String(p.invoiceDate || '').slice(0, 6);
-  storeDayRate.forEach(r => {
-    appendInvoiceLog({
-      storeId: r.sl.storeId, storeName: r.sl.storeName, partnerId: r.sl.pid || r.sl.storeId,
-      period: period,
-      amount: r.amount + (perStoreOtherTotal[r.sl.pid] || 0),
-      pdfUrl: pdfFile.getUrl(),
-      receiptPdfUrl: receiptPdfUrl,
-    });
-  });
-
-  return { ok: true, pdfUrl: pdfFile.getUrl(), receiptPdfUrl: receiptPdfUrl, grandTotal: grandTotal };
-}
-
-// ページに乗せる枚数に応じて、写真ができるだけ大きく表示されるようグリッドの列・行数を決める。
-// 1枚なら1マス全体、2枚は横並び（領収書は縦長になりがちなので高さを目一杯使えるように）、
-// 3〜4枚は2列×2行。5枚以上は入り切らない分を次ページへ回す。
-function _receiptGridDims(n) {
-  if (n <= 1) return { cols: 1, rows: 1 };
-  if (n === 2) return { cols: 2, rows: 1 };
-  return { cols: 2, rows: 2 };
-}
-
-// その他項目に添付された領収書写真（Drive file_id）を、1ページに複数枚まとめたGoogle Docsに
-// 差し込んでからPDFとしてエクスポートする。添付が無ければ何もせず空文字を返す。
-function buildInvoiceReceiptPdf(otherItems, fileBaseName, folder) {
-  const receiptItems = (otherItems || []).filter(it => it && it.receiptFileId);
-  if (!receiptItems.length) return '';
-
-  const doc = DocumentApp.create(fileBaseName + '_領収書_作業用');
-  const body = doc.getBody();
-  body.setMarginTop(20).setMarginBottom(20).setMarginLeft(20).setMarginRight(20);
-  const PAGE_WIDTH_PT  = 555; // A4幅(595pt)からマージン(左右20pt×2)を引いた値
-  const PAGE_HEIGHT_PT = 802; // A4高さ(842pt)からマージン(上下20pt×2)を引いた値
-  const PER_PAGE = 4; // 1ページ最大4枚
-  const CAPTION_H = 14; // 備考テキスト分の高さ見込み
-
-  for (let pageStart = 0; pageStart < receiptItems.length; pageStart += PER_PAGE) {
-    if (pageStart > 0) body.appendPageBreak();
-    const pageItems = receiptItems.slice(pageStart, pageStart + PER_PAGE);
-    const { cols, rows } = _receiptGridDims(pageItems.length);
-    const cellW = Math.floor(PAGE_WIDTH_PT / cols) - 12; // セルの内側余白ぶん差し引く
-    const cellH = Math.floor(PAGE_HEIGHT_PT / rows) - CAPTION_H - 16;
-    const seed = [];
-    for (let r = 0; r < rows; r++) seed.push(new Array(cols).fill(''));
-    const table = body.appendTable(seed);
-    table.setBorderWidth(0);
-
-    pageItems.forEach((it, idx) => {
-      const r = Math.floor(idx / cols), c = idx % cols;
-      const cell = table.getCell(r, c);
-      const captionPara = cell.getChild(0).asParagraph();
-      captionPara.setText(it.note || '');
-      captionPara.setFontSize(9).setBold(true).setAlignment(DocumentApp.HorizontalAlignment.CENTER);
-      try {
-        const imgBlob = DriveApp.getFileById(it.receiptFileId).getBlob();
-        const img = cell.appendImage(imgBlob);
-        const scale = Math.min(cellW / img.getWidth(), cellH / img.getHeight(), 1);
-        img.setWidth(img.getWidth() * scale).setHeight(img.getHeight() * scale);
-        const imgParent = img.getParent();
-        if (imgParent && imgParent.getType() === DocumentApp.ElementType.PARAGRAPH) {
-          imgParent.asParagraph().setAlignment(DocumentApp.HorizontalAlignment.CENTER);
-        }
-      } catch (e) {
-        cell.appendParagraph('(画像読込失敗)').setFontSize(8);
-      }
-    });
-  }
-  doc.saveAndClose();
-
-  const docFile = DriveApp.getFileById(doc.getId());
-  const pdfBlob = docFile.getAs('application/pdf').setName(fileBaseName + '_領収書.pdf');
-  const pdfFile = folder.createFile(pdfBlob);
-  docFile.setTrashed(true);
-  return pdfFile.getUrl();
-}
-
-// ----------------------------------------------------------------
-// 請求提出履歴（管理者の「請求一覧」画面用）
-// ----------------------------------------------------------------
-
-function appendInvoiceLog(entry) {
-  const sheet = getSheet(SHEET_INVOICE_LOG);
-  ensureHeaders(sheet, INVOICE_LOG_COLS);
-  // receipt_pdf_url列を後から追加したため、既存シートで既にヘッダー行がある場合は
-  // 末尾に列を補う（ensureHeadersはシートが空の場合しかヘッダーを書かないため）
-  const lastCol = sheet.getLastColumn();
-  if (lastCol > 0) {
-    const headers = sheet.getRange(1, 1, 1, lastCol).getValues()[0];
-    if (headers.indexOf('receipt_pdf_url') === -1) sheet.getRange(1, lastCol + 1).setValue('receipt_pdf_url');
-  }
-  // periodは'YYYYMMDD'形式のinvoiceDateから先頭6桁を受け取る想定なので、'YYYY-MM'に整形する
-  const period = /^\d{6}$/.test(entry.period) ? entry.period.slice(0, 4) + '-' + entry.period.slice(4, 6) : entry.period;
-  sheet.appendRow([
-    Utilities.getUuid(), entry.storeId, entry.storeName, entry.partnerId,
-    period, entry.amount, entry.pdfUrl, new Date().toISOString(), entry.receiptPdfUrl || '',
-  ]);
-}
-
-function getInvoiceLog() {
-  const sheet = getSheet(SHEET_INVOICE_LOG);
-  if (sheet.getLastRow() <= 1) return [];
-  const data = sheet.getDataRange().getValues();
-  const headers = data[0];
-  return data.slice(1).map(row => {
-    const o = {};
-    headers.forEach((h, i) => { o[h] = row[i]; });
-    return o;
   });
 }
 

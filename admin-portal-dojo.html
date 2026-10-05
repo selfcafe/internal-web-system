@@ -128,7 +128,7 @@ button{ font-family:inherit; cursor:pointer; }
 .portal{ background:var(--surface); border:1px solid var(--line); border-radius:10px; box-shadow:var(--shadow); }
 /* 実サイトのヘッダーはカード状ではなく、クリーム背景に直接ロゴ・ボタン・タイトルが
    並ぶフラットな構造（ボタンごとに色が違う: 業務管理=緑実線／マニュアル=緑線／
-   請求=グレー／ログアウト=濃グレー／メニュー・設定=濃緑）。2026-08-29、実サイトの
+   ログアウト=濃グレー／メニュー・設定=濃緑）。2026-08-29、実サイトの
    レイアウトに合わせて.portal-hd(色付きバー)方式から作り直した。 */
 .mock-header{ padding:2px 4px 0; }
 .mock-header-row{ display:flex; align-items:center; gap:10px; flex-wrap:wrap; margin-bottom:10px; }
@@ -141,7 +141,6 @@ button{ font-family:inherit; cursor:pointer; }
 }
 .p-btn:hover{ filter:brightness(1.08); }
 .p-btn.ghost{ background:transparent; color:var(--product); border:1px solid var(--product); }
-.p-btn.gray{ background:#8a8f7e; }
 .p-btn.graydark{ background:#6b7280; }
 .p-btn.solid{ background:#1a5c30; font-size:15px; padding:9px 13px; }
 .p-region-tabs{ display:flex; gap:4px; padding:8px 10px 0; flex-wrap:wrap; background:linear-gradient(180deg,#dfc35a,#b6952f); border-radius:9px 9px 0 0; }
@@ -359,7 +358,6 @@ function renderMockHeader(s){
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="p-btn" onclick="Trainer.act('open-attendance')">業務管理</button>
         <button class="p-btn ghost" onclick="Trainer.act('open-manual')">マニュアル</button>
-        <button class="p-btn gray">請求</button>
         <button class="p-btn graydark">ログアウト</button>
       </div>
     </div>
@@ -429,7 +427,7 @@ M.push({
   },
   steps:[
     { target:null, expect:null,
-      msg:'管理者ポータルのヘッダーを見てみましょう。左に「メニュー」、右に「業務管理」「設定」「請求」「ログアウト」が並びます。' },
+      msg:'管理者ポータルのヘッダーを見てみましょう。左に「メニュー」、右に「業務管理」「設定」「ログアウト」が並びます。' },
     { target:'.p-menu-wrap .p-btn', expect:'open-menu',
       msg:'「☰ メニュー」を<b>クリック</b>して開いてみましょう。エリア切替（東海／関西／関東）と表示切替の項目が並んでいます。' },
     { target:'#menu-item-history', expect:'menu-view-history',
@@ -437,7 +435,7 @@ M.push({
     { target:'.p-btn.solid', expect:'open-settings',
       msg:'右側の「<b>設定</b>」を<b>クリック</b>してみましょう。商品設定・チェックシート設定などはすべてここから入ります（モジュール03・04で実際に使います）。' },
     { target:null, expect:null,
-      msg:'これで基本の画面構成は完了です。「業務管理」「請求」ボタンは後のモジュールで扱います。' },
+      msg:'これで基本の画面構成は完了です。「業務管理」ボタンは後のモジュールで扱います。' },
   ],
   onAct(id, s){
     if (id === 'open-menu') s.menuOpen = !s.menuOpen;
@@ -613,22 +611,21 @@ M.push({
   },
 });
 
-/* ============ MODULE 04: 忘れ物一覧・請求書の確認 ============ */
+/* ============ MODULE 04: 忘れ物一覧の確認 ============ */
 
 M.push({
-  id:'other-view', eyebrow:'Status', title:'忘れ物一覧・請求書の確認', part:'ops',
+  id:'other-view', eyebrow:'Status', title:'忘れ物一覧の確認', part:'ops',
   state:{},
   render(s){
     return `
     <div class="eyebrow">04 · Status</div>
-    <h3 class="stage-h">忘れ物一覧・請求書の確認</h3>
+    <h3 class="stage-h">忘れ物一覧の確認</h3>
     <ul style="font-size:13.5px;line-height:2;color:var(--ink-soft);padding-left:20px">
       <li><b style="color:var(--ink)">忘れ物一覧</b> — 店舗からの忘れ物登録を一覧で確認できます。</li>
-      <li><b style="color:var(--ink)">請求書（本番稼働中）</b> — ヘッダーの「請求」ボタンから、請求一覧・請求設定の2タブに入れます。</li>
     </ul>`;
   },
   steps:[
-    { target:null, expect:null, msg:'忘れ物一覧・請求書はどちらも閲覧が中心の機能です。特別な設定は不要です。' },
+    { target:null, expect:null, msg:'忘れ物一覧は閲覧が中心の機能です。特別な設定は不要です。' },
   ],
   onAct(){}
 });
@@ -951,8 +948,7 @@ M.push({
     if (!isFinished) return `
     <div class="eyebrow">07 · Wrap-up</div>
     <h3 class="stage-h">まとめ</h3>
-    <p class="section-lede">ここまでの9モジュールで、管理者ポータルの日常業務(発注対応・棚卸表の確認・バグ報告掲示板)と設定業務(商品/チェックシート設定・店舗別設定・業務開始管理設定)をひと通り練習しました。次へ進むと修了画面です。</p>
-    <div class="note note-tip"><b>「請求」ボタンについて</b>ヘッダーにある「請求」は実装予定の機能です（現時点では準備中）。</div>`;
+    <p class="section-lede">ここまでの9モジュールで、管理者ポータルの日常業務(発注対応・棚卸表の確認・バグ報告掲示板)と設定業務(商品/チェックシート設定・店舗別設定・業務開始管理設定)をひと通り練習しました。次へ進むと修了画面です。</p>`;
     return `
     <div class="finish-hero">
       <div class="big">🥋</div>

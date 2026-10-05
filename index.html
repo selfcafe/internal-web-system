@@ -365,7 +365,6 @@
       .phw-bl.phw-piece-empty { background:#eef1ea; cursor:default; color:white; }
       .phw-br { grid-column:43/101; grid-row:59/101; background:#22703d; font-size:16px; white-space:nowrap; }
       .phw-br.manual-menu-btn { background:#b5544a; }
-      .phw-tl.invoice-btn { background:#8a8f7e; cursor:pointer; }
       .admin-title-row h1 { flex-basis:100%; }
       .link-btn { padding:8px 12px; font-size:13px; }
       table.card-mode { display:block; box-shadow:none; background:transparent; border-radius:0; }
@@ -813,13 +812,12 @@
         <button onclick="toggleManualMenu('admin-pc', ADMIN_MANUAL_DOCS)" style="background:#b5544a;color:white;padding:10px 16px;font-size:14px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">マニュアル</button>
         <div class="doc-menu-dd" id="manual-dd-admin-pc"></div>
       </div>
-      <button onclick="location.href='invoice.html'" style="background:#8a8f7e;color:white;padding:10px 16px;font-size:14px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;line-height:1.3"><span style="font-size:11px;font-weight:400;opacity:.85">準備中</span><br>請求</button>
       <button onclick="adminLogout()" style="background:#6b7280;color:white;padding:10px 16px;font-size:14px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">ログアウト</button>
     </div>
     <div class="admin-title-row" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
       <h1>管理者ポータル</h1>
       <div class="partner-hdr-pinwheel">
-        <button class="phw-piece phw-tl invoice-btn" onclick="location.href='invoice.html'"><span><span style="font-size:10px;font-weight:400;opacity:.85">準備中</span><br>請求</span></button>
+        <div class="phw-piece phw-tl"></div>
         <button class="phw-piece phw-tr" onclick="adminLogout()"><span>ログ<br>アウト</span></button>
         <button class="phw-piece phw-bl" onclick="switchAdminView('attendance')"><span>業務<br>管理</span></button>
         <button class="phw-piece phw-br manual-menu-btn" onclick="toggleManualMenu('admin-sp', ADMIN_MANUAL_DOCS)">マニュアル</button>
@@ -878,24 +876,6 @@
   </div>
   <div class="pagination" id="pagination" style="display:none"></div>
   <div id="settings-container" style="display:none"></div>
-  </div>
-</div>
-
-<div id="invoice-partner-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:2000;align-items:center;justify-content:center;padding:16px">
-  <div style="background:white;border-radius:14px;max-width:480px;width:100%;max-height:90vh;overflow-y:auto;padding:20px">
-    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
-      <span style="font-weight:700;font-size:16px">請求書作成</span>
-      <button onclick="closeInvoicePartnerScreen()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#888">×</button>
-    </div>
-    <div id="invoice-partner-pw-step" style="display:none">
-      <div style="font-size:13px;color:#888;margin-bottom:10px">個人パスワードを入力してください</div>
-      <input type="text" id="invoice-pw-input" maxlength="4" style="width:100%;border:1px solid #ddd;border-radius:8px;padding:10px;font-size:16px;font-family:monospace;text-align:center;letter-spacing:4px">
-      <div id="invoice-pw-msg" style="font-size:12px;color:#ef4444;min-height:16px;margin-top:6px"></div>
-      <button onclick="submitInvoicePartnerPw()" style="background:#22703d;color:white;padding:10px;font-size:14px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit;width:100%;margin-top:8px">確認</button>
-    </div>
-    <div id="invoice-partner-form-step" style="display:none">
-      <div id="invoice-partner-form-body"></div>
-    </div>
   </div>
 </div>
 
@@ -1100,12 +1080,6 @@ function _syncStoreProductCfg() {
 function _syncStoreOperationCfg() {
   _gasSaveSetting('store_operation_type', localStorage.getItem(STORE_OPERATION_KEY) || '{}');
 }
-function _syncInvoiceStoreCfg() {
-  _gasSaveSetting('invoice_store_cfg', localStorage.getItem(INVOICE_STORE_CFG_KEY) || '{}');
-}
-function _syncInvoicePartners() {
-  _gasSaveSetting('invoice_partners', localStorage.getItem(INVOICE_PARTNERS_KEY) || '{}');
-}
 async function syncAllStoreDataToGas() {
   const msg = document.getElementById('store-sync-msg');
   if (msg) { msg.style.color='#888'; msg.textContent='同期中...'; }
@@ -1122,8 +1096,6 @@ async function syncAllStoreDataToGas() {
     _gasSaveSetting('store_checksheet_cfg', localStorage.getItem(STORE_CHECKSHEET_KEY) || '{}'),
     _gasSaveSetting('all_checksheet_items', localStorage.getItem(ALL_CHECKSHEET_ITEMS_KEY) || '[]'),
     _gasSaveSetting('checksheet_categories', localStorage.getItem(CHECKSHEET_CATEGORIES_KEY) || '[]'),
-    _gasSaveSetting('invoice_store_cfg', localStorage.getItem(INVOICE_STORE_CFG_KEY) || '{}'),
-    _gasSaveSetting('invoice_partners', localStorage.getItem(INVOICE_PARTNERS_KEY) || '{}'),
   ]);
   if (msg) {
     msg.style.color = results.every(Boolean) ? '#22703d' : '#ef4444';
@@ -1250,8 +1222,6 @@ async function _loadSettings(scope, prefetched) {
       if (r.key === 'store_checksheet_cfg') localStorage.setItem(STORE_CHECKSHEET_KEY, clean(r.value));
       if (r.key === 'all_checksheet_items') localStorage.setItem(ALL_CHECKSHEET_ITEMS_KEY, clean(r.value));
       if (r.key === 'checksheet_categories') localStorage.setItem(CHECKSHEET_CATEGORIES_KEY, clean(r.value));
-      if (r.key === 'invoice_store_cfg') localStorage.setItem(INVOICE_STORE_CFG_KEY, clean(r.value));
-      if (r.key === 'invoice_partners')  localStorage.setItem(INVOICE_PARTNERS_KEY,  clean(r.value));
       if (r.key === 'attendance_enabled_stores') localStorage.setItem(ATTENDANCE_ENABLED_KEY, clean(r.value));
       if (r.key === 'attendance_staff_list')     localStorage.setItem(ATTENDANCE_STAFF_KEY,   clean(r.value));
       if (r.key === 'attendance_store_coords')   localStorage.setItem(ATTENDANCE_COORDS_KEY,  clean(r.value));
@@ -1280,8 +1250,6 @@ async function _loadSettings(scope, prefetched) {
     if (!gasKeys.has('store_checksheet_cfg') && localStorage.getItem(STORE_CHECKSHEET_KEY)) _syncStoreChecksheetCfg();
     if (!gasKeys.has('all_checksheet_items') && localStorage.getItem(ALL_CHECKSHEET_ITEMS_KEY)) _gasSaveSetting('all_checksheet_items', localStorage.getItem(ALL_CHECKSHEET_ITEMS_KEY));
     if (!gasKeys.has('checksheet_categories') && localStorage.getItem(CHECKSHEET_CATEGORIES_KEY)) _gasSaveSetting('checksheet_categories', localStorage.getItem(CHECKSHEET_CATEGORIES_KEY));
-    if (!gasKeys.has('invoice_store_cfg') && localStorage.getItem(INVOICE_STORE_CFG_KEY)) _syncInvoiceStoreCfg();
-    if (!gasKeys.has('invoice_partners')  && localStorage.getItem(INVOICE_PARTNERS_KEY))  _syncInvoicePartners();
     if (!gasKeys.has('attendance_enabled_stores') && localStorage.getItem(ATTENDANCE_ENABLED_KEY)) _gasSaveSetting('attendance_enabled_stores', localStorage.getItem(ATTENDANCE_ENABLED_KEY));
     if (!gasKeys.has('attendance_staff_list')     && localStorage.getItem(ATTENDANCE_STAFF_KEY))   _gasSaveSetting('attendance_staff_list',     localStorage.getItem(ATTENDANCE_STAFF_KEY));
     if (!gasKeys.has('attendance_store_coords')   && localStorage.getItem(ATTENDANCE_COORDS_KEY))  _gasSaveSetting('attendance_store_coords',   localStorage.getItem(ATTENDANCE_COORDS_KEY));
@@ -1503,7 +1471,7 @@ function _migrateConsumablesExcludeFlag() {
   if (v) { v.excludeFromInventory = true; saveVendorConfig(); }
 }
 
-// STORES定数はstores.js（invoice.htmlと共有の単一ファイル。<script src="stores.js">で読み込み）で定義
+// STORES定数はstores.js（<script src="stores.js">で読み込み）で定義
 const REGIONS = {
   tokai: { label:'東海', stores:[
     'sasashima','chikusa','gokiso','tsurumai','kamisawa','nakamura_nisseki',
@@ -3228,7 +3196,7 @@ const ATTENDANCE_ENABLED_KEY = 'attendance_enabled_stores'; // JSON配列 ["shib
 const ATTENDANCE_STAFF_KEY   = 'attendance_staff_list';     // JSON {storeId:[name,...]}
 const ATTENDANCE_COORDS_KEY  = 'attendance_store_coords';   // JSON {storeId:{lat,lng}}
 // JSON {storeId:{name:{type:'interval',intervalDays:N} | {type:'weekday',weekdays:[0-6の配列]}}}
-// 未設定時は{type:'interval',intervalDays:1}（毎日出勤）扱い。請求書機能の基準業務日数とは独立・非連携。
+// 未設定時は{type:'interval',intervalDays:1}（毎日出勤）扱い。
 const ATTENDANCE_SCHEDULE_KEY = 'attendance_staff_schedule';
 // JSON {storeId:{type:'interval',intervalDays:N} | {type:'weekday',weekdays:[0-6の配列]}}
 // スタッフが1人も登録されていない店舗専用のフォールバック(2026-08-03新設)
@@ -5697,17 +5665,8 @@ function buildStoreGroups(rows) {
   return [...map.values()].sort((a,b) => (a[0].requestDate||'').localeCompare(b[0].requestDate||''));
 }
 
-// 「請求無し」設定の店舗ではパートナー側の請求書ボタン自体を隠す
-function updateInvoiceButtonVisibility() {
-  const cfg = getInvoiceStoreCfg();
-  const hide = !!(cfg[storeTab] && cfg[storeTab].noInvoice);
-  const pc = document.getElementById('invoice-btn-pc');
-  if (pc) pc.style.display = hide ? 'none' : '';
-}
-
 function renderStore() {
   ensureAnnounceWidgetLoaded(storeTab);
-  updateInvoiceButtonVisibility();
   const isMobile = window.innerWidth < 640;
   const table = document.getElementById('store-table');
   isMobile ? table.classList.add('card-mode') : table.classList.remove('card-mode');
@@ -7439,8 +7398,6 @@ function bulkDenyOrderRows(sid) {
 const CUSTOM_STORES_KEY  = 'custom_stores';
 const STORE_REGION_KEY   = 'store_regions';
 const DELETED_STORES_KEY = 'deleted_stores';
-const INVOICE_STORE_CFG_KEY = 'invoice_store_cfg';
-const INVOICE_PARTNERS_KEY  = 'invoice_partners';
 
 function loadDeletedStores() {
   const deleted = JSON.parse(localStorage.getItem(DELETED_STORES_KEY) || '[]');
@@ -9306,452 +9263,6 @@ applyTimeMsg();
 populateLoginStoreSelect();
 if (!(sessionStorage.getItem('admin_authed') === '1' || isSiteAuthed())) {
   prefillLastPassword();
-}
-
-/* ===== 請求書機能 ===== */
-
-function getInvoiceStoreCfg() { return JSON.parse(localStorage.getItem(INVOICE_STORE_CFG_KEY) || '{}'); }
-function getInvoicePartners() { return JSON.parse(localStorage.getItem(INVOICE_PARTNERS_KEY) || '{}'); }
-function saveInvoiceStoreCfg(cfg) { localStorage.setItem(INVOICE_STORE_CFG_KEY, JSON.stringify(cfg)); _syncInvoiceStoreCfg(); }
-function saveInvoicePartners(partners) { localStorage.setItem(INVOICE_PARTNERS_KEY, JSON.stringify(partners)); _syncInvoicePartners(); }
-
-// 同一人物が複数店舗（複数partnerId）を管理しているケースは、専用のグループ管理データを持たず
-// 「業者コードが同じpartnerId同士」を自動的に同一グループとみなす（invoice.htmlの同名関数と同じロジック）。
-function partnerIdsSharingBizCode(bizCode, partners, excludePid) {
-  if (!bizCode) return [];
-  partners = partners || getInvoicePartners();
-  const cfg = getInvoiceStoreCfg();
-  return Object.keys(partners).filter(pid => {
-    if (pid === excludePid || pid === '__bizCodesSeeded') return false;
-    const entry = partners[pid];
-    if (!entry || entry.bizCode !== bizCode) return false;
-    // 店舗を複数パートナー化した後も、店舗ID自体をpidとする古い単独パートナー時代の
-    // データが残っていることがある（UI上は表示されない）。実在の人物ではないため除外する
-    if (cfg[pid] && cfg[pid].multiPartner) return false;
-    return true;
-  });
-}
-function syncInvoiceBizCodeGroup(pid, partners) {
-  const src = partners[pid];
-  if (!src || !src.bizCode) return;
-  partnerIdsSharingBizCode(src.bizCode, partners, pid).forEach(otherPid => {
-    partners[otherPid].bizCode = src.bizCode;
-    partners[otherPid].bank = Object.assign({}, src.bank || {});
-  });
-}
-
-// 基準業務日数：契約方式により当月日数、または当月日数÷2切り上げ
-function computeInvoiceBaseDays(mode) {
-  const now = new Date();
-  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-  return mode === 'halfRoundUp' ? Math.ceil(daysInMonth / 2) : daysInMonth;
-}
-
-// 店舗番号はinvoice.html（請求書管理ページ）側で管理・編集する。ここでは請求書PDFに差し込むため読み取るだけ
-function getInvoiceStoreCode(sid) {
-  const cfg = getInvoiceStoreCfg();
-  return (cfg[sid] && cfg[sid].storeCode) || '';
-}
-
-/* ---- パートナー側：請求書作成 ---- */
-
-let _invoiceActivePartnerId = null;
-
-function openInvoicePartnerScreen() {
-  const cfg = getInvoiceStoreCfg();
-  const multi = !!(cfg[storeTab] && cfg[storeTab].multiPartner);
-  document.getElementById('invoice-partner-overlay').style.display = 'flex';
-  if (multi) {
-    _invoiceActivePartnerId = null;
-    document.getElementById('invoice-partner-pw-step').style.display = 'block';
-    document.getElementById('invoice-partner-form-step').style.display = 'none';
-    const pwInput = document.getElementById('invoice-pw-input');
-    if (pwInput) pwInput.value = '';
-    const pwMsg = document.getElementById('invoice-pw-msg');
-    if (pwMsg) pwMsg.textContent = '';
-    setTimeout(() => pwInput?.focus(), 100);
-  } else {
-    enterInvoiceForm(storeTab);
-  }
-}
-
-function closeInvoicePartnerScreen() {
-  document.getElementById('invoice-partner-overlay').style.display = 'none';
-}
-
-function submitInvoicePartnerPw() {
-  const pw = document.getElementById('invoice-pw-input')?.value.trim();
-  const msg = document.getElementById('invoice-pw-msg');
-  const partners = getInvoicePartners();
-  const match = Object.entries(partners).find(([pid, p]) => p.storeId === storeTab && p.password === pw);
-  if (!match) {
-    if (msg) { msg.style.color = '#ef4444'; msg.textContent = 'パスワードが違います'; }
-    return;
-  }
-  enterInvoiceForm(match[0]);
-}
-
-// 個人（またはstoreTab）の身元が確定した後に呼ぶ。業者コードが同じ他店舗（＝同一人物が管理する
-// 別店舗）があれば「複数店舗まとめ」フォームへ、無ければ今まで通り単独店舗フォームへ進む。
-function enterInvoiceForm(pid) {
-  _invoiceActivePartnerId = pid;
-  document.getElementById('invoice-partner-pw-step').style.display = 'none';
-  document.getElementById('invoice-partner-form-step').style.display = 'block';
-  const partners = getInvoicePartners();
-  const p = partners[pid] || {};
-  const siblings = partnerIdsSharingBizCode(p.bizCode, partners, pid);
-  if (siblings.length) renderInvoiceCombinedForm(pid, siblings);
-  else renderInvoicePartnerForm();
-}
-
-// 業者コードが同じ他店舗を持たない（＝1店舗のみを管理する）パートナー向けの、今まで通りの単独店舗フォーム
-function renderInvoicePartnerForm() {
-  _invoiceCombinedMembers = null;
-  const p = getInvoicePartners()[_invoiceActivePartnerId] || {};
-  const bank = p.bank || {};
-  const baseDays = computeInvoiceBaseDays(p.baseDaysMode || 'full');
-  document.getElementById('invoice-partner-form-body').innerHTML = `
-    <div style="font-size:12px;color:#888;margin-bottom:10px">${esc(STORES[storeTab] || storeTab)} ／ 満額 ${Number(p.fullAmount || 0).toLocaleString()}円 ／ 基準業務日数 ${baseDays}日</div>
-    <div style="display:flex;flex-direction:column;gap:8px">
-      <label style="font-size:12px;color:#888">実業務日数<input type="number" id="inv-actualdays" min="0" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:8px;font-size:14px;font-family:inherit"></label>
-      ${_invoiceBankFieldsHtml(bank)}
-      <div style="border-top:1px solid #e0ede5;margin-top:6px;padding-top:10px">
-        <div style="font-weight:600;font-size:12px;color:#888;margin-bottom:6px">その他（緊急出動・現地購入など。税込金額で入力。マイナス可）</div>
-        <div id="invoice-other-rows"></div>
-        <button onclick="addInvoiceOtherRow()" style="background:#22703d;color:white;padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;margin-top:6px">+ 行を追加</button>
-      </div>
-      <div style="font-weight:600;font-size:15px;margin-top:10px;text-align:right">合計（税込）: <span id="invoice-total-display">0</span>円</div>
-      <div id="invoice-submit-msg" style="font-size:12px;min-height:16px"></div>
-      <button onclick="submitInvoiceForm()" style="background:#22703d;color:white;padding:10px;font-size:14px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">請求書を作成する</button>
-    </div>`;
-  document.getElementById('inv-actualdays').addEventListener('input', updateInvoiceTotal);
-  updateInvoiceTotal();
-}
-
-// 単独店舗・複数店舗まとめの両フォームで共通の口座・会社情報入力欄
-function _invoiceBankFieldsHtml(bank) {
-  return `
-      <label style="font-size:12px;color:#888">登録番号（Tから始まる番号。無い場合は空欄でOK）<input type="text" id="inv-regnum" value="${esc(bank.registrationNumber || '')}" placeholder="例:1234567890123" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:8px;font-size:14px;font-family:inherit"></label>
-      <label style="font-size:12px;display:flex;align-items:center;gap:6px"><input type="checkbox" id="inv-taxexempt" ${bank.isTaxExempt ? 'checked' : ''}>課税事業者ではない</label>
-      <label style="font-size:12px;color:#888">社名・お名前<input type="text" id="inv-partnername" value="${esc(bank.partnerName || '')}" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:8px;font-size:14px;font-family:inherit"></label>
-      <label style="font-size:12px;color:#888">住所<input type="text" id="inv-address" value="${esc(bank.address || '')}" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:8px;font-size:14px;font-family:inherit"></label>
-      <label style="font-size:12px;color:#888">電話番号<input type="text" id="inv-tel" value="${esc(bank.tel || '')}" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:8px;font-size:14px;font-family:inherit"></label>
-      <div style="display:flex;gap:8px">
-        <label style="font-size:12px;color:#888;flex:1">金融機関名<input type="text" id="inv-bankname" value="${esc(bank.bankName || '')}" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:8px;font-size:14px;font-family:inherit"></label>
-        <label style="font-size:12px;color:#888;width:110px">銀行コード<input type="text" id="inv-bankcode" value="${esc(bank.bankCode || '')}" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:8px;font-size:14px;font-family:inherit"></label>
-      </div>
-      <div style="display:flex;gap:8px">
-        <label style="font-size:12px;color:#888;flex:1">支店名<input type="text" id="inv-branchname" value="${esc(bank.branchName || '')}" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:8px;font-size:14px;font-family:inherit"></label>
-        <label style="font-size:12px;color:#888;width:110px">支店コード<input type="text" id="inv-branchcode" value="${esc(bank.branchCode || '')}" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:8px;font-size:14px;font-family:inherit"></label>
-      </div>
-      <div style="display:flex;gap:8px">
-        <label style="font-size:12px;color:#888;width:110px">口座種別
-          <select id="inv-accounttype" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:8px;font-size:14px;font-family:inherit">
-            <option value="普通" ${bank.accountType !== '当座' ? 'selected' : ''}>普通</option>
-            <option value="当座" ${bank.accountType === '当座' ? 'selected' : ''}>当座</option>
-          </select>
-        </label>
-        <label style="font-size:12px;color:#888;flex:1">口座番号<input type="text" id="inv-accountnum" value="${esc(bank.accountNumber || '')}" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:8px;font-size:14px;font-family:inherit"></label>
-      </div>
-      <label style="font-size:12px;color:#888">口座名義（カナ）<input type="text" id="inv-accountkana" value="${esc(bank.accountHolderKana || '')}" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:8px;font-size:14px;font-family:inherit"></label>`;
-}
-
-function _readInvoiceBankFields() {
-  return {
-    registrationNumber: document.getElementById('inv-regnum').value.trim(),
-    isTaxExempt: document.getElementById('inv-taxexempt').checked,
-    partnerName: document.getElementById('inv-partnername').value.trim(),
-    address: document.getElementById('inv-address').value.trim(),
-    tel: document.getElementById('inv-tel').value.trim(),
-    bankName: document.getElementById('inv-bankname').value.trim(),
-    bankCode: document.getElementById('inv-bankcode').value.trim(),
-    branchName: document.getElementById('inv-branchname').value.trim(),
-    branchCode: document.getElementById('inv-branchcode').value.trim(),
-    accountType: document.getElementById('inv-accounttype').value,
-    accountNumber: document.getElementById('inv-accountnum').value.trim(),
-    accountHolderKana: document.getElementById('inv-accountkana').value.trim(),
-  };
-}
-
-async function _postInvoicePayload(payload, msg) {
-  msg.style.color = '#888'; msg.textContent = '作成中...';
-  try {
-    const res = await gasPost('submitInvoice', { payload });
-    if (res.error) { msg.style.color = '#ef4444'; msg.textContent = res.error; return; }
-    msg.style.color = '#22703d';
-    msg.innerHTML = '✓ 請求書を作成しました。<a href="' + res.pdfUrl + '" target="_blank">PDFを開く</a>'
-      + (res.receiptPdfUrl ? ' ／ <a href="' + res.receiptPdfUrl + '" target="_blank">領収書PDFを開く</a>' : '');
-  } catch (e) {
-    msg.style.color = '#ef4444'; msg.textContent = '送信に失敗しました。通信環境を確認してください。';
-  }
-}
-
-// null = 単独店舗フォーム中。配列 = 複数店舗まとめフォーム中（対象店舗一覧）。
-// addInvoiceOtherRow()がその他行に店舗選択を出すかどうかの判定に使う。
-let _invoiceCombinedMembers = null;
-
-function addInvoiceOtherRow() {
-  const container = document.getElementById('invoice-other-rows');
-  if (!container) return;
-  if (container.children.length >= 19) { alert('その他の行数が上限（19行）に達しています'); return; }
-  const div = document.createElement('div');
-  div.className = 'inv-other-row';
-  div.style.cssText = 'display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-bottom:10px;padding-bottom:8px;border-bottom:1px dashed #e2e8dd';
-  const storeSelectHtml = _invoiceCombinedMembers ? `
-    <select class="inv-other-store" style="border:1px solid #ddd;border-radius:6px;padding:7px 8px;font-size:12px;font-family:inherit">
-      <option value="">店舗指定なし</option>
-      ${_invoiceCombinedMembers.map(m => `<option value="${esc(m.pid)}">${esc(m.storeName)}</option>`).join('')}
-    </select>` : '';
-  div.innerHTML = `
-    ${storeSelectHtml}
-    <input type="number" placeholder="金額(税込・マイナス可)" class="inv-other-amount" oninput="updateInvoiceTotal()" style="width:130px;border:1px solid #ddd;border-radius:6px;padding:7px 8px;font-size:13px;font-family:inherit">
-    <input type="text" placeholder="備考(用途)" class="inv-other-note" style="flex:1;min-width:100px;border:1px solid #ddd;border-radius:6px;padding:7px 8px;font-size:13px;font-family:inherit">
-    <button type="button" class="inv-other-remove-btn" style="background:#ef4444;color:white;padding:6px 10px;font-size:12px;border-radius:6px;border:none;cursor:pointer;font-family:inherit">×</button>
-    <div style="display:flex;align-items:center;gap:6px;width:100%">
-      <label style="cursor:pointer;font-size:11px;color:#6b7280;background:#f3f4f6;border:1px solid #d1d5db;border-radius:6px;padding:4px 8px;display:inline-flex;align-items:center;gap:4px;font-family:inherit">
-        📁 領収書を添付
-        <input type="file" accept="image/*" style="display:none" onchange="handleInvoiceReceiptUpload(this)">
-      </label>
-      <label style="cursor:pointer;font-size:11px;color:#6b7280;background:#f3f4f6;border:1px solid #d1d5db;border-radius:6px;padding:4px 8px;display:inline-flex;align-items:center;gap:4px;font-family:inherit">
-        📷 撮影
-        <input type="file" accept="image/*" capture="environment" style="display:none" onchange="handleInvoiceReceiptUpload(this)">
-      </label>
-      <span class="inv-other-receipt-uploading" style="display:none;font-size:11px;color:#888">アップロード中...</span>
-      <span class="inv-other-receipt-preview" style="display:none;align-items:center;gap:4px">
-        <img style="height:36px;border-radius:4px;border:1px solid #e5e7eb;cursor:pointer" onclick="showLostImage(this.src)">
-        <button type="button" style="font-size:11px;color:#9ca3af;background:none;border:none;cursor:pointer;font-family:inherit" onclick="removeInvoiceReceipt(this)">✕ 削除</button>
-      </span>
-    </div>`;
-  div.querySelector('.inv-other-remove-btn').onclick = () => { div.remove(); updateInvoiceTotal(); };
-  container.appendChild(div);
-}
-
-async function handleInvoiceReceiptUpload(input) {
-  const file = input.files[0]; if (!file) return;
-  const row = input.closest('.inv-other-row');
-  if (!row) return;
-  const uploading = row.querySelector('.inv-other-receipt-uploading');
-  if (uploading) uploading.style.display = 'inline';
-  try {
-    const blob = await compressLostImage(file);
-    const base64 = await _blobToBase64(blob);
-    const r = await gasPost('saveInvoiceReceiptImage', { imageBase64: base64, imageMime: 'image/jpeg', filename: 'invoice_receipt_' + uid() });
-    if (r.error) { alert('領収書のアップロードに失敗しました: ' + r.error); return; }
-    row.dataset.receiptFileId = r.file_id;
-    row.dataset.receiptUrl = r.image_url;
-    const preview = row.querySelector('.inv-other-receipt-preview');
-    preview.querySelector('img').src = r.image_url;
-    preview.style.display = 'inline-flex';
-  } catch (e) {
-    alert('領収書のアップロードに失敗しました: ' + e.message);
-  } finally {
-    if (uploading) uploading.style.display = 'none';
-    input.value = '';
-  }
-}
-
-function removeInvoiceReceipt(btn) {
-  const row = btn.closest('.inv-other-row');
-  if (!row) return;
-  delete row.dataset.receiptFileId;
-  delete row.dataset.receiptUrl;
-  const preview = row.querySelector('.inv-other-receipt-preview');
-  preview.style.display = 'none';
-}
-
-function updateInvoiceTotal() {
-  if (_invoiceCombinedMembers) { updateInvoiceCombinedTotal(); return; }
-  const p = getInvoicePartners()[_invoiceActivePartnerId] || {};
-  const baseDays = computeInvoiceBaseDays(p.baseDaysMode || 'full');
-  const actualDays = Number(document.getElementById('inv-actualdays')?.value || 0);
-  const fullAmount = Number(p.fullAmount || 0);
-  const dayRate = baseDays > 0 ? Math.floor(fullAmount / baseDays * actualDays) : 0;
-  const otherTotal = Array.from(document.querySelectorAll('.inv-other-amount')).reduce((s, el) => s + Math.floor(Number(el.value) || 0), 0);
-  const disp = document.getElementById('invoice-total-display');
-  if (disp) disp.textContent = (dayRate + otherTotal).toLocaleString();
-}
-
-function updateInvoiceCombinedTotal() {
-  const partners = getInvoicePartners();
-  let total = 0;
-  (_invoiceCombinedMembers || []).forEach(m => {
-    if (!document.getElementById('inv-combined-check-' + m.pid)?.checked) return;
-    const mp = partners[m.pid] || {};
-    const baseDays = computeInvoiceBaseDays(mp.baseDaysMode || 'full');
-    const actualDays = Number(document.getElementById('inv-actualdays-' + m.pid)?.value || 0);
-    total += baseDays > 0 ? Math.floor(Number(mp.fullAmount || 0) / baseDays * actualDays) : 0;
-  });
-  total += Array.from(document.querySelectorAll('.inv-other-amount')).reduce((s, el) => s + Math.floor(Number(el.value) || 0), 0);
-  const disp = document.getElementById('invoice-total-display');
-  if (disp) disp.textContent = total.toLocaleString();
-}
-
-// 業者コードが同じ他店舗を持つパートナー向け：まとめて対象店舗を選び、1回の送信で1枚のPDFにする
-function renderInvoiceCombinedForm(pid, siblingPids) {
-  const partners = getInvoicePartners();
-  const codeVal = c => (c === '' || c == null || isNaN(Number(c))) ? Infinity : Number(c);
-  const members = [pid, ...siblingPids].map(mpid => {
-    const mp = partners[mpid] || {};
-    const msid = mp.storeId || mpid;
-    return { pid: mpid, storeId: msid, storeName: STORES[msid] || msid, storeCode: getInvoiceStoreCode(msid), fullAmount: mp.fullAmount, baseDaysMode: mp.baseDaysMode, staffName: mp.staffName };
-  }).sort((a, b) => {
-    const av = codeVal(a.storeCode), bv = codeVal(b.storeCode);
-    if (av !== bv) return av - bv;
-    return String(a.storeName).localeCompare(String(b.storeName), 'ja');
-  });
-  _invoiceCombinedMembers = members;
-
-  const p = partners[pid] || {};
-  const bank = p.bank || {};
-
-  const memberRows = members.map(m => {
-    const baseDays = computeInvoiceBaseDays(m.baseDaysMode || 'full');
-    return `
-      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:6px 0;border-bottom:1px solid #f0f0f0">
-        <label style="display:flex;align-items:center;gap:6px;min-width:140px">
-          <input type="checkbox" id="inv-combined-check-${esc(m.pid)}" checked onchange="updateInvoiceTotal()">
-          <span style="font-size:13px;font-weight:600">${esc(m.storeName)}</span>
-        </label>
-        <span style="font-size:11px;color:#888">満額${Number(m.fullAmount || 0).toLocaleString()}円／基準${baseDays}日${m.staffName ? '／担当:' + esc(m.staffName) : ''}</span>
-        <input type="number" id="inv-actualdays-${esc(m.pid)}" placeholder="実業務日数" min="0" oninput="updateInvoiceTotal()" style="width:90px;border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:13px;font-family:inherit;margin-left:auto">
-      </div>`;
-  }).join('');
-
-  document.getElementById('invoice-partner-form-body').innerHTML = `
-    <div style="font-size:12px;color:#0369a1;background:#e0f2fe;border-radius:6px;padding:8px 10px;margin-bottom:10px">🔗 同じ業者コードの${members.length}店舗をまとめて1枚の請求書として作成します。今回対象外にしたい店舗はチェックを外してください。</div>
-    <div style="margin-bottom:10px">${memberRows}</div>
-    <div style="display:flex;flex-direction:column;gap:8px">
-      ${_invoiceBankFieldsHtml(bank)}
-      <div style="border-top:1px solid #e0ede5;margin-top:6px;padding-top:10px">
-        <div style="font-weight:600;font-size:12px;color:#888;margin-bottom:6px">その他（緊急出動・現地購入・割引など。税込金額で入力。マイナス可）</div>
-        <div id="invoice-other-rows"></div>
-        <button onclick="addInvoiceOtherRow()" style="background:#22703d;color:white;padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;margin-top:6px">+ 行を追加</button>
-      </div>
-      <div style="font-weight:600;font-size:15px;margin-top:10px;text-align:right">合計（税込）: <span id="invoice-total-display">0</span>円</div>
-      <div id="invoice-submit-msg" style="font-size:12px;min-height:16px"></div>
-      <button onclick="submitInvoiceCombinedForm()" style="background:#22703d;color:white;padding:10px;font-size:14px;font-weight:600;border-radius:8px;border:none;cursor:pointer;font-family:inherit">請求書を作成する</button>
-    </div>`;
-  updateInvoiceTotal();
-}
-
-function _invoiceDateAndEra() {
-  const now = new Date();
-  const lastDay = new Date(now.getFullYear(), now.getMonth() + 1, 0);
-  const isoDate = lastDay.toLocaleDateString('sv');
-  return {
-    dayRateNote: isoDate.slice(0, 7) + '分',
-    invoiceDate: isoDate.replace(/-/g, ''),
-    era: { year: lastDay.getFullYear() - 2018, month: lastDay.getMonth() + 1, day: lastDay.getDate() },
-  };
-}
-
-async function submitInvoiceForm() {
-  const msg = document.getElementById('invoice-submit-msg');
-  const partners = getInvoicePartners();
-  const pid = _invoiceActivePartnerId;
-  const p = partners[pid] || { storeId: storeTab, password: '', bank: {} };
-  const actualDays = Number(document.getElementById('inv-actualdays')?.value || 0);
-  if (!actualDays) { msg.style.color = '#ef4444'; msg.textContent = '実業務日数を入力してください'; return; }
-
-  const bank = _readInvoiceBankFields();
-  if (bank.isTaxExempt && bank.registrationNumber) {
-    msg.style.color = '#ef4444';
-    msg.textContent = '「課税事業者ではない」にチェックが入っている場合、登録番号は入力できません。どちらか一方にしてください。';
-    return;
-  }
-  if (!bank.partnerName) { msg.style.color = '#ef4444'; msg.textContent = '社名・お名前を入力してください'; return; }
-
-  // 自動入力欄は常に編集可能で、送信内容が次回以降の保存値としても上書きされる
-  p.bank = bank;
-  if (!p.storeId) p.storeId = storeTab;
-  partners[pid] = p;
-  syncInvoiceBizCodeGroup(pid, partners);
-  saveInvoicePartners(partners);
-
-  const otherItems = Array.from(document.querySelectorAll('#invoice-other-rows > div')).map(row => ({
-    pid, storeId: storeTab, storeName: STORES[storeTab] || storeTab, storeCode: getInvoiceStoreCode(storeTab) || storeTab, staffName: p.staffName || '',
-    amount: Number(row.querySelector('.inv-other-amount')?.value || 0),
-    note: row.querySelector('.inv-other-note')?.value.trim() || '',
-    receiptFileId: row.dataset.receiptFileId || '',
-  })).filter(it => it.amount !== 0);
-
-  const payload = {
-    partnerId: pid,
-    partnerName: bank.partnerName, address: bank.address, tel: bank.tel,
-    registrationNumber: bank.registrationNumber, isTaxExempt: bank.isTaxExempt,
-    bankName: bank.bankName, bankCode: bank.bankCode,
-    branchName: bank.branchName, branchCode: bank.branchCode,
-    accountType: bank.accountType, accountNumber: bank.accountNumber, accountHolderKana: bank.accountHolderKana,
-    bizCode: p.bizCode || '',
-    storeLines: [{ pid, storeId: storeTab, storeName: STORES[storeTab] || storeTab, storeCode: getInvoiceStoreCode(storeTab) || storeTab, staffName: p.staffName || '', fullAmount: Number(p.fullAmount || 0), baseDays: computeInvoiceBaseDays(p.baseDaysMode || 'full'), actualDays }],
-    otherItems,
-    ..._invoiceDateAndEra(),
-  };
-
-  await _postInvoicePayload(payload, msg);
-}
-
-async function submitInvoiceCombinedForm() {
-  const msg = document.getElementById('invoice-submit-msg');
-  const partners = getInvoicePartners();
-  const pid = _invoiceActivePartnerId;
-  const members = _invoiceCombinedMembers || [];
-
-  const checkedMembers = members.filter(m => document.getElementById('inv-combined-check-' + m.pid)?.checked);
-  if (!checkedMembers.length) { msg.style.color = '#ef4444'; msg.textContent = '対象店舗を1つ以上選択してください'; return; }
-
-  const storeLines = [];
-  for (const m of checkedMembers) {
-    const actualDays = Number(document.getElementById('inv-actualdays-' + m.pid)?.value || 0);
-    if (!actualDays) { msg.style.color = '#ef4444'; msg.textContent = esc(m.storeName) + 'の実業務日数を入力してください'; return; }
-    const mp = partners[m.pid] || {};
-    storeLines.push({
-      pid: m.pid, storeId: m.storeId, storeName: m.storeName, storeCode: getInvoiceStoreCode(m.storeId) || m.storeId,
-      staffName: mp.staffName || '', fullAmount: Number(mp.fullAmount || 0), baseDays: computeInvoiceBaseDays(mp.baseDaysMode || 'full'), actualDays,
-    });
-  }
-
-  const bank = _readInvoiceBankFields();
-  if (bank.isTaxExempt && bank.registrationNumber) {
-    msg.style.color = '#ef4444';
-    msg.textContent = '「課税事業者ではない」にチェックが入っている場合、登録番号は入力できません。どちらか一方にしてください。';
-    return;
-  }
-  if (!bank.partnerName) { msg.style.color = '#ef4444'; msg.textContent = '社名・お名前を入力してください'; return; }
-
-  const p = partners[pid] || { storeId: storeTab, password: '', bank: {} };
-  p.bank = bank;
-  if (!p.storeId) p.storeId = storeTab;
-  partners[pid] = p;
-  syncInvoiceBizCodeGroup(pid, partners);
-  saveInvoicePartners(partners);
-
-  const otherItems = Array.from(document.querySelectorAll('#invoice-other-rows > div')).map(row => {
-    const otherPid = row.querySelector('.inv-other-store')?.value || '';
-    const m = members.find(x => x.pid === otherPid);
-    return {
-      pid: otherPid, storeId: m ? m.storeId : '', storeName: m ? m.storeName : '',
-      storeCode: m ? (getInvoiceStoreCode(m.storeId) || m.storeId) : '',
-      staffName: m ? (partners[m.pid]?.staffName || '') : '',
-      amount: Number(row.querySelector('.inv-other-amount')?.value || 0),
-      note: row.querySelector('.inv-other-note')?.value.trim() || '',
-      receiptFileId: row.dataset.receiptFileId || '',
-    };
-  }).filter(it => it.amount !== 0);
-
-  const payload = {
-    partnerId: pid,
-    partnerName: bank.partnerName, address: bank.address, tel: bank.tel,
-    registrationNumber: bank.registrationNumber, isTaxExempt: bank.isTaxExempt,
-    bankName: bank.bankName, bankCode: bank.bankCode,
-    branchName: bank.branchName, branchCode: bank.branchCode,
-    accountType: bank.accountType, accountNumber: bank.accountNumber, accountHolderKana: bank.accountHolderKana,
-    bizCode: p.bizCode || '',
-    storeLines, otherItems,
-    ..._invoiceDateAndEra(),
-  };
-
-  await _postInvoicePayload(payload, msg);
 }
 
 (async () => {

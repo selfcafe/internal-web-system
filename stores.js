@@ -1,5 +1,5 @@
-// 店舗マスタ（基本店舗一覧）。index.html・invoice.html の両方から <script src="stores.js"></script> で読み込む単一の共有ファイル。
-// 店舗を追加・削除・改名する場合はここを編集すれば両画面に反映される（custom_stores/deleted_storesによる動的な追加・削除は別途GAS経由で反映される）。
+// 店舗マスタ（基本店舗一覧）。index.html から <script src="stores.js"></script> で読み込む（GAS側もUrlFetchAppでこのファイルを取得して使う）。
+// 店舗を追加・削除・改名する場合はここを編集すれば反映される（custom_stores/deleted_storesによる動的な追加・削除は別途GAS経由で反映される）。
 const STORES = {
   /* 東海 */
   sasashima:'ささしまライブ', chikusa:'千種', gokiso:'御器所', tsurumai:'鶴舞',
