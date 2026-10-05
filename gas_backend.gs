@@ -5169,6 +5169,12 @@ function getSteraProductGroups() {
 const WATER_STOCK_MISMATCH_ABS_THRESHOLD = 3;
 const WATER_STOCK_MISMATCH_PCT_THRESHOLD = 0.3;
 
+// 2026-10-05: 盗難疑い通知をいったん停止(ユーザー指示)。判定が正しいかを現地の状況と突き合わせて
+// 実証できておらず、千種で「補充24個／ステラ実売上0個」のような異常値の通知が出ていたため。
+// 計算・チェックポイント更新はそのまま続け(再開時にcarryOverが途切れないように)、LINE WORKSへの
+// 送信だけを止めている。trueに戻してデプロイすれば元通り通知される。
+const WATER_STOCK_MISMATCH_NOTIFY_ENABLED = false;
+
 // 水の盗難検知の対象外店舗(2026-09-11追加)。水のみ扱う店舗をステラ上では個別公開せず
 // 「全店舗まとめて1店舗」として扱う運用があり、該当店舗はステラのshop状態が非公開(draft)の
 // ままになるため、当ロジックの前提(「その店舗のステラ実売上」が個別に取得できる)が成立しない
@@ -5344,7 +5350,7 @@ function checkWaterStockMismatch(storeId, product) {
   const thresholdMet = overAbsolute && overPct;
   const notifiedRows = sheetRows(_getStockMismatchNotifiedSheet_(), STOCK_MISMATCH_NOTIFIED_COLS);
   let notified = false;
-  if (thresholdMet && !_hasNotifiedStockMismatch_(notifiedRows, storeId, group.prdId, sinceDate, 'theft')) {
+  if (WATER_STOCK_MISMATCH_NOTIFY_ENABLED && thresholdMet && !_hasNotifiedStockMismatch_(notifiedRows, storeId, group.prdId, sinceDate, 'theft')) {
     try {
       sendStockBotNotification_(
         '【在庫差異検知・盗難疑い】' + _storeIdLabel_(storeId) + '・' + group.label +
