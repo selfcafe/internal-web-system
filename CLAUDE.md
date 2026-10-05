@@ -220,7 +220,7 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
   - 期限切れはconfirmで確認するだけで送信できる。デイリーカウント不一致は参考表示のみ。
   - 消費期限(`exp1〜3`)はスプレッドシートに残らない。
 - **2つの対象外ルールは独立**: デイリーカウント対象(`isDailyCountTracked`)と消費期限対象(`needsExpiryTracking`)は別ルール(例: ペーパータオルはデイリーカウント対象だが期限管理外)。
-  - ⚠️ `isDailyCountTracked`(棚卸)はother=ペーパータオルだけ、`_checksheetProductColumns`(チェックシート)はペーパータオル・ストロー・トイレットペーパーで、ずれている。意図的かは未確認。
+  - `isDailyCountTracked`(棚卸)はother=ペーパータオルだけ、`_checksheetProductColumns`(チェックシート)はペーパータオル・ストロー・トイレットペーパーで、**ずれているのは意図どおり**(2026-10-05オーナー確認)。チェックシートは「随時数えてほしいもの」、棚卸表は「月末に数える、消耗品以外の在庫すべて」と、数える目的が違うため。片方に揃える修正はしないこと。
 - **消費量の値の出どころ**: `inventory_log`の消費量は送信時点の固定値。店舗タブの消費量・差異・金額・発注数はスプレッドシートの数式(2026-09-07〜)。
   - 過去の納品数を直したら店舗タブを再構築する。前月比の異常検知等は`inventory_log`側を読むので、そちらも直す。
 - **当月納品**: `inventory_delivery_auto`は追記だけの生ログで、集計のたびに合計し直す。
