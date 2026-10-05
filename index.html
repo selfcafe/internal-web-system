@@ -9,8 +9,24 @@
        URLはメインスクリプト内のGAS_URLと同じ値だが、スコープが
        別スクリプトのためconstの重複宣言を避けてこちらは直書きする。 -->
   <script>
-    window.__earlySettings = fetch('https://script.google.com/macros/s/AKfycbzoqu607sj-rpYulIiDwnuyGSCTzoblzSqaq37cb5k5KiGsK7sisZew9sSRSBoYBSwo_A/exec?action=getSettings')
-      .then(r => r.json()).catch(() => null);
+    // 管理者としてログイン中なら全店舗分(getSettings)、それ以外はログイン中の店舗、未ログインなら
+    // この端末で前回ログインした店舗の分だけ(getStoreSettings)を読む(2026-10-05、CLAUDE.md 7.1)。
+    // 店舗のパスワード一覧はどちらにも含まれるので、ログイン画面はどちらでも動く。
+    (function () {
+      let scope = 'all';
+      try {
+        if (sessionStorage.getItem('admin_authed') !== '1') {
+          const st = (sessionStorage.getItem('site_authed') === '1' && sessionStorage.getItem('site_authed_store')) ||
+            localStorage.getItem('last_login_store') || '';
+          scope = 'store:' + st;
+        }
+      } catch (_) {}
+      const base = 'https://script.google.com/macros/s/AKfycbzoqu607sj-rpYulIiDwnuyGSCTzoblzSqaq37cb5k5KiGsK7sisZew9sSRSBoYBSwo_A/exec';
+      const url = scope === 'all' ? base + '?action=getSettings'
+        : base + '?action=getStoreSettings&storeId=' + encodeURIComponent(scope.slice(6));
+      window.__earlySettingsScope = scope;
+      window.__earlySettings = fetch(url).then(r => r.json()).catch(() => null);
+    })();
     // 業務開始の押し忘れリマインダーが出るまでの待ち時間を縮めるため、セッション復元(前回ログイン
     // 済みで再度開いた)の場合は店舗が既にわかっているので、getAttendanceもここで先行発火しておく
     // (loadAttendanceHistoryが使う。ログイン処理完了を待ってから発火する従来の流れだと、その分
@@ -1033,6 +1049,12 @@ function _syncStoreToDb(storeId, rows, deletedIds) {
 // 実行させることで、最後に呼ばれた保存が必ず最後にサーバーへ反映されるようにする
 const _settingSyncChain = {};
 async function _gasSaveSetting(key, value) {
+  // 端末に自店舗分しか無い状態でこれらのキーを丸ごと保存すると、他店舗の設定が全部消える。
+  // 店舗ごとの変更は_gasMergeSettingを使うこと(管理画面は全店舗分を読み込んでから開くので通る)
+  if (STORE_SCOPED_SETTING_KEYS.includes(key) && _cachedSettingsScope() !== 'all') {
+    console.error('saveSetting blocked: ' + key + ' は全店舗分を読み込んでいないため丸ごと保存できません');
+    return false;
+  }
   const prev = _settingSyncChain[key] || Promise.resolve();
   const run = prev.catch(() => {}).then(async () => {
     try {
@@ -1140,18 +1162,43 @@ function _hideSettingsSyncBanner() {
   if (el) el.style.display = 'none';
 }
 
-async function initGas() {
-  try {
-    _ordersLoadFailed = false;
-    _ordersReady = gasGet('getOrders').then(orders => {
-      (orders || []).forEach(r => {
-        if (!ORDERS_CACHE[r.store_id]) ORDERS_CACHE[r.store_id] = [];
-        ORDERS_CACHE[r.store_id].push(_dbToRow(r));
-      });
-    }).catch(e => { console.error('getOrders error:', e); _ordersLoadFailed = true; });
+// 設定の読み込み範囲(2026-10-05〜)。'all'=全店舗分(getSettings、管理画面用)、
+// 'store:<店舗ID>'=その店舗の分+全店共通の分だけ(getStoreSettings、パートナー画面・ログイン画面用)。
+// 全店舗分は約122KBあり、大半は店舗別の取扱商品設定など他店舗の分だったため分けた(CLAUDE.md 7.1)。
+// 端末のlocalStorageに今どちらの範囲が入っているかはSETTINGS_SCOPE_KEYに残す(無ければ従来通り全店舗分)。
+const SETTINGS_SCOPE_KEY = 'settings_scope';
+// getStoreSettingsで自店舗分だけに絞られるキー(gas_backend.gsのSTORE_SCOPED_SETTING_KEYSと揃える)
+const STORE_SCOPED_SETTING_KEYS = ['store_product_cfg', 'store_checksheet_cfg'];
+function _cachedSettingsScope() { return localStorage.getItem(SETTINGS_SCOPE_KEY) || 'all'; }
+function _fetchSettings(scope) {
+  return (scope === 'all' ? gasGet('getSettings') : gasGet('getStoreSettings', { storeId: scope.slice(6) }))
+    .catch(() => null);
+}
 
-    // ページ最上部で先行発火済みのgetSettingsがあればそれを使う（早く始まっている分だけ速い）
-    let settings = await (window.__earlySettings || gasGet('getSettings').catch(() => null));
+async function initGas() {
+  _ordersLoadFailed = false;
+  _ordersReady = gasGet('getOrders').then(orders => {
+    (orders || []).forEach(r => {
+      if (!ORDERS_CACHE[r.store_id]) ORDERS_CACHE[r.store_id] = [];
+      ORDERS_CACHE[r.store_id].push(_dbToRow(r));
+    });
+  }).catch(e => { console.error('getOrders error:', e); _ordersLoadFailed = true; });
+  // ページ最上部で先行発火済みの読み込みがあればそれを使う（早く始まっている分だけ速い）
+  return _loadSettings(window.__earlySettingsScope || 'all', window.__earlySettings);
+}
+
+// ログイン後に必要な範囲がまだ読み込まれていなければ読み込む(別店舗でログイン・管理者ログイン時)
+async function ensureSettingsScope(scope) {
+  // 全店舗分はどの店舗の分も含むので、このページで全店舗分を読めていれば読み直さない
+  if (_settingsLoadedThisPage && (_cachedSettingsScope() === scope || _cachedSettingsScope() === 'all')) return true;
+  return _loadSettings(scope);
+}
+// このページを開いてから設定をサーバーから読めたか(false=端末に残っている前回分で表示中)
+let _settingsLoadedThisPage = false;
+
+async function _loadSettings(scope, prefetched) {
+  try {
+    let settings = await (prefetched || _fetchSettings(scope));
     // 2026-10-01: 取得失敗時(通信エラーでnull、GASエラーで{error}等の配列以外)は少し待って取り直す。
     // 以前は失敗をそのまま「設定が空」と扱っていたため、①端末に前回分の設定が残っているのに
     // コード内蔵の初期チェック項目だけで表示され(大塚駅南口で清掃5項目だけになった、バグ報告No.4)、
@@ -1159,13 +1206,16 @@ async function initGas() {
     // サーバーを上書きしかけていた。
     for (let i = 0; !Array.isArray(settings) && i < 2; i++) {
       await new Promise(r => setTimeout(r, 1500 * (i + 1)));
-      settings = await gasGet('getSettings').catch(() => null);
+      settings = await _fetchSettings(scope);
     }
     if (!Array.isArray(settings)) {
       // 取り直しても駄目なら、端末に残っている前回の設定で表示する。サーバーへの書き戻しは一切しない。
-      // 前回分も無い端末(初回・データ消去後)では、内蔵の初期リストは実際の店舗設定と違うため
-      // チェックシートを表示しない(renderChecksheet参照)。間違った項目のまま入力させないため
-      _checksheetItemsUnavailable = !localStorage.getItem(ALL_CHECKSHEET_ITEMS_KEY);
+      // 前回分も無い端末(初回・データ消去後)や、前回分が別店舗の分だけの端末では、内蔵の初期リストや
+      // 他店舗の設定は実際の店舗設定と違うためチェックシートを表示しない(renderChecksheet参照)。
+      // 間違った項目のまま入力させないため
+      const cached = _cachedSettingsScope();
+      _checksheetItemsUnavailable = !localStorage.getItem(ALL_CHECKSHEET_ITEMS_KEY) ||
+        (scope !== 'all' && cached !== 'all' && cached !== scope);
       loadVendorConfig();
       loadProductSettings();
       loadChecksheetCategories();
@@ -1182,6 +1232,7 @@ async function initGas() {
     }
     _hideSettingsSyncBanner();
     _checksheetItemsUnavailable = false;
+    _settingsLoadedThisPage = true;
     const gasKeys = new Set(settings.map(r => r.key));
     settings.forEach(r => {
       const clean = v => String(v).replace(/[\x00-\x1f]/g, '');
@@ -1209,6 +1260,7 @@ async function initGas() {
       if (r.key === 'machine_photo_disabled_stores') localStorage.setItem(MACHINE_PHOTO_DISABLED_KEY, clean(r.value));
       if (r.key === 'machine_photo_machine_counts') localStorage.setItem(MACHINE_PHOTO_COUNT_KEY, clean(r.value));
     });
+    localStorage.setItem(SETTINGS_SCOPE_KEY, scope);
     if (gasKeys.has('all_products') || gasKeys.has('vendor_config')) {
       loadVendorConfig();
       loadProductSettings();
@@ -1248,7 +1300,7 @@ async function initGas() {
     updatePartnerMachinePhotoTabVisibility();
     updatePartnerOrderTabVisibility();
     return true;
-  } catch(e) { console.error('GAS init error:', e); return false; }
+  } catch(e) { console.error('settings load error:', e); return false; }
 }
 
 function _dbToLostItem(r) {
@@ -5333,7 +5385,7 @@ setInterval(() => {
 }, 60 * 1000);
 
 
-function submitSiteLogin() {
+async function submitSiteLogin() {
   const val = document.getElementById('site-pw-input').value.trim();
   const err = document.getElementById('site-pw-error');
   if (!val) { err.textContent = 'パスワードを入力してください'; setTimeout(() => { err.textContent=''; }, 2000); return; }
@@ -5354,6 +5406,19 @@ function submitSiteLogin() {
       return;
     }
     localStorage.setItem('last_login_pw', val);
+    // ログイン画面は前回ログインした店舗の分しか読んでいないので、管理者なら全店舗分、
+    // 別店舗ならその店舗の分を読み込んでから画面を開く(CLAUDE.md 7.1)
+    const needScope = storeId === '__admin__' ? 'all' : 'store:' + storeId;
+    const loginBtn = document.querySelector('button.btn-pin-submit');
+    if (loginBtn) { loginBtn.disabled = true; loginBtn.textContent = '読み込み中…'; }
+    const scopeOk = await ensureSettingsScope(needScope);
+    if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = 'ログイン'; }
+    if (storeId === '__admin__' && !scopeOk && _cachedSettingsScope() !== 'all') {
+      // 店舗分だけの設定のまま管理画面を開くと、他店舗の設定が空に見え、保存で消してしまう恐れがある
+      err.textContent = '管理画面の設定を読み込めませんでした。通信環境の良い場所で再読み込みしてください';
+      setTimeout(() => { err.textContent = ''; }, 5000);
+      return;
+    }
     if (storeId === '__admin__') {
       sessionStorage.setItem('admin_authed', '1');
       sessionStorage.setItem('last_active', String(Date.now()));
@@ -5392,6 +5457,11 @@ const isAuthed = () => sessionStorage.getItem('admin_authed') === '1';
 
 async function showPage(p) {
   if (p === 'admin' && !isAuthed()) { showLock(); return; }
+  // 管理画面は全店舗分の設定が前提(店舗分だけのまま開くと他店舗の設定が空に見え、保存で消える恐れ)
+  if (p === 'admin' && _cachedSettingsScope() !== 'all') {
+    alert('管理画面の設定を読み込めませんでした。通信環境の良い場所で再読み込みしてください。');
+    return;
+  }
   await _ordersReady; // 注文データが揃うまで待ってから描画（未読込のまま空扱いされるのを防ぐ）
   if (p === 'store') {
     const authedStore = sessionStorage.getItem('site_authed_store');

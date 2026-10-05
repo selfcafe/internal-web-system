@@ -164,18 +164,14 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 
 別のPC・別セッションから続きをやる場合はここから。着手・完了したらこの節を更新すること。
 
-### 7.1 【未着手・方針合意済み】店舗の端末には自店舗分+共通部分の設定だけを渡す
+### 7.1 【対応済み 2026-10-05】店舗の端末には自店舗分+共通部分の設定だけを渡す
 
-**現状**: パートナー端末も管理画面も、起動時に`getSettings`で設定シート全体(全店舗分、約122KB)を毎回読み込んでいる(`index.html`の`initGas`)。内訳の大半は`store_product_cfg`(全店舗分の取扱商品除外リスト、約77KB)で、1店舗分は約1.5KB。店舗端末が実際に必要なのは「自店舗分+共通マスタ(`all_products`・`all_checksheet_items`・`checksheet_categories`・`vendor_config`等)」で約20KB。
-さらに`getSettings`は応答がCacheServiceの1件100KB上限を超えるため`cache.put`が毎回黙って失敗し、毎回シートを直接読んでいる。通信が不安定な時に読み込み失敗しやすい一因と考えている(下記7.2の事故の背景)。
-
-**やること(ユーザーと合意済み)**:
-- GASに店舗指定で必要な分だけ返す読み込み口を追加する(例: `getStoreSettings&storeId=...`)。店舗別キー(`store_product_cfg`・`store_checksheet_cfg`・`store_operation_type`・`invoice_store_cfg`等の`{storeId: ...}`形式)は該当店舗の分だけに絞り、共通マスタはそのまま返す。応答が100KB未満になるのでキャッシュも効く。
-- 店舗端末(パートナー画面)はこちらを使い、**管理画面だけは今まで通り全店舗分の`getSettings`**を使う。
-- 注意点: ログイン(店舗選択・パスワード照合)は今は全店舗分の`store_passwords`を端末側で照合している。ログイン前は店舗が決まっていないので、ログイン画面に必要なものの扱いを設計時に決めること。
-- 端末側は「全店舗分が手元にある」前提のコード(`localStorage`に全店舗分を保存して各所で参照)になっているため、店舗端末で他店舗の設定を参照している箇所が無いか洗い出してから切り替えること。7.2のフォールバック(取得失敗時は端末に残っている前回分で表示・書き戻ししない)も新しい読み込み口で維持すること。
-
-**対応しないと決めたこと**: 全店舗のパスワード・管理者PINが全端末に届いており開発者ツールで見られる点は、ユーザー判断で対策不要(そういう相手を想定した作りではない)。
+- パートナー画面・ログイン画面は`getStoreSettings&storeId=...`(GAS)を読む。`STORE_SCOPED_SETTING_KEYS`(`store_product_cfg`・`store_checksheet_cfg`、gas_backend.gsとindex.htmlの両方にある。増減するときは両方揃える)だけ指定店舗の分に絞り、他のキーは`getSettings`と同じ。約133KB→約40KBで、CacheService(1件100KB上限)にも載る。
+- 読む範囲: 管理者ログイン中=全店舗分(`getSettings`)、店舗ログイン中=その店舗、未ログイン=この端末で前回ログインした店舗(`last_login_store`)。ログイン時に範囲が違えば読み直してから画面を開く(`ensureSettingsScope`)。
+- 端末のlocalStorageに今どの範囲が入っているかは`settings_scope`(`'all'`/`'store:<id>'`、無ければ従来の全店舗分扱い)。
+- 安全策: 全店舗分が無い端末では①管理画面を開かない(`showPage`・`submitSiteLogin`)②上の2キーを`_gasSaveSetting`で丸ごと保存しない(他店舗分が消えるため。店舗ごとの変更は`_gasMergeSetting`)③読み込み失敗時に端末の前回分が別店舗の分ならチェックシートを出さない。
+- 応答速度(GAS側の処理時間)は全店舗分と大差なく約2.4秒。減ったのは転送量で、通信の弱い端末ほど効く。
+- 全店舗のパスワード・管理者PINが全端末に届き開発者ツールで見られる点は、ユーザー判断で対策不要(そういう相手を想定した作りではない)。
 
 ### 7.2 【対応済み・参考】設定の読み込み失敗時のチェック項目欠落(バグ報告No.4、commit `b9cbfcb`)
 
