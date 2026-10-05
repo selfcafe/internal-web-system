@@ -1,6 +1,21 @@
 # internal-web-system
 
-> **引き継ぎを受けた方へ**: まず [HANDOVER.md](HANDOVER.md)(引継ぎ書・未完成部分の一覧)を読んでください。
+## 引き継ぎを受けた方へ
+
+引き継ぎに必要な資料は、次の4つにまとめてあります。**まず[HANDOVER.md](HANDOVER.md)の「0. 引き継いだら最初にやること」から読んでください。**
+
+| 資料 | 中身 | 場所 |
+|---|---|---|
+| **[HANDOVER.md](HANDOVER.md)**(引継ぎ書) | 全体像、引き継ぐアカウント・権限、いま動いている自動処理、残っている課題、ステラ取り込みを別のPCへ移す手順 | このリポジトリ |
+| **[CLAUDE.md](CLAUDE.md)**(運用ガイド) | デプロイ手順、仕組みの詳細、過去の事故と注意点(前任者の作業メモから移したもの) | このリポジトリ |
+| **[社内ポータル　運用各種](https://docs.google.com/document/d/14P5jF1IsI7KjiGrYHwCdAGxEYXHI_UadEg8X7Z1BQCg/edit)**(URL一覧) | ポータルが使っているスプレッドシート・スクリプトなどのURL | Googleドキュメント(`selfcafe001@gmail.com`でのみ開ける) |
+| **[社内ポータル（システム一式）](https://drive.google.com/drive/folders/1clucdJh7gXCgML8HoC2Ol5xrvLuXx-98)**(ファイル一式) | 使っているスプレッドシート・Apps Script・画像保存用フォルダ・上のドキュメント | Googleドライブ(`selfcafe001@gmail.com`でのみ開ける) |
+
+- このリポジトリは公開(Public)なので、スプレッドシートのURLやパスワードは書かず、上のGoogleドキュメントにだけ置いています。
+- ポータルを変更したら、HANDOVER.mdとCLAUDE.mdも一緒に更新してください。
+- Claude Codeで作業する場合、このリポジトリを開くとCLAUDE.mdが自動で読み込まれます。
+
+---
 
 セルフカフェの社内ポータル（パートナー用ポータル／管理者用ポータル）。GitHub Pages上で動く単一の静的サイトで、Google Apps Script（GAS）をバックエンドAPIとして使い、一部データはFirebase Realtime Databaseでリアルタイム同期しています。
 
