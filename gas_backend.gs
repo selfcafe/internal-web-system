@@ -422,6 +422,7 @@ function doGet(e) {
     else if (a === '_debugWaterStockMismatch') result = _debugWaterStockMismatch_(e.parameter.storeId, e.parameter.product);
     else if (a === 'getOrders')         result = getOrders();
     else if (a === 'getSettings')       result = getSettings();
+    else if (a === 'getStoreSettings')  result = getStoreSettings(e.parameter.storeId);
     else if (a === 'getLostItems')      result = getLostItems(e.parameter.month, e.parameter.storeId);
     else if (a === 'getChecksheetData') result = getChecksheetData(e.parameter.storeId);
     else if (a === 'getSteraStockEstimate') result = getSteraStockEstimate(e.parameter.storeId);
@@ -1147,7 +1148,38 @@ function getSettings() {
   return rows;
 }
 function _invalidateSettingsCache_() {
-  try { CacheService.getScriptCache().remove(SETTINGS_CACHE_KEY); } catch (e) {}
+  try {
+    const cache = CacheService.getScriptCache();
+    cache.remove(SETTINGS_CACHE_KEY);
+    // getStoreSettingsの店舗別キャッシュは店舗数分あり個別に消せないので、版番号を変えて無効にする
+    cache.put(SETTINGS_VERSION_KEY, String(Date.now()), 21600);
+  } catch (e) {}
+}
+
+// パートナー画面・ログイン画面用(2026-10-05、CLAUDE.md 7.1)。getSettingsと同じ行を返すが、
+// 店舗別の大きい設定は指定店舗の分だけに絞る。全店舗分(約122KB)はCacheServiceの1件100KB上限を
+// 超えてキャッシュできず毎回シートを読んでいたが、こちらは小さいので店舗ごとにキャッシュが効く。
+// 絞るキーはindex.htmlのSTORE_SCOPED_SETTING_KEYSと揃えること(端末側はこれらを丸ごと保存しない)。
+// ?action=getStoreSettings&storeId=... (storeId空=どの店舗の分も含めない、初めての端末のログイン画面用)
+const STORE_SCOPED_SETTING_KEYS = ['store_product_cfg', 'store_checksheet_cfg'];
+const SETTINGS_VERSION_KEY = 'settings_version';
+function getStoreSettings(storeId) {
+  const cache = CacheService.getScriptCache();
+  const ver = cache.get(SETTINGS_VERSION_KEY) || '0';
+  const cacheKey = 'store_settings_' + ver + '_' + (storeId || '');
+  const cached = cache.get(cacheKey);
+  if (cached) { try { return JSON.parse(cached); } catch (e) {} }
+  const rows = getSettings().map(r => {
+    if (STORE_SCOPED_SETTING_KEYS.indexOf(r.key) < 0) return r;
+    let all;
+    try { all = JSON.parse(r.value); } catch (e) { return r; }
+    if (!all || typeof all !== 'object' || Array.isArray(all)) return r;
+    const scoped = {};
+    if (storeId && all[storeId] !== undefined) scoped[storeId] = all[storeId];
+    return { key: r.key, value: JSON.stringify(scoped) };
+  });
+  try { cache.put(cacheKey, JSON.stringify(rows), 60); } catch (e) {}
+  return rows;
 }
 
 function saveSetting(key, value) {
