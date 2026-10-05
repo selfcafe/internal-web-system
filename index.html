@@ -8318,7 +8318,7 @@ function renderSettings() {
 
         <div style="margin-bottom:18px;padding-bottom:18px;border-bottom:1px solid #e0ede5">
           <div style="font-weight:700;font-size:13px;color:#22703d;margin-bottom:8px">発注基準値設定(月初発注)</div>
-          <div style="font-size:11.5px;color:#888;margin-bottom:8px">棚卸完了時、ここで基準値(目標在庫数)を設定した商品だけ発注数(基準値−期末在庫)を自動算出します。空欄の商品は対象外です(従来通り随時発注のみ)。</div>
+          <div style="font-size:11.5px;color:#888;margin-bottom:8px">棚卸完了時、ここで基準値(目標在庫数)を設定した商品だけ発注数(基準値−期末在庫)を自動算出します。<b>基準値は個数(棚卸で数える単位)で入力してください。ケース数ではありません。</b>ケースで届く商品はケース単位に丸めて発注します。空欄の商品は対象外です(従来通り随時発注のみ)。</div>
           <div id="reorder-target-cfg-body"></div>
           <div style="margin-top:10px;display:flex;gap:8px">
             <button onclick="saveReorderTargetCfg()"
@@ -8774,7 +8774,7 @@ function renderReorderTargetCfg() {
       items.map(p => `<label style="display:flex;align-items:center;gap:6px">
           <span style="flex:1">${esc(p.label||p.name)}</span>
           <input type="number" min="0" step="1" data-reorder-code="${esc(p.code)}" value="${targets[p.code] !== undefined ? esc(String(targets[p.code])) : ''}"
-            placeholder="未設定" style="width:70px;border:1px solid #ddd;border-radius:6px;padding:4px 6px;font-size:13px;font-family:inherit">
+            placeholder="未設定" style="width:70px;border:1px solid #ddd;border-radius:6px;padding:4px 6px;font-size:13px;font-family:inherit"><span style="font-size:12px;color:#555">個</span>
         </label>`).join('') +
       `</div>`;
   }).join('') || '<div style="font-size:12px;color:#888">対象の商品がありません(仕入先がapex/toyoの商品のみ対象)</div>';
