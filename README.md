@@ -1,5 +1,7 @@
 # internal-web-system
 
+> **引き継ぎを受けた方へ**: まず [HANDOVER.md](HANDOVER.md)(引継ぎ書・未完成部分の一覧)を読んでください。
+
 セルフカフェの社内ポータル（パートナー用ポータル／管理者用ポータル）。GitHub Pages上で動く単一の静的サイトで、Google Apps Script（GAS）をバックエンドAPIとして使い、一部データはFirebase Realtime Databaseでリアルタイム同期しています。
 
 - 公開URL: https://selfcafe.github.io/internal-web-system/
@@ -33,8 +35,8 @@
 
 - **Apps Scriptプロジェクト**: https://script.google.com/u/1/home/projects/1J5qtNKPyXt3L7wmX6MMmAD33t1LQF5hBaDfjG2mghCinlc4h4xwagxP2/edit （selfcafe001@gmail.comアカウントでログインすると閲覧可能。実行数ログもここから確認する）
 - **`index.html`など静的ファイル**: `main`ブランチへのpushでGitHub Pagesが自動反映（数分以内）。
-- **`gas_backend.gs`**: 自動デプロイされない。変更後は必ず、Google Apps Scriptエディタにコードを貼り付けて「デプロイ→デプロイを管理→新しいバージョン」で手動デプロイする必要がある。
-  - リポジトリ内の`SHEET_ID`・`IMAGE_FOLDER_ID`等はダミー値（伏せ字）になっているため、Apps Scriptエディタに貼り付けた後は本番の実値に戻すこと。
+- **`gas_backend.gs`**: pushだけでは反映されない。`gh workflow run deploy-gas.yml --repo selfcafe/internal-web-system --ref main`(GitHub Actions、実IDはSecretsから自動で入る)で本番へ反映する。手順・緊急時の手動claspは[CLAUDE.md](CLAUDE.md) 1章。
+  - リポジトリ内の`SHEET_ID`等が空欄なのは公開リポジトリのため(意図的)。実値をコミットしないこと。
 - データの実体はFirebase Realtime Database（ライブ同期用ping）とGoogle スプレッドシート（実データ）。Firebaseのセキュリティルールはこのリポジトリには含まれておらず、Firebaseコンソール側でのみ管理されている。
 
 ## ローカルでの動作確認
