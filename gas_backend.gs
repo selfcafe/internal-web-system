@@ -419,6 +419,7 @@ function doGet(e) {
     if      (a === '_peekMainSheetTabByGid') result = _peekMainSheetTabByGid_(Number(e.parameter.gid), Number(e.parameter.rows) || 5);
     else if (a === '_listTriggers') result = _listTriggers_();
     else if (a === '_provisionDeliveryHistorySheet') result = _provisionDeliveryHistorySheet_();
+    else if (a === '_debugSteraSalesHistory') result = _debugSteraSalesHistory_(e.parameter.storeId, e.parameter.product, e.parameter.days);
     else if (a === '_debugWaterStockMismatch') result = _debugWaterStockMismatch_(e.parameter.storeId, e.parameter.product);
     else if (a === 'getOrders')         result = getOrders();
     else if (a === 'getSettings')       result = getSettings();
@@ -5477,6 +5478,48 @@ function checkWaterStockMismatch(storeId, product) {
 // 直感と合わないという指摘があり、原因の切り分けに内部状態(sinceDate判定・carryOver・range内訳・
 // 当日速報の各値)を1回で見られる手段が無かったため追加した。GETの読み取り専用アクションなので
 // 何度呼んでも本番データに影響しない。?action=_debugWaterStockMismatch&storeId=...&product=... で実行。
+// 2026-10-05追加: 店舗のステラ実売上が「そもそも取り込まれているか」を調べる調査専用関数(読み取りのみ)。
+// 千種で「補充24／ステラ実売上0」の通知が出た件の切り分け用。_debugWaterStockMismatch_は直近の
+// 比較期間しか見ないため、長い期間の日ごとの売上・補充入力と、同じエリアの他店舗の売上日数を並べて返す。
+// ?action=_debugSteraSalesHistory&storeId=...&product=水&days=60 で実行。
+function _debugSteraSalesHistory_(storeId, product, days) {
+  if (!storeId || !product) return { error: 'storeId/productは必須です' };
+  const group = STERA_SALES_MAPPING.find(m => m.ourProducts.indexOf(product) >= 0);
+  if (!group) return { ok: true, skipped: 'not_tracked' };
+  const n = Math.min(Number(days) || 60, 180);
+  const from = Utilities.formatDate(new Date(Date.now() - n * 86400000), _invSheetTz(), 'yyyy-MM-dd');
+  const rows = sheetRows(getSteraDailySheet_(), STERA_DAILY_COLS)
+    .filter(r => String(r.prd_id) === String(group.prdId) && String(r.date) >= from);
+  const salesByDay = {};
+  rows.filter(r => String(r.store_id) === String(storeId))
+    .forEach(r => { salesByDay[r.date] = (salesByDay[r.date] || 0) + (Number(r.qty) || 0); });
+  const area = Object.keys(AREA_STORES).find(a => AREA_STORES[a].indexOf(storeId) >= 0);
+  const areaSaleDays = {};
+  (AREA_STORES[area] || []).forEach(id => { areaSaleDays[id] = 0; });
+  const seen = {};
+  rows.forEach(r => {
+    if (!(r.store_id in areaSaleDays)) return;
+    const k = r.store_id + '|' + r.date;
+    if (!seen[k]) { seen[k] = true; areaSaleDays[r.store_id]++; }
+  });
+  const inputByDay = {};
+  getChecksheetData(storeId).forEach(p => Object.keys(p.data || {}).forEach(dayKey => {
+    if (dayKey < from) return;
+    group.ourProducts.forEach(name => {
+      const v = p.data[dayKey]['prod:' + name];
+      if (v !== undefined && v !== '' && v !== null) inputByDay[dayKey] = (inputByDay[dayKey] || 0) + (Number(v) || 0);
+    });
+  }));
+  const latestDate = rows.reduce((m, r) => (String(r.date) > m ? String(r.date) : m), '');
+  return {
+    ok: true, storeId, product, prdId: group.prdId, from, latestImportedDate: latestDate,
+    salesByDay, salesTotal: Object.values(salesByDay).reduce((a, b) => a + b, 0),
+    inputByDay, inputTotal: Object.values(inputByDay).reduce((a, b) => a + b, 0),
+    area, areaSaleDays,
+    excluded: WATER_STOCK_MISMATCH_EXCLUDED_STORES.indexOf(storeId) >= 0,
+  };
+}
+
 function _debugWaterStockMismatch_(storeId, product) {
   if (!storeId || !product) return { error: 'storeId/productは必須です' };
   const group = STERA_SALES_MAPPING.find(m => m.ourProducts.indexOf(product) >= 0);
