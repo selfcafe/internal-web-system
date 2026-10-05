@@ -453,6 +453,7 @@ function doGet(e) {
     else if (a === 'relocateCaseSizeColumnAndDropExtraColumns') result = relocateCaseSizeColumnAndDropExtraColumns();
     else if (a === 'ensureReorderRulesSheet') result = ensureReorderRulesSheet_();
     else if (a === 'rebuildReorderRulesSheet') result = rebuildReorderRulesSheet_();
+    else if (a === 'protectAllStoreInventorySheets') result = protectAllStoreInventorySheets();
     else if (a === 'updateReorderRulesQFormulaNote') result = updateReorderRulesQFormulaNote();
     else if (a === 'fixReorderRulesColumnLetters') result = fixReorderRulesColumnLetters();
     else if (a === 'pruneBlankStoreInventoryRows') result = pruneBlankStoreInventoryRows(e.parameter.storeId);
@@ -3955,8 +3956,54 @@ function buildStoreInventorySheet(storeId, periodLabel) {
   // 既存の他期間ブロックは配色ルール変更前に書かれた行でも、そのブロックが次回再構築される時に
   // 揃う(過去ブロックを毎回全部塗り直すコストは避ける)
   _applyStoreInventoryColColors_(sheet, startRow, outRows.length);
+  _protectStoreInventorySourceCols_(sheet);
 
   return { ok: true, store: sheetName, period: periodLabel, rows: outRows.length };
+}
+
+// 店舗タブのうち「元データからコピーしているだけの値の列」(2026-10-05、ユーザー指示)。
+// ここを店舗タブ上で直しても、次にbuildStoreInventorySheetで作り直すと元データの値で上書きされて
+// 戻ってしまうため、警告付き保護(setWarningOnly)をかけ、見出しのメモに正しい修正先を書いておく。
+// 消費量・差異・発注数・金額の列は数式なので対象外(参照先を直せば自動で再計算される)。
+const STORE_INV_SOURCE_COL_NOTES = {
+  open_stock: '元データ: inventory_log の期首在庫。修正は inventory_log 側で行い、店舗タブを作り直してください(このタブを直接直しても作り直すと元に戻ります)。',
+  end_stock: '元データ: inventory_log の期末在庫(棚卸で送られた数字)。修正は inventory_log 側で行い、店舗タブを作り直してください(このタブを直接直しても作り直すと元に戻ります)。',
+  delivery: '元データ: inventory_delivery_auto(「納品済み」ボタンの記録)の合計。修正は inventory_delivery_auto に補正行を追記し、inventory_log の当月納品・消費量も直してから、店舗タブを作り直してください。',
+  disposed_qty: '元データ: inventory_log の処分数量。修正は inventory_log 側で行い、店舗タブを作り直してください。',
+  daily_count: '元データ: inventory_log のデイリーカウント(棚卸送信時点のチェックシート合計)。修正は inventory_log 側で行い、店舗タブを作り直してください。',
+  reorder_target: '元データ: 管理者ポータルの「発注基準値設定(月初発注)」。修正はポータルで行い、店舗タブを作り直してください。',
+};
+const STORE_INV_PROTECTION_DESC = '自動作成の列(修正は元データで行う)';
+
+// 毎回の再構築で呼ばれるため、同じ説明の保護を一度外してから付け直す(重複して増えないように)。
+// 列全体を対象にするので、後から追加される期間ブロックの行も自動的に保護範囲に入る。
+// 警告のみ(setWarningOnly)なので、本当に直す必要がある人は確認ダイアログを経て編集できる。
+function _protectStoreInventorySourceCols_(sheet) {
+  sheet.getProtections(SpreadsheetApp.ProtectionType.RANGE)
+    .filter(p => p.getDescription() === STORE_INV_PROTECTION_DESC)
+    .forEach(p => p.remove());
+  Object.keys(STORE_INV_SOURCE_COL_NOTES).forEach(c => {
+    const col = STORE_INVENTORY_COLS.indexOf(c) + 1;
+    sheet.getRange(1, col).setNote(STORE_INV_SOURCE_COL_NOTES[c]);
+    sheet.getRange(1, col, sheet.getMaxRows(), 1).protect().setDescription(STORE_INV_PROTECTION_DESC).setWarningOnly(true);
+  });
+}
+
+// 既存の店舗タブすべてに上記の保護を一度だけかける(2026-10-05)。以降は棚卸のたびに
+// buildStoreInventorySheetが付け直すので、再実行は不要(何度実行しても安全)。
+// 店舗タブの判定は「見出し行がSTORE_INVENTORY_HEADERS_JAと一致するタブ」。
+// ?action=protectAllStoreInventorySheets で実行。
+function protectAllStoreInventorySheets() {
+  const ss = SpreadsheetApp.openById(INVENTORY_SHEET_ID);
+  const protectedTabs = [];
+  ss.getSheets().forEach(sheet => {
+    if (sheet.getLastColumn() < STORE_INVENTORY_HEADERS_JA.length) return;
+    const header = sheet.getRange(1, 1, 1, STORE_INVENTORY_HEADERS_JA.length).getValues()[0];
+    if (header.join('|') !== STORE_INVENTORY_HEADERS_JA.join('|')) return;
+    _protectStoreInventorySourceCols_(sheet);
+    protectedTabs.push(sheet.getName());
+  });
+  return { ok: true, count: protectedTabs.length, sheets: protectedTabs };
 }
 
 // 発注数ロジックのテストプレイ用シート(2026-09-05追加)。本番のinventory_log・店舗タブ

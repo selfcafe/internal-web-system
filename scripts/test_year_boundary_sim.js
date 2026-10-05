@@ -86,10 +86,20 @@ class Range {
   setFontColor() { return this; }
   setFormula() { return this; }
   merge() { return this; }
+  setNote() { return this; }
+  // 警告付き保護(_protectStoreInventorySourceCols_)。計算結果には影響しないので記録だけする
+  protect() {
+    const p = { desc: '', setDescription(d) { this.desc = d; return this; }, getDescription() { return this.desc; },
+      setWarningOnly() { return this; }, remove: () => { this.sheet.protections = this.sheet.protections.filter(x => x !== p); } };
+    this.sheet.protections.push(p);
+    return p;
+  }
 }
 class Sheet {
-  constructor(name) { this.name = name; this.rows = []; }
+  constructor(name) { this.name = name; this.rows = []; this.protections = []; }
   getName() { return this.name; }
+  getMaxRows() { return Math.max(this.rows.length, 1000); }
+  getProtections() { return this.protections.slice(); }
   getLastRow() { return this.rows.length; }
   getLastColumn() { return this.rows.reduce((m, r) => Math.max(m, r.length), 0); }
   getDataRange() { return new Range(this, 1, 1, this.rows.length, this.getLastColumn()); }
@@ -118,6 +128,7 @@ class Spreadsheet {
 const FILES = {};
 const openByIdCounts = {}; // ファイルIDごとの実際のopenById呼び出し回数(無駄な読み取りが無いか検証用)
 const SpreadsheetApp = {
+  ProtectionType: { RANGE: 'RANGE', SHEET: 'SHEET' },
   openById(id) {
     openByIdCounts[id] = (openByIdCounts[id] || 0) + 1;
     if (!FILES[id]) FILES[id] = new Spreadsheet(id);
