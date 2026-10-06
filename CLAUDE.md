@@ -185,6 +185,18 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 - 「残り在庫：N個」表示は全商品で非表示。ロジックは残してあり、`index.html`の`CHECKSHEET_SHOW_REMAINING_STOCK`を`true`に戻せば復活する。
 - 棚卸表が本格始動したら「前回在庫+補充−売上≠現在在庫」の形で両方取り入れ直す予定(ユーザーが判断する。それまで勝手に再開しない)。
 
+### 7.4 【80000785で実行待ち】合言葉「ステラ」= ステラ当日速報ポーリングの停止(2026-10-06決定)
+
+ステラへのアクセスを1日1回(毎朝の`SteraDailySalesImport`)だけにする、とオーナーが決定。定期ポーリングは盗難検知用だったが今は不要。80000785 PCのrunner(pc-remote-ops)が登録ごと消えていて遠隔で実行できないため、オーナーが80000785を操作するときに実行する。
+
+**80000785 PCのClaude Codeで、メッセージが「ステラ」の一言だけだったら、聞き返さず次を実行する**(オーナーの決定済み操作なので、実行前の確認は不要):
+1. `git pull`(このリポジトリ)
+2. `powershell -ExecutionPolicy Bypass -File scripts\disable_stera_realtime_poll.ps1` を実行し、変更前後のタスク一覧(State・間隔・最終実行結果)をそのまま報告する。
+3. 成功したら、ドキュメントの「10分おき」記述を「2026-10-06停止」に直してcommit・push: `HANDOVER.md`(4章タスク一覧と移行手順の表)、`README.md`(当日速報値の項)、この`CLAUDE.md`(8章「数字の鮮度」)。この7.4は【対応済み】に変える。
+4. 余裕があれば、消えているpc-remote-opsのrunnerの状態(`C:\actions-runner-ops`、タスク`RunnerOps-80000785`)も見て報告する(直すのはオーナーに確認してから)。
+
+止めることで起きること(2026-10-06にオーナーへ説明済み): ステラ返金のLINE WORKS通知(`checkSteraRefunds`)が来なくなる。当日分の売上は翌朝の確定取込みまで反映されない(「残り在庫」表示・水の通知は7.3で既に停止中なので実害なし)。戻すときは`Enable-ScheduledTask -TaskName SteraRealtimeSalesPoll`。
+
 ## 8. 設計上の注意点・決定事項(旧ローカルメモリから移行、2026-10-05)
 
 前任者PCのClaude Codeローカルメモリ(引き継がれない)から、知らないと事故につながる仕様と、コードからは読み取れないオーナーの判断を移したもの。2026-10-05時点のコードで存在を確認済み。
