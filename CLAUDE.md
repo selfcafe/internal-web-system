@@ -71,7 +71,7 @@ GitHub Secretsの値自体は招待した相手からは見えない(上書き�
 1. `selfcafe001@gmail.com`自体のログイン情報(パスワード・2段階認証)——Apps Scriptプロジェクト・各スプレッドシートの実質的な所有者
 2. `SHEET_ID`/`INVENTORY_SHEET_ID`/`DELIVERY_HISTORY_SHEET_ID`が指す各Googleスプレッドシートの共有設定(誰が編集者になっているか個別確認)
 3. 画像保存用Driveフォルダ(`IMAGE_FOLDER_ID`、`gas_backend.gs`内で確認可能)
-4. **80000785 PC自体へのアクセス**(状態確認は`selfcafe/pc-remote-ops`のself-hosted runner経由、8章「外部PC・Bot・clasp」参照)——stera日次取込み・在庫差異検知Bot・ポータル監視Botがここで動いている。GitHub権限とは完全に別系統
+4. **80000785 PC自体へのアクセス**(遠隔での状態確認手段は無い、8章「外部PC・Bot・clasp」参照)——stera日次取込み・在庫差異検知Bot・ポータル監視Botがここで動いている。GitHub権限とは完全に別系統
 5. LINE WORKS Bot(在庫差異検知Bot「佐藤テスト」等)の管理者アカウント
 6. **`SECRETS_ADMIN_TOKEN`(5章)** — GitHub Secrets/Variablesを書き換えられる強い権限のトークン。手放す際はGitHub側で無効化(Revoke)すること
 
@@ -195,7 +195,7 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 3. 成功したら、ドキュメントの「10分おき」記述を「2026-10-06停止」に直してcommit・push: `HANDOVER.md`(4章タスク一覧と移行手順の表)、`README.md`(当日速報値の項)、この`CLAUDE.md`(8章「数字の鮮度」)。この7.4は【対応済み】に変える。
 4. 余裕があれば、消えているpc-remote-opsのrunnerの状態(`C:\actions-runner-ops`、タスク`RunnerOps-80000785`)も見て報告する(直すのはオーナーに確認してから)。
 
-**2026-10-06 23:3x、80000785で`SteraRealtimeSalesPoll`を無効化済み(State: Disabled、最終実行23:29は結果0で正常終了)。`SteraDailySalesImport`(毎朝6:03)はReadyのまま。** 手順4の確認結果: `selfcafe/pc-remote-ops`の登録runnerは0台、80000785上にも`C:ctions-runner-ops`フォルダ・`RunnerOps-80000785`タスクとも存在しない(丸ごと消えている)。直すかはオーナー判断待ち。以下は当時の手順の記録。
+**2026-10-06 23:3x、80000785で`SteraRealtimeSalesPoll`を無効化済み(State: Disabled、最終実行23:29は結果0で正常終了)。`SteraDailySalesImport`(毎朝6:03)はReadyのまま。** 手順4の確認結果: `selfcafe/pc-remote-ops`の登録runnerは0台、80000785上にも`C:\actions-runner-ops`フォルダ・`RunnerOps-80000785`タスクとも存在しない(丸ごと消えている)。遠隔で確認する必要は無いとオーナー判断(2026-10-06)、作り直さない。以下は当時の手順の記録。
 
 止めることで起きること(2026-10-06オーナー了承済み): ステラ返金のLINE WORKS通知(`checkSteraRefunds`)が来なくなる。当日分の売上は翌朝の確定取込みまで反映されない(「残り在庫」表示・水の通知は7.3で既に停止中なので実害なし)。戻すときは`Enable-ScheduledTask -TaskName SteraRealtimeSalesPoll`。
 
@@ -352,7 +352,7 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 ### 外部PC・Bot・clasp
 - **80000785 PC**(前任者PC):
   - 会社用の常時起動PCで、ステラ取り込み・ポータル監視(`InternalPortalHealthWatchdog`)を動かしている。
-  - 状態確認は`selfcafe/pc-remote-ops`のself-hosted runner経由だったが、2026-10-06時点でrunnerはPCからもGitHubからも消えていて遠隔確認できない(7.4。WinRMは未開通)。
+  - 遠隔での状態確認手段は無い(`selfcafe/pc-remote-ops`のrunnerは消えており、不要とオーナー判断で作り直さない。2026-10-06、7.4)。
 - **タスク登録スクリプト**: `scripts/register_*.ps1`と`run_*.cmd`は`C:\Users\80000785`とUserIdを決め打ちしている。別PCへ移すときは書き換えが必要。PythonはPATHでなくフルパスで指定する。
 - **Bot構成**:
   - 「社内ポータル通知」: 発注・業務開始・休み申請。
