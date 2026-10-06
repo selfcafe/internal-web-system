@@ -195,7 +195,7 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 3. 成功したら、ドキュメントの「10分おき」記述を「2026-10-06停止」に直してcommit・push: `HANDOVER.md`(4章タスク一覧と移行手順の表)、`README.md`(当日速報値の項)、この`CLAUDE.md`(8章「数字の鮮度」)。この7.4は【対応済み】に変える。
 4. 余裕があれば、消えているpc-remote-opsのrunnerの状態(`C:\actions-runner-ops`、タスク`RunnerOps-80000785`)も見て報告する(直すのはオーナーに確認してから)。
 
-止めることで起きること(2026-10-06にオーナーへ説明済み): ステラ返金のLINE WORKS通知(`checkSteraRefunds`)が来なくなる。当日分の売上は翌朝の確定取込みまで反映されない(「残り在庫」表示・水の通知は7.3で既に停止中なので実害なし)。戻すときは`Enable-ScheduledTask -TaskName SteraRealtimeSalesPoll`。
+止めることで起きること(2026-10-06オーナー了承済み): ステラ返金のLINE WORKS通知(`checkSteraRefunds`)が来なくなる。当日分の売上は翌朝の確定取込みまで反映されない(「残り在庫」表示・水の通知は7.3で既に停止中なので実害なし)。戻すときは`Enable-ScheduledTask -TaskName SteraRealtimeSalesPoll`。
 
 ## 8. 設計上の注意点・決定事項(旧ローカルメモリから移行、2026-10-05)
 
