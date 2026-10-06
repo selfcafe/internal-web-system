@@ -185,7 +185,7 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 - 「残り在庫：N個」表示は全商品で非表示。ロジックは残してあり、`index.html`の`CHECKSHEET_SHOW_REMAINING_STOCK`を`true`に戻せば復活する。
 - 棚卸表が本格始動したら「前回在庫+補充−売上≠現在在庫」の形で両方取り入れ直す予定(ユーザーが判断する。それまで勝手に再開しない)。
 
-### 7.4 【80000785で実行待ち】合言葉「ステラ」= ステラ当日速報ポーリングの停止(2026-10-06決定)
+### 7.4 【対応済み 2026-10-06】合言葉「ステラ」= ステラ当日速報ポーリングの停止
 
 ステラへのアクセスを1日1回(毎朝の`SteraDailySalesImport`)だけにする、とオーナーが決定。定期ポーリングは盗難検知用だったが今は不要。80000785 PCのrunner(pc-remote-ops)が登録ごと消えていて遠隔で実行できないため、オーナーが80000785を操作するときに実行する。
 
@@ -194,6 +194,8 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 2. `powershell -ExecutionPolicy Bypass -File scripts\disable_stera_realtime_poll.ps1` を実行し、変更前後のタスク一覧(State・間隔・最終実行結果)をそのまま報告する。
 3. 成功したら、ドキュメントの「10分おき」記述を「2026-10-06停止」に直してcommit・push: `HANDOVER.md`(4章タスク一覧と移行手順の表)、`README.md`(当日速報値の項)、この`CLAUDE.md`(8章「数字の鮮度」)。この7.4は【対応済み】に変える。
 4. 余裕があれば、消えているpc-remote-opsのrunnerの状態(`C:\actions-runner-ops`、タスク`RunnerOps-80000785`)も見て報告する(直すのはオーナーに確認してから)。
+
+**2026-10-06 23:3x、80000785で`SteraRealtimeSalesPoll`を無効化済み(State: Disabled、最終実行23:29は結果0で正常終了)。`SteraDailySalesImport`(毎朝6:03)はReadyのまま。** 手順4の確認結果: `selfcafe/pc-remote-ops`の登録runnerは0台、80000785上にも`C:ctions-runner-ops`フォルダ・`RunnerOps-80000785`タスクとも存在しない(丸ごと消えている)。直すかはオーナー判断待ち。以下は当時の手順の記録。
 
 止めることで起きること(2026-10-06オーナー了承済み): ステラ返金のLINE WORKS通知(`checkSteraRefunds`)が来なくなる。当日分の売上は翌朝の確定取込みまで反映されない(「残り在庫」表示・水の通知は7.3で既に停止中なので実害なし)。戻すときは`Enable-ScheduledTask -TaskName SteraRealtimeSalesPoll`。
 
@@ -288,8 +290,8 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
   - 店舗名の表記ゆれは、正規化ロジックではなく`stores.js`側をステラの表記に合わせる方針。
   - 別事業の店舗名が`unmatchedStores`に出るのは正常。
 - **数字の鮮度**:
-  - 確定値は翌朝のCSV取り込み、当日分は10分おきの速報(非公式API、`stera_realtime_today`)。営業日はAM4:30締め。
-  - 80000785 PCが止まると、当日分と確定分の両方が止まる。
+  - 確定値は翌朝のCSV取り込み。当日分の10分おきの速報(非公式API、`stera_realtime_today`)は2026-10-06に停止したので、当日分は翌朝まで反映されない(7.4)。営業日はAM4:30締め。
+  - 80000785 PCが止まると、確定分の取り込みが止まる。
   - ステラ管理画面の数字と合わないと言われたら、まずこの点を疑う。
 - **水の判定**: 差が絶対3個以上かつ30%以上で、1回の検知で即通知する設計(監視カメラ映像の保存期間が約7日のため)。**2026-10-05から送信は停止中**(7.3参照)。
   - 誤検知を疑ったら、その店舗がステラ上で個別公開されていない「水だけ」店舗(除外リスト)ではないかを先に確認する。
@@ -350,7 +352,7 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 ### 外部PC・Bot・clasp
 - **80000785 PC**(前任者PC):
   - 会社用の常時起動PCで、ステラ取り込み・ポータル監視(`InternalPortalHealthWatchdog`)を動かしている。
-  - 状態確認は`selfcafe/pc-remote-ops`のself-hosted runner経由(2026-09-27時点。WinRMは未開通)。
+  - 状態確認は`selfcafe/pc-remote-ops`のself-hosted runner経由だったが、2026-10-06時点でrunnerはPCからもGitHubからも消えていて遠隔確認できない(7.4。WinRMは未開通)。
 - **タスク登録スクリプト**: `scripts/register_*.ps1`と`run_*.cmd`は`C:\Users\80000785`とUserIdを決め打ちしている。別PCへ移すときは書き換えが必要。PythonはPATHでなくフルパスで指定する。
 - **Bot構成**:
   - 「社内ポータル通知」: 発注・業務開始・休み申請。

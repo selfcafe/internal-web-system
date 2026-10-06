@@ -82,8 +82,8 @@ python -m http.server <高めのランダムポート>
 - **月次バックストップ**(`buildStockCheckMonthly`): 棚卸完了時に、消費量とステラ月間売上数量を店舗タブ上で全対象商品分突き合わせる。通知はなし(店舗タブに書き込むだけ、管理者が手動で確認・記入する運用)。パートナーがステラ取り扱い商品に一切触れなくても月1回は必ずカバーする安全網。
 - **売上データの取得タイミング**:
   - 確定分: 毎朝、Windowsタスクスケジューラ`SteraDailySalesImport`がプリセット「過去3日」で直近数日分のステラ注文詳細CSVをまとめて取得し、各行の実タイムスタンプから営業日を判定して`stera_daily_sales`シートへ反映(`importSteraDailySalesBulk`)。暦日1日分だけでなく複数日分を取得するのは、営業日の境界(AM4:30)が暦日をまたぐため。
-  - 当日速報値: `SteraRealtimeSalesPoll`タスクが**10分おき・24時間365日**、ステラ管理画面の内部集計API(非公式)をポーリング(`stera_realtime_today`シート)。
-  - 日付が変わる瞬間、削除される直前の前日最終ポーリング値を確定分シートへ速報値として書き込む(`_seedSteraDailyFromRealtimeRollover_`)。これにより「確定CSV取込み待ち」の空白は最大約6時間→最大10分に短縮される(2026-08-25)。
+  - 当日速報値: **2026-10-06停止**(ステラへのアクセスを毎朝1回にするため`SteraRealtimeSalesPoll`タスクを無効化)。以前は10分おきにステラ管理画面の内部集計API(非公式)をポーリングしていた(`stera_realtime_today`シート)。戻すときは`Enable-ScheduledTask -TaskName SteraRealtimeSalesPoll`。
+  - (停止中は無効)日付が変わる瞬間、削除される直前の前日最終ポーリング値を確定分シートへ速報値として書き込む(`_seedSteraDailyFromRealtimeRollover_`)。
 - ポーリング・CSV取込みスクリプト本体(`scripts/poll_stera_realtime_sales.py`・`scripts/import_stera_daily_sales.py`・`scripts/backfill_stera_daily_sales_amount.py`)はこのPC上のタスクスケジューラでのみ動作する(GitHub Actionsではない。e-MOSS/ステラ管理画面がクラウドIPをブロックするkaihipayパイプラインと同様の理由)。
 
 ## 開発フロー

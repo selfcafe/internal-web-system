@@ -99,7 +99,7 @@ URLがすでにコード内で公開されているもの:
 | 〃 | `sendNewStoreCheckNotification` | 新規店舗の確認通知 |
 | Apps Script(編集トリガー) | `onBugReportSheetEdit` | バグ報告シートでの返信・ステータス変更 |
 | 前任者PC(タスクスケジューラ) | `SteraDailySalesImport` | 毎朝、ステラの注文詳細CSV(直近3日)を取り込み |
-| 〃 | `SteraRealtimeSalesPoll` | 10分おき・24時間、ステラの当日売上を取得 |
+| 〃 | `SteraRealtimeSalesPoll` | **2026-10-06停止(無効化)**。以前は10分おきにステラの当日売上を取得していた |
 | 〃 | `InternalPortalHealthWatchdog` | 10分おきにポータルの死活監視。認可切れなら自動で再認可を試み、LINE WORKSへ通知 |
 | GitHub Actions(手動実行) | `deploy-gas.yml` / `rollover-inventory-year.yml` / `stera-daily-import.yml` / `stera-cloud-login-diagnose.yml` | デプロイ・年次切り替え・ステラ取り込みの手動再実行・クラウドログイン診断 |
 | Claude Code定期実行 | 毎年1/1 00:15 | 棚卸集計スプレッドシートの年次切り替え(次回 2027-01-01) |
@@ -119,7 +119,7 @@ URLがすでにコード内で公開されているもの:
 **なぜPCが必要なのか**
 - 社内ポータルのほとんどはクラウド(GitHub Pages・Apps Script・スプレッドシート)だけで動いていて、PCは要りません。
 - 例外が**ステラ(決済端末)の売上データ**です。商品別・店舗別の売上数量は、ステラの管理画面にログインして「注文詳細CSV」をダウンロードしないと取り出せません。
-  - これを、PC上のブラウザを自動で操作して毎朝・10分おきに行っています。
+  - これを、PC上のブラウザを自動で操作して毎朝1回行っています(10分おきの当日速報は2026-10-06に停止)。
   - クラウド(GitHub Actions等)から同じことをすると、ステラ管理画面がreCAPTCHA(ロボット判定)で弾きます。そのため、会社や家庭の回線につながった実物のPCが必要になっています。
   - ステラには公式APIもありますが、「1件いくらの決済か」しか返さず、**どの商品が何個売れたかは取れません**。だから代わりになりません。
 - 前任者PCでは、ポータルの死活監視(認可切れの検知・自動再認可)も動いています。
@@ -134,7 +134,7 @@ URLがすでにコード内で公開されているもの:
 2. **商品別の数量が取れるAPIを入手して、PCなしにする**: ステラ(カード会社)に、商品別・店舗別の売上数量が取れるAPIの提供を依頼します。入手できれば、GitHub Actionsだけで動かせる見込みです。
    - 前任者がカード会社の担当者に問い合わせていましたが、結果は未確認です。
 
-対象のスクリプト: `scripts/import_stera_daily_sales.py`(毎朝の確定値)、`scripts/poll_stera_realtime_sales.py`(10分おきの当日速報)、`scripts/watchdog_portal_health.py`(死活監視)。
+対象のスクリプト: `scripts/import_stera_daily_sales.py`(毎朝の確定値)、`scripts/poll_stera_realtime_sales.py`(当日速報、2026-10-06停止)、`scripts/watchdog_portal_health.py`(死活監視)。
 
 ### 4-2. 【中】水の在庫差異通知(盗難疑い・売上超過の両方)とチェックシートの「残り在庫」表示を停止中
 
@@ -223,12 +223,12 @@ URLがすでにコード内で公開されているもの:
 
 ## 5. ステラ取り込み・死活監視を別のPCへ移す手順
 
-4-1で「別のPCへ移す」を選んだ場合の手順です。今は前任者PC(`80000785`)で次の3つのタスクが動いています。
+4-1で「別のPCへ移す」を選んだ場合の手順です。今は前任者PC(`80000785`)で次の2つのタスクが動いています(`SteraRealtimeSalesPoll`は2026-10-06に停止済みで、移す必要はありません)。
 
 | タスク名 | 間隔 | 中身 |
 |---|---|---|
 | `SteraDailySalesImport` | 毎朝6:03 | ステラの注文詳細CSV(直近3日)をダウンロードし、確定値として取り込む |
-| `SteraRealtimeSalesPoll` | 10分おき | ステラの当日売上(速報)を取り込む |
+| `SteraRealtimeSalesPoll` | 2026-10-06停止 | (移行不要)ステラの当日売上(速報)を取り込んでいた |
 | `InternalPortalHealthWatchdog` | 10分おき | ポータルの死活監視。認可切れなら自動で再認可し、LINE WORKSへ通知 |
 
 ### 用意するもの
@@ -250,7 +250,6 @@ URLがすでにコード内で公開されているもの:
 4. **初回だけ手で動かして、ログイン状態を作る**:
    - `python scripts/import_stera_daily_sales.py`を実行します。専用のChromeプロファイル(`.chrome_stera_profile/`)が作られ、ステラにログインします。確認画面が出たら手で通します。
    - `logs/`にエラーが無く、「GASへの取込み結果: {'ok': True …}」と出れば成功です。
-   - `python scripts/poll_stera_realtime_sales.py`も同じように1回動かします。
 5. **死活監視の自動再認可を用意する**: `scripts/auto_reauthorize_portal.py`は、`selfcafe001@gmail.com`でログイン済みの専用Chromeプロファイル(`.chrome_portal_admin_profile/`)を使います。
    - 新しいPCでこのプロファイルを作るには、`--user-data-dir`にこのフォルダを指定してChromeを起動し、Googleに一度ログインします。
    - 用意しなくても死活監視と通知は動きます。ただし自動再認可が失敗して、毎回手作業で直すことになります。
@@ -258,12 +257,11 @@ URLがすでにコード内で公開されているもの:
    - `scripts/register_stera_daily_import_task.ps1`、`scripts/register_stera_realtime_task.ps1`、`scripts/register_portal_watchdog_task.ps1`
    - `scripts/run_import_stera_daily_sales.cmd`、`scripts/run_watchdog_portal_health.cmd`、`scripts/run_poll_stera_realtime_sales.cmd`
    - `register_stera_realtime_task.ps1`には、さらに前のPC(`xxxun`)のパスが残っています。この書き換えはPC固有の内容なので、コミットせず手元だけで直します。
-7. **タスクを登録する**: PowerShellで3つの`register_*.ps1`を実行します。登録できたかは`Get-ScheduledTask -TaskName Stera*,InternalPortal*`で確認します。
-8. **前任者PCのタスクを止める**: 新しいPCで動くのを確かめてから、前任者PCの3タスクを無効にします(`Disable-ScheduledTask`)。二重に動くと、ステラへのログインが重なって失敗しやすくなります。同じPCにある`KaihipayRunnerWatchdog`は会費ペイ用なので、社内ポータルとは関係ありません。
+7. **タスクを登録する**: PowerShellで`register_stera_daily_import_task.ps1`と`register_portal_watchdog_task.ps1`を実行します(`register_stera_realtime_task.ps1`は停止済みのタスク用なので不要)。登録できたかは`Get-ScheduledTask -TaskName Stera*,InternalPortal*`で確認します。
+8. **前任者PCのタスクを止める**: 新しいPCで動くのを確かめてから、前任者PCの2タスクを無効にします(`Disable-ScheduledTask`)。二重に動くと、ステラへのログインが重なって失敗しやすくなります。同じPCにある`KaihipayRunnerWatchdog`は会費ペイ用なので、社内ポータルとは関係ありません。
 
 ### 動いているかの確認
 - 翌朝、`?action=_debugSteraSalesHistory&storeId=shibuya&product=水`をブラウザで開き、`latestImportedDate`が前日になっていれば、毎朝の取り込みは動いています。
-- 当日の速報は、棚卸集計スプレッドシートの`stera_realtime_today`タブの`updated_at`が10分おきに更新されていればOKです。
 - 各スクリプトのログは`scripts/logs/`にあります。タスクスケジューラのイベントログは無効になっているので、ログファイルを見てください。
 
 GitHub Actionsの`stera-daily-import.yml`(手動の再実行用)は、前任者PCをself-hosted runnerとして使っています。新しいPCでも使うなら、GitHubのリポジトリ設定 → Actions → Runnersから新しいPCをrunnerとして登録し直します。
