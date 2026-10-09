@@ -39,6 +39,7 @@
 |---|---|
 | `index.html` | アプリ本体（パートナー/管理者ポータル、全ロジック込み） |
 | `gas_backend.gs` | バックエンドAPI（Google Apps Script）。Google スプレッドシートを実データベースとして読み書きする |
+| `ARCHITECTURE.md` | 設計図（部品のつながり・画面の地図・設定データの持ち方・主な流れ）。引き継ぎ時に HANDOVER.md の次に読む |
 | `stores.js` | 店舗マスタ（店舗ID・店舗名など）。フロント用だが `gas_backend.gs` からも動的に取得して参照している |
 | `admin-guide.html` / `guide.html` | 管理者向け・パートナー向けの操作マニュアル |
 | `theft-detection-notes.md` | 在庫差異検知(盗難/ロス検知)機能の設計経緯・検討メモ。ルール自体の要約はこのREADMEの該当セクション参照 |

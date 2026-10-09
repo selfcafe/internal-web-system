@@ -504,6 +504,28 @@
     .store-prod-cfg-current { font-size:15px; font-weight:700; color:#155a28; background:#e4f3e6; border:1px solid #9fd4ab; border-radius:6px; padding:8px 12px; margin-top:8px; }
     .store-prod-cfg-current::before { content:"編集中の店舗　"; font-size:11px; font-weight:600; color:#4a8a5a; }
     .store-prod-cfg-list { margin-top:10px; }
+    /* 設定画面のページ分け（左メニュー＋パンくず、2026-10-09） */
+    .sp-crumb { font-size:12px; color:#888; margin-bottom:10px; display:flex; align-items:center; gap:6px; flex-wrap:wrap; }
+    .sp-crumb a { color:#22703d; cursor:pointer; text-decoration:underline; }
+    .sp-crumb b { color:#333; }
+    .sp-crumb-sep { color:#bbb; }
+    .sp-layout { display:flex; gap:14px; align-items:flex-start; }
+    .sp-nav { width:180px; flex-shrink:0; background:#fffffe; border:1px solid #e0ede5; border-radius:10px; padding:8px; position:sticky; top:8px; }
+    .sp-main { flex:1; min-width:0; }
+    .sp-group-btn, .sp-page-btn { display:block; width:100%; text-align:left; border:none; background:none; cursor:pointer; font-family:inherit; border-radius:6px; }
+    .sp-group-btn { font-size:13px; font-weight:700; color:#22703d; padding:8px 10px; }
+    .sp-group.active .sp-group-btn { background:#edf2d4; }
+    .sp-pages { margin:4px 0 6px; }
+    .sp-page-btn { font-size:13px; color:#555; padding:6px 10px 6px 20px; }
+    .sp-page-btn.active { color:#fff; background:#22703d; font-weight:600; }
+    @media (max-width: 720px) {
+      .sp-layout { flex-direction:column; gap:10px; }
+      .sp-nav { width:auto; position:static; display:flex; flex-wrap:wrap; gap:6px; }
+      .sp-group { display:contents; }
+      .sp-group-btn { width:auto; border:1px solid #cfe0d4; border-radius:999px; padding:6px 12px; }
+      .sp-pages { order:99; width:100%; display:flex; flex-wrap:wrap; gap:6px; margin:4px 0 0; padding-top:8px; border-top:1px dashed #e0ede5; }
+      .sp-page-btn { width:auto; border:1px solid #ddd; border-radius:999px; padding:5px 12px; }
+    }
     .machine-fold { margin-top:8px; }
     .machine-fold > summary { font-size:11px; font-weight:700; color:#888; background:#f2f2f2; padding:3px 8px; border-radius:4px; cursor:pointer; list-style:none; }
     .machine-fold > summary::-webkit-details-marker { display:none; }
@@ -7783,7 +7805,7 @@ function addCustomProduct() {
   msg.style.color='#22703d'; msg.textContent=`✓ 「${name}」を追加しました`;
   setTimeout(() => { if(msg) msg.textContent=''; }, 3000);
   const tbody = document.getElementById('prod-tbl-body');
-  if (tbody) tbody.innerHTML = buildProdRows(); else renderSettings();
+  if (tbody) tbody.innerHTML = buildProdRows();
 }
 
 function deleteProduct(name) {
@@ -8235,6 +8257,54 @@ function renderAttendanceAdmin() {
     `;
 }
 
+/* ===== 設定画面（2026-10-09、メニューごとのページに分割） =====
+   SETTINGS_MENU がメニューの唯一の定義。左メニュー・パンくず・ページ本体はすべてこの表から作る。
+   ページを足すときは、この表に1行足して build(HTML を返す関数)と、必要なら after(描画後の処理)を書く。
+   開いているページだけを作るので、以前(全カードを一度に作っていた)より軽い。
+   どのページを開いているかは sessionStorage に残す(再読み込みしても同じページに戻る)。
+   アドレス(#)は使わない: #admin がログイン画面の切り替えに使われているため(showPage/hashchange)。 */
+const SETTINGS_PAGE_KEY = 'settings_page';
+const SETTINGS_STORE_KEY = 'settings_store';
+const SETTINGS_MENU = [
+  { key:'storecfg', label:'店舗別設定', pages:[
+    { key:'machines',   label:'設置している機械', build:() => _spStoreCfg(_spMachinesBlock()) },
+    { key:'products',   label:'取扱商品',         build:() => _spStoreCfg(_spProductsBlock()) },
+    { key:'operation',  label:'運用方式',         build:() => _spStoreCfg(_spOperationBlock()) },
+    { key:'reorder',    label:'発注基準値',       build:() => _spStoreCfg(_spReorderBlock()) },
+    { key:'checksheet', label:'チェック項目',     build:() => _spStoreCfg(_spChecksheetCfgBlock()) },
+  ]},
+  { key:'store', label:'店舗', pages:[
+    { key:'add',    label:'店舗の追加',   build:_spStoreAdd },
+    { key:'region', label:'エリア',       build:_spStoreRegion },
+    { key:'pw',     label:'パスワード',   build:_spStorePw },
+  ]},
+  { key:'product', label:'商品・棚卸', pages:[
+    { key:'list',   label:'商品一覧',     build:_spProductList },
+    { key:'add',    label:'商品の追加',   build:_spProductAdd },
+    { key:'vendor', label:'仕入先',       build:_spVendor },
+  ]},
+  { key:'checksheet', label:'チェックシート', pages:[
+    { key:'list',     label:'項目一覧',   build:_spCsList },
+    { key:'add',      label:'項目の追加', build:_spCsAdd },
+    { key:'category', label:'カテゴリ',   build:_spCsCategory },
+  ]},
+];
+
+function _settingsCurrent() {
+  let saved = '';
+  try { saved = sessionStorage.getItem(SETTINGS_PAGE_KEY) || ''; } catch (e) {}
+  const [gk, pk] = saved.split('/');
+  const group = SETTINGS_MENU.find(g => g.key === gk) || SETTINGS_MENU[0];
+  const page = group.pages.find(p => p.key === pk) || group.pages[0];
+  return { group, page };
+}
+// 'storecfg/reorder' のようにページを指定して開く。グループだけ('storecfg')ならその最初のページ
+function openSettingsPage(path) {
+  try { sessionStorage.setItem(SETTINGS_PAGE_KEY, path); } catch (e) {}
+  renderSettings();
+  window.scrollTo(0, 0);
+}
+
 function renderSettings() {
   /* テーブルを隠して設定コンテナを表示 */
   document.querySelector('#page-admin .table-wrap').style.display = 'none';
@@ -8246,323 +8316,275 @@ function renderSettings() {
   const container = document.getElementById('settings-container');
   container.style.display = 'block';
 
+  const { group, page } = _settingsCurrent();
+  const nav = SETTINGS_MENU.map(g => `
+      <div class="sp-group${g === group ? ' active' : ''}">
+        <button class="sp-group-btn" onclick="openSettingsPage('${g.key}')">${esc(g.label)}</button>
+        ${g === group ? `<div class="sp-pages">${g.pages.map(p => `
+          <button class="sp-page-btn${p === page ? ' active' : ''}" onclick="openSettingsPage('${g.key}/${p.key}')">${esc(p.label)}</button>`).join('')}
+        </div>` : ''}
+      </div>`).join('');
+
   container.innerHTML = `
-    <!-- 店舗追加 -->
-    <div class="settings-card">
-      <div class="settings-card-title">店舗管理</div>
-
-      <!-- 新規追加 -->
-      <div style="font-weight:600;font-size:12px;color:#888;margin-bottom:8px">新規追加</div>
-      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
-        <input type="text" id="new-store-name" placeholder="店舗名"
-          style="border:1px solid #ddd;border-radius:6px;padding:8px 12px;font-size:14px;font-family:inherit;flex:1;min-width:130px">
-        <select id="new-store-region" style="border:1px solid #ddd;border-radius:6px;padding:8px 10px;font-size:14px;font-family:inherit">
-          <option value="tokai">東海</option>
-          <option value="kansai">関西</option>
-          <option value="kanto">関東</option>
-          <option value="kanto_self">関東セルフ</option>
-          <option value="fc">FC</option>
-          <option value="gyomu_itaku">業務委託</option>
-        </select>
-        <button onclick="addCustomStore()" style="background:#22703d;color:white;padding:9px 18px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">追加</button>
-      </div>
-      <div id="store-add-msg" style="font-size:12px;min-height:18px"></div>
-
-      <!-- エリア変更 -->
-      <div style="margin-top:18px">
-        <div class="settings-accordion-hdr" onclick="toggleStoreRegion()">
-          <span style="font-size:13px;font-weight:700">店舗のエリア変更</span>
-          <span id="store-region-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
+    <div class="sp-crumb">
+      <span>設定</span><span class="sp-crumb-sep">›</span>
+      <a onclick="openSettingsPage('${group.key}')">${esc(group.label)}</a><span class="sp-crumb-sep">›</span>
+      <b>${esc(page.label)}</b>
+    </div>
+    <div class="sp-layout">
+      <nav class="sp-nav">${nav}</nav>
+      <div class="sp-main">
+        <div class="settings-card">
+          <div class="settings-card-title">${esc(page.label)}</div>
+          ${page.build()}
         </div>
-        <div id="store-region-body" style="display:none;margin-top:10px;max-height:360px;overflow-y:auto">
-          <div id="store-region-content">${buildStoreRegionContent()}</div>
+      </div>
+    </div>`;
+
+  // 店舗別設定のページは、選んでいた店舗で中身を描く(どのページでも同じ店舗を引き継ぐ)
+  if (group.key === 'storecfg') {
+    const sel = document.getElementById('store-settings-sel');
+    let sid = '';
+    try { sid = sessionStorage.getItem(SETTINGS_STORE_KEY) || ''; } catch (e) {}
+    if (sel && [...sel.options].some(o => o.value === sid)) sel.value = sid;
+    if (sel) syncStoreSettingsSelection(sel.value);
+  }
+}
+
+/* --- 店舗別設定: 店舗の選択欄(各ページ共通) --- */
+// 各設定のrender/save関数が内部でstore-prod-cfg-sel等のvalueを読むため、非表示のselectも残し、
+// 可視のstore-settings-selとの同期だけ行う(syncStoreSettingsSelection参照)
+function _spStoreCfg(blockHtml) {
+  const opts = Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('');
+  return `
+    <div class="store-prod-cfg-wrap">
+      <input id="store-settings-search" type="text" placeholder="店舗名で検索..." oninput="filterStoreSettingsSelect()"
+        style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:100%;margin-bottom:6px;box-sizing:border-box">
+      <select id="store-settings-sel" class="store-prod-cfg-store-sel" onchange="syncStoreSettingsSelection(this.value)">${opts}</select>
+    </div>
+    <div id="store-settings-current" class="store-prod-cfg-current" style="margin-bottom:12px"></div>
+    <select id="store-prod-cfg-sel" style="display:none">${opts}</select>
+    <select id="store-operation-cfg-sel" style="display:none">${opts}</select>
+    <select id="reorder-target-cfg-sel" style="display:none">${opts}</select>
+    <select id="checksheet-cfg-sel" style="display:none">${opts}</select>
+    <div id="store-prod-cfg-current" class="store-prod-cfg-current" style="display:none"></div>
+    <div id="store-operation-cfg-current" class="store-prod-cfg-current" style="display:none"></div>
+    <div id="reorder-target-cfg-current" class="store-prod-cfg-current" style="display:none"></div>
+    <div id="checksheet-cfg-current" class="store-prod-cfg-current" style="display:none"></div>
+    ${blockHtml}`;
+}
+const _SP_BTN = 'background:#22703d;color:white;padding:8px 20px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit';
+const _SP_BTN_SUB = 'background:#e0e0e0;color:#555;padding:8px 16px;font-size:13px;border-radius:6px;border:none;cursor:pointer;font-family:inherit';
+const _SP_NOTE = 'font-size:11.5px;color:#888;margin-bottom:8px';
+const _SP_MSG = 'font-size:12px;color:#22703d;align-self:center;min-height:18px';
+
+function _spMachinesBlock() {
+  return `
+    <div style="${_SP_NOTE}">チェックの無い機械の商品は、「取扱商品」「発注基準値」のページでたたんで表示します(タップで開けます)。</div>
+    <div id="store-machines-cfg-body"></div>
+    <div style="margin-top:10px;display:flex;gap:8px">
+      <button onclick="saveStoreMachinesCfg()" style="${_SP_BTN}">保存</button>
+      <span id="store-machines-cfg-msg" style="${_SP_MSG}"></span>
+    </div>`;
+}
+function _spProductsBlock() {
+  return `
+    <div style="${_SP_NOTE}">店舗ごとに取り扱う商品を選択してください。未設定の場合は全商品が表示されます。</div>
+    <div id="store-prod-cfg-body"></div>
+    <div style="margin-top:10px;display:flex;gap:8px">
+      <button onclick="saveStoreProdCfg()" style="${_SP_BTN}">保存</button>
+      <button onclick="clearStoreProdCfg()" style="${_SP_BTN_SUB}">全商品に戻す</button>
+      <span id="store-prod-cfg-msg" style="${_SP_MSG}"></span>
+    </div>`;
+}
+function _spOperationBlock() {
+  return `
+    <div style="${_SP_NOTE}">セミオペ(パートナー管理)／フルオペ(メーカー管理)を設定してください。未設定の場合は「セミオペ」扱いになります。パートナー操作ガイドの機種別マニュアルの出し分けに使われます。</div>
+    <div id="store-operation-cfg-body"></div>
+    <div style="margin-top:10px;display:flex;gap:8px">
+      <button onclick="saveStoreOperationCfg()" style="${_SP_BTN}">保存</button>
+      <span id="store-operation-cfg-msg" style="${_SP_MSG}"></span>
+    </div>`;
+}
+function _spReorderBlock() {
+  return `
+    <div style="${_SP_NOTE}">棚卸完了時、ここで基準値(目標在庫数)を設定した商品だけ発注数(基準値−期末在庫)を自動算出します。<b>基準値は個数(棚卸で数える単位)で入力してください。ケース数ではありません。</b>ケースで届く商品はケース単位に丸めて発注します。空欄の商品は対象外です(従来通り随時発注のみ)。</div>
+    <div id="reorder-target-cfg-body"></div>
+    <div style="margin-top:10px;display:flex;gap:8px">
+      <button onclick="saveReorderTargetCfg()" style="${_SP_BTN}">保存</button>
+      <span id="reorder-target-cfg-msg" style="${_SP_MSG}"></span>
+    </div>`;
+}
+function _spChecksheetCfgBlock() {
+  return `
+    <div style="${_SP_NOTE}">店舗ごとに実施するチェックシートの清掃・メンテナンス項目を選択してください。未設定の場合は全項目が表示されます。商品の補充数量列は「取扱商品」ページの内容がそのまま使われます（ここでの設定は不要です）。</div>
+    <div id="checksheet-cfg-body"></div>
+    <div style="margin-top:10px;display:flex;gap:8px">
+      <button onclick="saveChecksheetCfg()" style="${_SP_BTN}">保存</button>
+      <button onclick="clearChecksheetCfg()" style="${_SP_BTN_SUB}">全項目に戻す</button>
+      <span id="checksheet-cfg-msg" style="${_SP_MSG}"></span>
+    </div>`;
+}
+
+/* --- 店舗 --- */
+function _spStoreAdd() {
+  return `
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:6px">
+      <input type="text" id="new-store-name" placeholder="店舗名"
+        style="border:1px solid #ddd;border-radius:6px;padding:8px 12px;font-size:14px;font-family:inherit;flex:1;min-width:130px">
+      <select id="new-store-region" style="border:1px solid #ddd;border-radius:6px;padding:8px 10px;font-size:14px;font-family:inherit">
+        <option value="tokai">東海</option>
+        <option value="kansai">関西</option>
+        <option value="kanto">関東</option>
+        <option value="kanto_self">関東セルフ</option>
+        <option value="fc">FC</option>
+        <option value="gyomu_itaku">業務委託</option>
+      </select>
+      <button onclick="addCustomStore()" style="background:#22703d;color:white;padding:9px 18px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">追加</button>
+    </div>
+    <div id="store-add-msg" style="font-size:12px;min-height:18px"></div>`;
+}
+function _spStoreRegion() {
+  return `<div id="store-region-content">${buildStoreRegionContent()}</div>`;
+}
+function _spStorePw() {
+  return `
+    <div style="font-size:12px;color:#888;margin-bottom:12px">各店舗の現在のパスワードを確認・変更できます。</div>
+    <div style="font-size:12px;color:#b45309;background:#fef9c3;border:1px solid #fde68a;border-radius:6px;padding:8px 12px;margin-bottom:12px;line-height:1.6">
+      ※パスワードを変更した直後は、ログイン画面の高速化のため各端末が古いパスワードのキャッシュを使うことがあり、
+      変更前のパスワードでも数十秒〜数分ほどログインできてしまう場合があります。変更後は少し時間をおいてからご利用ください。
+    </div>
+    <div id="store-pw-list">${buildStorePwList()}</div>
+    <div id="store-pw-msg" style="font-size:12px;margin-top:8px;min-height:18px;color:#22703d"></div>
+    <div style="margin-top:14px;padding-top:12px;border-top:1px solid #e0ede5">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <button onclick="syncAllStoreDataToGas()" style="background:#f0f4ff;color:#3b5bdb;border:1px solid #c5cff5;padding:7px 14px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;font-family:inherit;white-space:nowrap">サーバーに手動同期</button>
+        <span style="font-size:11px;color:#888">新規店舗が別端末でログインできない場合に押してください</span>
+      </div>
+      <div id="store-sync-msg" style="font-size:12px;margin-top:6px;min-height:16px"></div>
+    </div>`;
+}
+
+/* --- 商品・棚卸 --- */
+function _spProductList() {
+  return `
+    <div style="font-size:12px;color:#888;margin-bottom:12px">※ドリンク原料・水・ペーパータオルのみデイリーカウント対象</div>
+    <table class="settings-tbl">
+      <thead><tr>
+        <th style="width:44px"></th>
+        <th>商品名</th><th style="width:90px">単位</th>
+        <th style="width:110px">単価（円）</th><th>1ケースの入り数</th>
+        <th style="width:90px">ケース発注のみ</th>
+        <th style="width:130px">コード</th>
+        <th style="width:52px"></th>
+      </tr></thead>
+      <tbody id="prod-tbl-body">${buildProdRows()}</tbody>
+    </table>`;
+}
+function _spProductAdd() {
+  return `
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+      <input id="new-prod-name" placeholder="商品名（必須）"
+        style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;flex:1;min-width:120px">
+      <select id="new-prod-vendor"
+        style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit">
+        ${buildVendorSelect()}
+      </select>
+      <input id="new-prod-unit" placeholder="単位"
+        style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:70px">
+      <input id="new-prod-case" placeholder="1ケースの入り数"
+        style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:130px">
+      <input id="new-prod-code" placeholder="商品コード（任意）" inputmode="numeric"
+        style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:150px">
+      <input id="new-prod-price" placeholder="単価（任意）" inputmode="decimal"
+        style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:100px">
+      <button onclick="addCustomProduct()"
+        style="background:#22703d;color:white;padding:8px 16px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap">追加</button>
+    </div>
+    <div style="margin-top:8px;padding-top:8px;border-top:1px dashed #ddd">
+      <label style="font-size:12px;color:#555;display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="checkbox" id="new-prod-store-limit" onchange="toggleStorePickerUI('new-prod-store-limit-body', this.checked)">
+        特定の店舗だけに表示する（未チェックなら全店に表示されます）
+      </label>
+      <div id="new-prod-store-limit-body" style="display:none;margin-top:8px">
+        <input type="text" placeholder="店舗名で検索..." oninput="filterStorePickerCheckboxes('new-prod', this.value)"
+          style="border:1px solid #ddd;border-radius:6px;padding:6px 10px;font-size:12px;font-family:inherit;width:100%;margin-bottom:6px;box-sizing:border-box">
+        <div style="max-height:180px;overflow-y:auto;border:1px solid #eee;border-radius:6px;padding:8px 10px">
+          ${buildStorePickerCheckboxes('new-prod')}
         </div>
       </div>
     </div>
+    <div id="prod-add-msg" style="font-size:12px;margin-top:6px;min-height:18px"></div>`;
+}
+function _spVendor() {
+  return `
+    <div style="${_SP_NOTE}">商品の分類(仕入先ごとのグループ)です。名前の変更・並べ替え・追加・削除ができます。</div>
+    <div id="vendor-rows">${buildVendorRows()}</div>
+    <div style="display:flex;gap:6px;align-items:center;margin-top:8px">
+      <input id="new-vendor-name" placeholder="新しいカテゴリ名"
+        style="border:1px solid #ddd;border-radius:6px;padding:6px 10px;font-size:13px;font-family:inherit;flex:1">
+      <button onclick="addVendor()"
+        style="background:#22703d;color:white;padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap">追加</button>
+    </div>
+    <div id="vendor-msg" style="font-size:12px;margin-top:6px;min-height:18px;color:#22703d"></div>`;
+}
 
-    <!-- 店舗別設定（統合、2026-08-29）：取扱商品・運用方式・発注基準値・チェックシート項目を
-         1つの店舗セレクターでまとめて確認・変更できるようにした。各設定の裏側のロジック
-         (getStoreProductConfig等)は従来のまま変更していない。店舗名で検索できる可視の
-         セレクター(store-settings-sel)を操作すると、非表示の4つの旧セレクターの値を
-         同期させてから各設定のrender関数を呼ぶだけの薄いラッパー。 -->
-    <div class="settings-card">
-      <div class="settings-accordion-hdr" onclick="toggleStoreSettingsGroup()">
-        <span>店舗別設定</span>
-        <span id="store-settings-group-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
-      </div>
-      <div id="store-settings-group-body" style="display:none;margin-top:10px">
-        <div style="font-size:12px;color:#888;margin-bottom:12px">店舗を1つ選ぶと、その店舗の設定(取扱商品・運用方式・発注基準値・チェックシート項目)をまとめて確認・変更できます。</div>
-        <div class="store-prod-cfg-wrap">
-          <input id="store-settings-search" type="text" placeholder="店舗名で検索..." oninput="filterStoreSettingsSelect()"
-            style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:100%;margin-bottom:6px;box-sizing:border-box">
-          <select id="store-settings-sel" class="store-prod-cfg-store-sel" onchange="syncStoreSettingsSelection(this.value)">
-            ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}
-          </select>
-        </div>
-        <div id="store-settings-current" class="store-prod-cfg-current" style="margin-bottom:6px"></div>
-
-        <!-- 各設定のrender/save関数が内部でstore-prod-cfg-sel等のvalueを読むため、
-             非表示のまま残し、store-settings-selとの同期だけ行う（下のsyncStoreSettingsSelection参照）。 -->
-        <select id="store-prod-cfg-sel" style="display:none">${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}</select>
-        <select id="store-operation-cfg-sel" style="display:none">${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}</select>
-        <select id="reorder-target-cfg-sel" style="display:none">${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}</select>
-        <select id="checksheet-cfg-sel" style="display:none">${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}</select>
-        <div id="store-prod-cfg-current" class="store-prod-cfg-current" style="display:none"></div>
-        <div id="store-operation-cfg-current" class="store-prod-cfg-current" style="display:none"></div>
-        <div id="reorder-target-cfg-current" class="store-prod-cfg-current" style="display:none"></div>
-        <div id="checksheet-cfg-current" class="store-prod-cfg-current" style="display:none"></div>
-
-        <div style="margin-bottom:18px;padding-bottom:18px;border-bottom:1px solid #e0ede5">
-          <div style="font-weight:700;font-size:13px;color:#22703d;margin-bottom:8px">設置している機械</div>
-          <div style="font-size:11.5px;color:#888;margin-bottom:8px">チェックの無い機械の商品は、下の取扱商品設定・発注基準値設定でたたんで表示します(タップで開けます)。</div>
-          <div id="store-machines-cfg-body"></div>
-          <div style="margin-top:10px;display:flex;gap:8px">
-            <button onclick="saveStoreMachinesCfg()"
-              style="background:#22703d;color:white;padding:8px 20px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">保存</button>
-            <span id="store-machines-cfg-msg" style="font-size:12px;color:#22703d;align-self:center;min-height:18px"></span>
-          </div>
-        </div>
-
-        <div style="margin-bottom:18px;padding-bottom:18px;border-bottom:1px solid #e0ede5">
-          <div style="font-weight:700;font-size:13px;color:#22703d;margin-bottom:8px">取扱商品設定</div>
-          <div style="font-size:11.5px;color:#888;margin-bottom:8px">店舗ごとに取り扱う商品を選択してください。未設定の場合は全商品が表示されます。</div>
-          <div id="store-prod-cfg-body"></div>
-          <div style="margin-top:10px;display:flex;gap:8px">
-            <button onclick="saveStoreProdCfg()"
-              style="background:#22703d;color:white;padding:8px 20px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">保存</button>
-            <button onclick="clearStoreProdCfg()"
-              style="background:#e0e0e0;color:#555;padding:8px 16px;font-size:13px;border-radius:6px;border:none;cursor:pointer;font-family:inherit">全商品に戻す</button>
-            <span id="store-prod-cfg-msg" style="font-size:12px;color:#22703d;align-self:center;min-height:18px"></span>
-          </div>
-        </div>
-
-        <div style="margin-bottom:18px;padding-bottom:18px;border-bottom:1px solid #e0ede5">
-          <div style="font-weight:700;font-size:13px;color:#22703d;margin-bottom:8px">運用方式設定(セミオペ／フルオペ)</div>
-          <div style="font-size:11.5px;color:#888;margin-bottom:8px">セミオペ(パートナー管理)／フルオペ(メーカー管理)を設定してください。未設定の場合は「セミオペ」扱いになります。パートナー操作ガイドの機種別マニュアルの出し分けに使われます。</div>
-          <div id="store-operation-cfg-body"></div>
-          <div style="margin-top:10px;display:flex;gap:8px">
-            <button onclick="saveStoreOperationCfg()"
-              style="background:#22703d;color:white;padding:8px 20px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">保存</button>
-            <span id="store-operation-cfg-msg" style="font-size:12px;color:#22703d;align-self:center;min-height:18px"></span>
-          </div>
-        </div>
-
-        <div style="margin-bottom:18px;padding-bottom:18px;border-bottom:1px solid #e0ede5">
-          <div style="font-weight:700;font-size:13px;color:#22703d;margin-bottom:8px">発注基準値設定(月初発注)</div>
-          <div style="font-size:11.5px;color:#888;margin-bottom:8px">棚卸完了時、ここで基準値(目標在庫数)を設定した商品だけ発注数(基準値−期末在庫)を自動算出します。<b>基準値は個数(棚卸で数える単位)で入力してください。ケース数ではありません。</b>ケースで届く商品はケース単位に丸めて発注します。空欄の商品は対象外です(従来通り随時発注のみ)。</div>
-          <div id="reorder-target-cfg-body"></div>
-          <div style="margin-top:10px;display:flex;gap:8px">
-            <button onclick="saveReorderTargetCfg()"
-              style="background:#22703d;color:white;padding:8px 20px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">保存</button>
-            <span id="reorder-target-cfg-msg" style="font-size:12px;color:#22703d;align-self:center;min-height:18px"></span>
-          </div>
-        </div>
-
-        <div>
-          <div style="font-weight:700;font-size:13px;color:#22703d;margin-bottom:8px">チェックシート項目設定</div>
-          <div style="font-size:11.5px;color:#888;margin-bottom:8px">店舗ごとに実施するチェックシートの清掃・メンテナンス項目を選択してください。未設定の場合は全項目が表示されます。商品の補充数量列は上の「取扱商品設定」の内容がそのまま使われます（ここでの設定は不要です）。</div>
-          <div id="checksheet-cfg-body"></div>
-          <div style="margin-top:10px;display:flex;gap:8px">
-            <button onclick="saveChecksheetCfg()"
-              style="background:#22703d;color:white;padding:8px 20px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">保存</button>
-            <button onclick="clearChecksheetCfg()"
-              style="background:#e0e0e0;color:#555;padding:8px 16px;font-size:13px;border-radius:6px;border:none;cursor:pointer;font-family:inherit">全項目に戻す</button>
-            <span id="checksheet-cfg-msg" style="font-size:12px;color:#22703d;align-self:center;min-height:18px"></span>
-          </div>
+/* --- チェックシート --- */
+const _SP_CS_NOTE = `<div style="font-size:12px;color:#888;margin-bottom:10px">
+    「デイリーカウント」（数量）に表示される商品は「店舗別設定 › 取扱商品」と連動しているため、ここでは編集できません。ここで追加・編集できるのは「清掃・点検」の項目です。
+  </div>`;
+function _spCsList() {
+  return `${_SP_CS_NOTE}
+    <table class="settings-tbl">
+      <thead><tr>
+        <th style="width:44px"></th>
+        <th>項目名</th><th style="width:120px">カテゴリ</th><th style="width:100px">種別</th><th style="width:52px"></th>
+      </tr></thead>
+      <tbody id="cs-item-tbl-body">${buildChecksheetItemRows()}</tbody>
+    </table>`;
+}
+function _spCsAdd() {
+  return `${_SP_CS_NOTE}
+    <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+      <input id="new-cs-item-name" placeholder="項目名（必須）"
+        style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;flex:1;min-width:140px">
+      <select id="new-cs-item-category"
+        style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit">
+        ${CHECKSHEET_CATEGORIES.map(c => `<option value="${esc(c.key)}">${esc(c.label)}</option>`).join('')}
+      </select>
+      <select id="new-cs-item-type"
+        style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit">
+        <option value="check">チェック</option>
+        <option value="qty">数量</option>
+      </select>
+      <button onclick="addCustomChecksheetItem()"
+        style="background:#22703d;color:white;padding:8px 16px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap">追加</button>
+    </div>
+    <div style="margin-top:8px;padding-top:8px;border-top:1px dashed #ddd">
+      <label style="font-size:12px;color:#555;display:flex;align-items:center;gap:6px;cursor:pointer">
+        <input type="checkbox" id="new-cs-item-store-limit" onchange="toggleStorePickerUI('new-cs-item-store-limit-body', this.checked)">
+        特定の店舗だけに表示する（未チェックなら全店に表示されます）
+      </label>
+      <div id="new-cs-item-store-limit-body" style="display:none;margin-top:8px">
+        <input type="text" placeholder="店舗名で検索..." oninput="filterStorePickerCheckboxes('new-cs-item', this.value)"
+          style="border:1px solid #ddd;border-radius:6px;padding:6px 10px;font-size:12px;font-family:inherit;width:100%;margin-bottom:6px;box-sizing:border-box">
+        <div style="max-height:180px;overflow-y:auto;border:1px solid #eee;border-radius:6px;padding:8px 10px">
+          ${buildStorePickerCheckboxes('new-cs-item')}
         </div>
       </div>
     </div>
-
-    <!-- 商品・棚卸設定（グループ） -->
-    <div class="settings-card">
-      <div class="settings-accordion-hdr" onclick="toggleProductGroup()">
-        <span>商品・棚卸</span>
-        <span id="product-group-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
-      </div>
-      <div id="product-group-body" style="display:none;margin-top:10px">
-        <div style="font-size:12px;color:#888;margin-bottom:12px">※ドリンク原料・水・ペーパータオルのみデイリーカウント対象</div>
-
-        <!-- 商品設定 -->
-        <div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid #e0ede5">
-          <div class="settings-accordion-hdr" onclick="toggleProdSettings()">
-            <span>商品設定</span>
-            <span id="prod-settings-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
-          </div>
-          <div id="prod-settings-body" style="display:none">
-            <div class="settings-accordion-body">
-              <!-- 仕入先カテゴリ管理 -->
-              <div style="background:#fffef0;border-radius:8px;padding:12px 14px;margin-bottom:14px">
-                <div style="font-weight:600;font-size:12px;color:#888;margin-bottom:10px">仕入先カテゴリ管理</div>
-                <div id="vendor-rows">${buildVendorRows()}</div>
-                <div style="display:flex;gap:6px;align-items:center;margin-top:8px">
-                  <input id="new-vendor-name" placeholder="新しいカテゴリ名"
-                    style="border:1px solid #ddd;border-radius:6px;padding:6px 10px;font-size:13px;font-family:inherit;flex:1">
-                  <button onclick="addVendor()"
-                    style="background:#22703d;color:white;padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap">追加</button>
-                </div>
-                <div id="vendor-msg" style="font-size:12px;margin-top:6px;min-height:18px;color:#22703d"></div>
-              </div>
-              <!-- 商品追加フォーム -->
-              <div style="background:#fffef0;border-radius:8px;padding:12px 14px;margin-bottom:14px">
-                <div style="font-weight:600;font-size:12px;color:#888;margin-bottom:8px">商品を追加</div>
-                <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
-                  <input id="new-prod-name" placeholder="商品名（必須）"
-                    style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;flex:1;min-width:120px">
-                  <select id="new-prod-vendor"
-                    style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit">
-                    ${buildVendorSelect()}
-                  </select>
-                  <input id="new-prod-unit" placeholder="単位"
-                    style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:70px">
-                  <input id="new-prod-case" placeholder="1ケースの入り数"
-                    style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:130px">
-                  <input id="new-prod-code" placeholder="商品コード（任意）" inputmode="numeric"
-                    style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:150px">
-                  <input id="new-prod-price" placeholder="単価（任意）" inputmode="decimal"
-                    style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:100px">
-                  <button onclick="addCustomProduct()"
-                    style="background:#22703d;color:white;padding:8px 16px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap">追加</button>
-                </div>
-                <div style="margin-top:8px;padding-top:8px;border-top:1px dashed #ddd">
-                  <label style="font-size:12px;color:#555;display:flex;align-items:center;gap:6px;cursor:pointer">
-                    <input type="checkbox" id="new-prod-store-limit" onchange="toggleStorePickerUI('new-prod-store-limit-body', this.checked)">
-                    特定の店舗だけに表示する（未チェックなら全店に表示されます）
-                  </label>
-                  <div id="new-prod-store-limit-body" style="display:none;margin-top:8px">
-                    <input type="text" placeholder="店舗名で検索..." oninput="filterStorePickerCheckboxes('new-prod', this.value)"
-                      style="border:1px solid #ddd;border-radius:6px;padding:6px 10px;font-size:12px;font-family:inherit;width:100%;margin-bottom:6px;box-sizing:border-box">
-                    <div style="max-height:180px;overflow-y:auto;border:1px solid #eee;border-radius:6px;padding:8px 10px">
-                      ${buildStorePickerCheckboxes('new-prod')}
-                    </div>
-                  </div>
-                </div>
-                <div id="prod-add-msg" style="font-size:12px;margin-top:6px;min-height:18px"></div>
-              </div>
-              <!-- 商品一覧 -->
-              <table class="settings-tbl">
-                <thead><tr>
-                  <th style="width:44px"></th>
-                  <th>商品名</th><th style="width:90px">単位</th>
-                  <th style="width:110px">単価（円）</th><th>1ケースの入り数</th>
-                  <th style="width:90px">ケース発注のみ</th>
-                  <th style="width:130px">コード</th>
-                  <th style="width:52px"></th>
-                </tr></thead>
-                <tbody id="prod-tbl-body">${buildProdRows()}</tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-
-      </div>
+    <div id="cs-item-add-msg" style="font-size:12px;margin-top:6px;min-height:18px"></div>`;
+}
+function _spCsCategory() {
+  return `
+    <div id="cs-category-rows">${buildChecksheetCategoryRows()}</div>
+    <div style="display:flex;gap:6px;align-items:center;margin-top:8px">
+      <input id="new-cs-category-name" placeholder="新しいカテゴリ名"
+        style="border:1px solid #ddd;border-radius:6px;padding:6px 10px;font-size:13px;font-family:inherit;flex:1">
+      <button onclick="addChecksheetCategory()"
+        style="background:#22703d;color:white;padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap">追加</button>
     </div>
-
-    <!-- チェックシート設定（グループ） -->
-    <div class="settings-card">
-      <div class="settings-accordion-hdr" onclick="toggleChecksheetGroup()">
-        <span>チェックシート</span>
-        <span id="checksheet-group-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
-      </div>
-      <div id="checksheet-group-body" style="display:none;margin-top:10px">
-
-        <!-- チェック項目設定（マスタ：追加・編集・削除） -->
-        <div style="margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid #e0ede5">
-          <div class="settings-accordion-hdr" onclick="toggleChecksheetItemSettings()">
-            <span>チェック項目設定</span>
-            <span id="cs-item-settings-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
-          </div>
-          <div id="cs-item-settings-body" style="display:none">
-            <div class="settings-accordion-body">
-              <div style="font-size:12px;color:#888;margin-bottom:10px">
-                「デイリーカウント」（数量）に表示される商品は「店舗別取扱商品設定」と連動しているため、ここでは編集できません。ここで追加・編集できるのは「清掃・点検」の項目です。
-              </div>
-              <!-- チェック項目カテゴリ管理 -->
-              <div style="background:#fffef0;border-radius:8px;padding:12px 14px;margin-bottom:14px">
-                <div style="font-weight:600;font-size:12px;color:#888;margin-bottom:10px">チェック項目カテゴリ管理</div>
-                <div id="cs-category-rows">${buildChecksheetCategoryRows()}</div>
-                <div style="display:flex;gap:6px;align-items:center;margin-top:8px">
-                  <input id="new-cs-category-name" placeholder="新しいカテゴリ名"
-                    style="border:1px solid #ddd;border-radius:6px;padding:6px 10px;font-size:13px;font-family:inherit;flex:1">
-                  <button onclick="addChecksheetCategory()"
-                    style="background:#22703d;color:white;padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap">追加</button>
-                </div>
-                <div id="cs-category-msg" style="font-size:12px;margin-top:6px;min-height:18px;color:#22703d"></div>
-              </div>
-              <!-- 項目追加フォーム -->
-              <div style="background:#fffef0;border-radius:8px;padding:12px 14px;margin-bottom:14px">
-                <div style="font-weight:600;font-size:12px;color:#888;margin-bottom:8px">チェック項目を追加</div>
-                <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
-                  <input id="new-cs-item-name" placeholder="項目名（必須）"
-                    style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;flex:1;min-width:140px">
-                  <select id="new-cs-item-category"
-                    style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit">
-                    ${CHECKSHEET_CATEGORIES.map(c => `<option value="${esc(c.key)}">${esc(c.label)}</option>`).join('')}
-                  </select>
-                  <select id="new-cs-item-type"
-                    style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit">
-                    <option value="check">チェック</option>
-                    <option value="qty">数量</option>
-                  </select>
-                  <button onclick="addCustomChecksheetItem()"
-                    style="background:#22703d;color:white;padding:8px 16px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap">追加</button>
-                </div>
-                <div style="margin-top:8px;padding-top:8px;border-top:1px dashed #ddd">
-                  <label style="font-size:12px;color:#555;display:flex;align-items:center;gap:6px;cursor:pointer">
-                    <input type="checkbox" id="new-cs-item-store-limit" onchange="toggleStorePickerUI('new-cs-item-store-limit-body', this.checked)">
-                    特定の店舗だけに表示する（未チェックなら全店に表示されます）
-                  </label>
-                  <div id="new-cs-item-store-limit-body" style="display:none;margin-top:8px">
-                    <input type="text" placeholder="店舗名で検索..." oninput="filterStorePickerCheckboxes('new-cs-item', this.value)"
-                      style="border:1px solid #ddd;border-radius:6px;padding:6px 10px;font-size:12px;font-family:inherit;width:100%;margin-bottom:6px;box-sizing:border-box">
-                    <div style="max-height:180px;overflow-y:auto;border:1px solid #eee;border-radius:6px;padding:8px 10px">
-                      ${buildStorePickerCheckboxes('new-cs-item')}
-                    </div>
-                  </div>
-                </div>
-                <div id="cs-item-add-msg" style="font-size:12px;margin-top:6px;min-height:18px"></div>
-              </div>
-              <!-- 項目一覧 -->
-              <table class="settings-tbl">
-                <thead><tr>
-                  <th style="width:44px"></th>
-                  <th>項目名</th><th style="width:120px">カテゴリ</th><th style="width:100px">種別</th><th style="width:52px"></th>
-                </tr></thead>
-                <tbody id="cs-item-tbl-body">${buildChecksheetItemRows()}</tbody>
-              </table>
-            </div>
-          </div>
-        </div>
-
-      </div>
-    </div>
-
-    <!-- 店舗別パスワード設定 -->
-    <div class="settings-card">
-      <div class="settings-accordion-hdr" onclick="toggleStorePwSettings()">
-        <span>店舗別パスワード設定</span>
-        <span id="store-pw-settings-arrow" style="font-size:12px;color:#888">▶ タップして開く</span>
-      </div>
-      <div id="store-pw-settings-body" style="display:none">
-        <div class="settings-accordion-body">
-          <div style="font-size:12px;color:#888;margin-bottom:12px">各店舗の現在のパスワードを確認・変更できます。</div>
-          <div style="font-size:12px;color:#b45309;background:#fef9c3;border:1px solid #fde68a;border-radius:6px;padding:8px 12px;margin-bottom:12px;line-height:1.6">
-            ※パスワードを変更した直後は、ログイン画面の高速化のため各端末が古いパスワードのキャッシュを使うことがあり、
-            変更前のパスワードでも数十秒〜数分ほどログインできてしまう場合があります。変更後は少し時間をおいてからご利用ください。
-          </div>
-          <div id="store-pw-list">${buildStorePwList()}</div>
-          <div id="store-pw-msg" style="font-size:12px;margin-top:8px;min-height:18px;color:#22703d"></div>
-          <div style="margin-top:14px;padding-top:12px;border-top:1px solid #e0ede5">
-            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
-              <button onclick="syncAllStoreDataToGas()" style="background:#f0f4ff;color:#3b5bdb;border:1px solid #c5cff5;padding:7px 14px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;font-family:inherit;white-space:nowrap">サーバーに手動同期</button>
-              <span style="font-size:11px;color:#888">新規店舗が別端末でログインできない場合に押してください</span>
-            </div>
-            <div id="store-sync-msg" style="font-size:12px;margin-top:6px;min-height:16px"></div>
-          </div>
-        </div>
-      </div>
-    </div>
-
-    `;
+    <div id="cs-category-msg" style="font-size:12px;margin-top:6px;min-height:18px;color:#22703d"></div>`;
 }
 
 async function clearAllOrders() {
@@ -8582,39 +8604,10 @@ async function clearAllOrders() {
   updateBadges();
 }
 
-function toggleStoreRegion() {
-  const body  = document.getElementById('store-region-body');
-  const arrow = document.getElementById('store-region-arrow');
-  const open  = body.style.display === 'none';
-  body.style.display = open ? 'block' : 'none';
-  arrow.textContent  = open ? '▼ 閉じる' : '▶ タップして開く';
-}
 
-function toggleProdSettings() {
-  const body  = document.getElementById('prod-settings-body');
-  const arrow = document.getElementById('prod-settings-arrow');
-  const open  = body.style.display === 'none';
-  body.style.display  = open ? 'block' : 'none';
-  arrow.textContent   = open ? '▼ 閉じる' : '▶ タップして開く';
-}
 
-function toggleProductGroup() {
-  const body  = document.getElementById('product-group-body');
-  const arrow = document.getElementById('product-group-arrow');
-  const open  = body.style.display === 'none';
-  body.style.display = open ? 'block' : 'none';
-  arrow.textContent  = open ? '▼ 閉じる' : '▶ タップして開く';
-}
 
 /* ===== 店舗別設定（統合）：1つの店舗セレクターで4つの設定をまとめて操作する薄いラッパー ===== */
-function toggleStoreSettingsGroup() {
-  const body  = document.getElementById('store-settings-group-body');
-  const arrow = document.getElementById('store-settings-group-arrow');
-  const open  = body.style.display === 'none';
-  body.style.display = open ? 'block' : 'none';
-  arrow.textContent  = open ? '▼ 閉じる' : '▶ タップして開く';
-  if (open) syncStoreSettingsSelection(document.getElementById('store-settings-sel').value);
-}
 function filterStoreSettingsSelect() {
   const q = (document.getElementById('store-settings-search')?.value || '').trim().toLowerCase();
   const sel = document.getElementById('store-settings-sel');
@@ -8630,6 +8623,7 @@ function filterStoreSettingsSelect() {
 // 可視の店舗セレクター1つの値を、各設定が内部で参照する非表示セレクター4つへ反映してから
 // それぞれのrender関数を呼ぶ。各設定自体のロジック(getStoreProductConfig等)には一切触れない。
 function syncStoreSettingsSelection(storeId) {
+  try { if (storeId) sessionStorage.setItem(SETTINGS_STORE_KEY, storeId); } catch (e) {}
   const label = document.getElementById('store-settings-current');
   if (label) label.textContent = STORES[storeId] || storeId;
   ['store-prod-cfg-sel', 'store-operation-cfg-sel', 'reorder-target-cfg-sel', 'checksheet-cfg-sel'].forEach(id => {
@@ -8902,21 +8896,7 @@ async function saveReorderTargetCfg() {
 }
 
 /* ===== 店舗別チェックシート項目設定（管理画面） ===== */
-function toggleChecksheetGroup() {
-  const body  = document.getElementById('checksheet-group-body');
-  const arrow = document.getElementById('checksheet-group-arrow');
-  const open  = body.style.display === 'none';
-  body.style.display = open ? 'block' : 'none';
-  arrow.textContent  = open ? '▼ 閉じる' : '▶ タップして開く';
-}
 
-function toggleChecksheetItemSettings() {
-  const body  = document.getElementById('cs-item-settings-body');
-  const arrow = document.getElementById('cs-item-settings-arrow');
-  const open  = body.style.display === 'none';
-  body.style.display = open ? 'block' : 'none';
-  arrow.textContent  = open ? '▼ 閉じる' : '▶ タップして開く';
-}
 
 
 function renderChecksheetCfg() {
@@ -9304,13 +9284,6 @@ async function renderLeaveRequestAdmin() {
     </tbody></table></div>`;
 }
 
-function toggleStorePwSettings() {
-  const body  = document.getElementById('store-pw-settings-body');
-  const arrow = document.getElementById('store-pw-settings-arrow');
-  const open  = body.style.display === 'none';
-  body.style.display = open ? 'block' : 'none';
-  arrow.textContent  = open ? '▼ 閉じる' : '▶ タップして開く';
-}
 
 function getActiveStorePw(sid) {
   const pws = JSON.parse(localStorage.getItem(STORE_PW_KEY) || '{}');

@@ -2,7 +2,7 @@
 
 最終更新: 2026-10-05
 
-社内ポータル(internal-web-system)の作成・編集を引き継ぐ方向けの資料です。最初にこのファイル、次に [README.md](README.md)(機能と構成)、[CLAUDE.md](CLAUDE.md)(デプロイ手順・仕組みの詳細・過去の事故)の順に読んでください。
+社内ポータル(internal-web-system)の作成・編集を引き継ぐ方向けの資料です。最初にこのファイル、次に [ARCHITECTURE.md](ARCHITECTURE.md)(設計図: 部品・画面の地図・データの持ち方)、[README.md](README.md)(機能と構成)、[CLAUDE.md](CLAUDE.md)(デプロイ手順・仕組みの詳細・過去の事故)の順に読んでください。
 
 > ⚠️ このリポジトリは**公開(Public)**です(無料プランでGitHub Pagesを使うため)。パスワード・スプレッドシートID・APIキーなどの実値は絶対にコミットしないでください。実値は、GitHub Secrets・[URL一覧のドキュメント](https://docs.google.com/document/d/14P5jF1IsI7KjiGrYHwCdAGxEYXHI_UadEg8X7Z1BQCg/edit)(selfcafeアカウント限定)・前任者から直接受け取る情報にだけあります(`gas_backend.gs`のID類が空欄なのは意図的です)。
 
