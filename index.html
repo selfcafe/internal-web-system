@@ -513,7 +513,8 @@
     .sp-nav { width:180px; flex-shrink:0; background:#fffffe; border:1px solid #e0ede5; border-radius:10px; padding:8px; position:sticky; top:8px; }
     .sp-main { flex:1; min-width:0; }
     .sp-group-btn, .sp-page-btn { display:block; width:100%; text-align:left; border:none; background:none; cursor:pointer; font-family:inherit; border-radius:6px; }
-    .sp-group-btn { font-size:13px; font-weight:700; color:#22703d; padding:8px 10px; }
+    .sp-group-btn { font-size:13px; font-weight:700; color:#22703d; padding:8px 10px; display:flex; justify-content:space-between; align-items:center; }
+    .sp-arrow { font-size:10px; color:#999; }
     .sp-group.active .sp-group-btn { background:#edf2d4; }
     .sp-pages { margin:4px 0 6px; }
     .sp-page-btn { font-size:13px; color:#555; padding:6px 10px 6px 20px; }
@@ -522,7 +523,7 @@
       .sp-layout { flex-direction:column; gap:10px; }
       .sp-nav { width:auto; position:static; display:flex; flex-wrap:wrap; gap:6px; }
       .sp-group { display:contents; }
-      .sp-group-btn { width:auto; border:1px solid #cfe0d4; border-radius:999px; padding:6px 12px; }
+      .sp-group-btn { width:auto; border:1px solid #cfe0d4; border-radius:999px; padding:6px 12px; gap:6px; }
       .sp-pages { order:99; width:100%; display:flex; flex-wrap:wrap; gap:6px; margin:4px 0 0; padding-top:8px; border-top:1px dashed #e0ede5; }
       .sp-page-btn { width:auto; border:1px solid #ddd; border-radius:999px; padding:5px 12px; }
     }
@@ -8298,6 +8299,27 @@ function _settingsCurrent() {
   const page = group.pages.find(p => p.key === pk) || group.pages[0];
   return { group, page };
 }
+// 左メニューはアコーディオン(2026-10-09)。大分類を押すと中身の一覧を開くだけで、ページは切り替えない
+// (クリック数を減らすため)。開けるのは1つだけ。中身の項目を押したときだけページを切り替える
+let _spOpenGroup = '';
+function _spNavHtml() {
+  const { group, page } = _settingsCurrent();
+  return SETTINGS_MENU.map(g => {
+    const open = g.key === _spOpenGroup;
+    return `
+      <div class="sp-group${g === group ? ' active' : ''}${open ? ' open' : ''}">
+        <button class="sp-group-btn" onclick="toggleSettingsGroup('${g.key}')"><span>${esc(g.label)}</span><span class="sp-arrow">${open ? '▼' : '▶'}</span></button>
+        ${open ? `<div class="sp-pages">${g.pages.map(p => `
+          <button class="sp-page-btn${g === group && p === page ? ' active' : ''}" onclick="openSettingsPage('${g.key}/${p.key}')">${esc(p.label)}</button>`).join('')}
+        </div>` : ''}
+      </div>`;
+  }).join('');
+}
+function toggleSettingsGroup(key) {
+  _spOpenGroup = _spOpenGroup === key ? '' : key;
+  const nav = document.getElementById('sp-nav');
+  if (nav) nav.innerHTML = _spNavHtml();
+}
 // 'storecfg/reorder' のようにページを指定して開く。グループだけ('storecfg')ならその最初のページ
 function openSettingsPage(path) {
   try { sessionStorage.setItem(SETTINGS_PAGE_KEY, path); } catch (e) {}
@@ -8317,13 +8339,8 @@ function renderSettings() {
   container.style.display = 'block';
 
   const { group, page } = _settingsCurrent();
-  const nav = SETTINGS_MENU.map(g => `
-      <div class="sp-group${g === group ? ' active' : ''}">
-        <button class="sp-group-btn" onclick="openSettingsPage('${g.key}')">${esc(g.label)}</button>
-        ${g === group ? `<div class="sp-pages">${g.pages.map(p => `
-          <button class="sp-page-btn${p === page ? ' active' : ''}" onclick="openSettingsPage('${g.key}/${p.key}')">${esc(p.label)}</button>`).join('')}
-        </div>` : ''}
-      </div>`).join('');
+  _spOpenGroup = group.key;
+  const nav = _spNavHtml();
 
   container.innerHTML = `
     <div class="sp-crumb">
@@ -8332,7 +8349,7 @@ function renderSettings() {
       <b>${esc(page.label)}</b>
     </div>
     <div class="sp-layout">
-      <nav class="sp-nav">${nav}</nav>
+      <nav class="sp-nav" id="sp-nav">${nav}</nav>
       <div class="sp-main">
         <div class="settings-card">
           <div class="settings-card-title">${esc(page.label)}</div>
