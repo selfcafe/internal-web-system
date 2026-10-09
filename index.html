@@ -208,6 +208,20 @@
     .note-box { background:#fffde0; border-left:4px solid #c9a227; border-radius:0 6px 6px 0; padding:10px 14px; font-size:13px; color:#5a4200; margin-bottom:14px; line-height:1.6; }
 
     /* 全体管理ハンバーガーメニュー */
+    /* 管理画面の左メニュー(2026-10-09) */
+    .admin-shell { display:flex; gap:14px; align-items:flex-start; }
+    .admin-sidebar { width:170px; flex-shrink:0; background:#fffffe; border:1px solid #e0ede5; border-radius:10px; padding:8px; position:sticky; top:8px; box-sizing:border-box; }
+    .admin-body { flex:1; min-width:0; }
+    .admin-nav-item { display:block; width:100%; text-align:left; border:none; background:none; padding:9px 10px; font-size:14px; font-weight:600; color:#22703d; border-radius:6px; cursor:pointer; font-family:inherit; }
+    .admin-nav-item:hover { background:#edf2d4; }
+    .admin-nav-item.active { background:#22703d; color:#fff; }
+    .admin-sidebar-toggle { display:none !important; }
+    @media (max-width: 720px) {
+      .admin-shell { flex-direction:column; gap:8px; }
+      .admin-sidebar { display:none; width:auto; position:static; align-self:stretch; }
+      .admin-sidebar.open { display:block; }
+      .admin-sidebar-toggle { display:flex !important; }
+    }
     .admin-menu-wrap { position:relative; }
     .admin-menu-btn { background:#1a5c30; color:white; border:none; border-radius:10px; padding:10px 16px; font-size:24px; line-height:1; cursor:pointer; display:flex; align-items:center; gap:6px; }
     .admin-menu-btn:hover { background:#154d27; }
@@ -845,30 +859,15 @@
         <button class="phw-piece phw-br manual-menu-btn" onclick="toggleManualMenu('admin-sp', ADMIN_MANUAL_DOCS)">マニュアル</button>
       </div>
       <div class="doc-menu-dd" id="manual-dd-admin-sp" style="position:absolute;top:134px;right:0"></div>
-      <div class="admin-menu-wrap">
-        <button class="admin-menu-btn" onclick="toggleAdminMenu()" title="メニュー">☰<span class="menu-label">メニュー</span></button>
-        <div class="admin-menu-dd" id="admin-menu-dd">
-          <div class="admin-menu-section">エリア</div>
-          <div class="admin-menu-item" id="menu-tokai"  onclick="menuSelect('region','tokai')">東海<span class="menu-badge" id="mbadge-tokai"  style="display:none"></span></div>
-          <div class="admin-menu-item" id="menu-kansai" onclick="menuSelect('region','kansai')">関西<span class="menu-badge" id="mbadge-kansai" style="display:none"></span></div>
-          <div class="admin-menu-item" id="menu-kanto"  onclick="menuSelect('region','kanto')">関東<span class="menu-badge" id="mbadge-kanto"  style="display:none"></span></div>
-          <div class="admin-menu-item" id="menu-kanto_self"  onclick="menuSelect('region','kanto_self')">関東セルフ<span class="menu-badge" id="mbadge-kanto_self"  style="display:none"></span></div>
-          <div class="admin-menu-item" id="menu-fc"  onclick="menuSelect('region','fc')" style="display:none">FC<span class="menu-badge" id="mbadge-fc"  style="display:none"></span></div>
-          <div class="admin-menu-item" id="menu-gyomu_itaku"  onclick="menuSelect('region','gyomu_itaku')">業務委託<span class="menu-badge" id="mbadge-gyomu_itaku"  style="display:none"></span></div>
-          <div class="admin-menu-divider"></div>
-          <div class="admin-menu-section">表示</div>
-          <div class="admin-menu-item" id="menu-overview"  onclick="menuSelect('view','overview')">発注依頼一覧</div>
-          <div class="admin-menu-item" id="menu-history"   onclick="menuSelect('view','history')">履歴</div>
-          <div class="admin-menu-item" id="menu-lost"      onclick="menuSelect('view','lost')">忘れ物一覧</div>
-          <div class="admin-menu-item" id="menu-machinePhoto" onclick="menuSelect('view','machinePhoto')">機械内写真</div>
-          <div class="admin-menu-item" id="menu-bugreport" onclick="menuSelect('view','bugreport')">バグ報告<span class="menu-badge" id="mbadge-bugreport" style="display:none"></span></div>
-        </div>
-      </div>
-      <button class="admin-settings-btn" id="admin-home-btn" onclick="goAdminHome()" title="ホーム(発注依頼一覧)"><span class="menu-label">ホーム</span></button>
-      <button class="admin-settings-btn" id="admin-settings-btn" onclick="menuSelect('view','settings')" title="設定"><span class="menu-label">設定</span></button>
+      <button class="admin-menu-btn admin-sidebar-toggle" onclick="toggleAdminSidebar()" title="メニュー">☰<span class="menu-label">メニュー</span></button>
     </div>
   </div>
 
+
+  <!-- 左メニュー(2026-10-09、常に表示。スマホでは☰で開閉)。メニューの定義は ADMIN_NAV の1か所 -->
+  <div class="admin-shell">
+  <nav class="admin-sidebar" id="admin-sidebar"></nav>
+  <div class="admin-body">
 
   <!-- 業務連絡ウィジェット(常時表示)・一覧/詳細/作成フォーム(通常の管理画面に被さって表示) -->
   <div id="admin-announce-widget-wrap"></div>
@@ -884,13 +883,6 @@
     <button class="sub-tab"        id="sub-fc"  onclick="switchRegion('fc')" style="display:none">FC<span class="tab-badge" id="badge-fc"  style="display:none"></span></button>
     <button class="sub-tab"        id="sub-gyomu_itaku"  onclick="switchRegion('gyomu_itaku')">業務委託<span class="tab-badge" id="badge-gyomu_itaku"  style="display:none"></span></button>
   </div>
-  <div class="sub-nav-wrap level2 last">
-    <button class="sub-tab active" id="sub-overview" onclick="switchAdminView('overview')">発注依頼一覧</button>
-    <button class="sub-tab"        id="sub-history"  onclick="switchAdminView('history')">履歴</button>
-    <button class="sub-tab"        id="sub-lost"     onclick="switchAdminView('lost')">忘れ物一覧</button>
-    <button class="sub-tab"        id="sub-machinePhoto" onclick="switchAdminView('machinePhoto')">機械内写真</button>
-    <button class="sub-tab"        id="sub-bugreport" onclick="switchAdminView('bugreport')">バグ報告<span class="tab-badge" id="badge-bugreport" style="display:none"></span></button>
-  </div>
 
   <div class="summary" id="admin-summary"></div>
   <div class="table-wrap">
@@ -899,6 +891,8 @@
   <div class="pagination" id="pagination" style="display:none"></div>
   <div id="settings-container" style="display:none"></div>
   </div>
+  </div><!-- /admin-body -->
+  </div><!-- /admin-shell -->
 </div>
 
 <div id="item-scope-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:2000;align-items:center;justify-content:center;padding:16px">
@@ -6134,17 +6128,37 @@ async function markDelivered(id) {
 }
 
 /* ===== 全体管理ページ ===== */
-function toggleAdminMenu() {
-  const dd = document.getElementById('admin-menu-dd');
-  dd.classList.toggle('open');
-  if (dd.classList.contains('open')) updateAdminMenuActive();
+// 管理画面の左メニュー(2026-10-09、案B)。項目の定義はここだけ。表示名を変える・項目を足すときはこの表を直す。
+// 以前の「☰メニュー」のドロップダウンと緑の業務タブ(sub-overview等)はこの左メニューに一本化した
+// (戻す場合は git タグ before-admin-sidebar の状態に戻す)
+const ADMIN_NAV = [
+  { view:'overview',     label:'ホーム（発注依頼一覧）' },
+  { view:'history',      label:'履歴' },
+  { view:'lost',         label:'忘れ物一覧' },
+  { view:'machinePhoto', label:'機械内写真' },
+  { view:'bugreport',    label:'バグ報告' },
+  { view:'attendance',   label:'業務管理' },
+  { view:'settings',     label:'設定' },
+];
+function renderAdminSidebar() {
+  const nav = document.getElementById('admin-sidebar');
+  if (!nav) return;
+  nav.innerHTML = ADMIN_NAV.map(it =>
+    `<button class="admin-nav-item${it.view === adminView ? ' active' : ''}" onclick="adminNav('${it.view}')">${esc(it.label)}</button>`).join('');
+}
+function adminNav(view) {
+  document.getElementById('admin-sidebar')?.classList.remove('open');
+  if (view === 'overview') { goAdminHome(); return; }
+  switchAdminView(view);
+  window.scrollTo(0, 0);
+}
+// スマホでは左メニューを☰で開閉する
+function toggleAdminSidebar() {
+  document.getElementById('admin-sidebar')?.classList.toggle('open');
 }
 
 function updateAdminMenuActive() {
-  Object.keys(REGIONS).forEach(r => document.getElementById('menu-'+r)?.classList.toggle('active', r===adminRegion));
-  ['overview','history','lost','settings','bugreport'].forEach(v => document.getElementById('menu-'+v)?.classList.toggle('active', v===adminView));
-  document.getElementById('admin-settings-btn')?.classList.toggle('active', adminView==='settings');
-  document.getElementById('admin-home-btn')?.classList.toggle('active', adminView==='overview');
+  renderAdminSidebar();
   document.querySelectorAll('.admin-attendance-btn').forEach(b => b.classList.toggle('active', adminView==='attendance'));
 }
 
@@ -6155,7 +6169,6 @@ function goAdminHome() {
 }
 
 function menuSelect(type, val) {
-  document.getElementById('admin-menu-dd').classList.remove('open');
   if (type==='region') switchRegion(val); else switchAdminView(val);
 }
 
@@ -6182,6 +6195,9 @@ function switchAdminView(v) {
   if (v === 'bugreport') _bugReportAdminForceRefresh = true;
   ['overview','history','lost','machinePhoto','bugreport'].forEach(k => document.getElementById('sub-'+k)?.classList.toggle('active', k===v));
   document.getElementById('admin-region-nav')?.classList.toggle('nav-disabled', v === 'lost' || v === 'bugreport');
+  // 設定はエリアに関係しないので、エリアのタブを隠す
+  const regionNav = document.getElementById('admin-region-nav');
+  if (regionNav) regionNav.style.display = v === 'settings' ? 'none' : '';
   const hideFc = _fcTabHiddenForView_(v);
   const subFcEl = document.getElementById('sub-fc'), menuFcEl = document.getElementById('menu-fc');
   if (subFcEl) subFcEl.style.display = hideFc ? 'none' : '';
@@ -6193,6 +6209,7 @@ function switchAdminView(v) {
 
 function renderAdmin() {
   ensureAdminAnnounceWidgetLoaded();
+  renderAdminSidebar();
   if      (adminView==='overview')   renderOverview();
   else if (adminView==='history')    renderHistory();
   else if (adminView==='lost')       renderLostAdmin();
