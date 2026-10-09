@@ -864,6 +864,7 @@
           <div class="admin-menu-item" id="menu-bugreport" onclick="menuSelect('view','bugreport')">バグ報告<span class="menu-badge" id="mbadge-bugreport" style="display:none"></span></div>
         </div>
       </div>
+      <button class="admin-settings-btn" id="admin-home-btn" onclick="goAdminHome()" title="ホーム(発注依頼一覧)"><span class="menu-label">ホーム</span></button>
       <button class="admin-settings-btn" id="admin-settings-btn" onclick="menuSelect('view','settings')" title="設定"><span class="menu-label">設定</span></button>
     </div>
   </div>
@@ -6143,7 +6144,14 @@ function updateAdminMenuActive() {
   Object.keys(REGIONS).forEach(r => document.getElementById('menu-'+r)?.classList.toggle('active', r===adminRegion));
   ['overview','history','lost','settings','bugreport'].forEach(v => document.getElementById('menu-'+v)?.classList.toggle('active', v===adminView));
   document.getElementById('admin-settings-btn')?.classList.toggle('active', adminView==='settings');
+  document.getElementById('admin-home-btn')?.classList.toggle('active', adminView==='overview');
   document.querySelectorAll('.admin-attendance-btn').forEach(b => b.classList.toggle('active', adminView==='attendance'));
+}
+
+// ホームボタン(2026-10-09): ログイン直後と同じ「発注依頼一覧」に戻り、画面の先頭へ
+function goAdminHome() {
+  menuSelect('view', 'overview');
+  window.scrollTo(0, 0);
 }
 
 function menuSelect(type, val) {
