@@ -845,25 +845,6 @@
         <button class="phw-piece phw-br manual-menu-btn" onclick="toggleManualMenu('admin-sp', ADMIN_MANUAL_DOCS)">マニュアル</button>
       </div>
       <div class="doc-menu-dd" id="manual-dd-admin-sp" style="position:absolute;top:134px;right:0"></div>
-      <div class="admin-menu-wrap">
-        <button class="admin-menu-btn" onclick="toggleAdminMenu()" title="メニュー">☰<span class="menu-label">メニュー</span></button>
-        <div class="admin-menu-dd" id="admin-menu-dd">
-          <div class="admin-menu-section">エリア</div>
-          <div class="admin-menu-item" id="menu-tokai"  onclick="menuSelect('region','tokai')">東海<span class="menu-badge" id="mbadge-tokai"  style="display:none"></span></div>
-          <div class="admin-menu-item" id="menu-kansai" onclick="menuSelect('region','kansai')">関西<span class="menu-badge" id="mbadge-kansai" style="display:none"></span></div>
-          <div class="admin-menu-item" id="menu-kanto"  onclick="menuSelect('region','kanto')">関東<span class="menu-badge" id="mbadge-kanto"  style="display:none"></span></div>
-          <div class="admin-menu-item" id="menu-kanto_self"  onclick="menuSelect('region','kanto_self')">関東セルフ<span class="menu-badge" id="mbadge-kanto_self"  style="display:none"></span></div>
-          <div class="admin-menu-item" id="menu-fc"  onclick="menuSelect('region','fc')" style="display:none">FC<span class="menu-badge" id="mbadge-fc"  style="display:none"></span></div>
-          <div class="admin-menu-item" id="menu-gyomu_itaku"  onclick="menuSelect('region','gyomu_itaku')">業務委託<span class="menu-badge" id="mbadge-gyomu_itaku"  style="display:none"></span></div>
-          <div class="admin-menu-divider"></div>
-          <div class="admin-menu-section">表示</div>
-          <div class="admin-menu-item" id="menu-overview"  onclick="menuSelect('view','overview')">発注依頼一覧</div>
-          <div class="admin-menu-item" id="menu-history"   onclick="menuSelect('view','history')">履歴</div>
-          <div class="admin-menu-item" id="menu-lost"      onclick="menuSelect('view','lost')">忘れ物一覧</div>
-          <div class="admin-menu-item" id="menu-machinePhoto" onclick="menuSelect('view','machinePhoto')">機械内写真</div>
-          <div class="admin-menu-item" id="menu-bugreport" onclick="menuSelect('view','bugreport')">バグ報告<span class="menu-badge" id="mbadge-bugreport" style="display:none"></span></div>
-        </div>
-      </div>
       <button class="admin-settings-btn" id="admin-home-btn" onclick="goAdminHome()" title="ホーム(発注依頼一覧)"><span class="menu-label">ホーム</span></button>
       <button class="admin-settings-btn" id="admin-settings-btn" onclick="menuSelect('view','settings')" title="設定"><span class="menu-label">設定</span></button>
     </div>
@@ -5643,7 +5624,6 @@ document.addEventListener('click', e => {
   touchActivity();
   if (!e.target.closest('.prod-wrap')) closeProdAll();
   if (!e.target.closest('#store-nav-search')) document.getElementById('store-search-dd')?.classList.remove('open');
-  if (!e.target.closest('.admin-menu-wrap')) document.getElementById('admin-menu-dd')?.classList.remove('open');
   if (!e.target.closest('.doc-menu-wrap') && !e.target.closest('.manual-menu-btn') && !e.target.closest('.doc-menu-dd')) document.querySelectorAll('.doc-menu-dd.open').forEach(el => el.classList.remove('open'));
   if (!e.target.closest('#site-store-search') && !e.target.closest('#site-store-dd')) {
     const dd = document.getElementById('site-store-dd');
@@ -5654,7 +5634,6 @@ document.addEventListener('touchstart', e => {
   touchActivity();
   if (!e.target.closest('.prod-wrap')) closeProdAll();
   if (!e.target.closest('#store-nav-search')) document.getElementById('store-search-dd')?.classList.remove('open');
-  if (!e.target.closest('.admin-menu-wrap')) document.getElementById('admin-menu-dd')?.classList.remove('open');
   if (!e.target.closest('.doc-menu-wrap') && !e.target.closest('.manual-menu-btn') && !e.target.closest('.doc-menu-dd')) document.querySelectorAll('.doc-menu-dd.open').forEach(el => el.classList.remove('open'));
   if (!e.target.closest('#site-store-search') && !e.target.closest('#site-store-dd')) {
     const dd = document.getElementById('site-store-dd');
@@ -6134,12 +6113,6 @@ async function markDelivered(id) {
 }
 
 /* ===== 全体管理ページ ===== */
-function toggleAdminMenu() {
-  const dd = document.getElementById('admin-menu-dd');
-  dd.classList.toggle('open');
-  if (dd.classList.contains('open')) updateAdminMenuActive();
-}
-
 function updateAdminMenuActive() {
   Object.keys(REGIONS).forEach(r => document.getElementById('menu-'+r)?.classList.toggle('active', r===adminRegion));
   ['overview','history','lost','settings','bugreport'].forEach(v => document.getElementById('menu-'+v)?.classList.toggle('active', v===adminView));
@@ -6154,8 +6127,8 @@ function goAdminHome() {
   window.scrollTo(0, 0);
 }
 
+// 「☰メニュー」ボタンは2026-10-09に廃止(エリアはエリアタブ、表示は緑の業務タブ・ホーム・設定ボタンで切り替える)
 function menuSelect(type, val) {
-  document.getElementById('admin-menu-dd').classList.remove('open');
   if (type==='region') switchRegion(val); else switchAdminView(val);
 }
 
