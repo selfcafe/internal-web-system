@@ -1096,6 +1096,7 @@ async function syncAllStoreDataToGas() {
     _gasSaveSetting('store_product_cfg',localStorage.getItem(STORE_PRODUCTS_KEY) || '{}'),
     _gasSaveSetting('store_operation_type', localStorage.getItem(STORE_OPERATION_KEY) || '{}'),
     _gasSaveSetting('store_machines',   localStorage.getItem(STORE_MACHINES_KEY) || '{}'),
+    ...(localStorage.getItem(MACHINE_DEFS_KEY) ? [_gasSaveSetting('machine_defs', localStorage.getItem(MACHINE_DEFS_KEY))] : []),
     _gasSaveSetting('reorder_targets',  localStorage.getItem(REORDER_TARGETS_KEY) || '{}'),
     _gasSaveSetting('all_products',     localStorage.getItem(ALL_PRODUCTS_KEY)   || '[]'),
     _gasSaveSetting('vendor_config',    localStorage.getItem(VENDOR_CONFIG_KEY)  || '[]'),
@@ -1222,6 +1223,7 @@ async function _loadSettings(scope, prefetched) {
       if (r.key === 'store_product_cfg') localStorage.setItem(STORE_PRODUCTS_KEY,  clean(r.value));
       if (r.key === 'store_operation_type') localStorage.setItem(STORE_OPERATION_KEY, clean(r.value));
       if (r.key === 'store_machines')    localStorage.setItem(STORE_MACHINES_KEY,  clean(r.value));
+      if (r.key === 'machine_defs')      localStorage.setItem(MACHINE_DEFS_KEY,    clean(r.value));
       if (r.key === 'reorder_targets')   localStorage.setItem(REORDER_TARGETS_KEY, clean(r.value));
       if (r.key === 'all_products')      localStorage.setItem(ALL_PRODUCTS_KEY,    clean(r.value));
       if (r.key === 'deleted_products')  localStorage.setItem(DELETED_PRODUCTS_KEY, clean(r.value));
@@ -1251,6 +1253,7 @@ async function _loadSettings(scope, prefetched) {
     if (!gasKeys.has('store_product_cfg') && localStorage.getItem(STORE_PRODUCTS_KEY))  _syncStoreProductCfg();
     if (!gasKeys.has('store_operation_type') && localStorage.getItem(STORE_OPERATION_KEY)) _syncStoreOperationCfg();
     if (!gasKeys.has('store_machines')    && localStorage.getItem(STORE_MACHINES_KEY))  _gasSaveSetting('store_machines', localStorage.getItem(STORE_MACHINES_KEY));
+    if (!gasKeys.has('machine_defs')      && localStorage.getItem(MACHINE_DEFS_KEY))    _gasSaveSetting('machine_defs', localStorage.getItem(MACHINE_DEFS_KEY));
     if (!gasKeys.has('reorder_targets')   && localStorage.getItem(REORDER_TARGETS_KEY)) _syncReorderTargets();
     if (!gasKeys.has('all_products')      && localStorage.getItem(ALL_PRODUCTS_KEY))    _gasSaveSetting('all_products',  localStorage.getItem(ALL_PRODUCTS_KEY));
     if (!gasKeys.has('deleted_products')  && localStorage.getItem(DELETED_PRODUCTS_KEY)) _syncDeletedProducts();
@@ -5198,11 +5201,26 @@ function setStoreOperationType(storeId, opType) {
 // {店舗ID: ['100rs','cs3','jcc']}。取扱商品設定・発注基準値設定で、設置していない機械の商品グループを
 // たたんで表示するために使う(たたむだけで、中の設定値は消さない)。未設定の店舗は従来どおり全部開いて表示する
 const STORE_MACHINES_KEY = 'store_machines';
-const MACHINE_DEFS = [
+// 機械の種類は管理画面から追加・削除できる(machine_defs、未設定ならこの初期値)。
+// vendorは、その機械の商品が入っている仕入先(商品グループ)のキー
+const MACHINE_DEFS_KEY = 'machine_defs';
+const DEFAULT_MACHINE_DEFS = [
   { key:'100rs', label:'アペックス 100RS', vendor:'apex' },
   { key:'cs3',   label:'55D CS3',          vendor:'cs3'  },
   { key:'jcc',   label:'トーヨー（JCC）',   vendor:'toyo' },
 ];
+function getMachineDefs() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(MACHINE_DEFS_KEY) || 'null');
+    if (Array.isArray(saved)) return saved;
+  } catch (e) {}
+  return DEFAULT_MACHINE_DEFS;
+}
+function _saveMachineDefs(defs) {
+  const json = JSON.stringify(defs);
+  localStorage.setItem(MACHINE_DEFS_KEY, json);
+  return _gasSaveSetting(MACHINE_DEFS_KEY, json);
+}
 function getStoreMachines(storeId) {
   const cfg = JSON.parse(localStorage.getItem(STORE_MACHINES_KEY) || '{}');
   return Array.isArray(cfg[storeId]) ? cfg[storeId] : null;
@@ -5216,7 +5234,7 @@ function setStoreMachines(storeId, machines) {
 // 機械に対応する仕入先の商品グループを、その店舗に機械が無ければ<details>でたたむ
 function _machineFold(storeId, vendorKey, label, html) {
   const machines = getStoreMachines(storeId);
-  const def = MACHINE_DEFS.find(m => m.vendor === vendorKey);
+  const def = getMachineDefs().find(m => m.vendor === vendorKey);
   if (!machines || !def || machines.includes(def.key)) return html;
   return `<details class="machine-fold"><summary>${esc(label)}（この店舗には機械なし・タップで開く）</summary>${html}</details>`;
 }
@@ -8631,10 +8649,48 @@ function renderStoreMachinesCfg() {
   if (!sel || !container || !sel.value) { if (container) container.innerHTML = ''; return; }
   const machines = getStoreMachines(sel.value);
   container.innerHTML = `<div style="display:flex;gap:16px;flex-wrap:wrap">` +
-    MACHINE_DEFS.map(m => `<label style="display:flex;align-items:center;gap:6px;font-size:13px">
+    getMachineDefs().map(m => `<label style="display:flex;align-items:center;gap:6px;font-size:13px">
         <input type="checkbox" data-machine="${esc(m.key)}" ${machines && machines.includes(m.key) ? 'checked' : ''}> ${esc(m.label)}
       </label>`).join('') + `</div>` +
-    (machines ? '' : `<div style="font-size:11px;color:#b45309;margin-top:6px">未設定です(未設定の間は全商品グループを開いて表示します)</div>`);
+    (machines ? '' : `<div style="font-size:11px;color:#b45309;margin-top:6px">未設定です(未設定の間は全商品グループを開いて表示します)</div>`) +
+    `<details style="margin-top:10px"><summary style="font-size:12px;color:#555;cursor:pointer">機械の種類を追加・削除する</summary>
+      <div style="margin-top:8px;font-size:12px">` +
+      getMachineDefs().map(m => `<div style="display:flex;align-items:center;gap:8px;margin-bottom:4px">
+          <span style="flex:1">${esc(m.label)} <span style="color:#888">（商品グループ: ${esc((VENDOR_CONFIG.find(v => v.key === m.vendor) || {}).label || m.vendor)}）</span></span>
+          <button onclick="deleteMachineDef('${esc(m.key)}')" style="background:#fee2e2;color:#b91c1c;border:none;border-radius:6px;padding:3px 10px;font-size:12px;cursor:pointer;font-family:inherit">削除</button>
+        </div>`).join('') +
+      `<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">
+          <input id="new-machine-label" placeholder="機械の名前" style="border:1px solid #ddd;border-radius:6px;padding:6px 10px;font-size:13px;font-family:inherit;flex:1;min-width:120px">
+          <select id="new-machine-vendor" style="border:1px solid #ddd;border-radius:6px;padding:6px 10px;font-size:13px;font-family:inherit">${buildVendorSelect()}</select>
+          <button onclick="addMachineDef()" style="background:#22703d;color:white;padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">追加</button>
+        </div>
+        <div style="font-size:11px;color:#888;margin-top:4px">商品グループは、その機械の商品が入っている仕入先です。新しい仕入先が必要なら先に「商品・棚卸」で仕入先を追加してください。</div>
+        <div id="machine-def-msg" style="font-size:12px;min-height:16px;margin-top:4px"></div>
+      </div></details>`;
+}
+async function addMachineDef() {
+  const label = document.getElementById('new-machine-label')?.value.trim();
+  const vendor = document.getElementById('new-machine-vendor')?.value;
+  const msg = document.getElementById('machine-def-msg');
+  if (!label) { if (msg) { msg.style.color='#ef4444'; msg.textContent='機械の名前を入力してください'; } return; }
+  const defs = getMachineDefs();
+  if (defs.some(m => m.label === label)) { if (msg) { msg.style.color='#ef4444'; msg.textContent='同じ名前の機械が既にあります'; } return; }
+  const used = defs.find(m => m.vendor === vendor);
+  if (used && !confirm(`商品グループ「${(VENDOR_CONFIG.find(v => v.key === vendor) || {}).label || vendor}」は「${used.label}」でも使っています。このまま追加しますか？`)) return;
+  const ok = await _saveMachineDefs([...defs, { key: 'm_' + Date.now().toString(36), label, vendor }]);
+  renderStoreMachinesCfg();
+  const m2 = document.getElementById('machine-def-msg');
+  if (m2) { m2.style.color = ok === false ? '#ef4444' : '#22703d'; m2.textContent = ok === false ? '⚠ 保存に失敗しました' : `✓ 「${label}」を追加しました`; }
+}
+async function deleteMachineDef(key) {
+  const defs = getMachineDefs();
+  const m = defs.find(d => d.key === key);
+  if (!m || !confirm(`機械「${m.label}」を一覧から削除しますか？\n（商品や基準値は消えません。この機械の商品グループは、どの店舗でもたたまずに表示されるようになります）`)) return;
+  const ok = await _saveMachineDefs(defs.filter(d => d.key !== key));
+  renderStoreMachinesCfg();
+  renderStoreProdCfg();
+  renderReorderTargetCfg();
+  if (ok === false) alert('保存に失敗しました。通信環境をご確認のうえ、もう一度お試しください。');
 }
 async function saveStoreMachinesCfg() {
   const sel = document.getElementById('store-prod-cfg-sel');
