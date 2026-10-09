@@ -504,6 +504,11 @@
     .store-prod-cfg-current { font-size:15px; font-weight:700; color:#155a28; background:#e4f3e6; border:1px solid #9fd4ab; border-radius:6px; padding:8px 12px; margin-top:8px; }
     .store-prod-cfg-current::before { content:"編集中の店舗　"; font-size:11px; font-weight:600; color:#4a8a5a; }
     .store-prod-cfg-list { margin-top:10px; }
+    .machine-fold { margin-top:8px; }
+    .machine-fold > summary { font-size:11px; font-weight:700; color:#888; background:#f2f2f2; padding:3px 8px; border-radius:4px; cursor:pointer; list-style:none; }
+    .machine-fold > summary::-webkit-details-marker { display:none; }
+    .machine-fold > summary::before { content:'▶ '; }
+    .machine-fold[open] > summary::before { content:'▼ '; }
     .store-prod-vendor-hdr { font-size:11px; font-weight:700; color:#22703d; background:#edf2d4; padding:3px 8px; margin-top:8px; margin-bottom:4px; border-radius:4px; }
     .store-prod-vendor-grid { display:grid; grid-template-columns:repeat(3,1fr); gap:2px 12px; margin-bottom:10px; }
     @media(max-width:639px) { .store-prod-vendor-grid { grid-template-columns:1fr; } }
@@ -1090,6 +1095,7 @@ async function syncAllStoreDataToGas() {
     _gasSaveSetting('store_regions',    localStorage.getItem(STORE_REGION_KEY) || '{}'),
     _gasSaveSetting('store_product_cfg',localStorage.getItem(STORE_PRODUCTS_KEY) || '{}'),
     _gasSaveSetting('store_operation_type', localStorage.getItem(STORE_OPERATION_KEY) || '{}'),
+    _gasSaveSetting('store_machines',   localStorage.getItem(STORE_MACHINES_KEY) || '{}'),
     _gasSaveSetting('reorder_targets',  localStorage.getItem(REORDER_TARGETS_KEY) || '{}'),
     _gasSaveSetting('all_products',     localStorage.getItem(ALL_PRODUCTS_KEY)   || '[]'),
     _gasSaveSetting('vendor_config',    localStorage.getItem(VENDOR_CONFIG_KEY)  || '[]'),
@@ -1215,6 +1221,7 @@ async function _loadSettings(scope, prefetched) {
       if (r.key === 'store_regions')     localStorage.setItem(STORE_REGION_KEY,    clean(r.value));
       if (r.key === 'store_product_cfg') localStorage.setItem(STORE_PRODUCTS_KEY,  clean(r.value));
       if (r.key === 'store_operation_type') localStorage.setItem(STORE_OPERATION_KEY, clean(r.value));
+      if (r.key === 'store_machines')    localStorage.setItem(STORE_MACHINES_KEY,  clean(r.value));
       if (r.key === 'reorder_targets')   localStorage.setItem(REORDER_TARGETS_KEY, clean(r.value));
       if (r.key === 'all_products')      localStorage.setItem(ALL_PRODUCTS_KEY,    clean(r.value));
       if (r.key === 'deleted_products')  localStorage.setItem(DELETED_PRODUCTS_KEY, clean(r.value));
@@ -1243,6 +1250,7 @@ async function _loadSettings(scope, prefetched) {
     if (!gasKeys.has('store_regions')     && localStorage.getItem(STORE_REGION_KEY))    _syncStoreRegions();
     if (!gasKeys.has('store_product_cfg') && localStorage.getItem(STORE_PRODUCTS_KEY))  _syncStoreProductCfg();
     if (!gasKeys.has('store_operation_type') && localStorage.getItem(STORE_OPERATION_KEY)) _syncStoreOperationCfg();
+    if (!gasKeys.has('store_machines')    && localStorage.getItem(STORE_MACHINES_KEY))  _gasSaveSetting('store_machines', localStorage.getItem(STORE_MACHINES_KEY));
     if (!gasKeys.has('reorder_targets')   && localStorage.getItem(REORDER_TARGETS_KEY)) _syncReorderTargets();
     if (!gasKeys.has('all_products')      && localStorage.getItem(ALL_PRODUCTS_KEY))    _gasSaveSetting('all_products',  localStorage.getItem(ALL_PRODUCTS_KEY));
     if (!gasKeys.has('deleted_products')  && localStorage.getItem(DELETED_PRODUCTS_KEY)) _syncDeletedProducts();
@@ -5186,6 +5194,33 @@ function setStoreOperationType(storeId, opType) {
   return _gasMergeSetting('store_operation_type', { [storeId]: opType });
 }
 
+/* ===== 設置している機械（2026-10-09追加） ===== */
+// {店舗ID: ['100rs','cs3','jcc']}。取扱商品設定・発注基準値設定で、設置していない機械の商品グループを
+// たたんで表示するために使う(たたむだけで、中の設定値は消さない)。未設定の店舗は従来どおり全部開いて表示する
+const STORE_MACHINES_KEY = 'store_machines';
+const MACHINE_DEFS = [
+  { key:'100rs', label:'アペックス 100RS', vendor:'apex' },
+  { key:'cs3',   label:'55D CS3',          vendor:'cs3'  },
+  { key:'jcc',   label:'トーヨー（JCC）',   vendor:'toyo' },
+];
+function getStoreMachines(storeId) {
+  const cfg = JSON.parse(localStorage.getItem(STORE_MACHINES_KEY) || '{}');
+  return Array.isArray(cfg[storeId]) ? cfg[storeId] : null;
+}
+function setStoreMachines(storeId, machines) {
+  const cfg = JSON.parse(localStorage.getItem(STORE_MACHINES_KEY) || '{}');
+  cfg[storeId] = machines;
+  localStorage.setItem(STORE_MACHINES_KEY, JSON.stringify(cfg));
+  return _gasMergeSetting('store_machines', { [storeId]: machines });
+}
+// 機械に対応する仕入先の商品グループを、その店舗に機械が無ければ<details>でたたむ
+function _machineFold(storeId, vendorKey, label, html) {
+  const machines = getStoreMachines(storeId);
+  const def = MACHINE_DEFS.find(m => m.vendor === vendorKey);
+  if (!machines || !def || machines.includes(def.key)) return html;
+  return `<details class="machine-fold"><summary>${esc(label)}（この店舗には機械なし・タップで開く）</summary>${html}</details>`;
+}
+
 /* ===== 発注基準値設定(月初発注) ===== */
 // 2026-08-23追加。{storeId: {商品コード: 基準値}}。商品コードが無い(またはここに未登録の)
 // 商品は月初発注の対象外——基準値を入れた商品コードだけがgas_backend.gsのbuildStoreInventorySheet/
@@ -7700,10 +7735,20 @@ function addCustomProduct() {
   const vendor   = document.getElementById('new-prod-vendor')?.value;
   const unit     = document.getElementById('new-prod-unit')?.value.trim() || '個';
   const caseUnit = document.getElementById('new-prod-case')?.value.trim() || '';
+  const code     = document.getElementById('new-prod-code')?.value.trim() || '';
+  const priceRaw = document.getElementById('new-prod-price')?.value.trim() || '';
   const msg      = document.getElementById('prod-add-msg');
   if (!name) { msg.style.color='#ef4444'; msg.textContent='商品名を入力してください'; return; }
   if (PRODUCTS.find(p => p.name === name)) { msg.style.color='#ef4444'; msg.textContent='同じ名前の商品が既に存在します'; return; }
-  PRODUCTS.push({ vendor, name, label:name, unit, caseUnit });
+  if (priceRaw && !(Number(priceRaw) >= 0)) { msg.style.color='#ef4444'; msg.textContent='単価は数字で入力してください'; return; }
+  if (code) {
+    const dup = PRODUCTS.find(p => String(p.code) === code);
+    if (dup && !confirm(`商品コード ${code} は「${dup.name}」で使われています。同じコードのまま追加しますか？`)) return;
+  }
+  // 商品コード・単価は任意(2026-10-09追加)。コードがあると月初発注の基準値を設定できる
+  const prod = { vendor, code, name, label:name, unit, caseUnit };
+  if (priceRaw) prod.price = Number(priceRaw);
+  PRODUCTS.push(prod);
   // 同じ仕入先・商品名を一度削除してから再登録した場合、削除トゥームストーン(deleted_products)が
   // 残っているとloadDeletedProducts()が次回読み込み時に今追加した商品を再び消してしまう
   // （実際に発生した不具合：削除→追加が「画面上は追加できるがリロードで消える」ように見えた）
@@ -7716,7 +7761,7 @@ function addCustomProduct() {
   saveAllProducts();
   applyNewItemStoreScope('new-prod', name, 'product');
   resetStorePickerUI('new-prod');
-  ['new-prod-name','new-prod-unit','new-prod-case'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
+  ['new-prod-name','new-prod-unit','new-prod-case','new-prod-code','new-prod-price'].forEach(id => { const el=document.getElementById(id); if(el) el.value=''; });
   msg.style.color='#22703d'; msg.textContent=`✓ 「${name}」を追加しました`;
   setTimeout(() => { if(msg) msg.textContent=''; }, 3000);
   const tbody = document.getElementById('prod-tbl-body');
@@ -8250,6 +8295,17 @@ function renderSettings() {
         <div id="checksheet-cfg-current" class="store-prod-cfg-current" style="display:none"></div>
 
         <div style="margin-bottom:18px;padding-bottom:18px;border-bottom:1px solid #e0ede5">
+          <div style="font-weight:700;font-size:13px;color:#22703d;margin-bottom:8px">設置している機械</div>
+          <div style="font-size:11.5px;color:#888;margin-bottom:8px">チェックの無い機械の商品は、下の取扱商品設定・発注基準値設定でたたんで表示します(タップで開けます)。</div>
+          <div id="store-machines-cfg-body"></div>
+          <div style="margin-top:10px;display:flex;gap:8px">
+            <button onclick="saveStoreMachinesCfg()"
+              style="background:#22703d;color:white;padding:8px 20px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">保存</button>
+            <span id="store-machines-cfg-msg" style="font-size:12px;color:#22703d;align-self:center;min-height:18px"></span>
+          </div>
+        </div>
+
+        <div style="margin-bottom:18px;padding-bottom:18px;border-bottom:1px solid #e0ede5">
           <div style="font-weight:700;font-size:13px;color:#22703d;margin-bottom:8px">取扱商品設定</div>
           <div style="font-size:11.5px;color:#888;margin-bottom:8px">店舗ごとに取り扱う商品を選択してください。未設定の場合は全商品が表示されます。</div>
           <div id="store-prod-cfg-body"></div>
@@ -8342,6 +8398,10 @@ function renderSettings() {
                     style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:70px">
                   <input id="new-prod-case" placeholder="1ケースの入り数"
                     style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:130px">
+                  <input id="new-prod-code" placeholder="商品コード（任意）" inputmode="numeric"
+                    style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:150px">
+                  <input id="new-prod-price" placeholder="単価（任意）" inputmode="decimal"
+                    style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:100px">
                   <button onclick="addCustomProduct()"
                     style="background:#22703d;color:white;padding:8px 16px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap">追加</button>
                 </div>
@@ -8558,10 +8618,38 @@ function syncStoreSettingsSelection(storeId) {
     const el = document.getElementById(id);
     if (el) el.value = storeId;
   });
+  renderStoreMachinesCfg();
   renderStoreProdCfg();
   renderStoreOperationCfg();
   renderReorderTargetCfg();
   renderChecksheetCfg();
+}
+
+function renderStoreMachinesCfg() {
+  const sel = document.getElementById('store-prod-cfg-sel');
+  const container = document.getElementById('store-machines-cfg-body');
+  if (!sel || !container || !sel.value) { if (container) container.innerHTML = ''; return; }
+  const machines = getStoreMachines(sel.value);
+  container.innerHTML = `<div style="display:flex;gap:16px;flex-wrap:wrap">` +
+    MACHINE_DEFS.map(m => `<label style="display:flex;align-items:center;gap:6px;font-size:13px">
+        <input type="checkbox" data-machine="${esc(m.key)}" ${machines && machines.includes(m.key) ? 'checked' : ''}> ${esc(m.label)}
+      </label>`).join('') + `</div>` +
+    (machines ? '' : `<div style="font-size:11px;color:#b45309;margin-top:6px">未設定です(未設定の間は全商品グループを開いて表示します)</div>`);
+}
+async function saveStoreMachinesCfg() {
+  const sel = document.getElementById('store-prod-cfg-sel');
+  const msg = document.getElementById('store-machines-cfg-msg');
+  if (!sel || !sel.value) return;
+  const machines = [...document.querySelectorAll('#store-machines-cfg-body input[data-machine]:checked')].map(el => el.dataset.machine);
+  if (msg) msg.textContent = '保存中…';
+  const ok = await setStoreMachines(sel.value, machines);
+  renderStoreMachinesCfg();
+  renderStoreProdCfg();
+  renderReorderTargetCfg();
+  if (msg) {
+    msg.textContent = ok === false ? '⚠ 保存に失敗しました。通信環境をご確認のうえ、もう一度お試しください。' : `✓ ${STORES[sel.value] || sel.value} に保存しました`;
+    setTimeout(() => { if (msg) msg.textContent=''; }, 2500);
+  }
 }
 
 function renderStoreOperationCfg() {
@@ -8623,7 +8711,7 @@ function renderStoreProdCfg() {
     VENDOR_CONFIG.map(v => {
       const items = byVendor[v.key] || [];
       if (!items.length) return '';
-      return `<div class="store-prod-vendor-hdr" style="display:flex;align-items:center;justify-content:space-between">
+      return _machineFold(sid, v.key, v.label, `<div class="store-prod-vendor-hdr" style="display:flex;align-items:center;justify-content:space-between">
           <span>${esc(v.label)}</span>
           <label style="font-weight:normal;font-size:11px;display:flex;align-items:center;gap:4px;cursor:pointer;margin-left:8px">
             <input type="checkbox" data-vendor-all="${esc(v.key)}" onchange="toggleVendorAll('${esc(v.key)}',this.checked)" style="width:13px;height:13px;accent-color:#22703d;flex-shrink:0">全選択
@@ -8634,7 +8722,7 @@ function renderStoreProdCfg() {
           const checked = excluded === null || !excluded.has(p.name) ? 'checked' : '';
           return `<label><input type="checkbox" value="${esc(p.name)}" data-vendor="${esc(v.key)}" onchange="updateVendorAllCheck('${esc(v.key)}')" ${checked}>${esc(p.label||p.name)}</label>`;
         }).join('') +
-        `</div>`;
+        `</div>`);
     }).join('') +
     `</div>`;
 
@@ -8699,7 +8787,8 @@ function clearStoreProdCfg() {
 /* ===== 発注基準値設定（月初発注、管理画面） ===== */
 // 対象はvendor:'apex'/'toyo'の商品のみ(2026-08-23時点の月初発注機能が対応する仕入先)。
 // 対応仕入先を増やす場合はこの配列に追記する
-const REORDER_TARGET_VENDORS = ['apex', 'toyo'];
+// 2026-10-09: CS3(東海6店)も追加。GAS側(processMonthlyReorder)は仕入先で絞らず商品コードで判定している
+const REORDER_TARGET_VENDORS = ['apex', 'toyo', 'cs3'];
 
 
 function renderReorderTargetCfg() {
@@ -8726,15 +8815,15 @@ function renderReorderTargetCfg() {
   container.innerHTML = REORDER_TARGET_VENDORS.map(vkey => {
     const items = byVendor[vkey] || [];
     if (!items.length) return '';
-    return `<div class="store-prod-vendor-hdr"><span>${esc(VENDOR_LABELS[vkey] || vkey)}</span></div>
+    return _machineFold(sid, vkey, VENDOR_LABELS[vkey] || vkey, `<div class="store-prod-vendor-hdr"><span>${esc(VENDOR_LABELS[vkey] || vkey)}</span></div>
       <div class="store-prod-vendor-grid">` +
       items.map(p => `<label style="display:flex;align-items:center;gap:6px">
           <span style="flex:1">${esc(p.label||p.name)}</span>
           <input type="number" min="0" step="1" data-reorder-code="${esc(p.code)}" value="${targets[p.code] !== undefined ? esc(String(targets[p.code])) : ''}"
             placeholder="未設定" style="width:70px;border:1px solid #ddd;border-radius:6px;padding:4px 6px;font-size:13px;font-family:inherit"><span style="font-size:12px;color:#555">個</span>
         </label>`).join('') +
-      `</div>`;
-  }).join('') || '<div style="font-size:12px;color:#888">対象の商品がありません(仕入先がapex/toyoの商品のみ対象)</div>';
+      `</div>`);
+  }).join('') || '<div style="font-size:12px;color:#888">対象の商品がありません(仕入先がアペックス・トーヨー・CS3の商品のみ対象)</div>';
 }
 
 async function saveReorderTargetCfg() {
