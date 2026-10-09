@@ -439,6 +439,8 @@ function doGet(e) {
     else if (a === 'buildStoreInventorySheet')  result = buildStoreInventorySheet(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'buildReorderTestPlaySheet') result = buildReorderTestPlaySheet(e.parameter.storeId);
     else if (a === 'processMonthlyReorder')     result = processMonthlyReorder(e.parameter.storeId, e.parameter.periodLabel);
+    else if (a === 'previewBranchReorder')      result = buildBranchReorder(e.parameter.branch, e.parameter.periodLabel, true);
+    else if (a === 'buildBranchReorder')        result = buildBranchReorder(e.parameter.branch, e.parameter.periodLabel, false);
     else if (a === 'reorderStoreTabs')          result = reorderStoreTabs();
     else if (a === 'removeInventoryLabelColumn') result = removeInventoryLabelColumn();
     else if (a === 'removeStoreInventoryLowStockColumn') result = removeStoreInventoryLowStockColumn();
@@ -4332,41 +4334,89 @@ const APEX_REORDER_RECIPIENTS = {
   shibuya: { to: 'mb218@apex-co.co.jp', cc: 'selfcafe001@gmail.com' },
 };
 
-// 棚卸完了(index.htmlの_submitInventoryInner)からbuildStoreInventorySheetと同じタイミングで
-// 呼ばれる「月初発注」処理(2026-08-23追加)。基準値(reorder_targets)が設定されている商品コード
-// について発注数(max(0,基準値-期末在庫))を計算し、1件以上発注が必要でAPEX_REORDER_RECIPIENTSに
-// 送付先が設定されている店舗なら、簡易な表形式PDFを生成してGmail下書きを自動作成する
-// (人が内容を確認して送信ボタンを押す運用、山崎さんのorder-automationシステムに倣った)。
-// 発注数の算出結果自体はbuildStoreInventorySheet側が店舗タブに書き込むため、この関数の役割は
-// 「PDF+Gmail下書き作成が必要な店舗だけ、それを行う」ことに絞られる——基準値未設定の店舗や
-// 送付先未設定の店舗(例: 大塚駅南口)では何もせず正常終了する。
-function processMonthlyReorder(storeId, periodLabel) {
+// ===== 月初発注（2026-10-09 支店まとめ・数量ルールを追加） =====
+// 設定は app_settings に置く（公開リポジトリのため、宛先・署名・発注書のIDはコードに書かない）:
+//   reorder_branches: {支店キー: {label, to, cc, sheet: アペックスの発注書(スプレッドシート)ID, stores: {店舗ID: 発注書の列名}}}
+//   reorder_mail:     {subject, body, folder: 発注書の写しを置く Drive フォルダID}
+//   reorder_code_map: {ポータルの商品コード: 発注書の商品コード}（違うものだけ）
+// 支店に入っている店舗は、棚卸のたびに「その支店の全店舗分」を1つの発注書（アペックスの発注書の写し、xlsx添付）と
+// Gmail下書き（1支店1通）に作り直す。支店に入っていない店舗は従来どおり1店舗1通（APEX_REORDER_RECIPIENTS、PDF）。
+// 下書きは人が確認して送る。送信済みの月は作り直さない（二重発注防止）。
+//
+// 数量のルール（2026-10-09 塩川さん）:
+//   ・アペックス・CS3: 袋・個単位（ケースに丸めない）。ただし店舗ごとに、どれか1品は1ケース以上にする
+//     （アペックスの最低発注条件。全部の合計ではなく1品で1ケース）。満たさないときは、ケースにいちばん近い品を1ケースにする
+//   ・トーヨー（JCC）: 従来どおりケース単位（Bカートの記載単位が最低発注ロット）
+function _settingJson_(key, fallback) {
+  const e = getSettings().find(s => s.key === key);
+  if (!e || !e.value) return fallback;
+  try { return JSON.parse(e.value); } catch (err) { return fallback; }
+}
+
+function _applyReorderRounding_(raw) {
+  const out = raw.map(it => {
+    const qty = it.vendor === 'toyo'
+      ? _reorderQtyPieces_(it.target, it.endStock, it.casePieces, it.stockCapCases)
+      : Math.max(0, Math.round(it.target - it.endStock));
+    return Object.assign({}, it, { qty });
+  }).filter(it => it.qty > 0);
+  const apex = out.filter(it => it.vendor !== 'toyo' && it.casePieces);
+  if (apex.length && !apex.some(it => it.qty >= it.casePieces)) {
+    const top = apex.reduce((a, b) => (b.qty / b.casePieces > a.qty / a.casePieces ? b : a));
+    top.qtyBefore = top.qty;
+    top.qty = top.casePieces;
+    top.bumped = true;
+  }
+  return out;
+}
+
+// 1店舗分の発注数。submitted=false はその月の棚卸がまだ出ていない
+function _storeReorderItems_(storeId, periodLabel) {
   const targets = _getReorderTargets_()[storeId];
-  if (!targets || !Object.keys(targets).length) return { ok: true, skipped: 'no_targets_configured' };
-
-  const recipient = APEX_REORDER_RECIPIENTS[storeId];
-  if (!recipient) return { ok: true, skipped: 'no_recipient_configured' };
-
+  if (!targets || !Object.keys(targets).length) return { submitted: false, noTargets: true, items: [] };
   // 年またぎ対応(2026-09-12): periodLabelの年からファイルを解決する
   const sheetId = _inventorySheetIdForPeriod_(periodLabel);
   const data = _inventoryLogRowsCached_(sheetId);
   const idx = {};
   INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
   const meta = _productMeta_();
-
-  const items = [];
+  const raw = [];
+  let submitted = false;
   for (let i = 1; i < data.length; i++) {
     const r = data[i];
     if (String(r[idx.store_id]) !== String(storeId)) continue;
     if (_invMonthLabelStr(r[idx.period_label], sheetId) !== String(periodLabel)) continue;
+    submitted = true;
     const code = String(r[idx.code]);
     if (!(code in targets)) continue;
     const endStock = r[idx.end_stock];
     if (endStock === '' || endStock === null) continue;
     const info = meta[r[idx.product]] || {};
-    const qty = _reorderQtyPieces_(Number(targets[code]), Number(endStock), info.casePieces, info.stockCapCases);
-    if (qty > 0) items.push({ code, product: r[idx.product], qty, casePieces: info.casePieces || null });
+    raw.push({ code, product: r[idx.product], target: Number(targets[code]), endStock: Number(endStock),
+      vendor: info.vendor || '', casePieces: info.casePieces || null, stockCapCases: info.stockCapCases || null });
   }
+  return { submitted, items: _applyReorderRounding_(raw) };
+}
+
+// 発注数は単位を必ず明記する(数字だけだとケース注文の商品で先方がケース数と読み、何十倍も
+// 届く恐れがあるため。随時発注で実際に20倍依頼になった事故(2026-09-29、渋谷神南)を受けて)
+function _reorderQtyText_(it) {
+  return it.casePieces && it.qty % it.casePieces === 0 ? `${it.qty / it.casePieces}ケース（${it.qty}個）` : `${it.qty}個`;
+}
+
+// 棚卸完了(index.htmlの_submitInventoryInner)からbuildStoreInventorySheetと同じタイミングで呼ばれる(2026-08-23〜)。
+// 基準値(reorder_targets)が無い店舗、送付先(支店・APEX_REORDER_RECIPIENTS)が無い店舗(トーヨーの店など)では何もしない
+function processMonthlyReorder(storeId, periodLabel) {
+  const branches = _settingJson_('reorder_branches', {});
+  const branchKey = Object.keys(branches).find(k => branches[k].stores && Object.prototype.hasOwnProperty.call(branches[k].stores, storeId));
+  if (branchKey) return buildBranchReorder(branchKey, periodLabel, false);
+
+  const r = _storeReorderItems_(storeId, periodLabel);
+  if (r.noTargets) return { ok: true, skipped: 'no_targets_configured' };
+  const recipient = APEX_REORDER_RECIPIENTS[storeId];
+  if (!recipient) return { ok: true, skipped: 'no_recipient_configured' };
+  const items = r.items;
+
   const storeName = _storeNames_()[storeId] || storeId;
   const periodJa = _periodLabelJa_(periodLabel);
   const fileBaseName = `${storeName}_発注書_${periodLabel}`;
@@ -4388,10 +4438,7 @@ function processMonthlyReorder(storeId, periodLabel) {
   const doc = DocumentApp.create(fileBaseName + '_作業用');
   const body = doc.getBody();
   body.appendParagraph(`${storeName}　発注書（${periodJa}分棚卸に基づく）`).setHeading(DocumentApp.ParagraphHeading.HEADING2);
-  // 発注数は単位を必ず明記する(数字だけだとケース注文の商品で先方がケース数と読み、何十倍も
-  // 届く恐れがあるため。随時発注で実際に20倍依頼になった事故(2026-09-29、渋谷神南)を受けて)
-  const qtyText = it => it.casePieces ? `${it.qty / it.casePieces}ケース（${it.qty}個）` : `${it.qty}個`;
-  const tableRows = [['商品コード', '商品名', '発注数']].concat(items.map(it => [it.code, it.product, qtyText(it)]));
+  const tableRows = [['商品コード', '商品名', '発注数']].concat(items.map(it => [it.code, it.product, _reorderQtyText_(it)]));
   const table = body.appendTable(tableRows);
   table.getRow(0).editAsText().setBold(true);
   doc.saveAndClose();
@@ -4410,6 +4457,103 @@ function processMonthlyReorder(storeId, periodLabel) {
   GmailApp.createDraft(recipient.to, subject, draftBody, draftOptions);
 
   return { ok: true, items: items.length, draftCreated: true };
+}
+
+// 支店まとめの発注書と下書きを作り直す。dryRun=true は計算結果を返すだけ(ファイル・下書きは作らない)。
+// ?action=previewBranchReorder&branch=...&periodLabel=... / ?action=buildBranchReorder&branch=...&periodLabel=... でも呼べる
+function buildBranchReorder(branchKey, periodLabel, dryRun) {
+  const b = _settingJson_('reorder_branches', {})[branchKey];
+  if (!b) return { error: 'unknown_branch: ' + branchKey };
+  const mail = _settingJson_('reorder_mail', {});
+  const codeMap = _settingJson_('reorder_code_map', {});
+  const names = _storeNames_();
+  const perStore = {};
+  const missing = [];
+  Object.keys(b.stores || {}).forEach(sid => {
+    const r = _storeReorderItems_(sid, periodLabel);
+    if (!r.submitted) { missing.push(names[sid] || sid); return; }
+    if (r.items.length) perStore[sid] = r.items;
+  });
+  const periodJa = _periodLabelJa_(periodLabel);
+  const subject = `${mail.subject || '発注依頼'}（${b.label}支店 ${periodJa}分）`;
+  const summary = { branch: b.label, subject, ordered: Object.keys(perStore).map(s => names[s] || s), notSubmitted: missing };
+  if (dryRun) {
+    const detail = {};
+    Object.keys(perStore).forEach(s => {
+      detail[names[s] || s] = perStore[s].map(it => ({ code: codeMap[it.code] || it.code, product: it.product, qty: it.qty, bumped: !!it.bumped }));
+    });
+    return Object.assign({ ok: true, dryRun: true, detail }, summary);
+  }
+
+  const lock = LockService.getScriptLock();
+  lock.waitLock(60000); // 同じ支店の店舗が同時に棚卸を出しても、下書き・写しが重複しないように
+  try {
+    const existingDrafts = GmailApp.getDrafts().filter(d => d.getMessage().getSubject() === subject);
+    if (!Object.keys(perStore).length) {
+      existingDrafts.forEach(d => d.deleteDraft());
+      return Object.assign({ ok: true, skipped: 'no_reorder_needed' }, summary);
+    }
+    const src = SpreadsheetApp.openById(b.sheet);
+    const to = String(src.getSheets()[0].getRange('C1').getDisplayValue() || '').trim() || b.to; // 宛先は発注書の記載が正
+    const alreadySent = GmailApp.search(`in:sent to:${to} newer_than:180d`, 0, 100).some(thread =>
+      thread.getMessages().some(msg => msg.getSubject() === subject));
+    if (alreadySent) return Object.assign({ ok: true, skipped: 'already_sent' }, summary);
+
+    const folder = mail.folder ? DriveApp.getFolderById(mail.folder) : DriveApp.getRootFolder();
+    const title = `${b.label} 注文表 ${periodJa}分（ポータル自動作成）`;
+    const old = folder.getFilesByName(title);
+    while (old.hasNext()) old.next().setTrashed(true); // 作り直すたびに古い写しは消す
+    const copy = DriveApp.getFileById(b.sheet).makeCopy(title, folder);
+    const ss = SpreadsheetApp.openById(copy.getId());
+    const sh = ss.getSheets()[0];
+    const values = sh.getDataRange().getDisplayValues();
+    const HEADER_ROW = 5; // 発注書の見出し行（店舗名が並ぶ行）
+    const header = values[HEADER_ROW - 1].map(h => String(h).replace(/\n/g, ''));
+    const codeRow = {};
+    for (let r = HEADER_ROW; r < values.length; r++) {
+      const c = String(values[r][0]).trim();
+      if (c && c !== '商品コード') codeRow[c] = r + 1;
+    }
+    // 元の発注書に前回分の数字が残っていることがあるので、店舗の列（合計列は式なので除く）を先に空にする
+    const clear = [];
+    header.forEach((h, ci) => {
+      if (ci < 5 || !h || h === '合計') return;
+      Object.values(codeRow).forEach(r => { if (String(values[r - 1][ci] || '').trim()) clear.push(sh.getRange(r, ci + 1).getA1Notation()); });
+    });
+    if (clear.length) sh.getRangeList(clear).clearContent();
+    const warnings = [];
+    Object.keys(perStore).forEach(sid => {
+      const col = String(b.stores[sid] || '').replace(/\n/g, '');
+      const ci = header.indexOf(col);
+      if (ci < 0) { warnings.push(`発注書に店舗の列が無い: ${col}`); return; }
+      perStore[sid].forEach(it => {
+        const code = codeMap[it.code] || it.code;
+        const r = codeRow[code];
+        if (!r) { warnings.push(`発注書に商品が無い: ${names[sid] || sid} ${it.product}（${code}）`); return; }
+        sh.getRange(r, ci + 1).setValue(it.qty);
+      });
+    });
+    if (String(values[1][6]).trim() === '注文日') { // 注文日（G2 の右: H2=年、I2=月日）
+      const now = new Date();
+      sh.getRange('H2').setValue(`${now.getFullYear()}年`);
+      sh.getRange('I2').setValue(`'${now.getMonth() + 1}/${now.getDate()}`);
+    }
+    SpreadsheetApp.flush();
+    const xlsx = UrlFetchApp.fetch(`https://docs.google.com/spreadsheets/d/${copy.getId()}/export?format=xlsx`,
+      { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() } }).getBlob().setName(title + '.xlsx');
+    const draftBody = mail.body || `${b.label}支店 ご担当者様\n\n発注書を添付いたします。ご確認のほどよろしくお願いいたします。`;
+    const opts = { attachments: [xlsx] };
+    if (b.cc || mail.cc) opts.cc = b.cc || mail.cc;
+    if (existingDrafts.length) {
+      existingDrafts[0].update(to, subject, draftBody, opts);
+      existingDrafts.slice(1).forEach(d => d.deleteDraft());
+    } else {
+      GmailApp.createDraft(to, subject, draftBody, opts);
+    }
+    return Object.assign({ ok: true, draft: existingDrafts.length ? 'updated' : 'created', to, sheetUrl: ss.getUrl(), warnings }, summary);
+  } finally {
+    lock.releaseLock();
+  }
 }
 
 // ----------------------------------------------------------------
