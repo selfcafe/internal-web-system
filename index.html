@@ -6202,12 +6202,15 @@ const ANNOUNCE_AREAS = ['東海', '関西', '関東', '関東セルフ', 'FC', '
 // サーバー側は'yyyy-MM-dd'で返すため、店舗のdate表示("2026/09/18")と合わせて'/'区切りにする
 function _announceDateLabel(d) { return d ? String(d).replace(/-/g, '/') : ''; }
 
+// scope='admin' は管理者だけに表示する業務連絡(2026-10-09追加)。GASのgetAnnouncementsは店舗のエリアと
+// 一致するものだけを店舗に返すため、'admin'はどの店舗にも出ない(管理者の一覧には全件出る)
 function _announceScopeToAreas(scopeStr) {
-  if (!scopeStr || scopeStr === 'all') return [];
+  if (!scopeStr || scopeStr === 'all' || scopeStr === 'admin') return [];
   return String(scopeStr).split(',').filter(Boolean);
 }
 function _announceScopeLabel(scopeStr) {
   if (!scopeStr || scopeStr === 'all') return '全店舗';
+  if (scopeStr === 'admin') return '管理者のみ';
   return _announceScopeToAreas(scopeStr).join('・');
 }
 
@@ -6452,6 +6455,7 @@ function openAnnounceForm(id) {
   const item = id ? adminAnnounceItems.find(a => String(a.id) === String(id)) : null;
   const areas = item ? _announceScopeToAreas(item.scope) : [];
   const isAll = !item || !item.scope || item.scope === 'all';
+  const isAdminOnly = !!item && item.scope === 'admin';
   const today = new Date().toLocaleDateString('sv');
   const isDraft = item && item.status !== 'published';
   document.getElementById('admin-announce-form-root').innerHTML = `
@@ -6477,12 +6481,13 @@ function openAnnounceForm(id) {
             <div style="font-size:11px;color:#888;margin-bottom:4px">公開範囲</div>
             <select id="announce-form-scope-mode" onchange="_toggleAnnounceScopeAreas()" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:8px 9px;font-size:13px;font-family:inherit;box-sizing:border-box">
               <option value="all" ${isAll ? 'selected' : ''}>全店舗</option>
-              <option value="areas" ${isAll ? '' : 'selected'}>エリア指定</option>
+              <option value="areas" ${isAll || isAdminOnly ? '' : 'selected'}>エリア指定</option>
+              <option value="admin" ${isAdminOnly ? 'selected' : ''}>管理者のみ（店舗には表示しない）</option>
             </select>
           </div>
         </div>
 
-        <div id="announce-form-areas-wrap" style="display:${isAll ? 'none' : 'flex'};flex-wrap:wrap;gap:6px 14px;margin-bottom:14px">
+        <div id="announce-form-areas-wrap" style="display:${isAll || isAdminOnly ? 'none' : 'flex'};flex-wrap:wrap;gap:6px 14px;margin-bottom:14px">
           ${ANNOUNCE_AREAS.map(a => `
             <label style="display:inline-flex;align-items:center;gap:5px;font-size:13px;color:#444;cursor:pointer">
               <input type="checkbox" class="announce-form-area-cb" value="${esc(a)}" ${areas.indexOf(a) >= 0 ? 'checked' : ''}> ${esc(a)}
@@ -6539,13 +6544,13 @@ async function saveAnnounceForm() {
   const publishDate = document.getElementById('announce-form-date').value;
   const status = document.getElementById('announce-form-status').value;
   const scopeMode = document.getElementById('announce-form-scope-mode').value;
-  const scope = scopeMode === 'all' ? ['all']
+  const scope = scopeMode === 'all' ? ['all'] : scopeMode === 'admin' ? ['admin']
     : Array.from(document.querySelectorAll('.announce-form-area-cb:checked')).map(cb => cb.value);
   if (btn) { btn.disabled = true; btn.textContent = '保存中…'; }
   try {
     const r = await gasPost('saveAnnouncement', { id, title, body, publishDate, scope, status, adminName: '' });
     if (r.error) throw new Error(r.error);
-    const scopeStr = scopeMode === 'all' ? 'all' : scope.join(',');
+    const scopeStr = scopeMode === 'all' ? 'all' : scopeMode === 'admin' ? 'admin' : scope.join(',');
     const nowStr = new Date().toLocaleString('sv');
     const existing = adminAnnounceItems.find(a => String(a.id) === String(r.id));
     const savedItem = {
