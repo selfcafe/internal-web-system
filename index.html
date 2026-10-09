@@ -327,8 +327,6 @@
     }
 
     /* ===== 時間帯メッセージ ===== */
-    #time-msg-bar { display:none; background:linear-gradient(135deg,#fffde0 0%,#f0f7e8 100%); border-radius:14px; padding:14px 24px; text-align:center; font-size:15px; color:#333; font-weight:500; box-shadow:0 3px 12px rgba(0,0,0,.09); letter-spacing:.3px; margin-bottom:12px; border:1.5px solid #e8e4c0; }
-    #admin-time-msg-bar { display:none; background:linear-gradient(135deg,#fff 0%,#f0f7e8 100%); border-radius:14px; padding:14px 24px; text-align:center; font-size:15px; color:#333; font-weight:500; box-shadow:0 3px 12px rgba(0,0,0,.09); letter-spacing:.3px; margin-bottom:12px; border:1.5px solid #e8e4c0; }
 
     .sp-only { display:none; }
     .pc-only { display:inline; }
@@ -340,7 +338,6 @@
       .store-title-txt { font-size:19px; }
       .portal-title-row { flex-direction:column; align-items:flex-start; gap:2px; }
       .portal-title-store-row { align-items:flex-start; gap:2px 10px; padding-right:175px; box-sizing:border-box; }
-      #time-msg-bar, #admin-time-msg-bar { font-size:12.5px; padding:9px 14px; border-radius:10px; margin-bottom:8px; }
       .store-name-wrap { flex-basis:100%; width:auto; min-width:0; }
       .partner-hdr-btns { display:none; }
       .admin-hdr-btns { display:none; }
@@ -521,10 +518,8 @@
     .sp-page-btn.active { color:#fff; background:#22703d; font-weight:600; }
     @media (max-width: 720px) {
       .sp-layout { flex-direction:column; gap:10px; }
-      .sp-nav { width:auto; position:static; display:flex; flex-wrap:wrap; gap:6px; }
-      .sp-group { display:contents; }
-      .sp-group-btn { width:auto; border:1px solid #cfe0d4; border-radius:999px; padding:6px 12px; gap:6px; }
-      .sp-pages { order:99; width:100%; display:flex; flex-wrap:wrap; gap:6px; margin:4px 0 0; padding-top:8px; border-top:1px dashed #e0ede5; }
+      .sp-nav { width:auto; position:static; }
+      .sp-pages { display:flex; flex-wrap:wrap; gap:6px; margin:4px 0 8px; padding-left:10px; }
       .sp-page-btn { width:auto; border:1px solid #ddd; border-radius:999px; padding:5px 12px; }
     }
     .machine-fold { margin-top:8px; }
@@ -618,7 +613,6 @@
     </div>
   </div>
 
-  <div id="time-msg-bar"></div>
 
   <!-- 業務連絡ウィジェット(常時表示)・一覧/詳細(タブの上に被さって表示) -->
   <div id="announce-widget-wrap"></div>
@@ -874,7 +868,6 @@
     </div>
   </div>
 
-  <div id="admin-time-msg-bar"></div>
 
   <!-- 業務連絡ウィジェット(常時表示)・一覧/詳細/作成フォーム(通常の管理画面に被さって表示) -->
   <div id="admin-announce-widget-wrap"></div>
@@ -2054,22 +2047,6 @@ function updateBadges() {
 
 /* ===== サイトログイン ===== */
 /* ===== 時間帯メッセージ ===== */
-function getTimeMsg() {
-  const h = new Date().getHours();
-  if (h >= 5  && h <= 10) return 'おはようございます。今日も頑張りましょう。';
-  if (h >= 11 && h <= 13) return 'お疲れさまです。少し深呼吸して、ひと息ついてくださいね。';
-  if (h >= 14 && h <= 16) return '午後もお疲れさまです。軽くストレッチして、気分転換してみませんか？';
-  if (h >= 17 && h <= 19) return '今日も一日お疲れさまでした。';
-  if (h >= 20 && h <= 23) return 'お疲れさまです。身体を休めてくださいね。';
-  return 'こんな時間まですごい！でも大丈夫ですか？無理は禁物ですよ。';
-}
-function applyTimeMsg() {
-  const msg = getTimeMsg();
-  ['time-msg-bar','admin-time-msg-bar'].forEach(id => {
-    const bar = document.getElementById(id);
-    if (bar) { bar.textContent = msg; bar.style.display = 'block'; }
-  });
-}
 
 /* ===== 棚卸表 ===== */
 const INVENTORY_KEY = 'inventory_data';
@@ -5527,7 +5504,6 @@ async function showPage(p) {
   if (p==='store') { renderStore(); maybeShowAttendanceReminder(); }
   if (p==='admin') renderAdmin();
   updateBadges();
-  applyTimeMsg();
 }
 window.addEventListener('hashchange', () => showPage(location.hash==='#admin' ? 'admin' : 'store'));
 
@@ -8299,13 +8275,21 @@ function _settingsCurrent() {
   const page = group.pages.find(p => p.key === pk) || group.pages[0];
   return { group, page };
 }
-// 左メニューはアコーディオン(2026-10-09)。大分類を押すと中身の一覧を開くだけで、ページは切り替えない
-// (クリック数を減らすため)。開けるのは1つだけ。中身の項目を押したときだけページを切り替える
-let _spOpenGroup = '';
+// 左メニューはアコーディオン(2026-10-09)。大分類を押すと中身の一覧を開閉するだけで、ページは切り替えない
+// (クリック数を減らすため)。いくつでも開いたままにでき、開閉の状態はsessionStorageに残す。
+// 中身の項目を押したときだけページを切り替える
+const SETTINGS_OPEN_GROUPS_KEY = 'settings_open_groups';
+function _spOpenGroups() {
+  try { return new Set(JSON.parse(sessionStorage.getItem(SETTINGS_OPEN_GROUPS_KEY) || '[]')); } catch (e) { return new Set(); }
+}
+function _spSaveOpenGroups(set) {
+  try { sessionStorage.setItem(SETTINGS_OPEN_GROUPS_KEY, JSON.stringify([...set])); } catch (e) {}
+}
 function _spNavHtml() {
   const { group, page } = _settingsCurrent();
+  const openSet = _spOpenGroups();
   return SETTINGS_MENU.map(g => {
-    const open = g.key === _spOpenGroup;
+    const open = openSet.has(g.key);
     return `
       <div class="sp-group${g === group ? ' active' : ''}${open ? ' open' : ''}">
         <button class="sp-group-btn" onclick="toggleSettingsGroup('${g.key}')"><span>${esc(g.label)}</span><span class="sp-arrow">${open ? '▼' : '▶'}</span></button>
@@ -8316,7 +8300,9 @@ function _spNavHtml() {
   }).join('');
 }
 function toggleSettingsGroup(key) {
-  _spOpenGroup = _spOpenGroup === key ? '' : key;
+  const set = _spOpenGroups();
+  if (set.has(key)) set.delete(key); else set.add(key);
+  _spSaveOpenGroups(set);
   const nav = document.getElementById('sp-nav');
   if (nav) nav.innerHTML = _spNavHtml();
 }
@@ -8339,7 +8325,8 @@ function renderSettings() {
   container.style.display = 'block';
 
   const { group, page } = _settingsCurrent();
-  _spOpenGroup = group.key;
+  const openSet = _spOpenGroups();
+  if (!openSet.has(group.key)) { openSet.add(group.key); _spSaveOpenGroups(openSet); } // 表示中のページの大分類は開いておく
   const nav = _spNavHtml();
 
   container.innerHTML = `
@@ -9394,7 +9381,6 @@ loadProductSettings();
 loadDeletedProducts();
 migrateProductRenames();
 _purgeLocalH(); // GAS未デプロイの間のフォールバック用ローカル履歴の30日パージ
-applyTimeMsg();
 populateLoginStoreSelect();
 if (!(sessionStorage.getItem('admin_authed') === '1' || isSiteAuthed())) {
   prefillLastPassword();
