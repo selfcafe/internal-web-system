@@ -528,7 +528,15 @@
     .region-fold[open] > summary { margin-bottom:4px; }
     /* 使い方ガイドへのボタン(2026-10-10、パートナーは店舗名の横・管理者は設定の横) */
     .guide-link-btn { display:inline-flex; align-items:center; gap:4px; background:#fff; color:#22703d; border:2px solid #22703d; border-radius:999px; padding:4px 12px; font-size:13px; font-weight:700; text-decoration:none; white-space:nowrap; align-self:center; }
-    .guide-link-btn.admin-guide-link { border-radius:10px; padding:8px 14px; }
+    .guide-link-btn.admin-guide-link { border-radius:10px; padding:8px 14px; cursor:pointer; }
+    /* 管理者の「使い方ガイド」: マウスを乗せる(スマホはタップ)と「管理者用・パートナー用」を出す(2026-10-10) */
+    .guide-menu-wrap { position:relative; display:inline-block; outline:none; }
+    .guide-menu { display:none; position:absolute; top:100%; left:0; padding-top:4px; z-index:450; min-width:150px; }
+    .guide-menu-wrap:hover .guide-menu, .guide-menu-wrap:focus-within .guide-menu { display:block; }
+    .guide-menu a { display:block; background:#fff; border:1px solid #cfe0d4; padding:10px 14px; font-size:14px; font-weight:700; color:#22703d; text-decoration:none; white-space:nowrap; }
+    .guide-menu a:first-child { border-radius:8px 8px 0 0; }
+    .guide-menu a:last-child { border-radius:0 0 8px 8px; border-top:none; }
+    .guide-menu a:hover { background:#edf2d4; }
     .machine-fold { margin-top:8px; }
     .machine-fold > summary { font-size:11px; font-weight:700; color:#888; background:#f2f2f2; padding:3px 8px; border-radius:4px; cursor:pointer; list-style:none; }
     .machine-fold > summary::-webkit-details-marker { display:none; }
@@ -855,7 +863,13 @@
       <div class="doc-menu-dd" id="manual-dd-admin-sp" style="position:absolute;top:134px;right:0"></div>
       <button class="admin-settings-btn" id="admin-home-btn" onclick="goAdminHome()" title="ホーム(発注依頼一覧)"><span class="menu-label">ホーム</span></button>
       <button class="admin-settings-btn" id="admin-settings-btn" onclick="menuSelect('view','settings')" title="設定"><span class="menu-label">設定</span></button>
-      <a class="guide-link-btn admin-guide-link" href="admin-guide.html" target="_blank" rel="noopener">📖 使い方ガイド</a>
+      <div class="guide-menu-wrap" tabindex="0">
+        <span class="guide-link-btn admin-guide-link">📖 使い方ガイド ▾</span>
+        <div class="guide-menu">
+          <a href="admin-guide.html" target="_blank" rel="noopener">管理者用</a>
+          <a href="guide.html" target="_blank" rel="noopener">パートナー用</a>
+        </div>
+      </div>
     </div>
   </div>
 
