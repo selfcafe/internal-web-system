@@ -4233,7 +4233,7 @@ function ensureReorderRulesSheet_() {
     ['1. 目標在庫数を決める: 基準値(Q列)が設定されていればその値。未設定なら 消費量×1.2(安全在庫のバッファ)。'],
     ['2. 発注数 = max(0, 目標在庫数 − 期末在庫)。在庫が目標を上回っていれば発注数は0。'],
     ['3. ケースサイズ(D列)が登録されている商品は、結果をケースサイズの倍数に四捨五入(0.5ケース以上は切り上げ)。ただしアペックス・CS3の原料はケースに丸めず袋・個単位(2026-10-10〜)。'],
-    ['3-2. アペックスの発注書(支店ごと1通)では、さらに店舗ごとに「どれか1品は1ケース以上」にする(足りなければケースにいちばん近い品を1ケースに)。この調整はR列には出ません。トーヨーはBカートの記載単位(ケース)が最低ロット。'],
+    ['3-2. アペックスの発注書(支店ごと1通)では、さらに店舗ごとに「どれか1品は1ケース以上」にする(足りなければコーヒー豆を1ケースに。豆が無い店はケースにいちばん近い品)。この調整はR列には出ません。トーヨーはBカートの記載単位(ケース)が最低ロット。'],
     ['4. 例外: ケース丸め対象の商品で、丸めた結果が0ケースでも、丸める前の発注数が0より大きく、かつ期末在庫が実際に0(売り切れ)なら、最低1ケースは発注する(売り切れなのに発注数0と表示される事故を防ぐため)。'],
     ['5. 保管上限(ケース数)が商品マスタに設定されている商品は、期末在庫+発注数がその上限を超えないよう発注数をさらに抑える(冷凍庫スペース対策等)。保管上限は数式内に値として埋め込まれ、シート上には列として表示されません。'],
     ['6. ケースサイズが無い商品は、四捨五入(0.5未満切り捨て・0.5以上切り上げ)で整数にする(例: 渋谷神南の抹茶ラテ)。'],
@@ -4398,7 +4398,7 @@ const APEX_REORDER_RECIPIENTS = {
 //
 // 数量のルール（2026-10-09 塩川さん）:
 //   ・アペックス・CS3: 袋・個単位（ケースに丸めない）。ただし店舗ごとに、どれか1品は1ケース以上にする
-//     （アペックスの最低発注条件。全部の合計ではなく1品で1ケース）。満たさないときは、ケースにいちばん近い品を1ケースにする
+//     （アペックスの最低発注条件。全部の合計ではなく1品で1ケース）。満たさないときはコーヒー豆を1ケースにする（豆が無い店はケースにいちばん近い品）
 //   ・トーヨー（JCC）: 従来どおりケース単位（Bカートの記載単位が最低発注ロット）
 function _settingJson_(key, fallback) {
   const e = getSettings().find(s => s.key === key);
@@ -4407,20 +4407,25 @@ function _settingJson_(key, fallback) {
 }
 
 function _applyReorderRounding_(raw) {
-  const out = raw.map(it => {
+  const all = raw.map(it => {
     const qty = it.vendor === 'toyo'
       ? _reorderQtyPieces_(it.target, it.endStock, it.casePieces, it.stockCapCases)
       : Math.max(0, Math.round(it.target - it.endStock));
     return Object.assign({}, it, { qty });
-  }).filter(it => it.qty > 0);
-  const apex = out.filter(it => it.vendor !== 'toyo' && it.casePieces);
-  if (apex.length && !apex.some(it => it.qty >= it.casePieces)) {
-    const top = apex.reduce((a, b) => (b.qty / b.casePieces > a.qty / a.casePieces ? b : a));
+  });
+  const apexAll = all.filter(it => it.vendor !== 'toyo' && it.casePieces);
+  const apexOrdered = apexAll.filter(it => it.qty > 0);
+  if (apexOrdered.length && !apexOrdered.some(it => it.qty >= it.casePieces)) {
+    // どの品も1ケースに届かないときは、コーヒー豆を1ケースにする(2026-10-10 塩川さん: いちばん消費が早く、場所もとらないため)。
+    // 豆が複数あれば、発注数が多い方(同じなら基準値が大きい方)。豆が無い店だけ、ケースにいちばん近い品を1ケースにする
+    const beans = apexAll.filter(it => /ロースト|ブレンド|豆/.test(String(it.product)))
+      .sort((a, b) => (b.qty - a.qty) || (b.target - a.target));
+    const top = beans[0] || apexOrdered.reduce((a, b) => (b.qty / b.casePieces > a.qty / a.casePieces ? b : a));
     top.qtyBefore = top.qty;
-    top.qty = top.casePieces;
+    top.qty = Math.max(top.qty, top.casePieces);
     top.bumped = true;
   }
-  return out;
+  return all.filter(it => it.qty > 0);
 }
 
 // ===== トーヨー（JCC）店舗の月初発注（2026-10-10） =====
