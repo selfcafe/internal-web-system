@@ -411,6 +411,50 @@
       letter-spacing: .03em;
     }
 
+    /* 手順動画のリンク集 */
+    .video-group {
+      background: var(--surface);
+      border-radius: 14px;
+      box-shadow: var(--shadow);
+      padding: 18px 20px;
+      margin-bottom: 16px;
+    }
+    .video-group-title {
+      font-size: 16px;
+      font-weight: 700;
+      color: var(--text);
+      margin-bottom: 10px;
+    }
+    .video-links {
+      list-style: none;
+      display: flex; flex-wrap: wrap; gap: 8px;
+    }
+    .video-links a {
+      display: inline-flex; align-items: center; gap: 6px;
+      background: var(--accent-light);
+      color: var(--tag-text);
+      font-size: 15px;
+      font-weight: 700;
+      text-decoration: none;
+      padding: 8px 14px;
+      border-radius: 20px;
+      border: 1.5px solid transparent;
+      transition: border-color .15s;
+    }
+    .video-links a:hover { border-color: var(--accent); }
+
+    /* お客様対応：お伝えする言葉 */
+    .say-box {
+      background: var(--surface);
+      border: 2px solid var(--accent);
+      border-radius: 12px;
+      padding: 16px 18px;
+      font-size: 16px;
+      font-weight: 700;
+      line-height: 1.8;
+      color: var(--text);
+    }
+
     @media (max-width: 500px) {
       .step-num-col { padding-top: 16px; }
       .step-body { padding: 14px 14px 14px 0; }
@@ -434,20 +478,23 @@
   <div class="container">
     <p class="eyebrow">Self Cafe Partner Portal</p>
     <h1>パートナーポータル<br>操作ガイド</h1>
-    <p class="subtitle">発注依頼・忘れ物の登録・チェックシート — 基本操作マニュアル</p>
+    <p class="subtitle">発注依頼・忘れ物の登録・チェックシート・棚卸 — 基本操作マニュアル</p>
   </div>
 </header>
 
 <div class="container">
 
   <div class="intro-card">
-    <p>このガイドでは、パートナーポータルを使って<strong>発注依頼の送信</strong>・<strong>忘れ物の登録</strong>・<strong>チェックシートの記入</strong>・<strong>バグ報告・修正依頼の投稿</strong>を行う手順を説明します。</p>
+    <p>このガイドでは、パートナーポータルを使って<strong>発注依頼の送信</strong>・<strong>忘れ物の登録</strong>・<strong>チェックシートの記入</strong>・<strong>月末の棚卸</strong>・<strong>バグ報告・修正依頼の投稿</strong>を行う手順を説明します。お客様への対応のしかたと、作業の手順動画もまとめています。</p>
     <p>スマートフォン（iPhone・Android）から操作できます。順番通りに進めれば、はじめての方でも迷わず使えます。</p>
     <div class="scope">
       <span class="scope-chip">📦 発注依頼</span>
       <span class="scope-chip">🔑 忘れ物</span>
       <span class="scope-chip">📝 チェックシート</span>
+      <span class="scope-chip">📋 棚卸</span>
       <span class="scope-chip">🐞 バグ報告</span>
+      <span class="scope-chip">🙋 お客様対応</span>
+      <span class="scope-chip">🎬 手順動画</span>
     </div>
   </div>
 
@@ -460,8 +507,11 @@
       <li><a href="#order"><span class="toc-num">4</span>発注依頼の送り方・取り消し方</a></li>
       <li><a href="#lostitem"><span class="toc-num">5</span>忘れ物の登録方法</a></li>
       <li><a href="#checksheet"><span class="toc-num">6</span>チェックシートの記入方法・アルバム</a></li>
-      <li><a href="#bugreport"><span class="toc-num">7</span>バグ報告・修正依頼の投稿</a></li>
-      <li><a href="#tips"><span class="toc-num">8</span>困ったときのポイント</a></li>
+      <li><a href="#inventory"><span class="toc-num">7</span>棚卸の手順（月末）</a></li>
+      <li><a href="#bugreport"><span class="toc-num">8</span>バグ報告・修正依頼の投稿</a></li>
+      <li><a href="#customer"><span class="toc-num">9</span>お客様対応</a></li>
+      <li><a href="#videos"><span class="toc-num">10</span>手順動画</a></li>
+      <li><a href="#tips"><span class="toc-num">11</span>困ったときのポイント</a></li>
     </ol>
   </nav>
 
@@ -548,6 +598,7 @@
         <li><b>「打刻しましたが、店舗から離れた場所での打刻として記録されました。」</b>（赤）＝打刻自体は記録済みですが、店舗の基準座標から300mより離れた場所からの打刻です</li>
         <li>「業務開始履歴（自店舗）」で自分の打刻履歴、当月・先月の記録日数を確認できます</li>
         <li>その日まだ打刻していない場合、ポータルを開くとリマインドのポップアップが表示されます。「業務開始」ボタンからそのまま打刻画面に移動できます</li>
+        <li>同じ画面の<b>「休み申請」</b>で、休む日を選んで「申請する」を押すと本部に届きます。<b>当日休む場合</b>は、申請したうえで、その店舗のグループトークにも連絡してください</li>
       </ul>
     </div>
   </section>
@@ -756,8 +807,9 @@
                 <div class="phone-tabs">
                   <div class="phone-tab active">発注</div>
                   <div class="phone-tab">忘れ物</div>
+                  <div class="phone-tab">チェック<br>シート</div>
+                  <div class="phone-tab">バグ報告</div>
                   <div class="phone-tab">棚卸表</div>
-                  <div class="phone-tab">その他</div>
                 </div>
                 <span class="tap-hint">👆 「発注」をタップ</span>
               </div>
@@ -770,7 +822,7 @@
         <div class="step-num-col"><span class="step-num">2</span></div>
         <div class="step-body">
           <p class="step-action">商品名と数量を入力する</p>
-          <p class="step-desc">発注タブを開くと、入力欄が<b>1行自動的に表示</b>されます。そのまま<b>商品名</b>と<b>数量</b>を入力してください。同じ発注で複数商品まとめたい場合は、「＋ 商品を追加」で行を増やせます。</p>
+          <p class="step-desc">「発注」タブの<b>「発注依頼」</b>を開くと、入力欄が<b>1行自動的に表示</b>されます。<b>商品名</b>を選び、<b>数量</b>を－／＋ボタンか直接入力で入れてください。商品によっては数量の横に<b>「バラ」「ケース」</b>の切り替えがあるので、どちらの数か選びます。同じ発注で複数商品まとめたい場合は、「＋ 商品を追加」で行を増やせます。必要なら「備考」に一言書いたり、「写真を添付」「撮影」で写真を付けたりできます。</p>
         </div>
         <div class="phone-wrap">
           <div class="phone">
@@ -797,7 +849,7 @@
         <div class="step-num-col"><span class="step-num">3</span></div>
         <div class="step-body">
           <p class="step-action">「依頼する →」ボタンを押す</p>
-          <p class="step-desc">入力内容を確認してから<b>「依頼する →」ボタン</b>をタップします。送信後、担当者にLINE WORKSで通知が届きます。</p>
+          <p class="step-desc">入力内容を確認してから<b>「依頼する →」ボタン</b>をタップします。依頼した内容は<b>「依頼済み履歴」</b>に移ります。</p>
         </div>
         <div class="phone-wrap">
           <div class="phone">
@@ -816,19 +868,30 @@
     </div>
 
     <div class="notice" style="margin-top:20px;">
-      <p class="notice-title">✅ 送信完了のサイン</p>
+      <p class="notice-title">✅ 依頼済み履歴での表示の見方</p>
       <ul>
-        <li>画面に <b>「✓ 依頼済み」</b> と表示されれば送信完了です</li>
-        <li>担当スタッフ側にはすぐ通知が届くので、再送は不要です</li>
+        <li><b>「⌛ 確認中」</b>＝依頼は届いています。本部が確認・手配するのを待っている状態です。再送は不要です</li>
+        <li><b>「✓ 依頼済み」</b>＝本部が発注しました。発注日・納品予定日が入ります</li>
+        <li><b>「✕ 否認されました」</b>＝依頼が通りませんでした。備考を確認し、「依頼取り下げ」を押してください</li>
+        <li>本部が発注・否認をすると、「発注」タブに赤い <b>NEW</b> が付きます。納品予定の商品があるときは <b>納品</b> の札が付きます</li>
+        <li>納品予定日を過ぎても届かないときは、LINEのグループトークで本部に知らせてください</li>
       </ul>
     </div>
 
     <div class="rule-box" style="margin-top:24px;">
-      <p class="rule-box-title">➕ 2件目以降の発注を追加したい場合</p>
+      <p class="rule-box-title">📦 商品が届いたら「納品済み」を押す</p>
       <ul>
-        <li>「依頼する →」を押した後に画面下の<b>「発注依頼を追加」ボタン</b>が表示されます</li>
-        <li>タップすると新しい発注グループの入力欄が追加されます</li>
-        <li>ルール通り、1件ごとに 1ケース以上を含めて依頼してください</li>
+        <li>「依頼済み履歴」で、届いた商品の<b>「納品済み」ボタン</b>を押してください。商品ごとに押せます</li>
+        <li>発注日が入るまでは押せません（ボタンが薄い色のままです）</li>
+        <li>「納品済み」にした数は、<b>棚卸の「当月納品」に自動で入ります</b>。押し忘れると棚卸の数が合わなくなるので、<b>棚卸の前に必ず押してください</b></li>
+      </ul>
+    </div>
+
+    <div class="rule-box" style="margin-top:24px;">
+      <p class="rule-box-title">➕ 2件目以降の発注をしたい場合</p>
+      <ul>
+        <li>依頼したあと、もう一度ポータルを開き直すと、新しい入力欄が1行表示されます</li>
+        <li>ルール通り、1件ごとに 1ケース以上を含めて依頼してください（アペックスの場合）</li>
       </ul>
     </div>
 
@@ -836,7 +899,7 @@
 
     <div class="section-header" style="margin-bottom:16px;">
       <div class="section-icon" style="background:#dc2626;">🔙</div>
-      <h2 style="font-size:18px;">発注依頼を取り消すには<small>スタッフが手配する前であれば取り消せます</small></h2>
+      <h2 style="font-size:18px;">発注依頼を取り消すには<small>本部が発注する前（「確認中」の間）であれば取り消せます</small></h2>
     </div>
 
     <div class="steps">
@@ -844,8 +907,8 @@
       <article class="step">
         <div class="step-num-col"><span class="step-num">1</span></div>
         <div class="step-body">
-          <p class="step-action">「✓ 依頼済み」の表示を確認する</p>
-          <p class="step-desc">送信した依頼の下に <b>「✓ 依頼済み」</b>と表示されます。その横に <b>「取り消す」ボタン（グレー）</b>が出ていれば、まだ取り消しが可能な状態です。</p>
+          <p class="step-action">「依頼済み履歴」を開いて「⌛ 確認中」を確認する</p>
+          <p class="step-desc">「発注」タブの<b>「依頼済み履歴」</b>を開きます。取り消したい依頼に <b>「⌛ 確認中」</b>と <b>「取り下げ」ボタン</b>が出ていれば、まだ取り消せます。</p>
         </div>
         <div class="phone-wrap">
           <div class="phone">
@@ -856,10 +919,10 @@
                   <b>ブレンドコーヒー豆</b> 2ケース
                 </div>
                 <div style="display:flex; align-items:center; gap:6px; padding:4px 0; flex-wrap:wrap;">
-                  <span style="color:#22703d; font-size:10px; font-weight:700;">✓ 依頼済み</span>
-                  <span style="background:#6b7280; color:#fff; font-size:9px; font-weight:700; padding:3px 8px; border-radius:5px;">取り消す</span>
+                  <span style="color:#d97706; font-size:10px; font-weight:700;">⌛ 確認中</span>
+                  <span style="background:#6b7280; color:#fff; font-size:9px; font-weight:700; padding:3px 8px; border-radius:5px;">取り下げ</span>
                 </div>
-                <span class="tap-hint">👆 グレーの「取り消す」をタップ</span>
+                <span class="tap-hint">👆 「取り下げ」をタップ</span>
               </div>
             </div>
           </div>
@@ -869,8 +932,8 @@
       <article class="step">
         <div class="step-num-col"><span class="step-num">2</span></div>
         <div class="step-body">
-          <p class="step-action">「取り消す」をタップして確認する</p>
-          <p class="step-desc">確認ダイアログが出た場合は <b>「OK」</b> をタップしてください。入力欄が再び編集できる状態に戻ります。</p>
+          <p class="step-action">「取り下げ」をタップする</p>
+          <p class="step-desc">依頼は<b>「発注依頼」の入力欄に戻り</b>、もう一度直せる状態になります。いらなくなった行は「削除」で消してください。直したら、もう一度「依頼する →」を押します。</p>
         </div>
       </article>
 
@@ -879,7 +942,7 @@
     <div class="notice" style="margin-top:16px;">
       <p class="notice-title">⚠ 取り消しができない場合</p>
       <ul>
-        <li>「取り消す」の代わりに <b>「発注済みのため取り消し不可」</b> と表示されている場合は、すでにスタッフが手配を開始しています</li>
+        <li><b>「✓ 依頼済み」</b>に変わっていて「取り下げ」ボタンが無い場合は、本部がすでに発注しています</li>
         <li>その場合は担当スタッフへ直接ご連絡ください</li>
       </ul>
     </div>
@@ -919,8 +982,9 @@
                 <div class="phone-tabs">
                   <div class="phone-tab">発注</div>
                   <div class="phone-tab active">忘れ物</div>
+                  <div class="phone-tab">チェック<br>シート</div>
+                  <div class="phone-tab">バグ報告</div>
                   <div class="phone-tab">棚卸表</div>
-                  <div class="phone-tab">その他</div>
                 </div>
                 <span class="tap-hint">👆 「忘れ物」をタップ</span>
               </div>
@@ -955,7 +1019,7 @@
         <div class="step-num-col"><span class="step-num">3</span></div>
         <div class="step-body">
           <p class="step-action">忘れ物の特徴を備考欄に書く</p>
-          <p class="step-desc"><b>色・形・ブランド・どこに届けたか</b>など、後から特定できる情報をできるだけ具体的に書いてください。</p>
+          <p class="step-desc"><b>見つけた場所・見つけた物（色・形・ブランドなど）・届けた場所</b>（交番・警察署に届けた場合）を書いてください。後から特定できるよう、できるだけ具体的にお願いします。</p>
         </div>
         <div class="phone-wrap">
           <div class="phone">
@@ -977,20 +1041,21 @@
         <div class="step-num-col"><span class="step-num">4</span></div>
         <div class="step-body">
           <p class="step-action">写真を撮って添付する</p>
-          <p class="step-desc"><b>「写真を追加」</b>をタップし、忘れ物の写真を撮影します。全体と特徴的な部分の2枚撮ると、持ち主の確認がスムーズです。</p>
+          <p class="step-desc"><b>「📷 撮影」</b>でその場で撮るか、<b>「📁 写真を添付」</b>でスマホの中の写真を選びます（複数枚できます）。全体と特徴的な部分の2枚撮ると、持ち主の確認がスムーズです。</p>
         </div>
         <div class="phone-wrap">
           <div class="phone">
             <div class="phone-screen">
               <div class="phone-bar">忘れ物を登録</div>
               <div class="phone-content">
-                <div class="phone-btn secondary" style="display:flex; align-items:center; justify-content:center; gap:5px;">
-                  📷 写真を追加
+                <div style="display:flex; gap:6px;">
+                  <div class="phone-btn secondary" style="flex:1; display:flex; align-items:center; justify-content:center; gap:5px;">📁 写真を添付</div>
+                  <div class="phone-btn secondary" style="flex:1; display:flex; align-items:center; justify-content:center; gap:5px;">📷 撮影</div>
                 </div>
                 <div style="background:#e8e8e8; border-radius:6px; height:50px; margin-top:7px; display:flex; align-items:center; justify-content:center;">
                   <span style="font-size:9px; color:#888;">🖼 添付された写真</span>
                 </div>
-                <span class="tap-hint" style="margin-top:6px;">👆 タップするとカメラが起動</span>
+                <span class="tap-hint" style="margin-top:6px;">👆 「撮影」でカメラが起動</span>
               </div>
             </div>
           </div>
@@ -1001,8 +1066,8 @@
       <article class="step">
         <div class="step-num-col"><span class="step-num">5</span></div>
         <div class="step-body">
-          <p class="step-action">「登録」ボタンを押して完了</p>
-          <p class="step-desc">入力内容を確認したら<b>「登録」ボタン</b>をタップします。登録した内容は管理者画面に届きます。</p>
+          <p class="step-action">「追加」ボタンを押して完了</p>
+          <p class="step-desc">入力内容を確認したら<b>「追加」ボタン</b>をタップします。登録した忘れ物は下の一覧に表示され、本部の管理画面にも届きます。</p>
         </div>
         <div class="phone-wrap">
           <div class="phone">
@@ -1013,7 +1078,7 @@
                   <b>2026年6月30日</b>
                   黒色の折りたたみ傘、持ち手に赤いリボン
                 </div>
-                <div class="phone-btn">登録する</div>
+                <div class="phone-btn">追加</div>
                 <span class="tap-hint" style="margin-top:6px;">👆 最後にここを押す</span>
               </div>
             </div>
@@ -1049,7 +1114,7 @@
       <ul>
         <li>「デイリーカウント」「清掃・点検」<b>それぞれ、業務時に入力</b>してください</li>
         <li>入力できるのは<b>「当日」の分だけ</b>です。日付をまたぐと前日以前の欄は編集できなくなります</li>
-        <li>月の記録は<b>暦通りの1日〜末日</b>で区切られます（棚卸表の締め日とは異なります）</li>
+        <li>月の記録は<b>暦通りの1日〜末日</b>で区切られます（棚卸と同じ区切りです）</li>
         <li>スマホ・PCどちらから入力しても<b>自動的に同期</b>されます</li>
       </ul>
     </div>
@@ -1070,8 +1135,9 @@
                 <div class="phone-tabs">
                   <div class="phone-tab">発注</div>
                   <div class="phone-tab">忘れ物</div>
+                  <div class="phone-tab active">チェック<br>シート</div>
+                  <div class="phone-tab">バグ報告</div>
                   <div class="phone-tab">棚卸表</div>
-                  <div class="phone-tab active">チェックシート</div>
                 </div>
                 <span class="tap-hint">👆 「チェックシート」をタップ</span>
               </div>
@@ -1105,7 +1171,7 @@
         <div class="step-num-col"><span class="step-num">3</span></div>
         <div class="step-body">
           <p class="step-action">デイリーカウント：－／＋で数量を入力する</p>
-          <p class="step-desc">対象の商品ごとに、<b>補充した数量</b>（在庫を数えた数ではありません）を<b>－／＋ボタン</b>（タップでカウント）または直接入力で記録します。表示される商品は<b>店舗ごとの設定</b>によって異なります。</p>
+          <p class="step-desc">対象の商品ごとに、<b>補充した数量</b>（在庫を数えた数ではありません）を<b>－／＋ボタン</b>（タップでカウント）または直接入力で記録します。表示される商品は、本部が設定している<b>店舗ごとの取扱商品</b>で決まります（その店舗で扱っていない商品は出ません）。お菓子など一部の販売品は<b>「理論在庫」</b>の数字が表示されるだけで、入力は不要です。</p>
         </div>
         <div class="phone-wrap">
           <div class="phone">
@@ -1155,7 +1221,7 @@
         <div class="step-num-col"><span class="step-num">5</span></div>
         <div class="step-body">
           <p class="step-action">「当月のチェックシート履歴」で入力状況を確認する</p>
-          <p class="step-desc">画面右上のボタンをタップすると、今月分の入力を日付ごとの表で確認できます（<b>確認専用</b>で、この画面から修正はできません）。もう一度タップすると入力画面に戻ります。</p>
+          <p class="step-desc">切り替えボタンの下にある、横長の<b>「当月のチェックシート履歴」</b>ボタンをタップすると、今月分の入力を日付ごとの表で確認できます（<b>確認専用</b>で、この画面から修正はできません）。ボタンが<b>「当日のチェックシート入力」</b>に変わるので、もう一度タップすると入力画面に戻ります。</p>
         </div>
       </article>
 
@@ -1277,6 +1343,161 @@
 
   <hr class="divider">
 
+  <!-- Section: Inventory (2026-10-10追加) -->
+  <section class="section" id="inventory">
+    <div class="section-header">
+      <div class="section-icon">📋</div>
+      <h2>棚卸の手順（月末）<small>月末に店舗の在庫を数えて、「棚卸表」タブから提出します</small></h2>
+    </div>
+
+    <div class="notice" style="margin-bottom:20px">
+      <p class="notice-title">ℹ 今は「準備中」です</p>
+      <ul>
+        <li>「棚卸表」タブには今「準備中」の札が付いています。<b>本部から案内があるまでは準備中</b>です。案内があったら、この手順で行ってください</li>
+      </ul>
+    </div>
+
+    <div class="rule-box">
+      <p class="rule-box-title">📋 棚卸のルール（必ずご確認ください）</p>
+      <ul>
+        <li>棚卸は<b>月末</b>に行います。月末が難しいときは、<b>前日・前々日</b>でも大丈夫です（数え方は<a href="https://youtu.be/0GxNRUGI0Xw" target="_blank" rel="noopener" style="color:var(--accent); font-weight:700;">棚卸の手順動画</a>でも確認できます）</li>
+        <li><b>その月のうちに提出</b>してください。送った日の月の分として記録されるため、月が変わると前の月の分は出せません</li>
+        <li>数える単位は<b>袋・個・本など、1つずつの数</b>です。<b>ケースの数ではありません</b>。箱のまま残っている分は「1ケースの入り数 × 箱の数」で計算して足してください</li>
+        <li>棚卸の前に、届いた商品の<b>「納品済み」ボタンを押しておいてください</b>（発注タブの「依頼済み履歴」）。押し忘れると数が合わなくなります</li>
+        <li>画面に出ている商品は、<b>全部数えて入力</b>してください。在庫が無い商品は<b>「0」</b>と入力します（空欄のままにしない）</li>
+      </ul>
+    </div>
+
+    <div class="steps">
+
+      <article class="step">
+        <div class="step-num-col"><span class="step-num">1</span></div>
+        <div class="step-body">
+          <p class="step-action">「棚卸表」タブをタップする</p>
+          <p class="step-desc">タブの一番右にある<b>「棚卸表」</b>を選びます。右上に<b>「○年○月分（締め日の目安：○/○〜○/○）」</b>と出るので、何月分かを確認してください。</p>
+        </div>
+        <div class="phone-wrap">
+          <div class="phone">
+            <div class="phone-screen">
+              <div class="phone-bar">Self Cafe Partner Portal</div>
+              <div class="phone-content">
+                <div class="phone-tabs">
+                  <div class="phone-tab">発注</div>
+                  <div class="phone-tab">忘れ物</div>
+                  <div class="phone-tab">チェック<br>シート</div>
+                  <div class="phone-tab">バグ報告</div>
+                  <div class="phone-tab active">棚卸表</div>
+                </div>
+                <span class="tap-hint">👆 「棚卸表」をタップ</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="step">
+        <div class="step-num-col"><span class="step-num">2</span></div>
+        <div class="step-body">
+          <p class="step-action">商品ごとに「期末在庫」を入力する</p>
+          <p class="step-desc">お店にある在庫を数えて、<b>「期末在庫」</b>の欄に数を入れます。単位は<b>袋・個・本</b>です（ケースではありません）。<b>「1ケースの入り数」</b>の列は、箱の中身を計算するときの参考にしてください。表が横に長いときは、横にスクロールできます。</p>
+        </div>
+        <div class="phone-wrap">
+          <div class="phone">
+            <div class="phone-screen">
+              <div class="phone-bar">棚卸表</div>
+              <div class="phone-content">
+                <div class="phone-field" style="justify-content:space-between;">
+                  <span>コーヒー豆</span>
+                  <span style="font-size:9px; color:#888;">入り数 25</span>
+                </div>
+                <div class="phone-field active" style="justify-content:space-between;">
+                  <span class="field-label" style="margin:0;">期末在庫</span>
+                  <span><b>32</b> 袋</span>
+                </div>
+                <span class="tap-hint">👆 1袋・1個ずつの数を入れる</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+      <article class="step">
+        <div class="step-num-col"><span class="step-num">3</span></div>
+        <div class="step-body">
+          <p class="step-action">消費期限がある商品は、期限と個数を入れる</p>
+          <p class="step-desc"><b>「消費期限①〜③」</b>に、期限の日付と、その期限の個数を入れます。個数を入れると、合計が<b>期末在庫に自動で入ります</b>。期限の管理がいらない商品は「対象外」と出ます。</p>
+          <p class="step-desc" style="margin-top:6px;">期限が切れた商品は<b>赤く</b>表示されます。処分したときは、期末在庫を<b>処分した後の数</b>に直し、<b>「処分数量」</b>に処分した数を入れてください。期限が近い商品は黄色で表示されます。期限までに使い切れないときは担当スタッフに連絡してください。</p>
+        </div>
+      </article>
+
+      <article class="step">
+        <div class="step-num-col"><span class="step-num">4</span></div>
+        <div class="step-body">
+          <p class="step-action">「確認 →」を押して、数字を確かめる</p>
+          <p class="step-desc">確認画面には、<b>期首在庫</b>（先月末の在庫）・<b>当月納品</b>（「納品済み」にした分など）・<b>期末在庫</b>・<b>消費量</b>・<b>処分数量</b>・<b>デイリーカウント</b>（チェックシートの補充数の合計）が並びます。直したいときは<b>「← 戻る」</b>で入力画面に戻れます。</p>
+        </div>
+      </article>
+
+      <article class="step">
+        <div class="step-num-col"><span class="step-num">5</span></div>
+        <div class="step-body">
+          <p class="step-action">赤い行があれば、理由を書く</p>
+          <p class="step-desc">消費量がおかしい商品（マイナスになっている、先月より増えている）は<b>赤い行</b>で表示されます。まず数え間違い・入力ミスが無いか確かめてください。合っている場合は、<b>理由の欄</b>に書きます（例：大量注文で消費が多かった）。<b>理由を書かないと提出できません</b>。</p>
+          <p class="step-desc" style="margin-top:6px;">「消費量とデイリーカウントが一致しません」と出たときは、数え間違いが無いか見直してください（このままでも提出はできます）。</p>
+        </div>
+      </article>
+
+      <article class="step">
+        <div class="step-num-col"><span class="step-num">6</span></div>
+        <div class="step-body">
+          <p class="step-action">「棚卸完了」を押して提出する</p>
+          <p class="step-desc">伝えたいことがあれば<b>「棚卸備考」</b>に書いてから、<b>「棚卸完了」</b>を押します。ボタンが「送信中…」→<b>「✓ 送信しました」</b>に変わり、<b>「最終送信：日時」</b>が表示されれば提出できています。</p>
+        </div>
+        <div class="phone-wrap">
+          <div class="phone">
+            <div class="phone-screen">
+              <div class="phone-bar">棚卸表（確認）</div>
+              <div class="phone-content">
+                <div class="phone-field" style="flex-direction:column; align-items:flex-start;">
+                  <span class="field-label">棚卸備考</span>
+                  <span>特記事項があれば記入</span>
+                </div>
+                <div style="display:flex; gap:6px;">
+                  <div class="phone-btn secondary" style="flex:1;">← 戻る</div>
+                  <div class="phone-btn" style="flex:1;">棚卸完了</div>
+                </div>
+                <span class="tap-hint" style="margin-top:6px;">👆 確かめたら「棚卸完了」</span>
+              </div>
+            </div>
+          </div>
+        </div>
+      </article>
+
+    </div>
+
+    <div class="notice" style="margin-top:20px;">
+      <p class="notice-title">✅ 提出した数字はこう使われます</p>
+      <ul>
+        <li>提出すると、<b>本部の集計表に自動で反映</b>されます</li>
+        <li>提出した在庫の数は、<b>月初の発注</b>（次の月にどれだけ発注するか）に使われます。正しく数えて入力してください</li>
+        <li>今月の期末在庫は、来月の「期首在庫」になります</li>
+      </ul>
+    </div>
+
+    <div class="rule-box" style="margin-top:24px;">
+      <p class="rule-box-title">✏ 提出し直す（訂正する）とき</p>
+      <ul>
+        <li><b>同じ月のうちなら、何度でも出し直せます</b>。「棚卸表」タブで数字を直し、「確認 →」→「棚卸完了」を押してください。最後に送った数字で上書きされます</li>
+        <li><b>空欄にした項目は、前に送った数字がそのまま残ります</b>（空欄で送っても消えません）。在庫が無いときは「0」と入力してください</li>
+        <li>入力途中の数字は、入力したスマホの中に残ります。別のスマホで開くと空欄に見えますが、<b>空欄の項目は前の数字が残る</b>ので、何人かで分けて入力・提出しても大丈夫です</li>
+        <li><b>月が変わってから</b>前の月の分を直したいときは、画面からは直せません。担当スタッフに連絡してください</li>
+        <li>右上の<b>「先月の棚卸を見る」</b>で、先月提出した内容を見ることができます（見るだけです）</li>
+      </ul>
+    </div>
+  </section>
+
+  <hr class="divider">
+
   <!-- Section 7: Bug report board -->
   <section class="section" id="bugreport">
     <div class="section-header">
@@ -1309,8 +1530,9 @@
                 <div class="phone-tabs">
                   <div class="phone-tab">発注</div>
                   <div class="phone-tab">忘れ物</div>
-                  <div class="phone-tab">棚卸表</div>
+                  <div class="phone-tab">チェック<br>シート</div>
                   <div class="phone-tab active">バグ報告</div>
+                  <div class="phone-tab">棚卸表</div>
                 </div>
                 <span class="tap-hint">👆 「バグ報告」をタップ</span>
               </div>
@@ -1323,7 +1545,7 @@
         <div class="step-num-col"><span class="step-num">2</span></div>
         <div class="step-body">
           <p class="step-action">種別を選び、内容を書いて投稿する</p>
-          <p class="step-desc">不具合の報告なら<b>「バグ報告」</b>、「こうしてほしい」という要望なら<b>「修正依頼」</b>を選び、内容を具体的に書いて「投稿する」をタップします。</p>
+          <p class="step-desc">不具合の報告なら<b>「バグ報告」</b>、「こうしてほしい」という要望なら<b>「修正依頼」</b>を選び、内容を具体的に書いて「投稿する」をタップします。画面の様子は「📁 写真を添付」「📷 撮影」で写真を付けられます（スクリーンショットがあると分かりやすいです）。</p>
         </div>
         <div class="phone-wrap">
           <div class="phone">
@@ -1372,6 +1594,84 @@
 
   <hr class="divider">
 
+  <!-- Section: Customer (2026-10-10追加) -->
+  <section class="section" id="customer">
+    <div class="section-header">
+      <div class="section-icon">🙋</div>
+      <h2>お客様対応<small>お客様に話しかけられたとき・危ないと感じたとき</small></h2>
+    </div>
+
+    <div class="steps">
+
+      <article class="step">
+        <div class="step-num-col"><span class="step-num">1</span></div>
+        <div class="step-body">
+          <p class="step-action">お客様に質問されたら</p>
+          <p class="step-desc">質問には答えず、次のようにお伝えしてください。</p>
+          <div class="say-box" style="margin-top:10px;">「大変申し訳ございませんが、私は清掃スタッフで質問にお答えできないので、テーブルに貼られている公式LINEのQRコードからお問い合わせをお願いします。」</div>
+        </div>
+      </article>
+
+      <article class="step">
+        <div class="step-num-col"><span class="step-num">2</span></div>
+        <div class="step-body">
+          <p class="step-action">危険を感じたら</p>
+          <p class="step-desc">店内近くにある<b>赤い非常ボタン</b>を押してください。<b>警備の人が助けに来ます</b>。無理をせず、自分の身の安全を一番に考えてください。</p>
+        </div>
+      </article>
+
+    </div>
+  </section>
+
+  <hr class="divider">
+
+  <!-- Section: Videos (2026-10-10追加) -->
+  <section class="section" id="videos">
+    <div class="section-header">
+      <div class="section-icon">🎬</div>
+      <h2>手順動画<small>作業のやり方を動画で確認できます（新しいタブで開きます）</small></h2>
+    </div>
+
+    <div class="video-group">
+      <p class="video-group-title">集計・補充・カス捨て</p>
+      <ul class="video-links">
+        <li><a href="https://youtu.be/GYC4-G3VAys" target="_blank" rel="noopener">▶ 100RS</a></li>
+        <li><a href="https://youtu.be/jXRmkAHFXmI" target="_blank" rel="noopener">▶ CS3</a></li>
+        <li><a href="https://youtu.be/qUVJ2COgJqI" target="_blank" rel="noopener">▶ 55D</a></li>
+        <li><a href="https://youtu.be/EnOt96VTI4U" target="_blank" rel="noopener">▶ 自動販売機</a></li>
+      </ul>
+    </div>
+
+    <div class="video-group">
+      <p class="video-group-title">補充</p>
+      <ul class="video-links">
+        <li><a href="https://youtube.com/shorts/fNZGSjQntu8" target="_blank" rel="noopener">▶ カップ</a></li>
+        <li><a href="https://youtu.be/U90RYePh7x4" target="_blank" rel="noopener">▶ アメニティ</a></li>
+        <li><a href="https://youtube.com/shorts/zNq1jY3tLu8" target="_blank" rel="noopener">▶ 台拭きタオル</a></li>
+      </ul>
+    </div>
+
+    <div class="video-group">
+      <p class="video-group-title">拭き掃除</p>
+      <ul class="video-links">
+        <li><a href="https://youtu.be/L0wX-p95wJg" target="_blank" rel="noopener">▶ サーバー周り</a></li>
+        <li><a href="https://youtu.be/vMblkTdaBog" target="_blank" rel="noopener">▶ トイレ周り</a></li>
+      </ul>
+    </div>
+
+    <div class="video-group">
+      <p class="video-group-title">そのほかの作業</p>
+      <ul class="video-links">
+        <li><a href="https://youtu.be/Selz72Y5eCY" target="_blank" rel="noopener">▶ ペーパーフィルター交換</a></li>
+        <li><a href="https://youtu.be/BYksXijpccI" target="_blank" rel="noopener">▶ ゴミ捨て</a></li>
+        <li><a href="https://youtu.be/0GxNRUGI0Xw" target="_blank" rel="noopener">▶ 棚卸</a></li>
+        <li><a href="https://docs.google.com/presentation/d/1BcdtE1spj7lem7R0wCD8fyZ2_UiKQU4_NIOwtcYYY9M/edit" target="_blank" rel="noopener">📄 オレンジ交換（資料）</a></li>
+      </ul>
+    </div>
+  </section>
+
+  <hr class="divider">
+
   <!-- Section 8: Tips -->
   <section class="section" id="tips">
     <div class="section-header">
@@ -1401,7 +1701,7 @@
         <div class="step-num-col"><span class="step-num">Q</span></div>
         <div class="step-body">
           <p class="step-action">発注を送ったか分からなくなった</p>
-          <p class="step-desc">「発注」タブを開いて、依頼した内容に <b>「✓ 依頼済み」</b> と表示されていれば送信済みです。二重送信を防ぐため、必ず確認してから再送してください。</p>
+          <p class="step-desc">「発注」タブの<b>「依頼済み履歴」</b>を開いてください。依頼した内容が <b>「⌛ 確認中」</b>または<b>「✓ 依頼済み」</b>で出ていれば送信済みです。二重送信を防ぐため、必ず確認してから再送してください。</p>
         </div>
       </article>
 
@@ -1429,6 +1729,14 @@
         </div>
       </article>
 
+      <article class="step">
+        <div class="step-num-col"><span class="step-num">Q</span></div>
+        <div class="step-body">
+          <p class="step-action">棚卸を提出できたか分からない・数字を間違えた</p>
+          <p class="step-desc">「棚卸表」タブで「確認 →」を押すと、下に<b>「最終送信：日時」</b>が出ます。出ていれば提出済みです（別のスマホで提出した場合は表示されません）。数字を間違えたときは、<b>同じ月のうちなら</b>直してもう一度「棚卸完了」を押せば上書きされます。月が変わったあとは担当スタッフへご連絡ください。</p>
+        </div>
+      </article>
+
     </div>
   </section>
 
@@ -1438,7 +1746,8 @@
   <div class="container">
     <p><strong>Self Cafe パートナーポータル</strong><br>
     操作に関するご不明点は担当スタッフまでご連絡ください。<br>
-    発行：2026年6月／改訂：2026年7月（チェックシートの使い方を追加）／改訂：2026年9月（バグ報告・修正依頼の投稿方法を追加）</p>
+    発行：2026年6月／改訂：2026年7月（チェックシートの使い方を追加）／改訂：2026年9月（バグ報告・修正依頼の投稿方法を追加）／改訂：2026年10月（棚卸の手順・お客様対応・手順動画を追加、発注・忘れ物・チェックシートの説明を今の画面に合わせて修正）<br>
+    最終更新：2026-10-10</p>
   </div>
 </footer>
 
