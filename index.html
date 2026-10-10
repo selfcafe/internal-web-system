@@ -537,6 +537,7 @@
     .guide-menu a:first-child { border-radius:8px 8px 0 0; }
     .guide-menu a:last-child { border-radius:0 0 8px 8px; border-top:none; }
     .guide-menu a:hover { background:#edf2d4; }
+    .amz-btn { display:inline-block; background:#ff9900; color:#111; border-radius:6px; padding:2px 8px; font-size:11px; font-weight:700; text-decoration:none; white-space:nowrap; vertical-align:middle; }
     .machine-fold { margin-top:8px; }
     .machine-fold > summary { font-size:11px; font-weight:700; color:#888; background:#f2f2f2; padding:3px 8px; border-radius:4px; cursor:pointer; list-style:none; }
     .machine-fold > summary::-webkit-details-marker { display:none; }
@@ -7072,6 +7073,9 @@ function buildStoreOrderDetail(sid, groups) {
 
     group.forEach((row, i) => {
       const pLabel     = prodByName(row.product)?.label || row.product || '—';
+      // Amazon で買う品(商品一覧に Amazon の URL がある品)は、商品ページを開くボタンを出す(2026-10-10)
+      const amzUrl     = prodByName(row.product)?.amazon_url || '';
+      const amzBtn     = amzUrl ? ` <a href="${esc(amzUrl)}" target="_blank" rel="noopener" class="amz-btn" title="Amazonの商品ページを開く">🛒 Amazon</a>` : '';
       const isPending  = row.isNew && !row.denied;
       const isDenied   = !!row.denied;
       const cls        = isPending ? 'new-req' : '';
@@ -7109,7 +7113,7 @@ function buildStoreOrderDetail(sid, groups) {
           <td data-label="依頼日" style="vertical-align:middle;padding:8px 10px;white-space:nowrap;${topBorder}">${esc(reqDate)||'—'}${photoCell}</td>
           <td data-label="発注日" style="vertical-align:middle;padding:8px 10px;${topBorder}">${orderDateCell}</td>
           <td data-label="納品予定日" style="padding:6px 8px;${topBorder}"><input type="date" value="${esc(row.deliveryDate)}" style="font-size:13px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-family:inherit" onchange="adminUpd('${sid}','${row.id}','deliveryDate',this.value)"></td>
-          <td data-label="商品名" style="padding:8px 10px;${topBorder}">${esc(pLabel)}</td>
+          <td data-label="商品名" style="padding:8px 10px;${topBorder}">${esc(pLabel)}${amzBtn}</td>
           <td data-label="数量" style="padding:8px 10px;white-space:nowrap;${topBorder}">${actualQtyCell(sid, row)}</td>
           <td data-label="備考" style="padding:6px 8px;${topBorder}"><textarea style="width:100%;min-width:100px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-size:12px;font-family:inherit;resize:vertical" placeholder="備考" onchange="adminUpd('${sid}','${row.id}','note',this.value)">${esc(row.note)}</textarea></td>
           <td data-label="発注" style="vertical-align:middle;padding:8px 10px;white-space:nowrap;${topBorder}">${actionCell}</td>
@@ -7120,7 +7124,7 @@ function buildStoreOrderDetail(sid, groups) {
           <td data-label="依頼日" class="grp-repeat" style="vertical-align:middle;padding:8px 10px;white-space:nowrap">${esc(reqDate)||'—'}</td>
           <td data-label="発注日" style="vertical-align:middle;padding:8px 10px">${orderDateCell}</td>
           <td data-label="納品予定日" style="padding:6px 8px"><input type="date" value="${esc(row.deliveryDate)}" style="font-size:13px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-family:inherit" onchange="adminUpd('${sid}','${row.id}','deliveryDate',this.value)"></td>
-          <td data-label="商品名" style="padding:8px 10px">${esc(pLabel)}</td>
+          <td data-label="商品名" style="padding:8px 10px">${esc(pLabel)}${amzBtn}</td>
           <td data-label="数量" style="padding:8px 10px;white-space:nowrap">${actualQtyCell(sid, row)}</td>
           <td data-label="備考" style="padding:6px 8px"><textarea style="width:100%;min-width:100px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-size:12px;font-family:inherit;resize:vertical" placeholder="備考" onchange="adminUpd('${sid}','${row.id}','note',this.value)">${esc(row.note)}</textarea></td>
           <td data-label="発注" style="vertical-align:middle;padding:8px 10px;white-space:nowrap">${actionCell}</td>
@@ -8086,7 +8090,13 @@ function buildProdRows() {
           ontouchend="prodTouchEnd(event)">⠿</td>
         <td data-label="商品名" style="min-width:150px"><input type="text" value="${esc(p.label)}"
           style="width:100%;border:1px solid #ddd;border-radius:5px;padding:5px 7px;font-size:13px;font-family:inherit"
-          onchange="saveProductSetting('${esc(p.name)}','label',this.value)"></td>
+          onchange="saveProductSetting('${esc(p.name)}','label',this.value)">
+          <div style="display:flex;gap:4px;align-items:center;margin-top:4px">
+            <input type="url" value="${esc(p.amazon_url||'')}" placeholder="Amazon の商品ページURL（Amazonで買う品だけ）"
+              style="flex:1;min-width:0;border:1px solid #eee;border-radius:5px;padding:3px 6px;font-size:11px;font-family:inherit;color:#555"
+              onchange="saveProductSetting('${esc(p.name)}','amazon_url',this.value.trim())">
+            ${p.amazon_url ? `<a href="${esc(p.amazon_url)}" target="_blank" rel="noopener" class="amz-btn">🛒</a>` : ''}
+          </div></td>
         <td data-label="単位"><input type="text" value="${esc(p.unit)}"
           style="width:76px;border:1px solid #ddd;border-radius:5px;padding:5px 7px;font-size:13px;font-family:inherit"
           onchange="saveProductSetting('${esc(p.name)}','unit',this.value)"></td>
