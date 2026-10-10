@@ -153,18 +153,18 @@ const AREA_STORES = {
   '東海': ['sasashima','chikusa','gokiso','tsurumai','kamisawa','nakamura_nisseki','midori_kofubutsu','sakurayama','akatsuka','shin_moriyama','tokoname','hamamatsu','sakae','rokubanchou','nonami','seto_iwayadou','nagakute','meieki_nishi','nadia_sakae','aratamabashi','sako','hotei','kamejima','nakamura_torii','taikodori','kouta','hibino','hoshigaoka','ikeshita','toyota','hara','fujigaoka','gifu_kitagata','narumiyamashita','kisomisaki'],
   '関西': ['tenma','higashiosaka','aikawa','minami_morimachi','abeno','tanimachi9','moriguchi','taishibashi','kyobashi_kita','shinsaibashi','kishi','umeda','kami_shinjyo','osaka_hirano','hikone','aeon_higashiosaka','gamo4','tenmabashi_kita','tsurumi_yokozutsumi'],
   '関東': ['inzai','otsuka','sugamo','umejima','shibuya','kamisato'],
-  // 2026-08-24追加。関東セルフ・FC・業務委託は、既存の東海/関西/関東とは別の新規カテゴリ
-  // (関東セルフは既存の「関東」とは別物——リネームではない、ユーザー明示)。フロントのREGIONS定数と
+  // 2026-08-24追加。関東ニッカ・FC・業務委託は、既存の東海/関西/関東とは別の新規カテゴリ
+  // (関東ニッカは既存の「関東」とは別物——リネームではない、ユーザー明示)。フロントのREGIONS定数と
   // 同じ内容(詳細はそちら側のコメント参照)。新宿西口店(shinjuku_fc)は関東からFCへ移動。
-  // 千歳烏山はメニュー表記が「ニッカ関東セルフカフェデフォルト」のため関東セルフへ、天満橋北(大阪)は
+  // 千歳烏山はメニュー表記が「ニッカ関東ニッカカフェデフォルト」のため関東ニッカへ、天満橋北(大阪)は
   // 関西へ、盛岡駅前・盛岡大通(岩手、地理的にはどのエリアにも属さない)はFCとして追加
-  '関東セルフ': ['chitose_karasuyama', 'waseda'],
+  '関東ニッカ': ['chitose_karasuyama', 'waseda'],
   'FC': ['shinjuku_fc', 'morioka_ekimae', 'morioka_odori', 'gamagori', 'kariya', 'tottori_ekimae'],
   '業務委託': []
 };
 // フロントのREGIONS定数のid('tokai'/'kansai'/'kanto'/'kanto_self'/'fc'/'gyomu_itaku')→日本語ラベルの対応
 // （store_regions設定の値はid形式のため）
-const REGION_ID_LABEL_ = { tokai: '東海', kansai: '関西', kanto: '関東', kanto_self: '関東セルフ', fc: 'FC', gyomu_itaku: '業務委託' };
+const REGION_ID_LABEL_ = { tokai: '東海', kansai: '関西', kanto: '関東', kanto_self: '関東ニッカ', fc: 'FC', gyomu_itaku: '業務委託' };
 
 // 店舗ID改名の後方互換エイリアス(旧ID→新ID)。2026-08-04、御器所の店舗IDを
 // 誤読み"gokaiso"から正しい"gokiso"へ改名した際に追加。各シートに既に書き込み済みの
@@ -294,11 +294,11 @@ function _migrateStoreIdAliasesInSettings_() {
 // ほしい」と依頼を受け追加)。AREA_STORESの並び順(東海→関西→関東、各エリア内は追加された順)を
 // そのままタブの正準な並び順として使う——stores.js自体が新規店舗をエリアごとの末尾に追記していく
 // 運用のため、この並び順が自然と「新しい店舗ほど後ろ」になる。
-// 2026-08-24、関東セルフ/FC/業務委託を新規カテゴリとして追加(いずれも現時点で0〜1店舗)。
+// 2026-08-24、関東ニッカ/FC/業務委託を新規カテゴリとして追加(いずれも現時点で0〜1店舗)。
 // 色分けの都合上ここに含めるが、実際の並び順・色付けは各エリアの店舗数に応じて自然に反映される
-const AREA_TAB_COLORS = { '東海': '#93c47d', '関西': '#6fa8dc', '関東': '#f6b26b', '関東セルフ': '#f1c232', 'FC': '#c27ba0', '業務委託': '#8e7cc3' }; // 緑/青/オレンジ/黄/ピンク/紫
+const AREA_TAB_COLORS = { '東海': '#93c47d', '関西': '#6fa8dc', '関東': '#f6b26b', '関東ニッカ': '#f1c232', 'FC': '#c27ba0', '業務委託': '#8e7cc3' }; // 緑/青/オレンジ/黄/ピンク/紫
 function _storeTabCanonicalOrder_() {
-  return [].concat(AREA_STORES['東海'], AREA_STORES['関西'], AREA_STORES['関東'], AREA_STORES['関東セルフ'], AREA_STORES['FC'], AREA_STORES['業務委託']);
+  return [].concat(AREA_STORES['東海'], AREA_STORES['関西'], AREA_STORES['関東'], AREA_STORES['関東ニッカ'], AREA_STORES['FC'], AREA_STORES['業務委託']);
 }
 // タブの色分け専用の軽量エリア判定。_areaForStore_()とは意図的に別実装——_areaForStore_()は
 // 店舗管理画面でのエリア上書き(_storeRegionOverrides_→getSettings())を反映するため、無関係な
@@ -3240,7 +3240,7 @@ const INVENTORY_ROLLUP_HEADERS_JA = ['期間', 'エリア', '店舗名', '店舗
 // _areaForStore_()の返り値をこの順で並べる。既存のAREA_STORES反復順に合わせている。
 // エリア未設定の店舗(store_regions上書きもAREA_STORES登録も無い)は末尾にまとめる。
 // FCは_isFcStore_()で別途対象外にしているため(下記continue参照)ここには含めない
-const ROLLUP_AREA_ORDER = ['東海', '関西', '関東', '関東セルフ', '業務委託', '(エリア未設定)'];
+const ROLLUP_AREA_ORDER = ['東海', '関西', '関東', '関東ニッカ', '業務委託', '(エリア未設定)'];
 const INVENTORY_MISSING_HEADERS_JA = ['期間','店舗ID','店舗名'];
 
 // 商品名からROLLUP_CATEGORIESのどれに属するか判定する。vendorはmeta(_productMeta_)経由。
@@ -6835,18 +6835,18 @@ function sendDailyOrderNotification() {
     if (area === '東海') hasTokai = true;
     if (area === '関西') hasKansai = true;
     if (area === '関東') hasKanto = true;
-    // 関東セルフ/FC/業務委託は基本的に発注機能を使わない想定だが、AREA_STORESに店舗が入っている
+    // 関東ニッカ/FC/業務委託は基本的に発注機能を使わない想定だが、AREA_STORESに店舗が入っている
     // 以上発注データが来る可能性はゼロではないため、見落とし防止の保険として他エリアと同じ
     // 共通チャンネルへ通知する（2026-09-22追加。既存ループを流用するだけなのでデータ量・
     // 処理コストは増えない。専用チャンネルが必要になれば別途LW_CHANNEL_ID_ORDER_FC等を追加する）
-    if (area === '関東セルフ') hasKantoSelf = true;
+    if (area === '関東ニッカ') hasKantoSelf = true;
     if (area === 'FC') hasFC = true;
     if (area === '業務委託') hasGyomuItaku = true;
   }
   if (hasTokai) sendLineWorksNotification('東海エリアにて発注依頼があります。');
   if (hasKansai) sendLineWorksNotification('関西エリアにて発注依頼があります。');
   if (hasKanto) sendLineWorksNotification('関東エリアにて発注依頼があります。');
-  if (hasKantoSelf) sendLineWorksNotification('関東セルフエリアにて発注依頼があります。');
+  if (hasKantoSelf) sendLineWorksNotification('関東ニッカエリアにて発注依頼があります。');
   if (hasFC) sendLineWorksNotification('FCエリアにて発注依頼があります。');
   if (hasGyomuItaku) sendLineWorksNotification('業務委託エリアにて発注依頼があります。');
 }

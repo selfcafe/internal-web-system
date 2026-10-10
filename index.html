@@ -861,7 +861,7 @@
     <button class="sub-tab active" id="sub-tokai"  onclick="switchRegion('tokai')">東海<span class="tab-badge" id="badge-tokai"  style="display:none"></span></button>
     <button class="sub-tab"        id="sub-kansai" onclick="switchRegion('kansai')">関西<span class="tab-badge" id="badge-kansai" style="display:none"></span></button>
     <button class="sub-tab"        id="sub-kanto"  onclick="switchRegion('kanto')">関東<span class="tab-badge" id="badge-kanto"  style="display:none"></span></button>
-    <button class="sub-tab"        id="sub-kanto_self"  onclick="switchRegion('kanto_self')">関東セルフ<span class="tab-badge" id="badge-kanto_self"  style="display:none"></span></button>
+    <button class="sub-tab"        id="sub-kanto_self"  onclick="switchRegion('kanto_self')">関東ニッカ<span class="tab-badge" id="badge-kanto_self"  style="display:none"></span></button>
     <button class="sub-tab"        id="sub-fc"  onclick="switchRegion('fc')" style="display:none">FC<span class="tab-badge" id="badge-fc"  style="display:none"></span></button>
     <button class="sub-tab"        id="sub-gyomu_itaku"  onclick="switchRegion('gyomu_itaku')">業務委託<span class="tab-badge" id="badge-gyomu_itaku"  style="display:none"></span></button>
   </div>
@@ -1498,11 +1498,12 @@ const REGIONS = {
   kanto: { label:'関東', stores:[
     'inzai','otsuka','sugamo','umejima','shibuya','kamisato',
   ]},
-  // 2026-08-24追加。関東セルフ・FC・業務委託は、既存の東海/関西/関東とは別の新規カテゴリ
-  // (関東セルフは既存の「関東」とは別物——リネームではない、ユーザー明示)。新宿西口店(shinjuku_fc)は
-  // 関東からFCへ移動。千歳烏山はメニュー表記が「ニッカ関東セルフカフェデフォルト」のため関東セルフへ、
+  // 2026-08-24追加。関東ニッカ・FC・業務委託は、既存の東海/関西/関東とは別の新規カテゴリ
+  // (関東ニッカは既存の「関東」とは別物——リネームではない、ユーザー明示)。新宿西口店(shinjuku_fc)は
+  // 関東からFCへ移動。千歳烏山はメニュー表記が「ニッカ関東ニッカカフェデフォルト」のため関東ニッカへ、
   // 天満橋北(大阪)は関西へ、盛岡駅前・盛岡大通(岩手、地理的にはどのエリアにも属さない)はFCとして追加
-  kanto_self: { label:'関東セルフ', stores:[
+  // 2026-10-10: 表示名を「関東セルフ」→「関東ニッカ」に変更(塩川さん)。内部のキー kanto_self はそのまま
+  kanto_self: { label:'関東ニッカ', stores:[
     'chitose_karasuyama','waseda',
   ]},
   fc: { label:'FC', stores:[
@@ -6178,7 +6179,7 @@ function renderAdmin() {
 /* ===== 業務連絡（管理者が作成・公開するお知らせ。パートナー/管理者ポータル共通のウィジェット
    ＋一覧・詳細に表示する。管理者は同じウィジェットから新規作成・編集・削除も行う。2026-09-18追加） ===== */
 
-const ANNOUNCE_AREAS = ['東海', '関西', '関東', '関東セルフ', 'FC', '業務委託'];
+const ANNOUNCE_AREAS = ['東海', '関西', '関東', '関東ニッカ', 'FC', '業務委託'];
 
 // サーバー側は'yyyy-MM-dd'で返すため、店舗のdate表示("2026/09/18")と合わせて'/'区切りにする
 function _announceDateLabel(d) { return d ? String(d).replace(/-/g, '/') : ''; }
@@ -8426,7 +8427,7 @@ function _spStoreAdd() {
         <option value="tokai">東海</option>
         <option value="kansai">関西</option>
         <option value="kanto">関東</option>
-        <option value="kanto_self">関東セルフ</option>
+        <option value="kanto_self">関東ニッカ</option>
         <option value="fc">FC</option>
         <option value="gyomu_itaku">業務委託</option>
       </select>

@@ -22,7 +22,7 @@ const STORES = {
   /* 関東 */
   inzai:'印西牧の原', otsuka:'大塚駅南口', sugamo:'巣鴨駅南口',
   umejima:'梅島', shibuya:'渋谷神南', kamisato:'カインズ上里本庄',
-  /* 関東セルフ */
+  /* 関東ニッカ */
   chitose_karasuyama:'千歳烏山', waseda:'早稲田',
   /* FC */
   shinjuku_fc:'新宿西口Shinjuku Future Gallery',
