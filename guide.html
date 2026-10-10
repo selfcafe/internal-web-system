@@ -1857,5 +1857,17 @@ function closeImgLightbox() {
 })();
 </script>
 
+<script>
+// 目次などのページ内リンク: どの画面（アプリ内のプレビューなど、#での移動が効かない所）でも、その章までスクロールする(2026-10-10)
+document.querySelectorAll('a[href^="#"]').forEach(function (a) {
+  a.addEventListener('click', function (e) {
+    var t = document.getElementById(a.getAttribute('href').slice(1));
+    if (!t) return;
+    e.preventDefault();
+    t.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    try { history.replaceState(null, '', a.getAttribute('href')); } catch (err) {}
+  });
+});
+</script>
 </body>
 </html>
