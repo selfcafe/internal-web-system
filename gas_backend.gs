@@ -441,6 +441,8 @@ function doGet(e) {
     else if (a === 'processMonthlyReorder')     result = processMonthlyReorder(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'previewBranchReorder')      result = buildBranchReorder(e.parameter.branch, e.parameter.periodLabel, true);
     else if (a === 'buildBranchReorder')        result = buildBranchReorder(e.parameter.branch, e.parameter.periodLabel, false);
+    else if (a === 'previewToyoReorder')        result = buildToyoReorder(e.parameter.store, e.parameter.periodLabel, true);
+    else if (a === 'buildToyoReorder')          result = buildToyoReorder(e.parameter.store, e.parameter.periodLabel, false);
     else if (a === 'reorderStoreTabs')          result = reorderStoreTabs();
     else if (a === 'removeInventoryLabelColumn') result = removeInventoryLabelColumn();
     else if (a === 'removeStoreInventoryLowStockColumn') result = removeStoreInventoryLowStockColumn();
@@ -3434,7 +3436,8 @@ function _productMeta_() {
     // 指定する任意項目(未設定なら上限なし)。アイスのように「売り切れたら1ケース発注」だけでは
     // 収納スペースを超えてしまう商品に、発注数の追加上限として使う([[_computeReorderQty_]]参照)。
     const stockCapCases = Number(p.stockCapCases) || null;
-    map[p.name] = { vendor: p.vendor || '', order: i, caseOnly: !!p.caseOnly, casePieces: casePieces, stockCapCases: stockCapCases };
+    map[p.name] = { vendor: p.vendor || '', order: i, caseOnly: !!p.caseOnly, casePieces: casePieces, stockCapCases: stockCapCases,
+      code: p.code, price: Number(p.price) || 0 };
   });
   return map;
 }
@@ -4370,6 +4373,108 @@ function _applyReorderRounding_(raw) {
   return out;
 }
 
+// ===== トーヨー（JCC）店舗の月初発注（2026-10-10） =====
+// Bカート「ミル挽き珈琲CAFE」は人がカートに入れて注文するため、ここでは「何をいくつ買うか」の発注メモ（Gmail下書き）を作る。
+//   ・数量 = 基準値 − 月末在庫。袋・個単位（Bカートは原料を1袋から買えるのでケースに丸めない。塩川さん 2026-10-10）
+//   ・Bカートの販売単位がまとまりの商品だけ、その単位に切り上げる（商品マスタの caseUnit: ブレンドA/B=4袋=1kg、カップ・蓋=1ケース）
+//   ・税抜 TOYO_FREE_SHIPPING 円以上で送料無料。満たないときは、いちばん早く切れる品（(月末在庫+発注分)÷基準値 が小さい順）を
+//     1単位ずつ足して乗せる（同じ品は基準値の2倍まで）
+//   ・無料メンテナンスは毎月1つ必ず入れる（自動では来ない。単品注文不可）
+//   ・単価は商品マスタの price（Bカートの税抜単価、袋・本・箱・個あたり）
+const TOYO_FREE_SHIPPING = 20000;
+const TOYO_MAINTENANCE_NAME = '無料メンテナンス';
+
+function _storeIsToyo_(storeId) {
+  const m = _settingJson_('store_machines', {})[storeId] || [];
+  return Array.isArray(m) && m.indexOf('jcc') >= 0;
+}
+
+function _toyoReorderItems_(storeId, periodLabel) {
+  const targets = _getReorderTargets_()[storeId];
+  if (!targets || !Object.keys(targets).length) return { submitted: false, noTargets: true, items: [] };
+  const sheetId = _inventorySheetIdForPeriod_(periodLabel);
+  const data = _inventoryLogRowsCached_(sheetId);
+  const idx = {};
+  INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
+  const meta = _productMeta_();
+  const items = [];
+  let submitted = false;
+  for (let i = 1; i < data.length; i++) {
+    const r = data[i];
+    if (String(r[idx.store_id]) !== String(storeId)) continue;
+    if (_invMonthLabelStr(r[idx.period_label], sheetId) !== String(periodLabel)) continue;
+    submitted = true;
+    const code = String(r[idx.code]);
+    if (!(code in targets)) continue;
+    const endStock = r[idx.end_stock];
+    if (endStock === '' || endStock === null) continue;
+    const info = meta[r[idx.product]] || {};
+    if (info.vendor !== 'toyo') continue;
+    const lot = info.casePieces || 1;
+    const target = Number(targets[code]), stock = Number(endStock);
+    const need = Math.max(0, target - stock);
+    items.push({ code, product: r[idx.product], target, endStock: stock, lot, qty: Math.ceil(need / lot) * lot,
+      unitPrice: info.price || 0, added: 0 });
+  }
+  return { submitted, items: _toyoTopUp_(items) };
+}
+
+function _toyoAmount_(items) { return items.reduce((s, it) => s + it.qty * it.unitPrice, 0); }
+
+function _toyoTopUp_(items) {
+  let total = _toyoAmount_(items);
+  if (total === 0 || total >= TOYO_FREE_SHIPPING) return items;
+  const cand = items.filter(it => it.unitPrice > 0 && it.target > 0);
+  for (let guard = 0; total < TOYO_FREE_SHIPPING && guard < 200; guard++) {
+    const pick = cand.filter(it => it.endStock + it.qty < it.target * 2)
+      .sort((a, b) => (a.endStock + a.qty) / a.target - (b.endStock + b.qty) / b.target)[0];
+    if (!pick) break;
+    pick.qty += pick.lot;
+    pick.added += pick.lot;
+    total = _toyoAmount_(items);
+  }
+  return items;
+}
+
+function _toyoQtyText_(it) {
+  return it.lot > 1 ? `${it.qty / it.lot}（${it.lot}個入り×${it.qty / it.lot}＝${it.qty}個）` : `${it.qty}`;
+}
+
+// トーヨー店舗の発注メモ（Gmail下書き）。dryRun=true は計算結果だけ返す
+// ?action=previewToyoReorder&store=...&periodLabel=... / ?action=buildToyoReorder&store=...&periodLabel=... でも呼べる
+// 宛先は reorder_mail.toyo_to（無ければ reorder_mail.cc）。人が下書きを見てBカートのカートに入れ、配送先にこの店舗を選んで注文する
+function buildToyoReorder(storeId, periodLabel, dryRun) {
+  const r = _toyoReorderItems_(storeId, periodLabel);
+  if (r.noTargets) return { ok: true, skipped: 'no_targets_configured' };
+  if (!r.submitted) return { ok: true, skipped: 'inventory_not_submitted' };
+  const items = r.items.filter(it => it.qty > 0);
+  const total = _toyoAmount_(items);
+  const storeName = _storeNames_()[storeId] || storeId;
+  const periodJa = _periodLabelJa_(periodLabel);
+  const lines = items.map(it => `${String(it.product).replace(/^㋣/, '')}：${_toyoQtyText_(it)}${it.added ? `（送料無料に乗せるため+${it.added}）` : ''}　${(it.qty * it.unitPrice).toLocaleString()}円`);
+  lines.push(`${TOYO_MAINTENANCE_NAME}：1回（毎月。単品注文不可）`);
+  const result = { ok: true, store: storeId, periodLabel, items, total, freeShipping: total >= TOYO_FREE_SHIPPING, lines };
+  if (dryRun) return result;
+  const mail = _settingJson_('reorder_mail', {});
+  const to = mail.toyo_to || mail.cc || Session.getEffectiveUser().getEmail();
+  const subject = `【Bカート発注メモ】${storeName}　${periodJa}分`;
+  const existing = GmailApp.getDrafts().filter(d => d.getMessage().getSubject() === subject);
+  if (!items.length) {
+    existing.forEach(d => d.deleteDraft());
+    return Object.assign(result, { skipped: 'no_reorder_needed', draftsDeleted: existing.length });
+  }
+  const body = [`${storeName}の${periodJa}分棚卸に基づく、Bカート「ミル挽き珈琲CAFE」で入れる数量です。`, '']
+    .concat(lines, ['', `商品総額（税抜） ${total.toLocaleString()}円 → ${total >= TOYO_FREE_SHIPPING ? '送料無料' : `送料がかかります（${TOYO_FREE_SHIPPING.toLocaleString()}円未満）`}`,
+      '', '配送先はこの店舗を選び、注文確定は人が行います。']).join('\n');
+  if (existing.length) {
+    existing[0].update(to, subject, body);
+    existing.slice(1).forEach(d => d.deleteDraft());
+    return Object.assign(result, { draftUpdated: true });
+  }
+  GmailApp.createDraft(to, subject, body);
+  return Object.assign(result, { draftCreated: true });
+}
+
 // 1店舗分の発注数。submitted=false はその月の棚卸がまだ出ていない
 // アペックスへの発注書に載せる仕入先。販売品(水)・お菓子はAmazonで発注するため、基準値があっても載せない(2026-10-10)
 const APEX_ORDER_VENDORS = ['apex', 'cs3'];
@@ -4408,11 +4513,13 @@ function _reorderQtyText_(it) {
 }
 
 // 棚卸完了(index.htmlの_submitInventoryInner)からbuildStoreInventorySheetと同じタイミングで呼ばれる(2026-08-23〜)。
-// 基準値(reorder_targets)が無い店舗、送付先(支店・APEX_REORDER_RECIPIENTS)が無い店舗(トーヨーの店など)では何もしない
+// 基準値(reorder_targets)が無い店舗、送付先(支店・APEX_REORDER_RECIPIENTS)が無い店舗では何もしない。
+// トーヨー(JCC)の店舗は buildToyoReorder（Bカート用の発注メモ下書き、2026-10-10〜）
 function processMonthlyReorder(storeId, periodLabel) {
   const branches = _settingJson_('reorder_branches', {});
   const branchKey = Object.keys(branches).find(k => branches[k].stores && Object.prototype.hasOwnProperty.call(branches[k].stores, storeId));
   if (branchKey) return buildBranchReorder(branchKey, periodLabel, false);
+  if (_storeIsToyo_(storeId)) return buildToyoReorder(storeId, periodLabel, false);
 
   const r = _storeReorderItems_(storeId, periodLabel);
   if (r.noTargets) return { ok: true, skipped: 'no_targets_configured' };
