@@ -1864,7 +1864,7 @@ document.querySelectorAll('a[href^="#"]').forEach(function (a) {
     var t = document.getElementById(a.getAttribute('href').slice(1));
     if (!t) return;
     e.preventDefault();
-    t.scrollIntoView({ behavior: 'smooth', block: 'start' });
+    t.scrollIntoView({ block: 'start' });
     try { history.replaceState(null, '', a.getAttribute('href')); } catch (err) {}
   });
 });
