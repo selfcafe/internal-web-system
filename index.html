@@ -9295,7 +9295,18 @@ function getActiveStorePw(sid) {
 
 function buildStorePwList() {
   const pws = JSON.parse(localStorage.getItem(STORE_PW_KEY) || '{}');
-  return Object.entries(STORES).map(([sid, sname]) => {
+  // エリアごとに開閉できる(2026-10-10、エリアのページと同じ形)。開いているエリアは作り直しても開いたまま
+  const groups = Object.keys(REGIONS).map(rId => [rId, REGIONS[rId].label, REGIONS[rId].stores.filter(sid => STORES[sid])]);
+  const inRegion = new Set(groups.flatMap(g => g[2]));
+  const rest = Object.keys(STORES).filter(sid => !inRegion.has(sid));
+  if (rest.length) groups.push(['_other', 'その他', rest]);
+  return groups.map(([rId, label, sids]) => `<details class="region-fold" ${_pwRegionOpen.has(rId) ? 'open' : ''} ontoggle="_togglePwRegionOpen('${rId}', this.open)">
+      <summary>${esc(label)}（${sids.length}店舗）</summary>${sids.map(sid => _storePwRow(sid, STORES[sid], pws)).join('')}</details>`).join('');
+}
+const _pwRegionOpen = new Set();
+function _togglePwRegionOpen(rId, open) { if (open) _pwRegionOpen.add(rId); else _pwRegionOpen.delete(rId); }
+function _storePwRow(sid, sname, pws) {
+  {
     const activePw = pws[sid] || SITE_PW;
     return `<div style="display:flex;gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid #eee;flex-wrap:wrap">
       <span style="flex:1;min-width:100px;font-size:13px">${esc(sname)}</span>
@@ -9307,7 +9318,7 @@ function buildStorePwList() {
           style="background:#22703d;color:white;padding:6px 12px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap">変更</button>
       </div>
     </div>`;
-  }).join('');
+  }
 }
 
 function saveStorePw(storeId) {
