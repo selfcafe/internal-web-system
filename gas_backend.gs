@@ -4371,6 +4371,8 @@ function _applyReorderRounding_(raw) {
 }
 
 // 1店舗分の発注数。submitted=false はその月の棚卸がまだ出ていない
+// アペックスへの発注書に載せる仕入先。販売品(水)・お菓子はAmazonで発注するため、基準値があっても載せない(2026-10-10)
+const APEX_ORDER_VENDORS = ['apex', 'cs3'];
 function _storeReorderItems_(storeId, periodLabel) {
   const targets = _getReorderTargets_()[storeId];
   if (!targets || !Object.keys(targets).length) return { submitted: false, noTargets: true, items: [] };
@@ -4392,6 +4394,7 @@ function _storeReorderItems_(storeId, periodLabel) {
     const endStock = r[idx.end_stock];
     if (endStock === '' || endStock === null) continue;
     const info = meta[r[idx.product]] || {};
+    if (APEX_ORDER_VENDORS.indexOf(info.vendor || '') < 0) continue;
     raw.push({ code, product: r[idx.product], target: Number(targets[code]), endStock: Number(endStock),
       vendor: info.vendor || '', casePieces: info.casePieces || null, stockCapCases: info.stockCapCases || null });
   }

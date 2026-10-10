@@ -8828,7 +8828,9 @@ function clearStoreProdCfg() {
 // 対象はvendor:'apex'/'toyo'の商品のみ(2026-08-23時点の月初発注機能が対応する仕入先)。
 // 対応仕入先を増やす場合はこの配列に追記する
 // 2026-10-09: CS3(東海6店)も追加。GAS側(processMonthlyReorder)は仕入先で絞らず商品コードで判定している
-const REORDER_TARGET_VENDORS = ['apex', 'toyo', 'cs3'];
+// 2026-10-10: 販売品(水)・東海お菓子も追加(基準値は本部で決める: 水2ケース・お菓子各1ケース)。
+// これらはAmazonで発注するため、GAS側のアペックス向け発注書(APEX_ORDER_VENDORS)には載らない
+const REORDER_TARGET_VENDORS = ['apex', 'toyo', 'cs3', 'sales', 'tokai_snack'];
 
 
 function renderReorderTargetCfg() {
@@ -8863,7 +8865,7 @@ function renderReorderTargetCfg() {
             placeholder="未設定" style="width:70px;border:1px solid #ddd;border-radius:6px;padding:4px 6px;font-size:13px;font-family:inherit"><span style="font-size:12px;color:#555">個</span>
         </label>`).join('') +
       `</div>`);
-  }).join('') || '<div style="font-size:12px;color:#888">対象の商品がありません(仕入先がアペックス・トーヨー・CS3の商品のみ対象)</div>';
+  }).join('') || '<div style="font-size:12px;color:#888">対象の商品がありません(仕入先がアペックス・トーヨー・CS3・販売品・お菓子の商品のみ対象)</div>';
 }
 
 async function saveReorderTargetCfg() {
