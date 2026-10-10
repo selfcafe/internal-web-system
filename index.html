@@ -343,24 +343,23 @@
       .admin-hdr-btns { display:none; }
       .admin-title-row { padding-right:175px; box-sizing:border-box; }
       .page-header { min-height:134px; justify-content:flex-start; }
+      /* 2026-10-10: 風車型(大きさ不ぞろい)から、同じ大きさの2×2に変更(塩川さん「ログアウトとマニュアルが不ぞろい」) */
       .partner-hdr-pinwheel {
-        display:grid; grid-template-columns:repeat(100,1fr); grid-template-rows:repeat(100,1fr);
-        position:absolute; top:0; right:0; width:160px; height:134px;
-        border-radius:8px; overflow:hidden; background:#eef1ea; gap:0;
+        display:grid; grid-template-columns:1fr 1fr; grid-template-rows:1fr 1fr;
+        position:absolute; top:0; right:0; width:160px; height:134px; gap:5px;
       }
       .phw-piece {
         border:none; margin:0; padding:3px; cursor:pointer; overflow:hidden; min-width:0; min-height:0;
-        font-family:inherit; font-size:20px; font-weight:700; color:white; line-height:1.15;
+        font-family:inherit; font-size:16px; font-weight:700; color:white; line-height:1.15; border-radius:8px;
         display:flex; align-items:center; justify-content:center; text-align:center; box-sizing:border-box;
         -webkit-text-size-adjust:100%; text-size-adjust:100%;
       }
-      .phw-tl { grid-column:1/59; grid-row:1/43; background:#eef1ea; cursor:default; }
-      .phw-tr { grid-column:59/101; grid-row:1/59; background:#6b7280; }
-      .phw-tr span { writing-mode:vertical-rl; text-orientation:upright; letter-spacing:1px; font-size:17px; text-align:start; }
-      .phw-bl { grid-column:1/43; grid-row:43/101; background:linear-gradient(180deg,#dfc35a,#b6952f); color:#241a12; }
+      .phw-tl { grid-column:1; grid-row:1; background:transparent; cursor:default; }
+      .phw-tr { grid-column:2; grid-row:1; background:#6b7280; }
+      .phw-bl { grid-column:1; grid-row:2; background:linear-gradient(180deg,#dfc35a,#b6952f); color:#241a12; }
       .phw-bl.partner-attendance-btn { background:#22703d; color:white; }
-      .phw-bl.phw-piece-empty { background:#eef1ea; cursor:default; color:white; }
-      .phw-br { grid-column:43/101; grid-row:59/101; background:#22703d; font-size:16px; white-space:nowrap; }
+      .phw-bl.phw-piece-empty { background:transparent; cursor:default; color:transparent; }
+      .phw-br { grid-column:2; grid-row:2; background:#22703d; font-size:14px; white-space:nowrap; }
       .phw-br.manual-menu-btn { background:#b5544a; }
       .admin-title-row h1 { flex-basis:100%; }
       .link-btn { padding:8px 12px; font-size:13px; }
@@ -424,23 +423,22 @@
     }
     @media (max-width:430px) {
       .page-header h1 { font-size:20px; }
-      .partner-hdr-pinwheel { width:128px; height:126px; }
-      .phw-piece { font-size:17px; padding:2px; }
-      .phw-br { font-size:13px; }
+      .partner-hdr-pinwheel { width:128px; height:126px; gap:4px; }
+      .phw-piece { font-size:14px; padding:2px; }
+      .phw-br { font-size:11px; }
       .portal-title-store-row { padding-right:142px; }
       .page-header { min-height:126px; }
     }
     @media (max-width:314px) {
       /* この幅ではロゴが横に長く伸びるため、ピンホイールをロゴ行に被せず、その下から開始する */
       .partner-hdr-pinwheel { top:30px; height:96px; }
-      .phw-tr span { font-size:14px; }
     }
     @media (max-width:255px) {
       .page-header h1 { font-size:15px; }
       .partner-hdr-pinwheel { width:88px; height:88px; top:30px; }
-      .phw-piece { font-size:13px; padding:1px; }
-      .phw-br { font-size:9px; }
-      .phw-tr span { font-size:12px; letter-spacing:0; }
+      .partner-hdr-pinwheel { gap:3px; }
+      .phw-piece { font-size:11px; padding:1px; border-radius:6px; }
+      .phw-br { font-size:8px; }
       .portal-title-store-row { padding-right:100px; }
       .page-header { min-height:118px; }
     }
@@ -528,6 +526,9 @@
     .region-fold > summary::before { content:'▶ '; font-size:10px; color:#888; }
     .region-fold[open] > summary::before { content:'▼ '; }
     .region-fold[open] > summary { margin-bottom:4px; }
+    /* 使い方ガイドへのボタン(2026-10-10、パートナーは店舗名の横・管理者は設定の横) */
+    .guide-link-btn { display:inline-flex; align-items:center; gap:4px; background:#fff; color:#22703d; border:2px solid #22703d; border-radius:999px; padding:4px 12px; font-size:13px; font-weight:700; text-decoration:none; white-space:nowrap; align-self:center; }
+    .guide-link-btn.admin-guide-link { border-radius:10px; padding:8px 14px; }
     .machine-fold { margin-top:8px; }
     .machine-fold > summary { font-size:11px; font-weight:700; color:#888; background:#f2f2f2; padding:3px 8px; border-radius:4px; cursor:pointer; list-style:none; }
     .machine-fold > summary::-webkit-details-marker { display:none; }
@@ -615,6 +616,7 @@
       <div class="doc-menu-dd" id="manual-dd-sp" style="position:absolute;top:134px;right:0"></div>
       <div class="store-name-wrap" style="display:flex;align-items:baseline;align-self:stretch;gap:4px 12px">
         <span id="active-store-label" class="store-title-txt"></span>
+        <a class="guide-link-btn" href="guide.html" target="_blank" rel="noopener" onclick="this.href=getPartnerGuideUrl()">📖 使い方ガイド</a>
       </div>
     </div>
   </div>
@@ -853,6 +855,7 @@
       <div class="doc-menu-dd" id="manual-dd-admin-sp" style="position:absolute;top:134px;right:0"></div>
       <button class="admin-settings-btn" id="admin-home-btn" onclick="goAdminHome()" title="ホーム(発注依頼一覧)"><span class="menu-label">ホーム</span></button>
       <button class="admin-settings-btn" id="admin-settings-btn" onclick="menuSelect('view','settings')" title="設定"><span class="menu-label">設定</span></button>
+      <a class="guide-link-btn admin-guide-link" href="admin-guide.html" target="_blank" rel="noopener">📖 使い方ガイド</a>
     </div>
   </div>
 
@@ -1648,7 +1651,7 @@ const isMobile  = () => window.innerWidth < 640;
 // 機種が判定できない店舗はどちらの資料か決められないため、念のため両方とも表示する。
 function getManualDocs() {
   const docs = [
-    { label: 'パートナー操作ガイド', url: () => `guide.html?machine=${encodeURIComponent(getStoreMachineType(storeTab))}&op=${encodeURIComponent(getStoreOperationType(storeTab))}` },
+    { label: 'パートナー操作ガイド', url: () => getPartnerGuideUrl() },
   ];
   if (getStoreOperationType(storeTab) !== 'full') {
     const machine = getStoreMachineType(storeTab);
@@ -1666,6 +1669,9 @@ function getManualDocs() {
 // 管理者向けマニュアルメニューの中身。「テスト環境（練習用）」は元々Claude Artifactsで
 // 公開していたが、共有範囲を「リンクを知っている全員」にできなかったため、
 // このリポジトリ内のファイル（GitHub Pages配信）に移した（2026-08-29、ユーザー依頼）。
+function getPartnerGuideUrl() {
+  return `guide.html?machine=${encodeURIComponent(getStoreMachineType(storeTab))}&op=${encodeURIComponent(getStoreOperationType(storeTab))}`;
+}
 const ADMIN_MANUAL_DOCS = [
   { label: '管理者ガイド', url: 'admin-guide.html' },
   { label: 'テスト環境（練習用）', url: 'admin-portal-dojo.html' },
