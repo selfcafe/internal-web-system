@@ -440,6 +440,7 @@ function doGet(e) {
     else if (a === 'buildReorderTestPlaySheet') result = buildReorderTestPlaySheet(e.parameter.storeId);
     else if (a === 'processMonthlyReorder')     result = processMonthlyReorder(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'previewBranchReorder')      result = buildBranchReorder(e.parameter.branch, e.parameter.periodLabel, true);
+    else if (a === 'buildAmazonList')           result = buildAmazonList(e.parameter.periodLabel);
     else if (a === 'buildBranchReorder')        result = buildBranchReorder(e.parameter.branch, e.parameter.periodLabel, false);
     else if (a === 'previewToyoReorder')        result = buildToyoReorder(e.parameter.store, e.parameter.periodLabel, true);
     else if (a === 'buildToyoReorder')          result = buildToyoReorder(e.parameter.store, e.parameter.periodLabel, false);
@@ -4567,10 +4568,75 @@ function _reorderQtyText_(it) {
   return it.casePieces && it.qty % it.casePieces === 0 ? `${it.qty / it.casePieces}ケース（${it.qty}個）` : `${it.qty}個`;
 }
 
+// ===== Amazon の買い物リスト（2026-10-10） =====
+// 水・お菓子（販売品・東海お菓子）は Amazon で買う。棚卸が出るたびに、基準値がある店舗の分を集めて、
+// 棚卸集計スプレッドシートのタブ「Amazon発注 YYYY年M月分」を作り直す（アペックスの発注書と同じタイミング）。
+// 数量は棚卸集計の発注数と同じ計算（ケース単位。Amazon の1注文＝1ケース）。商品ページは商品一覧の amazon_url。
+// 「注文済み」のチェックは作り直しても残す（店舗＋商品で引き継ぐ）。?action=buildAmazonList&periodLabel=YYYY-MM でも作れる
+const AMAZON_LIST_VENDORS = ['sales', 'tokai_snack'];
+function buildAmazonList(periodLabel) {
+  const targetsAll = _getReorderTargets_();
+  const meta = _productMeta_();
+  const urls = {};
+  const all = _settingJson_('all_products', []);
+  (Array.isArray(all) ? all : []).forEach(p => { if (p && p.name && p.amazon_url) urls[p.name] = p.amazon_url; });
+  const names = _storeNames_();
+  const sheetId = _inventorySheetIdForPeriod_(periodLabel);
+  const data = _inventoryLogRowsCached_(sheetId);
+  const idx = {};
+  INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
+  const items = [];
+  for (let i = 1; i < data.length; i++) {
+    const r = data[i];
+    if (_invMonthLabelStr(r[idx.period_label], sheetId) !== String(periodLabel)) continue;
+    const sid = String(r[idx.store_id]);
+    const info = meta[r[idx.product]] || {};
+    if (AMAZON_LIST_VENDORS.indexOf(info.vendor || '') < 0) continue;
+    if (/アイス/.test(String(r[idx.product]))) continue; // アイスは今後扱わない(基準値なし)
+    const targets = targetsAll[sid] || {};
+    const code = String(r[idx.code]);
+    if (!(code in targets)) continue;
+    const endStock = r[idx.end_stock];
+    if (endStock === '' || endStock === null) continue;
+    const qty = _reorderQtyPieces_(Number(targets[code]), Number(endStock), info.casePieces, info.stockCapCases);
+    if (qty <= 0) continue;
+    items.push({ sid, store: names[sid] || sid, product: String(r[idx.product]), qty,
+      packs: info.casePieces ? Math.round(qty / info.casePieces) : qty, url: urls[r[idx.product]] || '' });
+  }
+  items.sort((a, b) => (a.store > b.store ? 1 : a.store < b.store ? -1 : 0) || (a.product > b.product ? 1 : -1));
+
+  const ss = SpreadsheetApp.openById(sheetId);
+  const title = `Amazon発注 ${_periodLabelJa_(periodLabel)}分`;
+  let sh = ss.getSheetByName(title);
+  const done = {};
+  if (sh && sh.getLastRow() > 2) {
+    sh.getRange(3, 1, sh.getLastRow() - 2, 6).getValues().forEach(v => { if (v[5] === true) done[v[0] + '|' + v[1]] = true; });
+  }
+  if (!sh) sh = ss.insertSheet(title);
+  sh.clear();
+  sh.getRange(1, 1).setValue(`${title}（棚卸が出るたびに自動で作り直します。注文したら「注文済み」にチェック）`).setFontWeight('bold');
+  const head = ['店舗', '商品', '発注数(個)', 'Amazonで注文する数', '商品ページ', '注文済み'];
+  sh.getRange(2, 1, 1, head.length).setValues([head]).setFontWeight('bold').setBackground('#d9ead3');
+  if (items.length) {
+    const rows = items.map(it => [it.store, it.product, it.qty, it.packs,
+      it.url ? `=HYPERLINK("${it.url}","Amazonで開く")` : '（URL未登録）', !!done[it.store + '|' + it.product]]);
+    sh.getRange(3, 1, rows.length, head.length).setValues(rows);
+    sh.getRange(3, 6, rows.length, 1).insertCheckboxes();
+    rows.forEach((row, k) => { if (row[5]) sh.getRange(3 + k, 6).check(); });
+  } else {
+    sh.getRange(3, 1).setValue('Amazonで注文する品はありません（基準値のある水・お菓子で、発注数が0より大きいものが無い）');
+  }
+  sh.setFrozenRows(2);
+  sh.autoResizeColumns(1, head.length);
+  return { ok: true, sheet: title, items: items.length, stores: Object.keys(items.reduce((m, it) => (m[it.sid] = 1, m), {})).length };
+}
+
 // 棚卸完了(index.htmlの_submitInventoryInner)からbuildStoreInventorySheetと同じタイミングで呼ばれる(2026-08-23〜)。
 // 基準値(reorder_targets)が無い店舗、送付先(支店・APEX_REORDER_RECIPIENTS)が無い店舗では何もしない。
 // トーヨー(JCC)の店舗は buildToyoReorder（Bカート用の発注メモ下書き、2026-10-10〜）
 function processMonthlyReorder(storeId, periodLabel) {
+  // 水・お菓子の Amazon の買い物リストも同じタイミングで作り直す(失敗しても発注書づくりは止めない)
+  try { buildAmazonList(periodLabel); } catch (e) { console.error('buildAmazonList error:', e.message); }
   const branches = _settingJson_('reorder_branches', {});
   const branchKey = Object.keys(branches).find(k => branches[k].stores && Object.prototype.hasOwnProperty.call(branches[k].stores, storeId));
   if (branchKey) return buildBranchReorder(branchKey, periodLabel, false);
