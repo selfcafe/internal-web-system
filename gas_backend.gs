@@ -1139,10 +1139,50 @@ function getSettings() {
   const sheet = getSheet(SHEET_SETTINGS);
   if (sheet.getLastRow() <= 1) return [];
   const data = sheet.getDataRange().getValues();
-  const ki = data[0].indexOf('key'), vi = data[0].indexOf('value');
-  const rows = data.slice(1).map(r => ({ key: r[ki], value: r[vi] }));
+  const ki = data[0].indexOf('key');
+  const vcols = _settingValueCols_(data[0]);
+  const rows = data.slice(1).map(r => ({ key: r[ki], value: vcols.map(c => r[c]).join('') }));
   try { cache.put(SETTINGS_CACHE_KEY, JSON.stringify(rows), 60); } catch (e) {}
   return rows;
+}
+
+// ===== 長い設定値の分割保存（2026-10-10） =====
+// スプレッドシートの1セルは50,000文字までなので、長い値（全店舗分の store_product_cfg など）は
+// value, value_2, value_3 ... の列に分けて保存し、読むときにつなぐ。短い値は従来どおり value 列だけ。
+const SETTING_CHUNK_ = 45000;
+function _settingValueCols_(header) {
+  const cols = [];
+  header.forEach((h, i) => {
+    const m = String(h).match(/^value(?:_(\d+))?$/);
+    if (m) cols.push({ i, n: m[1] ? Number(m[1]) : 1 });
+  });
+  return cols.sort((a, b) => a.n - b.n).map(c => c.i);
+}
+function _splitSettingValue_(value) {
+  const str = String(value === undefined || value === null ? '' : value);
+  const out = [];
+  for (let i = 0; i < str.length; i += SETTING_CHUNK_) out.push(str.slice(i, i + SETTING_CHUNK_));
+  return out.length ? out : [''];
+}
+// 行rowNum(1始まり)に値を分けて書く。足りない分割列は見出しを足し、使わなくなった分割列は空にする
+function _writeSettingValue_(sheet, rowNum, value) {
+  const chunks = _splitSettingValue_(value);
+  let header = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  let vcols = _settingValueCols_(header);
+  while (vcols.length < chunks.length) {
+    const col = sheet.getLastColumn() + 1;
+    sheet.getRange(1, col).setValue('value_' + (vcols.length + 1));
+    header = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+    vcols = _settingValueCols_(header);
+  }
+  vcols.forEach((c, k) => {
+    const cell = sheet.getRange(rowNum, c + 1);
+    if (k < chunks.length) cell.setValue(chunks[k]);
+    else if (cell.getValue() !== '') cell.setValue('');
+  });
+}
+function _readSettingRow_(data, i) {
+  return _settingValueCols_(data[0]).map(c => data[i][c]).join('');
 }
 function _invalidateSettingsCache_() {
   try {
@@ -1183,17 +1223,18 @@ function saveSetting(key, value) {
   const sheet = getSheet(SHEET_SETTINGS);
   ensureHeaders(sheet, ['key', 'value']);
   const data = sheet.getDataRange().getValues();
-  const ki = data[0].indexOf('key'), vi = data[0].indexOf('value');
+  const ki = data[0].indexOf('key');
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][ki]) === String(key)) {
-      _logSettingHistory(key, data[i][vi]);
-      sheet.getRange(i + 1, vi + 1).setValue(value);
+      _logSettingHistory(key, _readSettingRow_(data, i));
+      _writeSettingValue_(sheet, i + 1, value);
       _invalidateSettingsCache_();
       return { ok: true };
     }
   }
   _logSettingHistory(key, '');
-  sheet.appendRow([key, value]);
+  sheet.appendRow([key, '']);
+  _writeSettingValue_(sheet, sheet.getLastRow(), value);
   _invalidateSettingsCache_();
   return { ok: true };
 }
@@ -1207,23 +1248,27 @@ function saveSettingMerge(key, patchJson) {
   const sheet = getSheet(SHEET_SETTINGS);
   ensureHeaders(sheet, ['key', 'value']);
   const data = sheet.getDataRange().getValues();
-  const ki = data[0].indexOf('key'), vi = data[0].indexOf('value');
+  const ki = data[0].indexOf('key');
   let patch = {};
   try { patch = JSON.parse(patchJson || '{}'); } catch (e) {}
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][ki]) === String(key)) {
-      const oldValue = data[i][vi];
+      const oldValue = _readSettingRow_(data, i);
+      let obj;
+      try { obj = JSON.parse(oldValue || '{}'); } catch (e) {
+        // 今の値が読めないときは書かない（{}から作り直すと他の店舗の設定が消えるため）
+        return { error: 'current_value_unreadable' };
+      }
       _logSettingHistory(key, oldValue);
-      let obj = {};
-      try { obj = JSON.parse(oldValue || '{}'); } catch (e) {}
       Object.assign(obj, patch);
-      sheet.getRange(i + 1, vi + 1).setValue(JSON.stringify(obj));
+      _writeSettingValue_(sheet, i + 1, JSON.stringify(obj));
       _invalidateSettingsCache_();
       return { ok: true };
     }
   }
   _logSettingHistory(key, '');
-  sheet.appendRow([key, JSON.stringify(patch)]);
+  sheet.appendRow([key, '']);
+  _writeSettingValue_(sheet, sheet.getLastRow(), JSON.stringify(patch));
   _invalidateSettingsCache_();
   return { ok: true };
 }
@@ -1233,7 +1278,7 @@ function saveSettingMerge(key, patchJson) {
 function _logSettingHistory(key, oldValue) {
   const sheet = getSheet(SHEET_SETTINGS_HISTORY);
   ensureHeaders(sheet, SETTINGS_HISTORY_COLS);
-  sheet.appendRow([new Date(), key, oldValue]);
+  sheet.appendRow([new Date(), key].concat(_splitSettingValue_(oldValue)));
 }
 
 // 指定キーの履歴を新しい順にlimit件返す（デフォルト20件）。復旧作業時に直接APIを叩いて確認する用途
