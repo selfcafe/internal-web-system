@@ -29,7 +29,7 @@ flowchart LR
   end
   F[(Firebase<br>更新の合図だけ)]
   LW[LINE WORKS<br>通知Bot]
-  PC[前任者PC<br>ステラ売上の取り込み]
+  PC[前任者PC<br>ステラ売上の取り込み<br>2026-10-12停止]
 
   P --> H
   A --> H

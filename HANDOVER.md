@@ -10,7 +10,7 @@
 
 1. **アカウントと権限を受け取る**(2章): GitHubの`selfcafe`組織、Googleアカウント`selfcafe001@gmail.com`、LINE WORKS、Firebase。
 2. **ファイルの場所を確認する**(1-2): [URL一覧のドキュメント](https://docs.google.com/document/d/14P5jF1IsI7KjiGrYHwCdAGxEYXHI_UadEg8X7Z1BQCg/edit)と、[ファイル一式のフォルダ](https://drive.google.com/drive/folders/1clucdJh7gXCgML8HoC2Ol5xrvLuXx-98)を開けるか確かめる。
-3. **前任者PCへの依存をなくす**(4-1章): 残っているのはポータルの死活監視だけです。ステラ売上の取り込みは2026-10-12に停止しました。
+3. **前任者PCは不要です**(4-1章): 2026-10-12に前任者PCのタスクをすべて止め、社内ポータルはクラウドだけで動いています。ステラ売上の取り込みは停止中です。
 4. **年次切り替えの定期実行を登録し直す**(2章・CLAUDE.md 5章): 前任者のClaudeアカウントに登録されています。次回の実行は2027-01-01です。
 5. **残っている課題を把握する**(4章): 優先度の高い順に並べています。
 
@@ -20,7 +20,7 @@
 
 - 画面は`index.html`の1ファイル(パートナー用・管理者用の両方)。GitHub Pagesで公開され、`main`へpushすると数十秒で反映されます。
 - サーバー側は`gas_backend.gs`(Google Apps Script)。データの実体はGoogleスプレッドシートです。反映は`gh workflow run deploy-gas.yml`(手順は[CLAUDE.md 1章](CLAUDE.md))。
-- ポータルの死活監視だけは、**前任者のWindows PC(PC名`80000785`、以下「前任者PC」)上のタスクスケジューラ**で動いています(4-1)。ステラ(決済端末)の売上取り込みもこのPCで動いていましたが、2026-10-12に停止しました。CLAUDE.mdやスクリプト内で「80000785 PC」と書かれているのはこのPCのことです。
+- PCに依存する処理はありません。以前は、ステラ(決済端末)の売上取り込みとポータルの死活監視が**前任者のWindows PC(PC名`80000785`、以下「前任者PC」)**で動いていましたが、2026-10-12にどちらも停止しました(4-1)。CLAUDE.mdやスクリプト内で「80000785 PC」と書かれているのはこのPCのことです。
 
 ### 1-1. 棚卸集計スプレッドシートの見方
 
@@ -86,7 +86,7 @@ URLがすでにコード内で公開されているもの:
 | GitHub Secrets | デプロイ用の認証情報と実ID | 一覧と用途は[CLAUDE.md 1章](CLAUDE.md) |
 | LINE WORKS | 在庫差異検知Bot(表示名「佐藤テスト」)・バグ報告Bot「バグ報告（社内ポータル）」・発注/勤怠通知 | 管理者コンソールとDeveloper Consoleの両方の権限が必要。在庫差異検知Botは試作時の名前のままなので、引き継ぎ時に改名してよい |
 | Firebase | リアルタイム同期用。セキュリティルールはFirebaseコンソール側にのみある | リポジトリには含まれない |
-| 前任者PC | ポータルの死活監視タスク(4-1参照) | ステラ取り込みは2026-10-12に停止済み |
+| 前任者PC | なし(タスクは2026-10-12にすべて無効化) | ステラ取り込みを再開する場合だけ必要(4-1・5章) |
 | Claude Codeの定期実行(1/1の棚卸年次切り替え) | 前任者のClaudeアカウントに登録されている | [CLAUDE.md 5章](CLAUDE.md)。アカウントを移すなら登録し直し |
 
 ## 3. いま動いている自動処理
@@ -98,11 +98,10 @@ URLがすでにコード内で公開されているもの:
 | 〃 | `runMonthlyStockCheckBackstop` | 棚卸とステラ月間売上の突き合わせ(通知なし、シートに書くだけ) |
 | 〃 | `sendNewStoreCheckNotification` | 新規店舗の確認通知 |
 | Apps Script(編集トリガー) | `onBugReportSheetEdit` | バグ報告シートでの返信・ステータス変更 |
-| 前任者PC(タスクスケジューラ) | `InternalPortalHealthWatchdog` | 10分おきにポータルの死活監視。認可切れなら自動で再認可を試み、LINE WORKSへ通知 |
 | GitHub Actions(手動実行) | `deploy-gas.yml` / `rollover-inventory-year.yml` / `stera-daily-import.yml` / `stera-cloud-login-diagnose.yml` | デプロイ・年次切り替え・ステラ取り込みの手動再実行・クラウドログイン診断 |
 | Claude Code定期実行 | 毎年1/1 00:15 | 棚卸集計スプレッドシートの年次切り替え(次回 2027-01-01) |
 
-停止済み: `SteraDailySalesImport`(毎朝のステラ注文詳細CSV取り込み、2026-10-12停止)、`SteraRealtimeSalesPoll`(10分おきの当日速報、2026-10-06停止)。どちらも前任者PCで無効化してあります。
+停止済み(前任者PCで無効化): `SteraDailySalesImport`(毎朝のステラ注文詳細CSV取り込み、2026-10-12)、`SteraRealtimeSalesPoll`(10分おきの当日速報、2026-10-06)、`InternalPortalHealthWatchdog`(ポータルの死活監視、2026-10-12。代わりの対策は4-1)。
 
 ※ 前任者PCの会費ペイ用タスク(`KaihipayActionsRunner`・`KaihipayRunnerWatchdog`)は2026-10-12に無効化しました。社内ポータルとは無関係です。
 
@@ -112,21 +111,25 @@ URLがすでにコード内で公開されているもの:
 
 それぞれ「何を／どこまで／次に必要なこと」の順に書いています。優先度は前任者の目安です。
 
-### 4-1. 【高】ポータルの死活監視が前任者PCに依存している/ステラ売上の取り込みは停止中
+### 4-1. 【参考】前任者PCをやめた経緯と、ポータルの「承認が必要です」対策/ステラ売上の取り込みは停止中
 
-**死活監視(`InternalPortalHealthWatchdog`)**
-- 前任者PCで10分おきにポータルの応答を確かめ、認可切れ(「承認が必要です」)なら`selfcafe001@gmail.com`でログイン済みのChromeを自動操作して再認可し、LINE WORKSへ通知します。
-- 再認可はGoogleの同意画面をブラウザで操作する必要があるため、このままの形ではクラウドへ移せません。扱いは検討中です(2026-10-12時点)。
-- 2026-08-22の設置以降、本当に認可切れが起きたことはありません(異常の記録は回線断・タイムアウト・一時的な404だけ)。
+**「承認が必要です」でポータル全体が止まる問題**
+- ポータルのサーバー(Apps Script)は`selfcafe001@gmail.com`として動きます。このアカウントの承認(権限の許可)が切れると、全画面が「承認が必要です」で止まります。
+- 以前は前任者PCの`InternalPortalHealthWatchdog`が10分おきに監視し、ブラウザを自動操作して再認可していました。再認可はGoogleの画面操作が必要でクラウドに移せないため、2026-10-12に止めました。2026-08-22の設置以降、本当に承認が切れたことは一度もありませんでした(記録された異常は回線断・タイムアウトだけ)。
+- 代わりに、承認が切れる原因を起こさないようにしています。
+  1. **Googleの設定が「テスト中」だと7日で切れる**: GCPプロジェクト`internal-web-system-logs`のOAuth同意画面は「本番環境」で公開済みです。「テスト中」に戻さないでください。
+  2. **新しい権限が要るコードをデプロイする**: `appsscript.json`の`oauthScopes`で権限を7つに固定し、`deploy-gas.yml`は本番より権限が増えるデプロイをpush前に止めます。どうしても権限を足すときの手順は[CLAUDE.md 1章](CLAUDE.md)。
+  3. **`selfcafe001@gmail.com`のパスワード変更・アクセス取り消し**: これをしたら、直後に下の再認可を行ってください。
+- それでも止まったとき(パートナーから「開けない」と連絡が来たとき)の再認可: `selfcafe001@gmail.com`でApps Scriptエディタ(「社内ポータルスクリプト」)を開き、関数`getSettings`を選んで実行→「権限を確認」→「このアプリはGoogleで確認されていません」で**2つ目**の「詳細」→「安全ではないページに移動」→「すべて選択」(初期状態は未選択)→「続行」。1〜2分で終わります。終わったら`?action=getSettings`を開いてデータが返ることを確かめます。
 
 **ステラ売上の取り込み(2026-10-12停止)**
 - 商品別・店舗別の売上数量は、ステラ管理画面から「注文詳細CSV」をダウンロードしないと取れません。前任者PC上のブラウザ自動操作で毎朝取り込んでいましたが、オーナー判断で停止しました。
   - クラウド(GitHub Actions等)から同じことをすると、ステラ管理画面がreCAPTCHA(ロボット判定)で弾きます。
   - ステラの公式APIは「1件いくらの決済か」しか返さず、どの商品が何個売れたかは取れません。
 - 止まっているもの: 店舗タブのステラ関連の列(ステラ売上・原価率(ステラ実売上ベース)・ステラ数量の突き合わせ)、`runMonthlyStockCheckBackstop`の突き合わせ、水の在庫差異の計算(通知は2026-10-05から停止中)。
-- 再開するなら、常時電源の入ったWindows PCに移すか(手順は[5章](#5-ステラ取り込み死活監視を別のpcへ移す手順))、商品別の数量が取れるAPIをステラ(カード会社)から入手します(前任者が問い合わせていましたが、結果は未確認です)。
+- 再開するなら、常時電源の入ったWindows PCに移すか(手順は[5章](#5-ステラ取り込みを再開する手順pcが必要))、商品別の数量が取れるAPIをステラ(カード会社)から入手します(前任者が問い合わせていましたが、結果は未確認です)。
 
-対象のスクリプト: `scripts/import_stera_daily_sales.py`(毎朝の確定値、停止中)、`scripts/poll_stera_realtime_sales.py`(当日速報、停止中)、`scripts/watchdog_portal_health.py`(死活監視)。
+対象のスクリプト: `scripts/import_stera_daily_sales.py`(毎朝の確定値、停止中)、`scripts/poll_stera_realtime_sales.py`(当日速報、停止中)、`scripts/watchdog_portal_health.py`(死活監視、停止中)。
 
 ### 4-2. 【中】水の在庫差異通知(盗難疑い・売上超過の両方)とチェックシートの「残り在庫」表示を停止中
 
@@ -213,15 +216,15 @@ URLがすでにコード内で公開されているもの:
 
 ---
 
-## 5. ステラ取り込み・死活監視を別のPCへ移す手順
+## 5. ステラ取り込みを再開する手順(PCが必要)
 
-ステラ取り込みを再開する場合や、死活監視を別のPCへ移す場合の手順です。前任者PC(`80000785`)の状態は次のとおりです。
+ステラ取り込みを再開する場合の手順です。前任者PC(`80000785`)のタスクは次のとおり、すべて無効化してあります。
 
 | タスク名 | 間隔 | 中身 |
 |---|---|---|
 | `SteraDailySalesImport` | 2026-10-12停止 | (再開するなら移す)ステラの注文詳細CSV(直近3日)をダウンロードし、確定値として取り込む |
 | `SteraRealtimeSalesPoll` | 2026-10-06停止 | (移行不要)ステラの当日売上(速報)を取り込んでいた |
-| `InternalPortalHealthWatchdog` | 10分おき | ポータルの死活監視。認可切れなら自動で再認可し、LINE WORKSへ通知 |
+| `InternalPortalHealthWatchdog` | 2026-10-12停止 | (移行不要、4-1)ポータルの死活監視・自動再認可をしていた |
 
 ### 用意するもの
 - **常に電源が入っているWindows PC**: スリープ・休止は無効にします。**Windowsにログインしたままにしておく必要があります**(タスクは「ログオン中のみ実行」で、画面上でChromeを動かすため)。
@@ -242,15 +245,13 @@ URLがすでにコード内で公開されているもの:
 4. **初回だけ手で動かして、ログイン状態を作る**:
    - `python scripts/import_stera_daily_sales.py`を実行します。専用のChromeプロファイル(`.chrome_stera_profile/`)が作られ、ステラにログインします。確認画面が出たら手で通します。
    - `logs/`にエラーが無く、「GASへの取込み結果: {'ok': True …}」と出れば成功です。
-5. **死活監視の自動再認可を用意する**: `scripts/auto_reauthorize_portal.py`は、`selfcafe001@gmail.com`でログイン済みの専用Chromeプロファイル(`.chrome_portal_admin_profile/`)を使います。
-   - 新しいPCでこのプロファイルを作るには、`--user-data-dir`にこのフォルダを指定してChromeを起動し、Googleに一度ログインします。
-   - 用意しなくても死活監視と通知は動きます。ただし自動再認可が失敗して、毎回手作業で直すことになります。
+5. (死活監視は2026-10-12に廃止したので、`auto_reauthorize_portal.py`用のChromeプロファイルの用意は不要です)
 6. **パスを書き換える**: 次の6ファイルは`C:\Users\80000785`やユーザー名を決め打ちしています。新しいPCのユーザー名・Pythonの場所に書き換えます。
    - `scripts/register_stera_daily_import_task.ps1`、`scripts/register_stera_realtime_task.ps1`、`scripts/register_portal_watchdog_task.ps1`
    - `scripts/run_import_stera_daily_sales.cmd`、`scripts/run_watchdog_portal_health.cmd`、`scripts/run_poll_stera_realtime_sales.cmd`
    - `register_stera_realtime_task.ps1`には、さらに前のPC(`xxxun`)のパスが残っています。この書き換えはPC固有の内容なので、コミットせず手元だけで直します。
-7. **タスクを登録する**: PowerShellで`register_stera_daily_import_task.ps1`と`register_portal_watchdog_task.ps1`を実行します(`register_stera_realtime_task.ps1`は停止済みのタスク用なので不要)。登録できたかは`Get-ScheduledTask -TaskName Stera*,InternalPortal*`で確認します。
-8. **前任者PCのタスクを止める**: 新しいPCで動くのを確かめてから、前任者PCの2タスクを無効にします(`Disable-ScheduledTask`)。二重に動くと、ステラへのログインが重なって失敗しやすくなります。同じPCにある`KaihipayRunnerWatchdog`は会費ペイ用なので、社内ポータルとは関係ありません。
+7. **タスクを登録する**: PowerShellで`register_stera_daily_import_task.ps1`を実行します(`register_stera_realtime_task.ps1`・`register_portal_watchdog_task.ps1`は停止済みのタスク用なので不要)。登録できたかは`Get-ScheduledTask -TaskName Stera*`で確認します。
+8. **前任者PCのタスクは有効にしない**: 前任者PCの`SteraDailySalesImport`は無効化済みです。両方で動くと、ステラへのログインが重なって失敗しやすくなります。
 
 ### 動いているかの確認
 - 翌朝、`?action=_debugSteraSalesHistory&storeId=shibuya&product=水`をブラウザで開き、`latestImportedDate`が前日になっていれば、毎朝の取り込みは動いています。

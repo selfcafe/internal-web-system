@@ -16,8 +16,8 @@ gas_backend.gs
      ② 手動clasp(緊急時のフォールバック) — 下記2章参照
 
 scripts/*.py (import_stera_daily_sales.py / poll_stera_realtime_sales.py / watchdog_portal_health.py等)
-  → Windowsタスクスケジューラで80000785 PC(前任者PC。HANDOVER.mdでは「前任者PC」と表記)上で実行。
-    2026-10-12時点で動いているのはwatchdog_portal_health.pyだけ。ステラ取込み2本は停止済み(7.4)
+  → 以前はWindowsタスクスケジューラで80000785 PC(前任者PC)上で実行していた。
+    2026-10-12に全タスクを無効化し、PCに依存する処理は無い(ステラ取込みは7.4、死活監視は1章「権限の固定」)
   → .github/workflows/stera-daily-import.yml(self-hosted runner、手動再実行用に残置。80000785のrunnerも2026-10-12に停止)
 ```
 
@@ -49,6 +49,13 @@ gh workflow run deploy-gas.yml --repo selfcafe/internal-web-system --ref main
 |---|---|
 | `INVENTORY_SHEET_ID_ARCHIVE_JSON` | 年→旧`INVENTORY_SHEET_ID`のマップ(JSON)。Secretsと違い読み出し可能なので5章の自動更新に使う |
 
+### 権限(oauthScopes)の固定(2026-10-12)
+Web Appは`executeAs: USER_DEPLOYING`なので、本番の権限が1つでも増えると、selfcafeが再認可するまでポータル全体が「承認が必要です」で止まる。再認可はブラウザでの同意操作が必要でクラウドから自動化できないため、増やさない仕組みにしている(PCの監視`InternalPortalHealthWatchdog`はこれに置き換えて廃止)。
+- `appsscript.json`の`oauthScopes`に7つを固定(本番の概要ページの一覧と同じ)。自動検出に任せないので、コードで新しいGoogleサービスを使っても権限は増えず、その処理だけが権限エラーになる。
+- `deploy-gas.yml`は`clasp pull`で本番のappsscript.jsonを取り、権限が増えるならpush前に失敗する(2026-10-12、増やすテストで止まることを確認済み)。疎通確認は応答がJSONかまで見る(承認切れでもHTTP 200のHTMLが返るため)。
+- どうしても権限を足すとき: `oauthScopes`に追記→`gh workflow run deploy-gas.yml --ref main -f allow_scope_change=true`→**直後に**再認可: `selfcafe001@gmail.com`でApps Scriptエディタ(「社内ポータルスクリプト」)を開き、関数`getSettings`を選んで実行→「権限を確認」→「このアプリはGoogleで確認されていません」で**2つ目**の「詳細」→「安全ではないページに移動」→「すべて選択」(初期状態は未選択)→「続行」。ユーザーがその場にいる時だけ行う。
+- `selfcafe001`のパスワード変更・アクセス取り消しの後も同じ再認可が要る。
+
 **index.html側だけの変更は`clasp`不要。** `git push origin main`だけでGitHub Pagesが自動再ビルドする。`gas_backend.gs`を変更した場合のみ上記デプロイが必要。
 
 ### 手動clasp(緊急時のフォールバック)
@@ -72,7 +79,7 @@ GitHub Secretsの値自体は招待した相手からは見えない(上書き�
 1. `selfcafe001@gmail.com`自体のログイン情報(パスワード・2段階認証)——Apps Scriptプロジェクト・各スプレッドシートの実質的な所有者
 2. `SHEET_ID`/`INVENTORY_SHEET_ID`/`DELIVERY_HISTORY_SHEET_ID`が指す各Googleスプレッドシートの共有設定(誰が編集者になっているか個別確認)
 3. 画像保存用Driveフォルダ(`IMAGE_FOLDER_ID`、`gas_backend.gs`内で確認可能)
-4. **80000785 PC自体へのアクセス**(遠隔での状態確認手段は無い、8章「外部PC・Bot・clasp」参照)——ポータル監視(`InternalPortalHealthWatchdog`)がここで動いている(ステラ取込みは2026-10-12停止)。GitHub権限とは完全に別系統
+4. **80000785 PC自体へのアクセス**(遠隔での状態確認手段は無い、8章「外部PC・Bot・clasp」参照)——2026-10-12に全タスクを無効化済みで、日常運用には不要。ステラ取込みを再開する場合だけ関係する。GitHub権限とは完全に別系統
 5. LINE WORKS Bot(在庫差異検知Bot「佐藤テスト」等)の管理者アカウント
 6. **`SECRETS_ADMIN_TOKEN`(5章)** — GitHub Secrets/Variablesを書き換えられる強い権限のトークン。手放す際はGitHub側で無効化(Revoke)すること
 
@@ -353,7 +360,7 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 
 ### 外部PC・Bot・clasp
 - **80000785 PC**(前任者PC):
-  - 会社用の常時起動PCで、ポータル監視(`InternalPortalHealthWatchdog`)を動かしている。ステラ取り込み2本と会費ペイ用runner(`KaihipayActionsRunner`/`KaihipayRunnerWatchdog`)は2026-10-12に無効化済み。
+  - 2026-10-12に、ステラ取り込み2本・ポータル監視(`InternalPortalHealthWatchdog`)・会費ペイ用runner(`KaihipayActionsRunner`/`KaihipayRunnerWatchdog`)をすべて無効化した。このリポジトリの運用はPC非依存。
   - 遠隔での状態確認手段は無い(`selfcafe/pc-remote-ops`のrunnerは消えており、不要とオーナー判断で作り直さない。2026-10-06、7.4)。
 - **タスク登録スクリプト**: `scripts/register_*.ps1`と`run_*.cmd`は`C:\Users\80000785`とUserIdを決め打ちしている。別PCへ移すときは書き換えが必要。PythonはPATHでなくフルパスで指定する。
 - **Bot構成**:
