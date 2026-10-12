@@ -195,7 +195,7 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 
 ### 7.4 【対応済み 2026-10-06/10-12】ステラ取込みの停止
 
-**2026-10-12、オーナー判断で毎朝の確定取込み`SteraDailySalesImport`も80000785で無効化した。ステラへの自動アクセスは全て停止している。** 店舗タブのステラ関連列(ステラ売上・原価率(ステラ実売上ベース)・数量突き合わせ)と`runMonthlyStockCheckBackstop`の突き合わせは、10/12以降の分が更新されない(オーナー了承済み)。戻すときは`Enable-ScheduledTask -TaskName SteraDailySalesImport`(80000785上)。以下は10/6の当日速報停止の記録。
+**2026-10-12、オーナー判断で毎朝の確定取込み`SteraDailySalesImport`も80000785で無効化した。ステラへの自動アクセスは全て停止している。** 店舗タブのステラ関連列(ステラ売上・原価率(ステラ実売上ベース)・数量突き合わせ)と`runMonthlyStockCheckBackstop`の突き合わせは、10/12以降の分が更新されない(オーナー了承済み)。不完全な数字が正しく見えないよう、`gas_backend.gs`の`STERA_IMPORT_STOPPED_AFTER = '2026-10-11'`より後の日を含む月は、`buildStockCheckMonthly`/`buildSalesCategoryCostRatio`がステラ関連列に「ステラ取込み停止中」と書き、LINE WORKSの在庫照会にも注記を付ける(9月以前の月は従来どおり)。戻すときは`Enable-ScheduledTask -TaskName SteraDailySalesImport`(80000785上)、定数を`''`にしてデプロイ、該当月を再実行。以下は10/6の当日速報停止の記録。
 
 ステラへのアクセスを1日1回(毎朝の`SteraDailySalesImport`)だけにする、とオーナーが決定。定期ポーリングは盗難検知用だったが今は不要。80000785 PCのrunner(pc-remote-ops)が登録ごと消えていて遠隔で実行できないため、オーナーが80000785を操作するときに実行する。
 
