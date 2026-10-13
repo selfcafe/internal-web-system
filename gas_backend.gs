@@ -444,6 +444,7 @@ function doGet(e) {
     else if (a === 'buildBranchReorder')        result = buildBranchReorder(e.parameter.branch, e.parameter.periodLabel, false);
     else if (a === 'previewToyoReorder')        result = buildToyoReorder(e.parameter.store, e.parameter.periodLabel, true);
     else if (a === 'buildToyoReorder')          result = buildToyoReorder(e.parameter.store, e.parameter.periodLabel, false);
+    else if (a === 'buildAdhocApexOrder')       result = buildAdhocApexOrder(e.parameter.branch, e.parameter.items, e.parameter.dryRun === '1' || e.parameter.dryRun === 'true');
     else if (a === 'reorderStoreTabs')          result = reorderStoreTabs();
     else if (a === 'removeInventoryLabelColumn') result = removeInventoryLabelColumn();
     else if (a === 'removeStoreInventoryLowStockColumn') result = removeStoreInventoryLowStockColumn();
@@ -4785,6 +4786,123 @@ function buildBranchReorder(branchKey, periodLabel, dryRun) {
   } finally {
     lock.releaseLock();
   }
+}
+
+// ===== アペックスの都度発注（追加発注、2026-10-13） =====
+// 月初以外に現場から「○○店に抹茶1ケース」と頼まれたときの発注書と Gmail 下書き。PC の selfcafe-automation/scripts/order_adhoc.py と同じ動き。
+//   ?action=buildAdhocApexOrder&branch=名古屋北&items=ささしまライブ店:抹茶ラテ=18,カップ蓋=20,カップM=25;名駅西口店:抹茶ラテ=18&dryRun=1
+//   branch … reorder_branches のキー（tokai_名古屋北）か label（名古屋北）
+//   items  … 店舗:商品=数,商品=数;店舗:… 店舗はポータルの店舗ID か表示名（「店」の有無は問わない）、
+//            商品はポータルの商品名（抹茶ラテ・カップM など）か商品コード。数量は袋・本・個
+//   dryRun=1 … 計算と確認だけ（発注書も下書きも作らない）
+// 発注書の写しは reorder_mail.folder に「{支店} 注文表 {年}年{月}月分（追加 M/D）」で作る（同じ日に2回目以降は (2) を付ける）。
+// 宛先は発注書の C1。件名は reorder_mail.subject ＋「（支店 追加 M/D）」。送信はしない（人が下書きを確認して送る）。
+// アペックスの最低条件「店舗ごとにどれか1品は1ケース以上」は満たさない店を warnings に出す（止めない）。
+function _adhocResolveStore_(key, stores, names) {
+  const norm = x => String(x || '').replace(/[\s　]/g, '').replace(/店$/, '');
+  if (stores[key]) return key;
+  const k = norm(key);
+  return Object.keys(stores).find(sid => norm(names[sid]) === k || norm(sid) === k) || null;
+}
+
+function _adhocParseItems_(spec, stores, names, products, codeMap) {
+  const norm = x => String(x || '').replace(/[\s　]/g, '').replace(/^㋣/, '');
+  const byName = {};
+  products.forEach(p => { [p.name, p.label].forEach(n => { if (n) byName[norm(n)] = String(p.code); }); });
+  const out = {}, errors = [];
+  String(spec || '').split(';').map(x => x.trim()).filter(Boolean).forEach(part => {
+    const i = part.indexOf(':');
+    if (i < 0) { errors.push('店舗と商品の区切り「:」が無い: ' + part); return; }
+    const sid = _adhocResolveStore_(part.slice(0, i).trim(), stores, names);
+    if (!sid) { errors.push('この支店に無い店舗: ' + part.slice(0, i).trim()); return; }
+    part.slice(i + 1).split(',').map(x => x.trim()).filter(Boolean).forEach(kv => {
+      const j = kv.lastIndexOf('=');
+      if (j < 0) { errors.push('数量が無い: ' + kv); return; }
+      const name = kv.slice(0, j).trim(), qty = Number(kv.slice(j + 1));
+      if (!(qty > 0)) { errors.push('数量が不正: ' + kv); return; }
+      const portalCode = byName[norm(name)] || name;
+      const code = codeMap[portalCode] || portalCode;
+      out[sid] = out[sid] || [];
+      out[sid].push({ name, code, qty });
+    });
+  });
+  return { items: out, errors };
+}
+
+function buildAdhocApexOrder(branchKey, spec, dryRun) {
+  const branches = _settingJson_('reorder_branches', {});
+  const key = branches[branchKey] ? branchKey : Object.keys(branches).find(k => branches[k].label === branchKey);
+  const b = branches[key];
+  if (!b) return { error: 'unknown_branch: ' + branchKey, branches: Object.keys(branches) };
+  const mail = _settingJson_('reorder_mail', {});
+  const codeMap = _settingJson_('reorder_code_map', {});
+  const names = _storeNames_();
+  const products = _settingJson_('all_products', []);
+  const parsed = _adhocParseItems_(spec, b.stores || {}, names, products, codeMap);
+  if (parsed.errors.length) return { error: 'bad_items', details: parsed.errors, stores: Object.keys(b.stores || {}).map(s => names[s] || s) };
+  if (!Object.keys(parsed.items).length) return { error: 'no_items' };
+
+  // 発注書の行（商品コード→行、ケース入数、単価、商品名）を元の発注書から読む（写しを作る前に確認できるように）
+  const src = SpreadsheetApp.openById(b.sheet).getSheets()[0];
+  const values = src.getDataRange().getDisplayValues();
+  const HEADER_ROW = 5;
+  const header = values[HEADER_ROW - 1].map(h => String(h).replace(/\n/g, ''));
+  const rowInfo = {};
+  for (let r = HEADER_ROW; r < values.length; r++) {
+    const c = String(values[r][0]).trim();
+    if (c && c !== '商品コード') rowInfo[c] = { row: r + 1, name: String(values[r][1]).trim(), casePieces: Number(String(values[r][2]).replace(/,/g, '')) || 0, unit: String(values[r][3]).trim(), price: Number(String(values[r][4]).replace(/,/g, '')) || 0 };
+  }
+  const warnings = [], lines = [], detail = {};
+  let total = 0;
+  Object.keys(parsed.items).forEach(sid => {
+    const col = String(b.stores[sid] || '').replace(/\n/g, '');
+    const ci = header.indexOf(col);
+    if (ci < 0) { warnings.push(`発注書に店舗の列が無い: ${col}`); return; }
+    let hasCase = false;
+    detail[names[sid] || sid] = parsed.items[sid].map(it => {
+      const info = rowInfo[it.code];
+      if (!info) { warnings.push(`発注書に商品が無い: ${names[sid] || sid} ${it.name}（${it.code}）`); return { name: it.name, code: it.code, qty: it.qty, missing: true }; }
+      const amount = it.qty * info.price;
+      total += amount;
+      if (info.casePieces && it.qty >= info.casePieces) hasCase = true;
+      lines.push(`${names[sid] || sid}　${info.name}　${it.qty}${info.unit}${info.casePieces ? `（1ケース${info.casePieces}${info.unit}）` : ''}　${amount.toLocaleString()}円`);
+      return { name: info.name, code: it.code, qty: it.qty, unit: info.unit, casePieces: info.casePieces, price: info.price, amount, col: ci + 1, row: info.row };
+    });
+    if (!hasCase) warnings.push(`${names[sid] || sid} は1ケース以上の品が無い（アペックスの最低条件）`);
+  });
+  const now = new Date();
+  const md = `${now.getMonth() + 1}/${now.getDate()}`;
+  const subject = `${mail.subject || '発注依頼'}（${b.label}支店 追加 ${md}）`;
+  const to = String(values[0][2] || '').trim() || b.to; // 宛先は発注書の記載が正
+  const result = { ok: true, branch: b.label, to, subject, lines, total, warnings, detail };
+  if (dryRun) return Object.assign(result, { dryRun: true });
+
+  const folder = mail.folder ? DriveApp.getFolderById(mail.folder) : DriveApp.getRootFolder();
+  let title = `${b.label} 注文表 ${now.getFullYear()}年${now.getMonth() + 1}月分（追加 ${md}）`;
+  for (let n = 2; folder.getFilesByName(title).hasNext(); n++) title = `${b.label} 注文表 ${now.getFullYear()}年${now.getMonth() + 1}月分（追加 ${md}）(${n})`;
+  const copy = DriveApp.getFileById(b.sheet).makeCopy(title, folder);
+  const ss = SpreadsheetApp.openById(copy.getId());
+  const sh = ss.getSheets()[0];
+  // 元の発注書に前回分の数字が残っていることがあるので、店舗の列（合計列は式なので除く）を先に空にする
+  const clear = [];
+  header.forEach((h, ci) => {
+    if (ci < 5 || !h || h === '合計') return;
+    Object.values(rowInfo).forEach(info => { if (String(values[info.row - 1][ci] || '').trim()) clear.push(sh.getRange(info.row, ci + 1).getA1Notation()); });
+  });
+  if (clear.length) sh.getRangeList(clear).clearContent();
+  Object.values(detail).forEach(items => items.forEach(it => { if (!it.missing) sh.getRange(it.row, it.col).setValue(it.qty); }));
+  if (String(values[1][6]).trim() === '注文日') {
+    sh.getRange('H2').setValue(`${now.getFullYear()}年`);
+    sh.getRange('I2').setValue(`'${md}`);
+  }
+  SpreadsheetApp.flush();
+  const xlsx = UrlFetchApp.fetch(`https://docs.google.com/spreadsheets/d/${copy.getId()}/export?format=xlsx`,
+    { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() } }).getBlob().setName(title + '.xlsx');
+  const draftBody = mail.body || `${b.label}支店 ご担当者様\n\n発注書を添付いたします。ご確認のほどよろしくお願いいたします。`;
+  const opts = { attachments: [xlsx] };
+  if (b.cc || mail.cc) opts.cc = b.cc || mail.cc;
+  GmailApp.createDraft(to, subject, draftBody, opts);
+  return Object.assign(result, { draft: 'created', sheetUrl: ss.getUrl(), title });
 }
 
 // ----------------------------------------------------------------
