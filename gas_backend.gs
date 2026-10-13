@@ -529,8 +529,17 @@ function doPost(e) {
   // ロック待ち時間を計測してログに残す（2026-08-12、doPostが同時に何件も来た時に
   // 「ロック待ちで詰まっている」のか「処理自体が遅い」のかを次回切り分けられるようにするため）
   const _lockWaitStart = Date.now();
-  lock.waitLock(30000);
+  // waitLockだと時間切れで例外になり、HTMLのエラーページが返って端末側では英語の
+  // JSON解析エラーとしか出なかった(2026-10-13、巣鴨駅南口の打刻失敗)。tryLockにして、
+  // 取れなければ日本語のエラーをJSONで返す
+  const _gotLock = lock.tryLock(30000);
   const _lockWaitMs = Date.now() - _lockWaitStart;
+  if (!_gotLock) {
+    let _b = {};
+    try { _b = JSON.parse(e.postData.contents) || {}; } catch (_) {}
+    console.warn('doPost ロック待ち時間切れ action=' + (_b.action || '(不明)') + ' storeId=' + (_b.storeId || '') + ' lockWaitMs=' + _lockWaitMs);
+    return json({ error: 'ただいま混み合っています。1分ほど待ってから、もう一度お試しください。', busy: true });
+  }
   let result;
   let actionForErrorNotify_ = null;
   let exceptionCaught_ = false;
@@ -1066,6 +1075,23 @@ function saveOrders(storeId, rows) {
   return { ok: true };
 }
 
+// シートの1行(getValuesの値)と、これから書く値が同じかどうか。シート側は数値・真偽値・
+// 日付(created_at等が日時として自動変換された場合)で返ってくるので、文字列にそろえて比べる。
+// 日付は時刻の一致で判定し、判定できない値は「違う」として書き直す(書き直しても害は無い)
+function _orderRowSame_(cur, next) {
+  if (!cur) return false;
+  for (let i = 0; i < next.length; i++) {
+    const a = cur[i], b = next[i];
+    if (a instanceof Date) {
+      const t = (b instanceof Date) ? b.getTime() : Date.parse(b);
+      if (isNaN(t) || t !== a.getTime()) return false;
+    } else if (String(a) !== String(b)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 // saveOrdersの「その店舗の行を全削除してから書き込む」という2段階方式は、削除と
 // 書き込みの間に一瞬「空」の状態ができてしまい、その瞬間に別のリクエスト（getOrders）が
 // 割り込むと、本当は行があるのに0件に見えてしまう（実際にこの隙間が原因でデータが
@@ -1076,25 +1102,42 @@ function upsertOrderRows(storeId, rows) {
   ensureHeaders(sheet, ORDER_COLS);
   if (!rows || !rows.length) return { ok: true };
 
+  // 端末は保存のたびにその店舗の全行(数十行)を送ってくる。以前は1行ごとに書き込み1回＋
+  // 日付列の書式設定3回をしていたため、1回の保存で200回以上シートを触っていた。
+  // シートの応答が遅い時間帯にこれが6分の上限を超えてタイムアウトし、その間ロックを
+  // 握り続けて他店舗の打刻・保存が全部失敗した(2026-10-13 18:37、巣鴨駅南口)。
+  // いまの行を1回で読み、中身が変わった行だけを書き、書式設定もまとめて1回にする。
   const idIdx = ORDER_COLS.indexOf('id');
   const idToRowNum = {};
+  const current = {};
   if (sheet.getLastRow() > 1) {
-    const ids = sheet.getRange(2, idIdx + 1, sheet.getLastRow() - 1, 1).getValues();
-    ids.forEach((r, i) => { if (r[0] !== '') idToRowNum[String(r[0])] = i + 2; });
+    const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, ORDER_COLS.length).getValues();
+    data.forEach((r, i) => {
+      if (r[idIdx] === '') return;
+      idToRowNum[String(r[idIdx])] = i + 2;
+      current[String(r[idIdx])] = r;
+    });
   }
 
   const dateCols = ['request_date', 'order_date', 'delivery_date'];
   const toAppend = [];
+  const changedRowNums = [];
   rows.forEach(r => {
     const values = ORDER_COLS.map(c => (r[c] === undefined || r[c] === null) ? '' : r[c]);
     const rowNum = idToRowNum[String(r.id)];
     if (rowNum) {
+      if (_orderRowSame_(current[String(r.id)], values)) return;
       sheet.getRange(rowNum, 1, 1, ORDER_COLS.length).setValues([values]);
-      dateCols.forEach(c => sheet.getRange(rowNum, ORDER_COLS.indexOf(c) + 1).setNumberFormat('@'));
+      changedRowNums.push(rowNum);
     } else {
       toAppend.push(values);
     }
   });
+  if (changedRowNums.length) {
+    const a1s = [];
+    changedRowNums.forEach(n => dateCols.forEach(c => a1s.push(sheet.getRange(n, ORDER_COLS.indexOf(c) + 1).getA1Notation())));
+    sheet.getRangeList(a1s).setNumberFormat('@');
+  }
 
   if (toAppend.length) {
     const startRow = sheet.getLastRow() + 1;
