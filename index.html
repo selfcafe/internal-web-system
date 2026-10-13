@@ -481,6 +481,7 @@
     .checksheet-today-list { background:white; border-radius:8px; overflow:hidden; box-shadow:0 1px 4px rgba(0,0,0,.08); }
     .checksheet-today-row { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:16px 14px; border-bottom:1px solid #f0f0f0; font-size:15px; }
     .checksheet-today-row:last-child { border-bottom:none; }
+    .cs-saved-note { color:#888; font-size:12px; }
     .checksheet-past-edit-btn { flex-shrink:0; padding:6px 10px; border:1px solid #c98a1a; border-radius:6px; background:white; color:#c98a1a; font-size:12px; font-weight:700; cursor:pointer; }
     .checksheet-past-edit { margin-bottom:10px; padding:10px 12px; background:#fff3d6; border:2px solid #f59e0b; border-radius:8px; font-size:13px; color:#8a5a00; }
     #checksheet-table-wrap .checksheet-past-edit select { padding:6px 8px; border:1px solid #d9b26a; border-radius:6px; background:white; margin-right:8px; }
@@ -3372,6 +3373,42 @@ const CHECKSHEET_UNSAVED_KEY = 'checksheet_unsaved';
 // 未保存の各項目の「変更前の値」(=サーバーにある値。無かった項目はnull)。キャンセルで戻す先、
 // および入力を元の値に戻した時に未保存から外す判定に使う。キーの形はchecksheet_unsavedと同じ
 const CHECKSHEET_UNSAVED_ORIG_KEY = 'checksheet_unsaved_orig';
+// 当日入力の数量は「今回補充した数」(足し算、2026-10-13〜)。保存済みの合計を上書きする入力にすると、
+// 開いた直後(サーバーの最新値が届く前)にタップした数が古い合計を元に保存され、今日の正しい合計を
+// 上書きしてしまう(渋谷神南で、＋－の後に他の項目の数字が後から出てきて分かりにくいと指摘)。
+// 今回の数はここに貯め、保存する瞬間に最新の合計へ足して絶対値に変換してから送る
+// (_convertChecksheetAddsToAbsolute)。送るのは絶対値なので、応答が届かず再送しても二重に足されない。
+// 保存済みの合計を直すのは「保存済みの分を修正する」(checksheetEditDay、絶対値の入力)だけ
+const CHECKSHEET_UNSAVED_ADD_KEY = 'checksheet_unsaved_add';
+function _getChecksheetUnsavedAdd() {
+  try { return JSON.parse(localStorage.getItem(CHECKSHEET_UNSAVED_ADD_KEY) || '{}'); } catch(e) { return {}; }
+}
+function _setChecksheetUnsavedAdd(obj) {
+  try { localStorage.setItem(CHECKSHEET_UNSAVED_ADD_KEY, JSON.stringify(obj)); } catch(e) { console.error('checksheet unsaved add store error:', e); }
+}
+function _checksheetAddValue(storeId, periodLabel, dayKey, itemKey) {
+  return _getChecksheetUnsavedAdd()[storeId + '|' + periodLabel]?.[dayKey]?.[itemKey] || 0;
+}
+// 今回の数を最新の合計に足して、絶対値の未保存分へ移す(保存の直前に呼ぶ)
+function _convertChecksheetAddsToAbsolute(storeId, periodLabel) {
+  const key = storeId + '|' + periodLabel;
+  const adds = _getChecksheetUnsavedAdd();
+  if (!adds[key]) return;
+  Object.entries(adds[key]).forEach(([dayKey, items]) => {
+    Object.entries(items).forEach(([itemKey, delta]) => {
+      // キャッシュ=サーバーの最新値(+修正画面での未保存の値)
+      const cur = (getChecksheetData(storeId, periodLabel)[dayKey] || {})[itemKey];
+      const value = (Number(cur) || 0) + delta;
+      setChecksheetField(storeId, periodLabel, dayKey, itemKey, value);
+      _markChecksheetUnsaved(storeId, periodLabel, dayKey, itemKey, value, cur);
+    });
+  });
+  delete adds[key];
+  _setChecksheetUnsavedAdd(adds);
+}
+// 最後にサーバーから取り直した時刻(店舗ごと)。今回の数を足す元の合計が古くないかの判定に使う
+const _checksheetLoadedAt = {};
+const CHECKSHEET_BASE_MAX_AGE_MS = 60000;
 const CHECKSHEET_AUTOSAVE_MS = 60000;
 function _getChecksheetUnsaved() {
   try { return JSON.parse(localStorage.getItem(CHECKSHEET_UNSAVED_KEY) || '{}'); } catch(e) { return {}; }
@@ -3428,10 +3465,12 @@ function cancelChecksheetChanges() {
   if (!confirm(`保存していない変更（${n}件）を取り消して、元の値に戻しますか？`)) return;
   const unsaved = _getChecksheetUnsaved();
   const orig = _getChecksheetUnsavedOrig();
+  const adds = _getChecksheetUnsavedAdd();
   const cache = JSON.parse(localStorage.getItem(CHECKSHEET_DATA_KEY) || '{}');
   _checksheetUnsavedKeys(storeTab).forEach(k => {
     const periodLabel = k.slice(storeTab.length + 1);
-    Object.entries(unsaved[k]).forEach(([dayKey, items]) => {
+    delete adds[k]; // 今回の数はキャッシュに入れていないので消すだけでよい
+    Object.entries(unsaved[k] || {}).forEach(([dayKey, items]) => {
       Object.keys(items).forEach(itemKey => {
         const day = cache[storeTab]?.[periodLabel]?.[dayKey];
         if (!day) return;
@@ -3445,18 +3484,23 @@ function cancelChecksheetChanges() {
   localStorage.setItem(CHECKSHEET_DATA_KEY, JSON.stringify(cache));
   _setChecksheetUnsaved(unsaved);
   _setChecksheetUnsavedOrig(orig);
+  _setChecksheetUnsavedAdd(adds);
   clearTimeout(_checksheetAutosaveTimer);
   _checksheetAutosaveTimer = null;
   renderChecksheet();
 }
 function _checksheetUnsavedKeys(storeId) {
-  return Object.keys(_getChecksheetUnsaved()).filter(k => k.split('|')[0] === storeId);
+  const keys = new Set([...Object.keys(_getChecksheetUnsaved()), ...Object.keys(_getChecksheetUnsavedAdd())]);
+  return [...keys].filter(k => k.split('|')[0] === storeId);
 }
+// 件数は項目単位(同じ項目に今回の数と修正の両方があっても1件)
 function _checksheetUnsavedCount(storeId) {
-  const all = _getChecksheetUnsaved();
-  let n = 0;
-  _checksheetUnsavedKeys(storeId).forEach(k => Object.values(all[k]).forEach(day => { n += Object.keys(day).length; }));
-  return n;
+  const items = new Set();
+  [_getChecksheetUnsaved(), _getChecksheetUnsavedAdd()].forEach(all => {
+    _checksheetUnsavedKeys(storeId).forEach(k => Object.entries(all[k] || {}).forEach(([dayKey, day]) =>
+      Object.keys(day).forEach(itemKey => items.add(k + '|' + dayKey + '|' + itemKey))));
+  });
+  return items.size;
 }
 // サーバーから取り直した値で未保存の入力が巻き戻らないよう、取得後のキャッシュに未保存分を上書きする
 function _applyChecksheetUnsaved(storeId) {
@@ -3548,9 +3592,16 @@ function _syncChecksheetToDb(storeId, periodLabel) {
   _updateChecksheetSavingIndicator();
   const run = prev.catch(() => {}).then(async () => {
     let ok = true;
-    // 直列化の順番が来た時点の未保存分を送る(前の保存中に追加された入力もここで一緒に送られる)
-    const data = _getChecksheetUnsaved()[key];
+    let data;
     try {
+      // 今回の数を足す元の合計が古ければ(開いた直後・他端末の保存後など)、先に取り直す
+      if (_getChecksheetUnsavedAdd()[key] && Date.now() - (_checksheetLoadedAt[storeId] || 0) > CHECKSHEET_BASE_MAX_AGE_MS) {
+        await loadChecksheetDataFromDb(storeId);
+      }
+      _convertChecksheetAddsToAbsolute(storeId, periodLabel);
+      if (storeId === storeTab) _refreshChecksheetSavedNotes();
+      // 直列化の順番が来た時点の未保存分を送る(前の保存中に追加された入力もここで一緒に送られる)
+      data = _getChecksheetUnsaved()[key];
       if (!data) return; // 前の保存で送り終わっている(finallyで件数表示は戻す)
       const res = await gasPost('saveChecksheetData', { storeId, periodLabel, data });
       if (!res || res.error) throw new Error((res && res.error) || 'empty response');
@@ -3576,6 +3627,7 @@ function _syncChecksheetToDb(storeId, periodLabel) {
     finally {
       _checksheetPendingSyncCount--;
       _updateChecksheetSavingIndicator(ok);
+      if (storeId === storeTab) _refreshChecksheetSavedNotes();
     }
   });
   _checksheetSyncChain[key] = run;
@@ -3585,7 +3637,9 @@ function _syncChecksheetToDb(storeId, periodLabel) {
 async function loadChecksheetDataFromDb(storeId) {
   try {
     const rows = await gasGet('getChecksheetData', { storeId });
-    if (!Array.isArray(rows) || !rows.length) return;
+    if (!Array.isArray(rows)) return;
+    _checksheetLoadedAt[storeId] = Date.now();
+    if (!rows.length) return;
     const all = JSON.parse(localStorage.getItem(CHECKSHEET_DATA_KEY) || '{}');
     if (!all[storeId]) all[storeId] = {};
     rows.forEach(r => { all[storeId][r.period_label] = r.data || {}; });
@@ -3699,7 +3753,52 @@ function _updateChecksheetRemainingNote(itemKey) {
   const remain = checksheetRemainingStock(itemKey.slice(5));
   if (remain !== null) el.textContent = `残り在庫：${remain}個`;
 }
-// タップで数量をカウント（直接入力も併用可）
+// 当日入力の数量(今回補充した数、足し算)。0以上の整数だけ
+function updateChecksheetAdd(dayKey, itemKey, rawValue) {
+  const [y, m, d] = dayKey.split('-').map(Number);
+  const period = getChecksheetPeriod(new Date(y, m - 1, d));
+  const n = Number(rawValue);
+  const delta = rawValue === '' || !Number.isFinite(n) ? 0 : Math.max(0, Math.round(n));
+  const inp = document.getElementById('cs-qty-' + itemKey);
+  if (inp && inp.value !== (delta ? String(delta) : '')) inp.value = delta ? delta : '';
+  const key = storeTab + '|' + period.label;
+  const adds = _getChecksheetUnsavedAdd();
+  if (delta) {
+    if (!adds[key]) adds[key] = {};
+    if (!adds[key][dayKey]) adds[key][dayKey] = {};
+    adds[key][dayKey][itemKey] = delta;
+  } else {
+    _deleteChecksheetNested(adds, key, dayKey, itemKey); // 0に戻したら変更なし
+  }
+  _setChecksheetUnsavedAdd(adds);
+  _scheduleChecksheetAutosave();
+  _updateChecksheetSavingIndicator();
+  _refreshChecksheetSavedNotes();
+}
+function stepChecksheetAdd(dayKey, itemId, delta) {
+  const inp = document.getElementById('cs-qty-' + itemId);
+  if (!inp) return;
+  updateChecksheetAdd(dayKey, itemId, Math.max(0, (parseInt(inp.value) || 0) + delta));
+}
+// 「本日保存済み：N」の小さい表示。今回の数があれば保存後の合計も出す
+function _checksheetSavedNoteText(periodLabel, dayKey, itemKey) {
+  const cur = (getChecksheetData(storeTab, periodLabel)[dayKey] || {})[itemKey];
+  const base = Number(cur) || 0;
+  const pending = itemKey in ((_getChecksheetUnsaved()[storeTab + '|' + periodLabel] || {})[dayKey] || {});
+  const add = _checksheetAddValue(storeTab, periodLabel, dayKey, itemKey);
+  return (pending ? `本日の合計：${base}（保存待ち）` : `本日保存済み：${base}`) + (add ? ` → 保存後 ${base + add}` : '');
+}
+// 小さい表示と、大きい「今回の数」の欄を最新の状態に合わせる(保存に回した分は欄から消える)
+function _refreshChecksheetSavedNotes() {
+  document.querySelectorAll('.cs-saved-note').forEach(el => {
+    const { period, day, item } = el.dataset;
+    el.textContent = _checksheetSavedNoteText(period, day, item);
+    const inp = document.getElementById('cs-qty-' + item);
+    const add = _checksheetAddValue(storeTab, period, day, item);
+    if (inp && inp !== document.activeElement && inp.value !== (add ? String(add) : '')) inp.value = add || '';
+  });
+}
+// タップで数量をカウント（直接入力も併用可）。「保存済みの分を修正する」画面用(合計そのものを直す)
 function stepChecksheetQty(dayKey, itemId, delta) {
   const inp = document.getElementById('cs-qty-' + itemId);
   if (!inp) return;
@@ -3779,9 +3878,9 @@ let checksheetActiveCategory = 'daily_count';
 let checksheetActiveView = 'today'; // 'today' | 'history'（常に実際の当月） | 'last_month'（常に実際の前月）
 let checksheetPrevView = 'today'; // 先月の履歴を開く直前のビュー（もう一度押したときに戻す用）
 function switchChecksheetCategory(cat) { checksheetActiveCategory = cat; renderChecksheet(); }
-// 過去の分の修正(2026-10-13〜)：当日入力フォームを過去の日付で開き直す。null=今日の入力。
-// 選べるのは当月・先月(営業日基準)の今日より前の日だけ(履歴で見られる範囲と同じ。範囲を広げるほど
-// 記録の信頼性が下がるため)。保存の仕組みは当日入力と同じで、期間はdayKeyから決まる
+// 保存済みの分の修正(2026-10-13〜)：入力フォームを指定日の「合計そのもの」を直す画面で開き直す。
+// null=今日の入力(今回の数を足す画面)。選べるのは当月・先月(営業日基準)の今日までの日(履歴で
+// 見られる範囲と同じ。範囲を広げるほど記録の信頼性が下がるため)。期間はdayKeyから決まる
 let checksheetEditDay = null;
 function checksheetEditableDays() {
   const todayKey = checksheetToday();
@@ -3789,10 +3888,16 @@ function checksheetEditableDays() {
   const days = [
     ...checksheetPeriodDays(getChecksheetPeriod(new Date(y, m - 2, 1))),
     ...checksheetPeriodDays(getChecksheetPeriod(new Date(y, m - 1, 1))),
-  ].map(dateKeyStr).filter(k => k < todayKey);
-  return days.reverse(); // 新しい日付が上
+  ].map(dateKeyStr).filter(k => k <= todayKey);
+  return days.reverse(); // 新しい日付(今日)が上
 }
 function startChecksheetPastEdit() {
+  // 今回の数(足し算)が残ったまま合計を直すと、どちらを優先するか分かりにくいので先に片付けてもらう
+  const adds = _getChecksheetUnsavedAdd();
+  if (Object.keys(adds).some(k => k.split('|')[0] === storeTab)) {
+    alert('今回入力した数がまだ保存されていません。先に「保存する」か「キャンセル」を押してください。');
+    return;
+  }
   checksheetEditDay = checksheetEditableDays()[0] || null;
   checksheetActiveView = 'today';
   renderChecksheet();
@@ -3870,6 +3975,7 @@ function checksheetToday() {
 }
 function renderChecksheetTodayForm(wrap, subgroups) {
   const dKey = checksheetEditDay || checksheetToday();
+  const addMode = !checksheetEditDay; // 今日の入力=今回の数を足す／修正画面=合計を直す
   // periodもdKey(営業日)基準で決める。月末深夜〜AM4:29に暦月をまたぐと、
   // 「今日」のフォームなのに period.label だけ翌月のまま…という月境界のズレを防ぐため
   const [dy, dm, dd] = dKey.split('-').map(Number);
@@ -3887,6 +3993,16 @@ function renderChecksheetTodayForm(wrap, subgroups) {
           const estimate = _steraStockEstimate[col.id.slice(5)];
           const display = (estimate === null || estimate === undefined) ? '―' : esc(estimate);
           return `<div class="checksheet-today-row"><span>${esc(col.name)}</span><span style="color:#22703d;font-weight:600;flex-shrink:0;white-space:nowrap">理論在庫：${display}個</span></div>`;
+        }
+        if (addMode && col.type === 'qty') {
+          const add = _checksheetAddValue(storeTab, period.label, dKey, col.id);
+          return `<div class="checksheet-today-row"><span>${esc(col.name)}<br><small class="cs-saved-note" data-period="${esc(period.label)}" data-day="${dKey}" data-item="${esc(col.id)}">${esc(_checksheetSavedNoteText(period.label, dKey, col.id))}</small></span>
+            <div class="qty-wrap">
+              <button class="qty-btn" onclick="stepChecksheetAdd('${dKey}','${col.id}',-1)">－</button>
+              <input type="number" min="0" step="1" id="cs-qty-${col.id}" value="${add || ''}" placeholder="0"
+                onchange="updateChecksheetAdd('${dKey}','${col.id}',this.value)">
+              <button class="qty-btn" onclick="stepChecksheetAdd('${dKey}','${col.id}',1)">＋</button>
+            </div></div>`;
         }
         const input = col.type === 'check'
           ? `<input type="checkbox" ${v ? 'checked' : ''} onchange="updateChecksheetField('${dKey}','${col.id}',this.checked,'check')">`
@@ -3909,15 +4025,16 @@ function renderChecksheetTodayForm(wrap, subgroups) {
   wrap.innerHTML = `
     ${checksheetEditDay ? `
     <div class="checksheet-past-edit">
-      <div style="font-weight:700;margin-bottom:6px">過去の分を修正中</div>
+      <div style="font-weight:700">保存済みの分を修正中</div>
+      <div style="font-size:12px;margin-bottom:6px">その日の合計の数を、正しい数に直してください</div>
       <select onchange="selectChecksheetEditDay(this.value)">
         ${checksheetEditableDays().map(k => { const [a, b, c] = k.split('-').map(Number); return `<option value="${k}" ${k === dKey ? 'selected' : ''}>${fmtChecksheetDay(new Date(a, b - 1, c))}</option>`; }).join('')}
       </select>
       <button onclick="endChecksheetPastEdit()">今日の入力に戻る</button>
     </div>` : `
     <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;color:#888;margin-bottom:8px">
-      <span>${fmtChecksheetDay(new Date(dKey))} の入力（${esc(period.label)}分）</span>
-      <button class="checksheet-past-edit-btn" onclick="startChecksheetPastEdit()">過去の分を修正する</button>
+      <span>${fmtChecksheetDay(new Date(dKey))} の入力（${esc(period.label)}分）<br>今回補充した数を入力してください</span>
+      <button class="checksheet-past-edit-btn" onclick="startChecksheetPastEdit()">保存済みの分を修正する</button>
     </div>`}
     ${body}
     <div class="checksheet-save-bar">
