@@ -482,6 +482,7 @@
     .checksheet-today-row { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:16px 14px; border-bottom:1px solid #f0f0f0; font-size:15px; }
     .checksheet-today-row:last-child { border-bottom:none; }
     .cs-saved-note { color:#888; font-size:12px; }
+    #checksheet-table-wrap input.cs-qty-minus { color:#c0392b; font-weight:700; }
     .checksheet-past-edit-btn { flex-shrink:0; padding:6px 10px; border:1px solid #c98a1a; border-radius:6px; background:white; color:#c98a1a; font-size:12px; font-weight:700; cursor:pointer; }
     .checksheet-past-edit { margin-bottom:10px; padding:10px 12px; background:#fff3d6; border:2px solid #f59e0b; border-radius:8px; font-size:13px; color:#8a5a00; }
     #checksheet-table-wrap .checksheet-past-edit select { padding:6px 8px; border:1px solid #d9b26a; border-radius:6px; background:white; margin-right:8px; }
@@ -3398,7 +3399,8 @@ function _convertChecksheetAddsToAbsolute(storeId, periodLabel) {
     Object.entries(items).forEach(([itemKey, delta]) => {
       // キャッシュ=サーバーの最新値(+修正画面での未保存の値)
       const cur = (getChecksheetData(storeId, periodLabel)[dayKey] || {})[itemKey];
-      const value = (Number(cur) || 0) + delta;
+      // マイナスの今回の数で、その間に別端末が合計を減らしていても0未満にはしない
+      const value = Math.max(0, (Number(cur) || 0) + delta);
       setChecksheetField(storeId, periodLabel, dayKey, itemKey, value);
       _markChecksheetUnsaved(storeId, periodLabel, dayKey, itemKey, value, cur);
     });
@@ -3753,14 +3755,18 @@ function _updateChecksheetRemainingNote(itemKey) {
   const remain = checksheetRemainingStock(itemKey.slice(5));
   if (remain !== null) el.textContent = `残り在庫：${remain}個`;
 }
-// 当日入力の数量(今回補充した数、足し算)。0以上の整数だけ
+// 当日入力の数量(今回補充した数、足し算)。整数で、マイナスは「本日保存済み」の数まで
+// (例：保存済み8で－2回→保存後6。2026-10-13、多く保存した分をその場で減らせるように)。
+// 合計(保存済み＋今回)が0未満になる数は入れられない
 function updateChecksheetAdd(dayKey, itemKey, rawValue) {
   const [y, m, d] = dayKey.split('-').map(Number);
   const period = getChecksheetPeriod(new Date(y, m - 1, d));
+  const base = Number((getChecksheetData(storeTab, period.label)[dayKey] || {})[itemKey]) || 0;
   const n = Number(rawValue);
-  const delta = rawValue === '' || !Number.isFinite(n) ? 0 : Math.max(0, Math.round(n));
+  const delta = rawValue === '' || !Number.isFinite(n) ? 0 : Math.max(-base, Math.round(n));
   const inp = document.getElementById('cs-qty-' + itemKey);
   if (inp && inp.value !== (delta ? String(delta) : '')) inp.value = delta ? delta : '';
+  if (inp) inp.classList.toggle('cs-qty-minus', delta < 0);
   const key = storeTab + '|' + period.label;
   const adds = _getChecksheetUnsavedAdd();
   if (delta) {
@@ -3778,7 +3784,7 @@ function updateChecksheetAdd(dayKey, itemKey, rawValue) {
 function stepChecksheetAdd(dayKey, itemId, delta) {
   const inp = document.getElementById('cs-qty-' + itemId);
   if (!inp) return;
-  updateChecksheetAdd(dayKey, itemId, Math.max(0, (parseInt(inp.value) || 0) + delta));
+  updateChecksheetAdd(dayKey, itemId, (parseInt(inp.value) || 0) + delta);
 }
 // 「本日保存済み：N」の小さい表示。今回の数があれば保存後の合計も出す
 function _checksheetSavedNoteText(periodLabel, dayKey, itemKey) {
@@ -3786,7 +3792,7 @@ function _checksheetSavedNoteText(periodLabel, dayKey, itemKey) {
   const base = Number(cur) || 0;
   const pending = itemKey in ((_getChecksheetUnsaved()[storeTab + '|' + periodLabel] || {})[dayKey] || {});
   const add = _checksheetAddValue(storeTab, periodLabel, dayKey, itemKey);
-  return (pending ? `本日の合計：${base}（保存待ち）` : `本日保存済み：${base}`) + (add ? ` → 保存後 ${base + add}` : '');
+  return (pending ? `本日の合計：${base}（保存待ち）` : `本日保存済み：${base}`) + (add ? ` → 保存後 ${Math.max(0, base + add)}` : '');
 }
 // 小さい表示と、大きい「今回の数」の欄を最新の状態に合わせる(保存に回した分は欄から消える)
 function _refreshChecksheetSavedNotes() {
@@ -3796,6 +3802,7 @@ function _refreshChecksheetSavedNotes() {
     const inp = document.getElementById('cs-qty-' + item);
     const add = _checksheetAddValue(storeTab, period, day, item);
     if (inp && inp !== document.activeElement && inp.value !== (add ? String(add) : '')) inp.value = add || '';
+    if (inp) inp.classList.toggle('cs-qty-minus', add < 0);
   });
 }
 // タップで数量をカウント（直接入力も併用可）。「保存済みの分を修正する」画面用(合計そのものを直す)
@@ -3999,7 +4006,7 @@ function renderChecksheetTodayForm(wrap, subgroups) {
           return `<div class="checksheet-today-row"><span>${esc(col.name)}<br><small class="cs-saved-note" data-period="${esc(period.label)}" data-day="${dKey}" data-item="${esc(col.id)}">${esc(_checksheetSavedNoteText(period.label, dKey, col.id))}</small></span>
             <div class="qty-wrap">
               <button class="qty-btn" onclick="stepChecksheetAdd('${dKey}','${col.id}',-1)">－</button>
-              <input type="number" min="0" step="1" id="cs-qty-${col.id}" value="${add || ''}" placeholder="0"
+              <input type="number" step="1" id="cs-qty-${col.id}" value="${add || ''}" placeholder="0" class="${add < 0 ? 'cs-qty-minus' : ''}"
                 onchange="updateChecksheetAdd('${dKey}','${col.id}',this.value)">
               <button class="qty-btn" onclick="stepChecksheetAdd('${dKey}','${col.id}',1)">＋</button>
             </div></div>`;
@@ -4033,7 +4040,7 @@ function renderChecksheetTodayForm(wrap, subgroups) {
       <button onclick="endChecksheetPastEdit()">今日の入力に戻る</button>
     </div>` : `
     <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;color:#888;margin-bottom:8px">
-      <span>${fmtChecksheetDay(new Date(dKey))} の入力（${esc(period.label)}分）<br>今回補充した数を入力してください</span>
+      <span>${fmtChecksheetDay(new Date(dKey))} の入力（${esc(period.label)}分）<br>今回補充した数を入力してください（多く保存した分は－で減らせます）</span>
       <button class="checksheet-past-edit-btn" onclick="startChecksheetPastEdit()">保存済みの分を修正する</button>
     </div>`}
     ${body}
