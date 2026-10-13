@@ -82,7 +82,7 @@ python -m http.server <高めのランダムポート>
 - **パートナー向け「理論在庫」表示**(`getSteraStockEstimate`、`gas_backend.gs`): チェックシート画面にステラ取り扱い商品(水など)の理論在庫を読み取り専用で表示する。パートナーの入力には一切依存せず、`直近確定棚卸の期末在庫 + その後の当月納品累計 − その後のステラ実売上累計`で自動計算する(デイリーカウントの入力欄自体が無い)。「理論在庫」という名称にしているのは、盗難等で実物が減ってもこの数字自体はそれを検知できず、実物とは独立に乖離していく値でしかないため(2026-09-09、「残り在庫」から改称)。
 - **月次バックストップ**(`buildStockCheckMonthly`): 棚卸完了時に、消費量とステラ月間売上数量を店舗タブ上で全対象商品分突き合わせる。通知はなし(店舗タブに書き込むだけ、管理者が手動で確認・記入する運用)。パートナーがステラ取り扱い商品に一切触れなくても月1回は必ずカバーする安全網。
 - **売上データの取得タイミング**:
-  - 確定分: 毎朝、Windowsタスクスケジューラ`SteraDailySalesImport`がプリセット「過去3日」で直近数日分のステラ注文詳細CSVをまとめて取得し、各行の実タイムスタンプから営業日を判定して`stera_daily_sales`シートへ反映(`importSteraDailySalesBulk`)。暦日1日分だけでなく複数日分を取得するのは、営業日の境界(AM4:30)が暦日をまたぐため。
+  - 確定分: **2026-10-12停止**(`SteraDailySalesImport`タスクを無効化、CLAUDE.md 7.4)。以前は毎朝、Windowsタスクスケジューラ`SteraDailySalesImport`がプリセット「過去3日」で直近数日分のステラ注文詳細CSVをまとめて取得し、各行の実タイムスタンプから営業日を判定して`stera_daily_sales`シートへ反映(`importSteraDailySalesBulk`)。暦日1日分だけでなく複数日分を取得するのは、営業日の境界(AM4:30)が暦日をまたぐため。
   - 当日速報値: **2026-10-06停止**(ステラへのアクセスを毎朝1回にするため`SteraRealtimeSalesPoll`タスクを無効化)。以前は10分おきにステラ管理画面の内部集計API(非公式)をポーリングしていた(`stera_realtime_today`シート)。戻すときは`Enable-ScheduledTask -TaskName SteraRealtimeSalesPoll`。
   - (停止中は無効)日付が変わる瞬間、削除される直前の前日最終ポーリング値を確定分シートへ速報値として書き込む(`_seedSteraDailyFromRealtimeRollover_`)。
 - ポーリング・CSV取込みスクリプト本体(`scripts/poll_stera_realtime_sales.py`・`scripts/import_stera_daily_sales.py`・`scripts/backfill_stera_daily_sales_amount.py`)はこのPC上のタスクスケジューラでのみ動作する(GitHub Actionsではない。e-MOSS/ステラ管理画面がクラウドIPをブロックするkaihipayパイプラインと同様の理由)。

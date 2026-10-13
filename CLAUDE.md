@@ -16,8 +16,9 @@ gas_backend.gs
      ② 手動clasp(緊急時のフォールバック) — 下記2章参照
 
 scripts/*.py (import_stera_daily_sales.py / poll_stera_realtime_sales.py / watchdog_portal_health.py等)
-  → Windowsタスクスケジューラで80000785 PC(前任者PC。HANDOVER.mdでは「前任者PC」と表記)上に常駐実行
-  → .github/workflows/stera-daily-import.yml(self-hosted runner、手動再実行用に残置)
+  → 以前はWindowsタスクスケジューラで80000785 PC(前任者PC)上で実行していた。
+    2026-10-12に全タスクを無効化し、PCに依存する処理は無い(ステラ取込みは7.4、死活監視は1章「権限の固定」)
+  → .github/workflows/stera-daily-import.yml(self-hosted runner、手動再実行用に残置。80000785のrunnerも2026-10-12に停止)
 ```
 
 **⚠️`gas_backend.gs`はSHEET_ID等の実IDを空文字プレースホルダーのまま維持するルール(公開リポジトリのため)。実IDはGitHub Secretsにのみ存在する。**
@@ -48,6 +49,13 @@ gh workflow run deploy-gas.yml --repo selfcafe/internal-web-system --ref main
 |---|---|
 | `INVENTORY_SHEET_ID_ARCHIVE_JSON` | 年→旧`INVENTORY_SHEET_ID`のマップ(JSON)。Secretsと違い読み出し可能なので5章の自動更新に使う |
 
+### 権限(oauthScopes)の固定(2026-10-12)
+Web Appは`executeAs: USER_DEPLOYING`なので、本番の権限が1つでも増えると、selfcafeが再認可するまでポータル全体が「承認が必要です」で止まる。再認可はブラウザでの同意操作が必要でクラウドから自動化できないため、増やさない仕組みにしている(PCの監視`InternalPortalHealthWatchdog`はこれに置き換えて廃止)。
+- `appsscript.json`の`oauthScopes`に7つを固定(本番の概要ページの一覧と同じ)。自動検出に任せないので、コードで新しいGoogleサービスを使っても権限は増えず、その処理だけが権限エラーになる。
+- `deploy-gas.yml`は`clasp pull`で本番のappsscript.jsonを取り、権限が増えるならpush前に失敗する(2026-10-12、増やすテストで止まることを確認済み)。疎通確認は応答がJSONかまで見る(承認切れでもHTTP 200のHTMLが返るため)。
+- どうしても権限を足すとき: `oauthScopes`に追記→`gh workflow run deploy-gas.yml --ref main -f allow_scope_change=true`→**直後に**再認可: `selfcafe001@gmail.com`でApps Scriptエディタ(「社内ポータルスクリプト」)を開き、関数`getSettings`を選んで実行→「権限を確認」→「このアプリはGoogleで確認されていません」で**2つ目**の「詳細」→「安全ではないページに移動」→「すべて選択」(初期状態は未選択)→「続行」。ユーザーがその場にいる時だけ行う。
+- `selfcafe001`のパスワード変更・アクセス取り消しの後も同じ再認可が要る。
+
 **index.html側だけの変更は`clasp`不要。** `git push origin main`だけでGitHub Pagesが自動再ビルドする。`gas_backend.gs`を変更した場合のみ上記デプロイが必要。
 
 ### 手動clasp(緊急時のフォールバック)
@@ -71,7 +79,7 @@ GitHub Secretsの値自体は招待した相手からは見えない(上書き�
 1. `selfcafe001@gmail.com`自体のログイン情報(パスワード・2段階認証)——Apps Scriptプロジェクト・各スプレッドシートの実質的な所有者
 2. `SHEET_ID`/`INVENTORY_SHEET_ID`/`DELIVERY_HISTORY_SHEET_ID`が指す各Googleスプレッドシートの共有設定(誰が編集者になっているか個別確認)
 3. 画像保存用Driveフォルダ(`IMAGE_FOLDER_ID`、`gas_backend.gs`内で確認可能)
-4. **80000785 PC自体へのアクセス**(遠隔での状態確認手段は無い、8章「外部PC・Bot・clasp」参照)——stera日次取込み・在庫差異検知Bot・ポータル監視Botがここで動いている。GitHub権限とは完全に別系統
+4. **80000785 PC自体へのアクセス**(遠隔での状態確認手段は無い、8章「外部PC・Bot・clasp」参照)——2026-10-12に全タスクを無効化済みで、日常運用には不要。ステラ取込みを再開する場合だけ関係する。GitHub権限とは完全に別系統
 5. LINE WORKS Bot(在庫差異検知Bot「佐藤テスト」等)の管理者アカウント
 6. **`SECRETS_ADMIN_TOKEN`(5章)** — GitHub Secrets/Variablesを書き換えられる強い権限のトークン。手放す際はGitHub側で無効化(Revoke)すること
 
@@ -185,7 +193,9 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 - 「残り在庫：N個」表示は全商品で非表示。ロジックは残してあり、`index.html`の`CHECKSHEET_SHOW_REMAINING_STOCK`を`true`に戻せば復活する。
 - 棚卸表が本格始動したら「前回在庫+補充−売上≠現在在庫」の形で両方取り入れ直す予定(ユーザーが判断する。それまで勝手に再開しない)。
 
-### 7.4 【対応済み 2026-10-06】合言葉「ステラ」= ステラ当日速報ポーリングの停止
+### 7.4 【対応済み 2026-10-06/10-12】ステラ取込みの停止
+
+**2026-10-12、オーナー判断で毎朝の確定取込み`SteraDailySalesImport`も80000785で無効化した。ステラへの自動アクセスは全て停止している。** 店舗タブのステラ関連列(ステラ売上・原価率(ステラ実売上ベース)・数量突き合わせ)と`runMonthlyStockCheckBackstop`の突き合わせは、10/12以降の分が更新されない(オーナー了承済み)。不完全な数字が正しく見えないよう、`gas_backend.gs`の`STERA_IMPORT_STOPPED_AFTER = '2026-10-11'`より後の日を含む月は、`buildStockCheckMonthly`/`buildSalesCategoryCostRatio`がステラ関連列に「ステラ取込み停止中」と書き、LINE WORKSの在庫照会にも注記を付ける(9月以前の月は従来どおり)。戻すときは`Enable-ScheduledTask -TaskName SteraDailySalesImport`(80000785上)、定数を`''`にしてデプロイ、該当月を再実行。以下は10/6の当日速報停止の記録。
 
 ステラへのアクセスを1日1回(毎朝の`SteraDailySalesImport`)だけにする、とオーナーが決定。定期ポーリングは盗難検知用だったが今は不要。80000785 PCのrunner(pc-remote-ops)が登録ごと消えていて遠隔で実行できないため、オーナーが80000785を操作するときに実行する。
 
@@ -290,8 +300,7 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
   - 店舗名の表記ゆれは、正規化ロジックではなく`stores.js`側をステラの表記に合わせる方針。
   - 別事業の店舗名が`unmatchedStores`に出るのは正常。
 - **数字の鮮度**:
-  - 確定値は翌朝のCSV取り込み。当日分の10分おきの速報(非公式API、`stera_realtime_today`)は2026-10-06に停止したので、当日分は翌朝まで反映されない(7.4)。営業日はAM4:30締め。
-  - 80000785 PCが止まると、確定分の取り込みが止まる。
+  - **2026-10-12以降は取り込みを全て停止中**(7.4)。以前は確定値を翌朝のCSV取り込み、当日分を10分おきの速報(非公式API、`stera_realtime_today`、10/6停止)で入れていた。営業日はAM4:30締め。
   - ステラ管理画面の数字と合わないと言われたら、まずこの点を疑う。
 - **水の判定**: 差が絶対3個以上かつ30%以上で、1回の検知で即通知する設計(監視カメラ映像の保存期間が約7日のため)。**2026-10-05から送信は停止中**(7.3参照)。
   - 誤検知を疑ったら、その店舗がステラ上で個別公開されていない「水だけ」店舗(除外リスト)ではないかを先に確認する。
@@ -351,7 +360,7 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 
 ### 外部PC・Bot・clasp
 - **80000785 PC**(前任者PC):
-  - 会社用の常時起動PCで、ステラ取り込み・ポータル監視(`InternalPortalHealthWatchdog`)を動かしている。
+  - 2026-10-12に、ステラ取り込み2本・ポータル監視(`InternalPortalHealthWatchdog`)・会費ペイ用runner(`KaihipayActionsRunner`/`KaihipayRunnerWatchdog`)をすべて無効化した。このリポジトリの運用はPC非依存。
   - 遠隔での状態確認手段は無い(`selfcafe/pc-remote-ops`のrunnerは消えており、不要とオーナー判断で作り直さない。2026-10-06、7.4)。
 - **タスク登録スクリプト**: `scripts/register_*.ps1`と`run_*.cmd`は`C:\Users\80000785`とUserIdを決め打ちしている。別PCへ移すときは書き換えが必要。PythonはPATHでなくフルパスで指定する。
 - **Bot構成**:

@@ -4837,6 +4837,17 @@ function importSteraOrdersCsv(csvText) {
 // (buildStockCheckMonthlyと同じ月次自動トリガー)から呼べるようになり、完全自動化した。
 // 年またぎ対応(2026-09-12): periodLabelの年からファイルを解決する。getSteraDailyAmountTotal_は
 // 自身で日付範囲から対象ファイルを解決する(_steraSheetIdsForRange_)ため呼び出し側の変更不要。
+// ステラ取込みの停止(2026-10-12、CLAUDE.md 7.4)。stera_daily_salesは2026-10-11分までで止まっている。
+// これより後の日を含む月のステラ関連列(原価率・在庫突き合わせ)は、数字の代わりに
+// STERA_STOPPED_LABELを書く(不完全な売上で計算した値が、正しい数字に見えてしまうのを防ぐ)。
+// 取込みを再開したら''にしてデプロイし、該当月を再実行する。
+const STERA_IMPORT_STOPPED_AFTER = '2026-10-11';
+const STERA_STOPPED_LABEL = 'ステラ取込み停止中';
+function _steraPeriodIncomplete_(periodLabel) {
+  // periodLabel+'-32'は月末より後の日付として文字列比較できる(下のfromDateExclusive等と同じ手法)
+  return !!STERA_IMPORT_STOPPED_AFTER && (String(periodLabel) + '-32') > STERA_IMPORT_STOPPED_AFTER;
+}
+
 function buildSalesCategoryCostRatio(storeId, periodLabel) {
   if (!storeId) return { error: 'storeIdは必須です' };
   if (!periodLabel) return { error: 'periodLabelは必須です（例: 2026-07）' };
@@ -4920,10 +4931,17 @@ function buildSalesCategoryCostRatio(storeId, periodLabel) {
 
   const skipped = [];
   let writtenCount = 0;
+  const steraStopped = _steraPeriodIncomplete_(periodLabel);
   STERA_SALES_MAPPING.forEach(m => {
     const representative = m.ourProducts[0];
     const row = rowNumByProduct[representative];
     if (!row) { skipped.push(m.label); return; }
+    if (steraStopped) {
+      sheet.getRange(row, startCol, 1, headerRow.length).setValues([[STERA_STOPPED_LABEL, '']]);
+      sheet.getRange(row, startCol, 1, headerRow.length).setBackground(STORE_INV_COLOR_GREEN);
+      writtenCount++;
+      return;
+    }
     const revenue = revenueByPrdId[m.prdId];
     const cost = m.ourProducts.reduce((sum, name) => sum + (costByProduct[name] || 0), 0);
     const hasCost = m.ourProducts.some(name => costByProduct[name] !== undefined);
@@ -4936,7 +4954,7 @@ function buildSalesCategoryCostRatio(storeId, periodLabel) {
     writtenCount++;
   });
 
-  return { ok: true, store: sheetName, period: periodLabel, rows: writtenCount, skipped: skipped };
+  return { ok: true, store: sheetName, period: periodLabel, rows: writtenCount, skipped: skipped, steraStopped: steraStopped };
 }
 
 // 上記の代表行揃え修正(2026-09-15)を、過去に既にbuildSalesCategoryCostRatioが実行済みの
@@ -6068,6 +6086,7 @@ function buildStockCheckMonthly(storeId, periodLabel) {
 
   const skipped = [];
   let writtenCount = 0;
+  const steraStopped = _steraPeriodIncomplete_(periodLabel);
   STERA_SALES_MAPPING.forEach(m => {
     const representative = m.ourProducts[0];
     const row = rowNumByProduct[representative];
@@ -6075,16 +6094,22 @@ function buildStockCheckMonthly(storeId, periodLabel) {
     const hasConsumption = m.ourProducts.some(name => consumptionByProduct[name] !== undefined);
     const netConsumption = m.ourProducts.reduce((sum, name) =>
       sum + (consumptionByProduct[name] || 0) - (disposedByProduct[name] || 0), 0);
+    const status = existingStatusByLabel[m.label] || '';
+    if (steraStopped) {
+      sheet.getRange(row, STOCK_CHECK_START_COL, 1, STOCK_CHECK_HEADERS.length).setValues([[m.label, STERA_STOPPED_LABEL, '', status]]);
+      sheet.getRange(row, STOCK_CHECK_START_COL, 1, STOCK_CHECK_HEADERS.length).setBackground(STORE_INV_COLOR_GREEN);
+      writtenCount++;
+      return;
+    }
     const steraQty = getSteraDailyTotal_(storeId, m.prdId, fromDateExclusive, toDateInclusive);
     const diff = hasConsumption ? netConsumption - steraQty : '';
-    const status = existingStatusByLabel[m.label] || '';
     sheet.getRange(row, STOCK_CHECK_START_COL, 1, STOCK_CHECK_HEADERS.length).setValues([[m.label, steraQty, diff, status]]);
     // ステラ関連ブロックは緑(2026-09-07、ユーザー確定の店舗タブ配色ルール。[[_applyStoreInventoryColColors_]]参照)
     sheet.getRange(row, STOCK_CHECK_START_COL, 1, STOCK_CHECK_HEADERS.length).setBackground(STORE_INV_COLOR_GREEN);
     writtenCount++;
   });
 
-  return { ok: true, store: storeName, period: periodLabel, rows: writtenCount, skipped: skipped };
+  return { ok: true, store: storeName, period: periodLabel, rows: writtenCount, skipped: skipped, steraStopped: steraStopped };
 }
 
 // 盗難検知②月次バックストップの「翌月1日朝」再実行(2026-09-06追加、ユーザー要望)。
@@ -6560,7 +6585,9 @@ function handleLineWorksStockInquiry_(body) {
     ok: true, storeId, group: group.label, fromDate, toDate, inputQty, steraQty, diff,
     _notify: { type: 'stockInquiryReply', userId,
       message: storeName + '・' + group.label + '(' + fromDate + '〜' + toDate + ')\n'
-        + '補充: ' + inputQty + '個\nステラ実売上: ' + steraQty + '個\n差異: ' + diff + '個' }
+        + '補充: ' + inputQty + '個\nステラ実売上: ' + steraQty + '個\n差異: ' + diff + '個'
+        + (STERA_IMPORT_STOPPED_AFTER && toDate > STERA_IMPORT_STOPPED_AFTER
+          ? '\n※' + STERA_STOPPED_LABEL + '(' + STERA_IMPORT_STOPPED_AFTER + 'までの売上のみ)' : '') }
   };
 }
 
