@@ -488,6 +488,7 @@
     .checksheet-save-bar { position:sticky; bottom:0; z-index:5; display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:12px; padding:10px 12px; background:white; border-radius:8px; box-shadow:0 -2px 8px rgba(0,0,0,.12); }
     #checksheet-saving-indicator { font-size:12px; font-weight:600; line-height:1.4; }
     #checksheet-save-btn { flex-shrink:0; padding:10px 18px; border:none; border-radius:8px; background:#22703d; color:white; font-size:15px; font-weight:700; cursor:pointer; }
+    #checksheet-cancel-btn { padding:10px 12px; border:1px solid #bbb; border-radius:8px; background:white; color:#555; font-size:14px; font-weight:600; cursor:pointer; }
     #checksheet-save-btn:disabled { background:#b8c9bc; cursor:default; }
     .checksheet-today-row > span { flex:1 1 auto; min-width:0; }
     .checksheet-today-row input[type="number"] { width:70px; text-align:right; padding:6px 8px; border:1px solid #d1d5db; border-radius:4px; font-size:14px; }
@@ -3368,6 +3369,9 @@ function setChecksheetField(storeId, periodLabel, dayKey, itemKey, value) {
 // するので、送らなかった項目は消えない——別端末が同じ日に入力した他の項目を古い値で上書きしなくなる。
 // 未保存分はlocalStorageにも残すので、保存前にリロード・圏外になっても消えず、次回開いた時に再送する。
 const CHECKSHEET_UNSAVED_KEY = 'checksheet_unsaved';
+// 未保存の各項目の「変更前の値」(=サーバーにある値。無かった項目はnull)。キャンセルで戻す先、
+// および入力を元の値に戻した時に未保存から外す判定に使う。キーの形はchecksheet_unsavedと同じ
+const CHECKSHEET_UNSAVED_ORIG_KEY = 'checksheet_unsaved_orig';
 const CHECKSHEET_AUTOSAVE_MS = 60000;
 function _getChecksheetUnsaved() {
   try { return JSON.parse(localStorage.getItem(CHECKSHEET_UNSAVED_KEY) || '{}'); } catch(e) { return {}; }
@@ -3375,14 +3379,75 @@ function _getChecksheetUnsaved() {
 function _setChecksheetUnsaved(obj) {
   try { localStorage.setItem(CHECKSHEET_UNSAVED_KEY, JSON.stringify(obj)); } catch(e) { console.error('checksheet unsaved store error:', e); }
 }
-// キーは storeId + '|' + periodLabel、値は { dayKey: { itemKey: value } }
-function _markChecksheetUnsaved(storeId, periodLabel, dayKey, itemKey, value) {
+function _getChecksheetUnsavedOrig() {
+  try { return JSON.parse(localStorage.getItem(CHECKSHEET_UNSAVED_ORIG_KEY) || '{}'); } catch(e) { return {}; }
+}
+function _setChecksheetUnsavedOrig(obj) {
+  try { localStorage.setItem(CHECKSHEET_UNSAVED_ORIG_KEY, JSON.stringify(obj)); } catch(e) { console.error('checksheet unsaved orig store error:', e); }
+}
+// 2階層のmap(day→item)から1項目を消し、空になった階層も消す
+function _deleteChecksheetNested(all, key, dayKey, itemKey) {
+  if (!all[key] || !all[key][dayKey]) return;
+  delete all[key][dayKey][itemKey];
+  if (!Object.keys(all[key][dayKey]).length) delete all[key][dayKey];
+  if (!Object.keys(all[key]).length) delete all[key];
+}
+// 空欄・未チェックは「未入力」と同じ扱いで比べる(0は「補充0」の記録なので未入力とは区別する)
+const _checksheetSameValue = (a, b) => {
+  const n = v => (v === undefined || v === null || v === '' || v === false) ? null : v;
+  return n(a) === n(b);
+};
+// キーは storeId + '|' + periodLabel、値は { dayKey: { itemKey: value } }。prevValueは今回の変更直前の値
+function _markChecksheetUnsaved(storeId, periodLabel, dayKey, itemKey, value, prevValue) {
   const all = _getChecksheetUnsaved();
+  const orig = _getChecksheetUnsavedOrig();
   const key = storeId + '|' + periodLabel;
-  if (!all[key]) all[key] = {};
-  if (!all[key][dayKey]) all[key][dayKey] = {};
-  all[key][dayKey][itemKey] = value;
+  const isNew = !(all[key] && all[key][dayKey] && itemKey in all[key][dayKey]);
+  const origValue = isNew ? (prevValue === undefined ? null : prevValue) : orig[key]?.[dayKey]?.[itemKey];
+  if (_checksheetSameValue(value, origValue)) {
+    // 元の値に戻した(＋→－など)なら変更なしとして未保存から外す
+    _deleteChecksheetNested(all, key, dayKey, itemKey);
+    _deleteChecksheetNested(orig, key, dayKey, itemKey);
+  } else {
+    if (!all[key]) all[key] = {};
+    if (!all[key][dayKey]) all[key][dayKey] = {};
+    all[key][dayKey][itemKey] = value;
+    if (isNew) {
+      if (!orig[key]) orig[key] = {};
+      if (!orig[key][dayKey]) orig[key][dayKey] = {};
+      orig[key][dayKey][itemKey] = origValue;
+    }
+  }
   _setChecksheetUnsaved(all);
+  _setChecksheetUnsavedOrig(orig);
+}
+// 未保存の変更をすべて取り消し、変更前の値に戻す(サーバーへの通信は無し)
+function cancelChecksheetChanges() {
+  const n = _checksheetUnsavedCount(storeTab);
+  if (!n || _checksheetPendingSyncCount > 0) return;
+  if (!confirm(`保存していない変更（${n}件）を取り消して、元の値に戻しますか？`)) return;
+  const unsaved = _getChecksheetUnsaved();
+  const orig = _getChecksheetUnsavedOrig();
+  const cache = JSON.parse(localStorage.getItem(CHECKSHEET_DATA_KEY) || '{}');
+  _checksheetUnsavedKeys(storeTab).forEach(k => {
+    const periodLabel = k.slice(storeTab.length + 1);
+    Object.entries(unsaved[k]).forEach(([dayKey, items]) => {
+      Object.keys(items).forEach(itemKey => {
+        const day = cache[storeTab]?.[periodLabel]?.[dayKey];
+        if (!day) return;
+        const o = orig[k]?.[dayKey]?.[itemKey];
+        if (o === null || o === undefined) delete day[itemKey]; else day[itemKey] = o;
+      });
+    });
+    delete unsaved[k];
+    delete orig[k];
+  });
+  localStorage.setItem(CHECKSHEET_DATA_KEY, JSON.stringify(cache));
+  _setChecksheetUnsaved(unsaved);
+  _setChecksheetUnsavedOrig(orig);
+  clearTimeout(_checksheetAutosaveTimer);
+  _checksheetAutosaveTimer = null;
+  renderChecksheet();
 }
 function _checksheetUnsavedKeys(storeId) {
   return Object.keys(_getChecksheetUnsaved()).filter(k => k.split('|')[0] === storeId);
@@ -3400,13 +3465,22 @@ function _applyChecksheetUnsaved(storeId) {
   if (!keys.length) return;
   const all = JSON.parse(localStorage.getItem(CHECKSHEET_DATA_KEY) || '{}');
   if (!all[storeId]) all[storeId] = {};
+  const orig = _getChecksheetUnsavedOrig();
   keys.forEach(k => {
     const periodLabel = k.slice(storeId.length + 1);
     if (!all[storeId][periodLabel]) all[storeId][periodLabel] = {};
     Object.entries(unsaved[k]).forEach(([dayKey, items]) => {
-      all[storeId][periodLabel][dayKey] = Object.assign(all[storeId][periodLabel][dayKey] || {}, items);
+      // 取り直した値が最新のサーバー値なので、キャンセル時の戻し先もこれに更新する(別端末の保存を反映)
+      const fresh = all[storeId][periodLabel][dayKey] || {};
+      Object.keys(items).forEach(itemKey => {
+        if (!orig[k]) orig[k] = {};
+        if (!orig[k][dayKey]) orig[k][dayKey] = {};
+        orig[k][dayKey][itemKey] = itemKey in fresh ? fresh[itemKey] : null;
+      });
+      all[storeId][periodLabel][dayKey] = Object.assign(fresh, items);
     });
   });
+  _setChecksheetUnsavedOrig(orig);
   localStorage.setItem(CHECKSHEET_DATA_KEY, JSON.stringify(all));
 }
 
@@ -3425,8 +3499,10 @@ let _checksheetAutosaveTimer = null;
 function _updateChecksheetSavingIndicator(ok) {
   const el = document.getElementById('checksheet-saving-indicator');
   const btn = document.getElementById('checksheet-save-btn');
+  const cancelBtn = document.getElementById('checksheet-cancel-btn');
   if (!el) return;
   const unsaved = _checksheetUnsavedCount(storeTab);
+  if (cancelBtn) cancelBtn.style.display = unsaved && _checksheetPendingSyncCount === 0 ? '' : 'none';
   if (btn) {
     btn.disabled = unsaved === 0 || _checksheetPendingSyncCount > 0;
     btn.textContent = _checksheetPendingSyncCount > 0 ? '保存中…' : (unsaved ? `保存する（${unsaved}件）` : '保存済み');
@@ -3479,16 +3555,21 @@ function _syncChecksheetToDb(storeId, periodLabel) {
       const res = await gasPost('saveChecksheetData', { storeId, periodLabel, data });
       if (!res || res.error) throw new Error((res && res.error) || 'empty response');
       // 送信中に同じ項目が書き換えられていたら、その項目は未保存のまま残す
+      // (残した項目の変更前の値は、いま保存できた値になる)
       const all = _getChecksheetUnsaved();
-      const cur = all[key] || {};
+      const orig = _getChecksheetUnsavedOrig();
       Object.entries(data).forEach(([dayKey, items]) => {
         Object.entries(items).forEach(([itemKey, v]) => {
-          if (cur[dayKey] && cur[dayKey][itemKey] === v) delete cur[dayKey][itemKey];
+          if (all[key]?.[dayKey]?.[itemKey] === v) {
+            _deleteChecksheetNested(all, key, dayKey, itemKey);
+            _deleteChecksheetNested(orig, key, dayKey, itemKey);
+          } else if (orig[key]?.[dayKey] && itemKey in orig[key][dayKey]) {
+            orig[key][dayKey][itemKey] = v;
+          }
         });
-        if (cur[dayKey] && !Object.keys(cur[dayKey]).length) delete cur[dayKey];
       });
-      if (Object.keys(cur).length) all[key] = cur; else delete all[key];
       _setChecksheetUnsaved(all);
+      _setChecksheetUnsavedOrig(orig);
       _fbDb.ref('checksheet_updated').set({ ts: Date.now(), by: _CLIENT_ID, storeId, periodLabel });
       _checkStockMismatchAfterSave(storeId, data);
     } catch(e) { console.error('checksheet sync error:', e); ok = false; }
@@ -3603,8 +3684,9 @@ function updateChecksheetField(dayKey, itemKey, rawValue, type) {
     const inp = document.getElementById('cs-qty-' + itemKey);
     if (inp && inp.value !== String(value)) inp.value = value;
   }
+  const prevValue = (getChecksheetData(storeTab, period.label)[dayKey] || {})[itemKey];
   setChecksheetField(storeTab, period.label, dayKey, itemKey, value);
-  _markChecksheetUnsaved(storeTab, period.label, dayKey, itemKey, value);
+  _markChecksheetUnsaved(storeTab, period.label, dayKey, itemKey, value, prevValue);
   _scheduleChecksheetAutosave();
   _updateChecksheetSavingIndicator();
   updateChecksheetTotals();
@@ -3840,7 +3922,10 @@ function renderChecksheetTodayForm(wrap, subgroups) {
     ${body}
     <div class="checksheet-save-bar">
       <span id="checksheet-saving-indicator"></span>
-      <button id="checksheet-save-btn" onclick="saveChecksheetNow()">保存する</button>
+      <div style="display:flex;gap:6px;flex-shrink:0">
+        <button id="checksheet-cancel-btn" onclick="cancelChecksheetChanges()">キャンセル</button>
+        <button id="checksheet-save-btn" onclick="saveChecksheetNow()">保存する</button>
+      </div>
     </div>`;
   _updateChecksheetSavingIndicator();
   // 前回保存しきれずに端末に残っていた入力があれば、押し忘れ時と同じく一定時間後に自動で送る
