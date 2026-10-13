@@ -3408,8 +3408,12 @@ function _convertChecksheetAddsToAbsolute(storeId, periodLabel) {
   delete adds[key];
   _setChecksheetUnsavedAdd(adds);
 }
-// 最後にサーバーから取り直した時刻(店舗ごと)。今回の数を足す元の合計が古くないかの判定に使う
+// 最後にサーバーから取り直した時刻(店舗ごと)。今回の数を足す元の合計が古くないかの判定と、
+// 「本日保存済み」を読み込み中と表示するかの判定に使う(このページを開いてから一度も読めていない間は、
+// 端末に残っている古い数字や0を保存済みの数として見せない。2026-10-13、Safariで開き直すと
+// 読み込みが終わるまで全部0に見えると指摘)。_checksheetLoadFailedは直近の取得が失敗したか
 const _checksheetLoadedAt = {};
+const _checksheetLoadFailed = {};
 const CHECKSHEET_BASE_MAX_AGE_MS = 60000;
 const CHECKSHEET_AUTOSAVE_MS = 60000;
 function _getChecksheetUnsaved() {
@@ -3515,7 +3519,8 @@ function _applyChecksheetUnsaved(storeId) {
   keys.forEach(k => {
     const periodLabel = k.slice(storeId.length + 1);
     if (!all[storeId][periodLabel]) all[storeId][periodLabel] = {};
-    Object.entries(unsaved[k]).forEach(([dayKey, items]) => {
+    // keysには今回の数(足し算)だけの期間も入るので、合計の未保存分が無い期間は飛ばす
+    Object.entries(unsaved[k] || {}).forEach(([dayKey, items]) => {
       // 取り直した値が最新のサーバー値なので、キャンセル時の戻し先もこれに更新する(別端末の保存を反映)
       const fresh = all[storeId][periodLabel][dayKey] || {};
       Object.keys(items).forEach(itemKey => {
@@ -3597,8 +3602,11 @@ function _syncChecksheetToDb(storeId, periodLabel) {
     let data;
     try {
       // 今回の数を足す元の合計が古ければ(開いた直後・他端末の保存後など)、先に取り直す
-      if (_getChecksheetUnsavedAdd()[key] && Date.now() - (_checksheetLoadedAt[storeId] || 0) > CHECKSHEET_BASE_MAX_AGE_MS) {
+      const baseIsStale = () => Date.now() - (_checksheetLoadedAt[storeId] || 0) > CHECKSHEET_BASE_MAX_AGE_MS;
+      if (_getChecksheetUnsavedAdd()[key] && baseIsStale()) {
         await loadChecksheetDataFromDb(storeId);
+        // 最新の合計が分からないまま足すと記録がずれるので、保存せず今回の数を残す(失敗表示→再送できる)
+        if (baseIsStale()) throw new Error('checksheet base not loaded');
       }
       _convertChecksheetAddsToAbsolute(storeId, periodLabel);
       if (storeId === storeTab) _refreshChecksheetSavedNotes();
@@ -3639,15 +3647,17 @@ function _syncChecksheetToDb(storeId, periodLabel) {
 async function loadChecksheetDataFromDb(storeId) {
   try {
     const rows = await gasGet('getChecksheetData', { storeId });
-    if (!Array.isArray(rows)) return;
+    if (!Array.isArray(rows)) throw new Error((rows && rows.error) || 'unexpected response');
+    if (rows.length) {
+      const all = JSON.parse(localStorage.getItem(CHECKSHEET_DATA_KEY) || '{}');
+      if (!all[storeId]) all[storeId] = {};
+      rows.forEach(r => { all[storeId][r.period_label] = r.data || {}; });
+      localStorage.setItem(CHECKSHEET_DATA_KEY, JSON.stringify(all));
+      _applyChecksheetUnsaved(storeId);
+    }
     _checksheetLoadedAt[storeId] = Date.now();
-    if (!rows.length) return;
-    const all = JSON.parse(localStorage.getItem(CHECKSHEET_DATA_KEY) || '{}');
-    if (!all[storeId]) all[storeId] = {};
-    rows.forEach(r => { all[storeId][r.period_label] = r.data || {}; });
-    localStorage.setItem(CHECKSHEET_DATA_KEY, JSON.stringify(all));
-    _applyChecksheetUnsaved(storeId);
-  } catch(e) { console.error('getChecksheetData error:', e); }
+    delete _checksheetLoadFailed[storeId];
+  } catch(e) { console.error('getChecksheetData error:', e); _checksheetLoadFailed[storeId] = true; }
 }
 // 盗難検知①(表示専用)：「前回入力からの実売上」。チェックシートタブを開くたびに1回だけ取得する
 // (表示内容は前回チェックポイント基準で今回の入力値には依存しないため、タップごとの再取得は不要)。
@@ -3788,6 +3798,9 @@ function stepChecksheetAdd(dayKey, itemId, delta) {
 }
 // 「本日保存済み：N」の小さい表示。今回の数があれば保存後の合計も出す
 function _checksheetSavedNoteText(periodLabel, dayKey, itemKey) {
+  if (!_checksheetLoadedAt[storeTab]) {
+    return _checksheetLoadFailed[storeTab] ? '本日保存済み：読み込めませんでした' : '本日保存済み：読み込み中…';
+  }
   const cur = (getChecksheetData(storeTab, periodLabel)[dayKey] || {})[itemKey];
   const base = Number(cur) || 0;
   const pending = itemKey in ((_getChecksheetUnsaved()[storeTab + '|' + periodLabel] || {})[dayKey] || {});
@@ -3903,6 +3916,13 @@ function startChecksheetPastEdit() {
   const adds = _getChecksheetUnsavedAdd();
   if (Object.keys(adds).some(k => k.split('|')[0] === storeTab)) {
     alert('今回入力した数がまだ保存されていません。先に「保存する」か「キャンセル」を押してください。');
+    return;
+  }
+  // 保存済みの数が届く前に開くと、古い数字を正しい合計として直してしまうため
+  if (!_checksheetLoadedAt[storeTab]) {
+    alert(_checksheetLoadFailed[storeTab]
+      ? '保存済みの数を読み込めませんでした。通信の良い場所で再読み込みしてください。'
+      : '保存済みの数を読み込み中です。少し待ってからもう一度押してください。');
     return;
   }
   checksheetEditDay = checksheetEditableDays()[0] || null;
@@ -4177,7 +4197,12 @@ async function switchPartnerTab(tab) {
   }
   if (tab === 'checklist') {
     renderChecksheet();
-    await Promise.all([loadChecksheetDataFromDb(storeTab), loadSteraStockEstimate(storeTab), loadChecksheetOpeningStock(storeTab)]);
+    // 保存済みの数(「読み込み中…」の表示)は、他の取得を待たず届いた時点で描き直す
+    const csStore = storeTab;
+    const csLoad = loadChecksheetDataFromDb(csStore).then(() => {
+      if (storeTab === csStore && partnerTabCurrent === 'checklist') renderChecksheet();
+    });
+    await Promise.all([csLoad, loadSteraStockEstimate(storeTab), loadChecksheetOpeningStock(storeTab)]);
     renderChecksheet();
   }
   if (tab === 'attendance') {
