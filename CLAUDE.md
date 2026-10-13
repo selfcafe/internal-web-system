@@ -365,7 +365,8 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 - **ヘッダー配色**:
   - マニュアル`#b5544a`、ログアウト`#6b7280`。
   - 業務管理は管理者が金グラデーション、パートナーが`#22703d`。
-  - スマホ幅のヘッダー(`partner-hdr-pinwheel`)は4ピース構成で、左上(`phw-tl`)は管理者・パートナーとも空き(背景色と同じ)。
+  - スマホ幅のヘッダー(`partner-hdr-pinwheel`)は4ピース構成。左上(`phw-tl`)は管理者は空き(背景色と同じ)、パートナーは「ホーム」(2026-10-13〜)。
+  - パートナーのホーム(`goPartnerHome`、ロゴ・ホームボタン)はログイン直後と同じ状態に戻す: 業務連絡の一覧/詳細を閉じ、最初のタブ(FC店舗はチェックシート、他は発注)を開いて先頭へ。管理者のホームは`goAdminHome`(発注依頼一覧)。
 
 ### 外部PC・Bot・clasp
 - **80000785 PC**(前任者PC):

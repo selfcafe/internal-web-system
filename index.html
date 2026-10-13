@@ -355,6 +355,7 @@
         -webkit-text-size-adjust:100%; text-size-adjust:100%;
       }
       .phw-tl { grid-column:1; grid-row:1; background:transparent; cursor:default; }
+      .phw-tl.phw-home { background:#1a5c30; cursor:pointer; }
       .phw-tr { grid-column:2; grid-row:1; background:#6b7280; }
       .phw-bl { grid-column:1; grid-row:2; background:linear-gradient(180deg,#dfc35a,#b6952f); color:#241a12; }
       .phw-bl.partner-attendance-btn { background:#22703d; color:white; }
@@ -612,9 +613,10 @@
 <!-- 店舗ページ -->
 <div id="page-store" class="page">
   <div class="page-header" style="flex-direction:column;align-items:stretch;gap:4px;position:relative">
-    <img src="logo-horizontal.png" class="portal-logo" alt="セルフカフェ">
+    <img src="logo-horizontal.png" class="portal-logo" alt="セルフカフェ" onclick="goPartnerHome()" title="ホームへ" style="cursor:pointer">
     <div class="partner-hdr-btns">
       <div class="partner-hdr-cell" style="display:flex;gap:8px;align-items:center">
+        <button onclick="goPartnerHome()" style="background:#1a5c30;color:white;padding:10px 16px;font-size:14px;font-weight:700;border-radius:6px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">ホーム</button>
         <button id="ptab-attendance-pc" class="pc-only" onclick="switchPartnerTab('attendance')" style="display:none;background:#22703d;color:white;padding:10px 16px;font-size:14px;font-weight:700;border-radius:6px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">業務管理</button>
         <div class="doc-menu-wrap">
           <button onclick="toggleManualMenu('pc', getManualDocs())" style="background:#b5544a;color:white;padding:10px 16px;font-size:14px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;flex-shrink:0">マニュアル</button>
@@ -628,7 +630,7 @@
     <div class="portal-title-store-row">
       <h1>パートナーポータル</h1>
       <div class="partner-hdr-pinwheel">
-        <div class="phw-piece phw-tl" id="phw-empty"></div>
+        <button class="phw-piece phw-tl phw-home" onclick="goPartnerHome()"><span>ホーム</span></button>
         <button class="phw-piece phw-tr" onclick="siteLogout()"><span>ログ<br>アウト</span></button>
         <button id="ptab-attendance-sp" class="phw-piece phw-bl partner-attendance-btn" onclick="if(isAttendanceEnabled(storeTab))switchPartnerTab('attendance')"><span>業務<br>管理</span></button>
         <button class="phw-piece phw-br manual-menu-btn" onclick="toggleManualMenu('sp', getManualDocs())"><span>マニュアル</span></button>
@@ -6725,6 +6727,15 @@ function showAnnounceDetail(id) {
   drill.innerHTML = _announceDetailHTML(it, 'showAnnounceList()');
 }
 
+// パートナー画面のホーム(2026-10-13、ロゴ・ホームボタン): ログイン直後と同じ状態に戻す。
+// 業務連絡の一覧/詳細を閉じ、最初のタブ(FC店舗は発注タブが無いのでチェックシート)を開いて先頭へ。
+// チェックシートから離れる時の未保存分の自動保存はswitchPartnerTab側で行われる
+function goPartnerHome() {
+  document.querySelectorAll('.doc-menu-dd').forEach(dd => dd.classList.remove('open'));
+  announceGoHome();
+  switchPartnerTab(getStoreRegion(storeTab) === 'fc' ? 'checklist' : 'order');
+  window.scrollTo(0, 0);
+}
 function announceGoHome() {
   document.getElementById('announce-drill-wrap').style.display = 'none';
   document.getElementById('announce-drill-wrap').innerHTML = '';
