@@ -4805,10 +4805,26 @@ function _adhocResolveStore_(key, stores, names) {
   return Object.keys(stores).find(sid => norm(names[sid]) === k || norm(sid) === k) || null;
 }
 
+// 現場向けの呼び名 → ポータルの商品名（部分一致で決まらないものだけ）
+const ADHOC_PRODUCT_ALIASES = { 'ココア': 'プレミアムココア', '紅茶': '紅茶(粉末)', 'クリーム': 'クリーミー', 'ウーロン茶': '烏龍茶',
+  'コーラシロップ': 'コカ・コーラ', 'ぶどうシロップ': 'まろやかブドウ', 'リンゴパウダー': 'リンゴ（粉末）', 'フィルター': 'ペーパーフィルター' };
+
+// 商品の呼び名 → ポータルの商品コード。アペックス発注書に載る仕入先（apex → cs3 の順）だけを見る（トーヨーの同名品を拾わない）。
+// 完全一致 → 別名表 → 部分一致（候補が1つに絞れたとき）
+function _adhocProductCode_(name, products) {
+  const norm = x => String(x || '').replace(/[\s　]/g, '');
+  const want = norm(ADHOC_PRODUCT_ALIASES[norm(name)] || name);
+  for (const vendor of APEX_ORDER_VENDORS) {
+    const list = products.filter(p => (p.vendor || '') === vendor && p.name);
+    const exact = list.find(p => norm(p.name) === want || norm(p.label) === want);
+    if (exact) return String(exact.code);
+    const part = list.filter(p => norm(p.name).indexOf(want) >= 0);
+    if (part.length === 1) return String(part[0].code);
+  }
+  return null;
+}
+
 function _adhocParseItems_(spec, stores, names, products, codeMap) {
-  const norm = x => String(x || '').replace(/[\s　]/g, '').replace(/^㋣/, '');
-  const byName = {};
-  products.forEach(p => { [p.name, p.label].forEach(n => { if (n) byName[norm(n)] = String(p.code); }); });
   const out = {}, errors = [];
   String(spec || '').split(';').map(x => x.trim()).filter(Boolean).forEach(part => {
     const i = part.indexOf(':');
@@ -4820,7 +4836,7 @@ function _adhocParseItems_(spec, stores, names, products, codeMap) {
       if (j < 0) { errors.push('数量が無い: ' + kv); return; }
       const name = kv.slice(0, j).trim(), qty = Number(kv.slice(j + 1));
       if (!(qty > 0)) { errors.push('数量が不正: ' + kv); return; }
-      const portalCode = byName[norm(name)] || name;
+      const portalCode = _adhocProductCode_(name, products) || name; // 見つからなければコードが直接書かれたものとみなす
       const code = codeMap[portalCode] || portalCode;
       out[sid] = out[sid] || [];
       out[sid].push({ name, code, qty });
