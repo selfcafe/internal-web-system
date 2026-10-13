@@ -4575,12 +4575,107 @@ function _reorderQtyText_(it) {
 // 数量は棚卸集計の発注数と同じ計算（ケース単位。Amazon の1注文＝1ケース）。商品ページは商品一覧の amazon_url。
 // 「注文済み」のチェックは作り直しても残す（店舗＋商品で引き継ぐ）。?action=buildAmazonList&periodLabel=YYYY-MM でも作れる
 const AMAZON_LIST_VENDORS = ['sales', 'tokai_snack'];
-function buildAmazonList(periodLabel) {
-  const targetsAll = _getReorderTargets_();
-  const meta = _productMeta_();
+// ===== Amazon のリンクと発注依頼の通知（2026-10-13。別チャットの「発注アシスト」から流用） =====
+// iPhone では amazon.co.jp のリンクが個人用の Amazon アプリに取られる。末尾に nodl=1 を付けると
+// アプリが開かず Safari（ビジネスアカウントでログイン）で開く。共有で出る短縮URL(amzn.asia 等)は
+// 本来のURLに展開してから /dp/ASIN の形にそろえる。読み取れなければ元のURLのまま
+function _amazonUrl_(input) {
+  let s = String(input || '').trim();
+  if (!s) return '';
+  const inText = s.match(/https?:\/\/\S+/);
+  if (inText) s = inText[0];
+  if (/^[A-Z0-9]{10}$/.test(s)) return 'https://www.amazon.co.jp/dp/' + s + '?nodl=1';
+  if (/^https?:\/\/(amzn\.asia|amzn\.to|a\.co)\//.test(s)) {
+    try {
+      const res = UrlFetchApp.fetch(s, { followRedirects: false, muteHttpExceptions: true });
+      const h = res.getHeaders();
+      const loc = h['Location'] || h['location'];
+      if (loc) s = loc;
+    } catch (e) { /* 展開できなければ短縮URLのまま */ }
+  }
+  const m = s.match(/\/(?:dp|gp\/product|gp\/aw\/d)\/([A-Z0-9]{10})/);
+  if (m) return 'https://www.amazon.co.jp/dp/' + m[1] + '?nodl=1';
+  return /^https?:\/\//.test(s) ? s : '';
+}
+
+// 商品一覧(all_products)の amazon_url を {商品名: URL} で返す
+function _amazonUrlMap_() {
   const urls = {};
   const all = _settingJson_('all_products', []);
   (Array.isArray(all) ? all : []).forEach(p => { if (p && p.name && p.amazon_url) urls[p.name] = p.amazon_url; });
+  return urls;
+}
+
+// 新着の発注依頼のうち Amazon で買う品（商品一覧に Amazon の URL がある品）を、店舗ごとに1通、
+// 商品ページを開くボタン付きで LINE WORKS に送る（sendDailyOrderNotification から毎朝。
+// エリアの「発注依頼があります」と同じチャンネル）。発注済みにするのは今まで通りポータルで
+function sendAmazonOrderButtons_(data) {
+  const urls = _amazonUrlMap_();
+  if (!Object.keys(urls).length) return 0;
+  const h = data[0];
+  const ix = c => h.indexOf(c);
+  const names = _storeNames_();
+  const byStore = {};
+  for (let i = 1; i < data.length; i++) {
+    const r = data[i];
+    const isNew = r[ix('is_new')], denied = r[ix('denied')];
+    if (isNew !== true && String(isNew) !== 'TRUE') continue;
+    if (denied === true || String(denied) === 'TRUE') continue;
+    const product = String(r[ix('product')]);
+    if (!urls[product]) continue;
+    const sid = String(r[ix('store_id')]);
+    (byStore[sid] = byStore[sid] || []).push({
+      label: String(r[ix('label')] || '') || product, qty: r[ix('qty')], unit: String(r[ix('unit')] || ''), url: urls[product],
+    });
+  }
+  const circled = '①②③④⑤⑥⑦⑧⑨⑩';
+  const cut = (s, n) => (s = String(s), s.length > n ? s.slice(0, n - 1) + '…' : s);
+  let sent = 0;
+  Object.keys(byStore).forEach(sid => {
+    const items = byStore[sid];
+    const lines = ['【Amazon】' + (names[sid] || sid) + 'の発注依頼', ''];
+    const actions = [];
+    items.forEach((it, k) => {
+      const mark = circled[k] || '・';
+      const url = _amazonUrl_(it.url);
+      lines.push(mark + ' ' + it.label + ' ×' + it.qty + it.unit);
+      if (actions.length < 10 && url) actions.push({ type: 'uri', label: cut(mark + ' ' + it.label, 20), uri: url });
+      else if (url) lines.push('　' + url); // ボタンは10個まで。あふれた分は本文にURL
+    });
+    lines.push('', 'ボタンで Amazon の商品ページが開きます（ビジネスアカウントで注文）。注文したらポータルで発注済みにしてください');
+    try {
+      sendLineWorksContent_({ type: 'button_template', contentText: cut(lines.join('\n'), 1000), actions: actions });
+      sent++;
+    } catch (e) { console.error('Amazon通知エラー:', sid, e.message); }
+  });
+  return sent;
+}
+
+// テキスト以外（ボタン付きなど）を発注用チャンネル(LW_CHANNEL_ID)へ送る
+function sendLineWorksContent_(content, channelIdOverride) {
+  const props = PropertiesService.getScriptProperties();
+  const url = 'https://www.worksapis.com/v1.0/bots/' + props.getProperty('LW_BOT_ID') + '/channels/' +
+    (channelIdOverride || props.getProperty('LW_CHANNEL_ID')) + '/messages';
+  const send = token => UrlFetchApp.fetch(url, {
+    method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    payload: JSON.stringify({ content: content }), muteHttpExceptions: true,
+  });
+  let res = send(getLineWorksAccessToken_());
+  if (res.getResponseCode() === 401) res = send(getLineWorksAccessToken_(true));
+  if (res.getResponseCode() >= 300) throw new Error('LINE WORKS送信失敗 ' + res.getResponseCode() + ': ' + res.getContentText());
+}
+
+// 動作確認用（エディタから実行）: 今の新着の発注依頼で Amazon の通知だけ送る（発注用チャンネルに実際に届く）
+function testAmazonOrderButtons() {
+  const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_ORDERS);
+  if (!sheet || sheet.getLastRow() <= 1) return { ok: true, sent: 0 };
+  return { ok: true, sent: sendAmazonOrderButtons_(sheet.getDataRange().getValues()) };
+}
+
+function buildAmazonList(periodLabel) {
+  const targetsAll = _getReorderTargets_();
+  const meta = _productMeta_();
+  const urls = _amazonUrlMap_();
   const names = _storeNames_();
   const sheetId = _inventorySheetIdForPeriod_(periodLabel);
   const data = _inventoryLogRowsCached_(sheetId);
@@ -4620,7 +4715,7 @@ function buildAmazonList(periodLabel) {
   sh.getRange(2, 1, 1, head.length).setValues([head]).setFontWeight('bold').setBackground('#d9ead3');
   if (items.length) {
     const rows = items.map(it => [it.store, it.product, it.qty, it.packs,
-      it.url ? `=HYPERLINK("${it.url}","Amazonで開く")` : '（URL未登録）', !!done[it.store + '|' + it.product]]);
+      it.url ? `=HYPERLINK("${_amazonUrl_(it.url)}","Amazonで開く")` : '（URL未登録）', !!done[it.store + '|' + it.product]]);
     sh.getRange(3, 1, rows.length, head.length).setValues(rows);
     sh.getRange(3, 6, rows.length, 1).insertCheckboxes();
     rows.forEach((row, k) => { if (row[5]) sh.getRange(3 + k, 6).check(); });
@@ -7086,6 +7181,8 @@ function sendDailyOrderNotification() {
   if (hasKantoSelf) sendLineWorksNotification('関東ニッカエリアにて発注依頼があります。');
   if (hasFC) sendLineWorksNotification('FCエリアにて発注依頼があります。');
   if (hasGyomuItaku) sendLineWorksNotification('業務委託エリアにて発注依頼があります。');
+  // Amazon で買う品の依頼は、店舗ごとに商品ページのボタン付きでもう1通（2026-10-13）
+  try { sendAmazonOrderButtons_(data); } catch (e) { console.error('sendAmazonOrderButtons_ error:', e.message); }
 }
 
 // ----------------------------------------------------------------

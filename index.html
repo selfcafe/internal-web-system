@@ -1823,6 +1823,14 @@ const nearingExpiry = d => !!d && !overdue(d) && d <= oneMonthFromToday();
 const esc     = s  => (s == null ? '' : String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
 const prodByName = n => PRODUCTS.find(p => p.name===n) || null;
+// Amazon の商品ページURLを /dp/ASIN?nodl=1 の形にそろえる（nodl=1 があると iPhone で個人用の
+// Amazon アプリではなく Safari＝ビジネスアカウントで開く。2026-10-13）。ASIN が読めないURLはそのまま
+function amzHref(url) {
+  const s = String(url || '').trim();
+  if (!s) return '';
+  const m = s.match(/\/(?:dp|gp\/product|gp\/aw\/d)\/([A-Z0-9]{10})/) || s.match(/^([A-Z0-9]{10})$/);
+  return m ? `https://www.amazon.co.jp/dp/${m[1]}?nodl=1` : s;
+}
 
 // ケースサイズを添える際の共通文言。以前は「ケース（25）」のように括弧内が合計本数なのか
 // ケースあたりの入り数なのか紛らわしかったため、「/1ケースの入り数25」で統一する
@@ -7074,7 +7082,7 @@ function buildStoreOrderDetail(sid, groups) {
     group.forEach((row, i) => {
       const pLabel     = prodByName(row.product)?.label || row.product || '—';
       // Amazon で買う品(商品一覧に Amazon の URL がある品)は、商品ページを開くボタンを出す(2026-10-10)
-      const amzUrl     = prodByName(row.product)?.amazon_url || '';
+      const amzUrl     = amzHref(prodByName(row.product)?.amazon_url);
       const amzBtn     = amzUrl ? ` <a href="${esc(amzUrl)}" target="_blank" rel="noopener" class="amz-btn" title="Amazonの商品ページを開く">🛒 Amazon</a>` : '';
       const isPending  = row.isNew && !row.denied;
       const isDenied   = !!row.denied;
@@ -8095,7 +8103,7 @@ function buildProdRows() {
             <input type="url" value="${esc(p.amazon_url||'')}" placeholder="Amazon の商品ページURL（Amazonで買う品だけ）"
               style="flex:1;min-width:0;border:1px solid #eee;border-radius:5px;padding:3px 6px;font-size:11px;font-family:inherit;color:#555"
               onchange="saveProductSetting('${esc(p.name)}','amazon_url',this.value.trim())">
-            ${p.amazon_url ? `<a href="${esc(p.amazon_url)}" target="_blank" rel="noopener" class="amz-btn">🛒</a>` : ''}
+            ${p.amazon_url ? `<a href="${esc(amzHref(p.amazon_url))}" target="_blank" rel="noopener" class="amz-btn">🛒</a>` : ''}
           </div></td>
         <td data-label="単位"><input type="text" value="${esc(p.unit)}"
           style="width:76px;border:1px solid #ddd;border-radius:5px;padding:5px 7px;font-size:13px;font-family:inherit"
