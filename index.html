@@ -887,7 +887,6 @@
     <button class="sub-tab"        id="sub-kanto"  onclick="switchRegion('kanto')">関東<span class="tab-badge" id="badge-kanto"  style="display:none"></span></button>
     <button class="sub-tab"        id="sub-kanto_self"  onclick="switchRegion('kanto_self')">関東ニッカ<span class="tab-badge" id="badge-kanto_self"  style="display:none"></span></button>
     <button class="sub-tab"        id="sub-fc"  onclick="switchRegion('fc')" style="display:none">FC<span class="tab-badge" id="badge-fc"  style="display:none"></span></button>
-    <button class="sub-tab"        id="sub-gyomu_itaku"  onclick="switchRegion('gyomu_itaku')">業務委託<span class="tab-badge" id="badge-gyomu_itaku"  style="display:none"></span></button>
   </div>
   <div class="sub-nav-wrap level2 last">
     <button class="sub-tab active" id="sub-overview" onclick="switchAdminView('overview')">発注依頼一覧</button>
@@ -1242,6 +1241,7 @@ async function _loadSettings(scope, prefetched) {
       if (r.key === 'custom_stores')     localStorage.setItem(CUSTOM_STORES_KEY,   clean(r.value));
       if (r.key === 'deleted_stores')    localStorage.setItem(DELETED_STORES_KEY,  clean(r.value));
       if (r.key === 'store_regions')     localStorage.setItem(STORE_REGION_KEY,    clean(r.value));
+      if (r.key === 'outsourced_stores') localStorage.setItem(OUTSOURCED_KEY,      clean(r.value));
       if (r.key === 'store_product_cfg') localStorage.setItem(STORE_PRODUCTS_KEY,  clean(r.value));
       if (r.key === 'store_operation_type') localStorage.setItem(STORE_OPERATION_KEY, clean(r.value));
       if (r.key === 'store_machines')    localStorage.setItem(STORE_MACHINES_KEY,  clean(r.value));
@@ -1533,8 +1533,6 @@ const REGIONS = {
   fc: { label:'FC', stores:[
     'shinjuku_fc','morioka_ekimae','morioka_odori','gamagori','kariya','tottori_ekimae',
   ]},
-  gyomu_itaku: { label:'業務委託', stores:[
-  ]},
 };
 
 // ===== 新規追加時の「特定の店舗だけに表示」ピッカー（商品追加・チェック項目追加で共有） =====
@@ -1547,7 +1545,7 @@ function buildStorePickerCheckboxes(prefix) {
   return Object.entries(REGIONS).map(([rkey, r]) => {
     const rows = r.stores.map(sid => `
       <label data-store-pick-row style="display:flex;align-items:center;gap:6px;font-size:12.5px;padding:2px 0">
-        <input type="checkbox" data-store-pick="${esc(prefix)}" value="${esc(sid)}"> ${esc(STORES[sid] || sid)}
+        <input type="checkbox" data-store-pick="${esc(prefix)}" value="${esc(sid)}"> ${esc(storeLabel(sid))}
       </label>`).join('');
     return `<div style="font-weight:600;font-size:11px;color:#888;margin:6px 0 2px">${esc(r.label)}</div>${rows}`;
   }).join('');
@@ -1823,6 +1821,24 @@ const nearingExpiry = d => !!d && !overdue(d) && d <= oneMonthFromToday();
 const esc     = s  => (s == null ? '' : String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 
 const prodByName = n => PRODUCTS.find(p => p.name===n) || null;
+// 業務委託の店舗（2026-10-13）。エリアは地域（東海・関東など）のまま、管理画面の店舗名の横に「（業務委託）」を付けるだけ。
+// 設定 › 店舗 › エリア のチェックで変えられる（サーバーの設定 outsourced_stores）。設定がまだ無いときは下の4店
+const OUTSOURCED_KEY = 'outsourced_stores';
+const OUTSOURCED_DEFAULT = ['narumiyamashita', 'kisomisaki', 'shin_moriyama', 'inzai'];
+function outsourcedStores() {
+  try { const v = JSON.parse(localStorage.getItem(OUTSOURCED_KEY) || 'null'); if (Array.isArray(v)) return v; } catch (e) {}
+  return OUTSOURCED_DEFAULT;
+}
+const isOutsourced = sid => outsourcedStores().includes(sid);
+// 管理画面に出す店舗名（業務委託なら「（業務委託）」付き）。保存・検索・パートナー画面は STORES の名前のまま
+const storeLabel = sid => (STORES[sid] || sid) + (isOutsourced(sid) ? '（業務委託）' : '');
+function toggleOutsourced(sid, on) {
+  const set = new Set(outsourcedStores());
+  if (on) set.add(sid); else set.delete(sid);
+  const v = JSON.stringify([...set]);
+  localStorage.setItem(OUTSOURCED_KEY, v);
+  _gasSaveSetting(OUTSOURCED_KEY, v);
+}
 // Amazon の商品ページURLを /dp/ASIN?nodl=1 の形にそろえる（nodl=1 があると iPhone で個人用の
 // Amazon アプリではなく Safari＝ビジネスアカウントで開く。2026-10-13）。ASIN が読めないURLはそのまま
 function amzHref(url) {
@@ -6214,7 +6230,7 @@ function renderAdmin() {
 /* ===== 業務連絡（管理者が作成・公開するお知らせ。パートナー/管理者ポータル共通のウィジェット
    ＋一覧・詳細に表示する。管理者は同じウィジェットから新規作成・編集・削除も行う。2026-09-18追加） ===== */
 
-const ANNOUNCE_AREAS = ['東海', '関西', '関東', '関東ニッカ', 'FC', '業務委託'];
+const ANNOUNCE_AREAS = ['東海', '関西', '関東', '関東ニッカ', 'FC'];
 
 // サーバー側は'yyyy-MM-dd'で返すため、店舗のdate表示("2026/09/18")と合わせて'/'区切りにする
 function _announceDateLabel(d) { return d ? String(d).replace(/-/g, '/') : ''; }
@@ -6629,7 +6645,7 @@ async function renderLostAdmin() {
   }
 
   const storeOptions = Object.entries(STORES).map(([sid, sname]) =>
-    `<option value="${esc(sid)}" ${sid === adminLostStore ? 'selected' : ''}>${esc(sname)}</option>`
+    `<option value="${esc(sid)}" ${sid === adminLostStore ? 'selected' : ''}>${esc(storeLabel(sid))}</option>`
   ).join('');
 
   const now = new Date();
@@ -6776,7 +6792,7 @@ function _machinePhotoDaysBadge(daysSince) {
 
 // 1店舗分の行(店舗名セルのrowspan込み)を組み立てる。初回描画・部分更新のどちらからも呼ばれる
 function _machinePhotoBuildStoreRows(storeId) {
-  const storeName = STORES[storeId] || storeId;
+  const storeName = storeLabel(storeId);
   const regionId = getStoreRegion(storeId) || 'tokai';
   const enabled = isMachinePhotoEnabled(storeId);
   const machines = (_machinePhotoStatusByStore[storeId] || []).slice().sort((a, b) => a.machineIndex - b.machineIndex);
@@ -6958,7 +6974,7 @@ function renderOverview() {
     const groups = buildGroups(rows.map(r => ({...r, _sid:sid, _sname:STORES[sid]||sid})));
     const hasNew = rows.some(r => r.isNew && !r.denied);
     const newCnt = new Set(rows.filter(r => r.isNew && !r.denied).map(r => r.groupId||r.id)).size;
-    return { sid, sname: STORES[sid]||sid, groups, hasNew, newCnt };
+    return { sid, sname: storeLabel(sid), groups, hasNew, newCnt };
   });
 
   const totalGroups = storeData.reduce((n, s) => n + s.groups.length, 0);
@@ -7256,7 +7272,7 @@ async function renderHistory() {
   const storeData = region.stores.map(sid => {
     const rows = loadH(sid);
     const cnt = buildGroups(rows.map(r => ({...r, isNew:false}))).length;
-    return { sid, sname: STORES[sid]||sid, cnt };
+    return { sid, sname: storeLabel(sid), cnt };
   });
 
   const totalCnt = storeData.reduce((n, s) => n + s.cnt, 0);
@@ -7544,6 +7560,7 @@ function buildStoreRegionContent() {
       const delBtn = `<button onclick="deleteStore('${sid}')" style="background:#ef4444;color:white;padding:4px 10px;font-size:12px;border-radius:5px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap">削除</button>`;
       return `<div style="display:flex;align-items:center;gap:8px;padding:5px 0;border-bottom:1px solid #e0ede5">
         <span style="flex:1;font-size:13px">${esc(STORES[sid]||sid)}</span>
+        <label style="font-size:11px;color:#666;white-space:nowrap;display:flex;align-items:center;gap:3px"><input type="checkbox" ${isOutsourced(sid) ? 'checked' : ''} onchange="toggleOutsourced('${sid}', this.checked)">業務委託</label>
         <select onchange="changeStoreRegion('${sid}',this.value)"
           style="border:1px solid #ddd;border-radius:5px;padding:4px 8px;font-size:12px;font-family:inherit;color:#555">
           <option value="" disabled selected style="color:#aaa">移動先</option>
@@ -8219,7 +8236,7 @@ function renderAttendanceAdmin() {
           <input type="text" placeholder="店舗名で検索..." oninput="filterStoreOptions('attendance-cfg-store-sel', this.value)"
             style="border:1px solid #ddd;border-radius:6px;padding:7px 12px;font-size:13px;font-family:inherit;width:100%;margin-bottom:8px;box-sizing:border-box">
           <select id="attendance-cfg-store-sel" style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit;width:100%;margin-bottom:12px" onchange="renderAttendanceCfg()">
-            ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}
+            ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(storeLabel(sid))}</option>`).join('')}
           </select>
           <div id="attendance-cfg-body"></div>
         </div>
@@ -8238,7 +8255,7 @@ function renderAttendanceAdmin() {
           <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
             <select id="attendance-admin-store-sel" style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit" onchange="renderAttendanceAdminHistory()">
               <option value="">全店舗</option>
-              ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}
+              ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(storeLabel(sid))}</option>`).join('')}
             </select>
             <button onclick="renderAttendanceAdminHistory(true)" style="background:#22703d;color:white;padding:7px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">更新</button>
           </div>
@@ -8258,7 +8275,7 @@ function renderAttendanceAdmin() {
           <div style="display:flex;gap:8px;align-items:center;margin-bottom:10px">
             <select id="leave-request-admin-store-sel" style="border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit" onchange="renderLeaveRequestAdmin()">
               <option value="">全店舗</option>
-              ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('')}
+              ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(storeLabel(sid))}</option>`).join('')}
             </select>
             <button onclick="renderLeaveRequestAdmin(true)" style="background:#22703d;color:white;padding:7px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">更新</button>
           </div>
@@ -8394,7 +8411,7 @@ function renderSettings() {
 // 各設定のrender/save関数が内部でstore-prod-cfg-sel等のvalueを読むため、非表示のselectも残し、
 // 可視のstore-settings-selとの同期だけ行う(syncStoreSettingsSelection参照)
 function _spStoreCfg(blockHtml) {
-  const opts = Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(sname)}</option>`).join('');
+  const opts = Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(storeLabel(sid))}</option>`).join('');
   return `
     <div class="store-prod-cfg-wrap">
       <input id="store-settings-search" type="text" placeholder="店舗名で検索..." oninput="filterStoreSettingsSelect()"
@@ -8477,7 +8494,6 @@ function _spStoreAdd() {
         <option value="kanto">関東</option>
         <option value="kanto_self">関東ニッカ</option>
         <option value="fc">FC</option>
-        <option value="gyomu_itaku">業務委託</option>
       </select>
       <button onclick="addCustomStore()" style="background:#22703d;color:white;padding:9px 18px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">追加</button>
     </div>
@@ -8664,7 +8680,7 @@ function filterStoreSettingsSelect() {
 function syncStoreSettingsSelection(storeId) {
   try { if (storeId) sessionStorage.setItem(SETTINGS_STORE_KEY, storeId); } catch (e) {}
   const label = document.getElementById('store-settings-current');
-  if (label) label.textContent = STORES[storeId] || storeId;
+  if (label) label.textContent = storeLabel(storeId);
   ['store-prod-cfg-sel', 'store-operation-cfg-sel', 'reorder-target-cfg-sel', 'checksheet-cfg-sel'].forEach(id => {
     const el = document.getElementById(id);
     if (el) el.value = storeId;
@@ -8748,7 +8764,7 @@ function renderStoreOperationCfg() {
   if (!sel || !container) return;
   if (!sel.options.length) { container.innerHTML = '<div style="font-size:12px;color:#888">該当する店舗がありません</div>'; if (currentLabel) currentLabel.textContent = ''; return; }
   const sid = sel.value;
-  if (currentLabel) currentLabel.textContent = STORES[sid] || sid;
+  if (currentLabel) currentLabel.textContent = storeLabel(sid);
   const opType = getStoreOperationType(sid);
   const machine = getStoreMachineType(sid);
   const MACHINE_LABELS = { apex: 'アペックス', toyo: 'トーヨーベンディング', '': '判定不能(取扱商品から機種を特定できません)' };
@@ -8784,7 +8800,7 @@ function renderStoreProdCfg() {
   if (!sel || !container) return;
   if (!sel.options.length) { container.innerHTML = '<div style="font-size:12px;color:#888">該当する店舗がありません</div>'; if (currentLabel) currentLabel.textContent = ''; return; }
   const sid = sel.value;
-  if (currentLabel) currentLabel.textContent = STORES[sid] || sid;
+  if (currentLabel) currentLabel.textContent = storeLabel(sid);
   const cfg = getStoreProductConfig(sid);
   // cfgは「除外リスト」。excludedに入っていない（＝cfgがnull、またはその商品名が含まれない）商品はチェック済み＝表示する
   const excluded = cfg ? new Set(cfg) : null;
@@ -8889,7 +8905,7 @@ function renderReorderTargetCfg() {
   if (!sel || !container) return;
   if (!sel.options.length) { container.innerHTML = '<div style="font-size:12px;color:#888">該当する店舗がありません</div>'; if (currentLabel) currentLabel.textContent = ''; return; }
   const sid = sel.value;
-  if (currentLabel) currentLabel.textContent = STORES[sid] || sid;
+  if (currentLabel) currentLabel.textContent = storeLabel(sid);
   const targets = getReorderTargets(sid);
 
   const VENDOR_LABELS = Object.fromEntries(VENDOR_CONFIG.map(v => [v.key, v.label]));
@@ -8947,7 +8963,7 @@ function renderChecksheetCfg() {
   if (!sel || !container) return;
   if (!sel.options.length) { container.innerHTML = '<div style="font-size:12px;color:#888">該当する店舗がありません</div>'; if (currentLabel) currentLabel.textContent = ''; return; }
   const sid = sel.value;
-  if (currentLabel) currentLabel.textContent = STORES[sid] || sid;
+  if (currentLabel) currentLabel.textContent = storeLabel(sid);
   const cfg = getStoreChecksheetConfig(sid);
   // cfgは「除外リスト」。excludedに入っていない（＝cfgがnull、またはそのIDが含まれない）項目はチェック済み＝表示する
   const excluded = cfg ? new Set(cfg) : null;
@@ -9281,7 +9297,7 @@ async function renderAttendanceAdminHistory() {
     <tbody>${rows.map(r => `
       <tr style="border-bottom:1px solid #eee">
         <td style="padding:6px 10px;font-size:13px;white-space:nowrap">${_attendanceDisplayWithBizDay(r.clocked_at)}</td>
-        <td style="padding:6px 10px;font-size:13px;color:#22703d;font-weight:600">${esc(STORES[r.store_id] || r.store_id)}</td>
+        <td style="padding:6px 10px;font-size:13px;color:#22703d;font-weight:600">${esc(storeLabel(r.store_id))}</td>
         <td style="padding:6px 10px;font-size:13px">${esc(r.name || '')}</td>
         <td style="padding:6px 10px;font-size:13px;text-align:center">${r.within_range === false
           ? `<span style="color:#dc2626">要確認</span>${r.lat != null && r.lng != null ? ` <a href="https://www.google.com/maps?q=${esc(r.lat)},${esc(r.lng)}" target="_blank" rel="noopener" style="font-size:11px">📍地図</a>` : ''}`
@@ -9318,7 +9334,7 @@ async function renderLeaveRequestAdmin() {
     <tbody>${rows.map(r => `
       <tr style="border-bottom:1px solid #eee">
         <td style="padding:6px 10px;font-size:13px;white-space:nowrap">${esc(r.leave_date || '')}</td>
-        <td style="padding:6px 10px;font-size:13px;color:#22703d;font-weight:600">${esc(STORES[r.store_id] || r.store_id)}</td>
+        <td style="padding:6px 10px;font-size:13px;color:#22703d;font-weight:600">${esc(storeLabel(r.store_id))}</td>
         <td style="padding:6px 10px;font-size:13px">${esc(r.name || '')}</td>
         <td style="padding:6px 10px;font-size:13px;white-space:nowrap">${esc(r.submitted_at || '')}</td>
       </tr>`).join('')}
@@ -9339,7 +9355,7 @@ function buildStorePwList() {
   const rest = Object.keys(STORES).filter(sid => !inRegion.has(sid));
   if (rest.length) groups.push(['_other', 'その他', rest]);
   return groups.map(([rId, label, sids]) => `<details class="region-fold" ${_pwRegionOpen.has(rId) ? 'open' : ''} ontoggle="_togglePwRegionOpen('${rId}', this.open)">
-      <summary>${esc(label)}（${sids.length}店舗）</summary>${sids.map(sid => _storePwRow(sid, STORES[sid], pws)).join('')}</details>`).join('');
+      <summary>${esc(label)}（${sids.length}店舗）</summary>${sids.map(sid => _storePwRow(sid, storeLabel(sid), pws)).join('')}</details>`).join('');
 }
 const _pwRegionOpen = new Set();
 function _togglePwRegionOpen(rId, open) { if (open) _pwRegionOpen.add(rId); else _pwRegionOpen.delete(rId); }
