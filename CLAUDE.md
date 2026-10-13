@@ -282,7 +282,8 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
   - サーバーから取り直した時は`_applyChecksheetUnsaved`で未保存分を上書きし直す(入力が巻き戻らないように)。送信中に同じ項目が書き換えられたら、その項目は未保存のまま残る。
   - 水の盗難検知(`checkWaterStockMismatch`)はサーバー保存済みの値で判定するため、保存成功後に、保存に含まれた水(とステラ扱い商品)だけ呼ぶ。
 - **保存のマージ**: サーバー(`_stampChecksheetEntryTimes_`)が日付・商品の両階層でマージするので、送らなかった項目は消えない。日ごとに`_enteredAt`(その日の最終変更時刻)が付く。
-- **過去日の追加**: UIからはできないので直接APIで書く。キーは`'prod:'+商品名`。略称は、その店舗の既存データと`store_product_cfg`で確かめてから使う。
+- **過去の分の修正**(2026-10-13〜): 当日入力の「過去の分を修正する」から、当月・先月(営業日基準)の今日より前の日を選んで同じフォームで直せる(`checksheetEditDay`)。保存は上書きなので、間違えて多く保存した数はその日を開いて直す。数量の直接入力は0以上の整数に丸める(マイナスで帳尻を合わせるとその日の記録が壊れるため)。
+- **先月より前の日の追加**: UIからはできないので直接APIで書く。キーは`'prod:'+商品名`。略称は、その店舗の既存データと`store_product_cfg`で確かめてから使う。
 - **Firebaseのルール**: Firebase RTDBのセキュリティルールはコンソールにしか無い。新しいパスを足したらルールにも追加する(`curl <db>/<path>.json`で"Permission denied"が出るかで確認できる)。
 - **CSSの罠**: グローバルの`input[type=number]{min-height:38px}`と、モバイルの`font-size:16px !important`には、インライン指定では勝てない。ID付きセレクタで上書きする。
 - **表示店舗の設定**: 除外リスト方式(`store_checksheet_cfg`/`store_product_cfg`)。複数店舗の変更は1回の読み込み・1回の同期にまとめる。

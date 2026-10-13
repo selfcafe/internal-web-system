@@ -481,6 +481,10 @@
     .checksheet-today-list { background:white; border-radius:8px; overflow:hidden; box-shadow:0 1px 4px rgba(0,0,0,.08); }
     .checksheet-today-row { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:16px 14px; border-bottom:1px solid #f0f0f0; font-size:15px; }
     .checksheet-today-row:last-child { border-bottom:none; }
+    .checksheet-past-edit-btn { flex-shrink:0; padding:6px 10px; border:1px solid #c98a1a; border-radius:6px; background:white; color:#c98a1a; font-size:12px; font-weight:700; cursor:pointer; }
+    .checksheet-past-edit { margin-bottom:10px; padding:10px 12px; background:#fff3d6; border:2px solid #f59e0b; border-radius:8px; font-size:13px; color:#8a5a00; }
+    #checksheet-table-wrap .checksheet-past-edit select { padding:6px 8px; border:1px solid #d9b26a; border-radius:6px; background:white; margin-right:8px; }
+    .checksheet-past-edit button { padding:7px 12px; border:none; border-radius:6px; background:#22703d; color:white; font-weight:700; cursor:pointer; }
     .checksheet-save-bar { position:sticky; bottom:0; z-index:5; display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:12px; padding:10px 12px; background:white; border-radius:8px; box-shadow:0 -2px 8px rgba(0,0,0,.12); }
     #checksheet-saving-indicator { font-size:12px; font-weight:600; line-height:1.4; }
     #checksheet-save-btn { flex-shrink:0; padding:10px 18px; border:none; border-radius:8px; background:#22703d; color:white; font-size:15px; font-weight:700; cursor:pointer; }
@@ -3589,7 +3593,16 @@ function updateChecksheetField(dayKey, itemKey, rawValue, type) {
   // dayKeyの属する暦月を使う（当月1〜5日に前月分の履歴を編集するケースがあるため、常に「今日」の期間とは限らない）
   const [y, m, d] = dayKey.split('-').map(Number);
   const period = getChecksheetPeriod(new Date(y, m - 1, d));
-  const value = type === 'check' ? !!rawValue : (rawValue === '' ? '' : Number(rawValue));
+  let value;
+  if (type === 'check') value = !!rawValue;
+  else if (rawValue === '' || !Number.isFinite(Number(rawValue))) value = '';
+  else {
+    // 直接入力で「-2」や小数を打てないようにする(マイナスで帳尻を合わせると、その日の記録が壊れるため。
+    // 間違えて保存した数はその日の分を開いて直す——保存は加算ではなく上書き)
+    value = Math.max(0, Math.round(Number(rawValue)));
+    const inp = document.getElementById('cs-qty-' + itemKey);
+    if (inp && inp.value !== String(value)) inp.value = value;
+  }
   setChecksheetField(storeTab, period.label, dayKey, itemKey, value);
   _markChecksheetUnsaved(storeTab, period.label, dayKey, itemKey, value);
   _scheduleChecksheetAutosave();
@@ -3684,6 +3697,29 @@ let checksheetActiveCategory = 'daily_count';
 let checksheetActiveView = 'today'; // 'today' | 'history'（常に実際の当月） | 'last_month'（常に実際の前月）
 let checksheetPrevView = 'today'; // 先月の履歴を開く直前のビュー（もう一度押したときに戻す用）
 function switchChecksheetCategory(cat) { checksheetActiveCategory = cat; renderChecksheet(); }
+// 過去の分の修正(2026-10-13〜)：当日入力フォームを過去の日付で開き直す。null=今日の入力。
+// 選べるのは当月・先月(営業日基準)の今日より前の日だけ(履歴で見られる範囲と同じ。範囲を広げるほど
+// 記録の信頼性が下がるため)。保存の仕組みは当日入力と同じで、期間はdayKeyから決まる
+let checksheetEditDay = null;
+function checksheetEditableDays() {
+  const todayKey = checksheetToday();
+  const [y, m] = todayKey.split('-').map(Number);
+  const days = [
+    ...checksheetPeriodDays(getChecksheetPeriod(new Date(y, m - 2, 1))),
+    ...checksheetPeriodDays(getChecksheetPeriod(new Date(y, m - 1, 1))),
+  ].map(dateKeyStr).filter(k => k < todayKey);
+  return days.reverse(); // 新しい日付が上
+}
+function startChecksheetPastEdit() {
+  checksheetEditDay = checksheetEditableDays()[0] || null;
+  checksheetActiveView = 'today';
+  renderChecksheet();
+}
+function selectChecksheetEditDay(dayKey) {
+  checksheetEditDay = checksheetEditableDays().includes(dayKey) ? dayKey : null;
+  renderChecksheet();
+}
+function endChecksheetPastEdit() { checksheetEditDay = null; renderChecksheet(); }
 // 1つのボタンで当日入力⇔当月履歴をトグル。ボタンには「次に切り替わる先」の名前を表示する
 function toggleChecksheetView() {
   checksheetActiveView = checksheetActiveView === 'today' ? 'history' : 'today';
@@ -3751,7 +3787,7 @@ function checksheetToday() {
   return _businessDateFromDateTime(localStr) || today();
 }
 function renderChecksheetTodayForm(wrap, subgroups) {
-  const dKey = checksheetToday();
+  const dKey = checksheetEditDay || checksheetToday();
   // periodもdKey(営業日)基準で決める。月末深夜〜AM4:29に暦月をまたぐと、
   // 「今日」のフォームなのに period.label だけ翌月のまま…という月境界のズレを防ぐため
   const [dy, dm, dd] = dKey.split('-').map(Number);
@@ -3789,7 +3825,18 @@ function renderChecksheetTodayForm(wrap, subgroups) {
     </div>`).join('');
 
   wrap.innerHTML = `
-    <div style="font-size:12px;color:#888;margin-bottom:8px">${fmtChecksheetDay(new Date(dKey))} の入力（${esc(period.label)}分）</div>
+    ${checksheetEditDay ? `
+    <div class="checksheet-past-edit">
+      <div style="font-weight:700;margin-bottom:6px">過去の分を修正中</div>
+      <select onchange="selectChecksheetEditDay(this.value)">
+        ${checksheetEditableDays().map(k => { const [a, b, c] = k.split('-').map(Number); return `<option value="${k}" ${k === dKey ? 'selected' : ''}>${fmtChecksheetDay(new Date(a, b - 1, c))}</option>`; }).join('')}
+      </select>
+      <button onclick="endChecksheetPastEdit()">今日の入力に戻る</button>
+    </div>` : `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;font-size:12px;color:#888;margin-bottom:8px">
+      <span>${fmtChecksheetDay(new Date(dKey))} の入力（${esc(period.label)}分）</span>
+      <button class="checksheet-past-edit-btn" onclick="startChecksheetPastEdit()">過去の分を修正する</button>
+    </div>`}
     ${body}
     <div class="checksheet-save-bar">
       <span id="checksheet-saving-indicator"></span>
@@ -3890,7 +3937,7 @@ function updateChecksheetTotals(period) {
 let partnerTabCurrent = 'order';
 async function switchPartnerTab(tab) {
   // チェックシートから別のタブへ移る時は、押し忘れの未保存分をここで送っておく
-  if (partnerTabCurrent === 'checklist' && tab !== 'checklist') saveChecksheetNow();
+  if (partnerTabCurrent === 'checklist' && tab !== 'checklist') { saveChecksheetNow(); checksheetEditDay = null; }
   partnerTabCurrent = tab;
   ['order','inventory','checklist','lost','attendance','bugreport'].forEach(t => {
     document.getElementById('ptab-'+t)?.classList.toggle('active', t===tab);
