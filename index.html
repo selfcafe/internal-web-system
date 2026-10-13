@@ -481,6 +481,10 @@
     .checksheet-today-list { background:white; border-radius:8px; overflow:hidden; box-shadow:0 1px 4px rgba(0,0,0,.08); }
     .checksheet-today-row { display:flex; align-items:center; justify-content:space-between; gap:10px; padding:16px 14px; border-bottom:1px solid #f0f0f0; font-size:15px; }
     .checksheet-today-row:last-child { border-bottom:none; }
+    .checksheet-save-bar { position:sticky; bottom:0; z-index:5; display:flex; align-items:center; justify-content:space-between; gap:10px; margin-top:12px; padding:10px 12px; background:white; border-radius:8px; box-shadow:0 -2px 8px rgba(0,0,0,.12); }
+    #checksheet-saving-indicator { font-size:12px; font-weight:600; line-height:1.4; }
+    #checksheet-save-btn { flex-shrink:0; padding:10px 18px; border:none; border-radius:8px; background:#22703d; color:white; font-size:15px; font-weight:700; cursor:pointer; }
+    #checksheet-save-btn:disabled { background:#b8c9bc; cursor:default; }
     .checksheet-today-row > span { flex:1 1 auto; min-width:0; }
     .checksheet-today-row input[type="number"] { width:70px; text-align:right; padding:6px 8px; border:1px solid #d1d5db; border-radius:4px; font-size:14px; }
     .checksheet-today-row input[type="checkbox"] { width:28px; height:28px; accent-color:#22703d; flex-shrink:0; }
@@ -2289,6 +2293,7 @@ async function loadInventoryTabData(storeId, periodLabel) {
       if (!all[storeId]) all[storeId] = {};
       csRows.forEach(r => { all[storeId][r.period_label] = r.data || {}; });
       localStorage.setItem(CHECKSHEET_DATA_KEY, JSON.stringify(all));
+      _applyChecksheetUnsaved(storeId);
     }
     renderInventory();
   } catch (e) { console.error('getInventoryTabData error:', e); }
@@ -3351,38 +3356,111 @@ function setChecksheetField(storeId, periodLabel, dayKey, itemKey, value) {
   all[storeId][periodLabel][dayKey][itemKey] = value;
   localStorage.setItem(CHECKSHEET_DATA_KEY, JSON.stringify(all));
 }
+// 保存は「保存する」ボタン方式(2026-10-13〜)。以前は＋／－のタップやチェック1つごとに、その月の
+// 全データをGASへ送っていた(1回1.5〜5秒、doPostは全店舗共通のロックを取るため、補充10品なら10回
+// 順番待ちになり他店舗の発注保存まで待たせていた)。今は入力をこの端末の「未保存」に貯めておき、
+// ボタン(押し忘れ時は最後の入力から一定時間後・タブ切替時・画面を離れる時の自動保存)で1回だけ、
+// 変更した日・項目だけを送る。サーバー側(_stampChecksheetEntryTimes_)は日付・項目の両階層でマージ
+// するので、送らなかった項目は消えない——別端末が同じ日に入力した他の項目を古い値で上書きしなくなる。
+// 未保存分はlocalStorageにも残すので、保存前にリロード・圏外になっても消えず、次回開いた時に再送する。
+const CHECKSHEET_UNSAVED_KEY = 'checksheet_unsaved';
+const CHECKSHEET_AUTOSAVE_MS = 60000;
+function _getChecksheetUnsaved() {
+  try { return JSON.parse(localStorage.getItem(CHECKSHEET_UNSAVED_KEY) || '{}'); } catch(e) { return {}; }
+}
+function _setChecksheetUnsaved(obj) {
+  try { localStorage.setItem(CHECKSHEET_UNSAVED_KEY, JSON.stringify(obj)); } catch(e) { console.error('checksheet unsaved store error:', e); }
+}
+// キーは storeId + '|' + periodLabel、値は { dayKey: { itemKey: value } }
+function _markChecksheetUnsaved(storeId, periodLabel, dayKey, itemKey, value) {
+  const all = _getChecksheetUnsaved();
+  const key = storeId + '|' + periodLabel;
+  if (!all[key]) all[key] = {};
+  if (!all[key][dayKey]) all[key][dayKey] = {};
+  all[key][dayKey][itemKey] = value;
+  _setChecksheetUnsaved(all);
+}
+function _checksheetUnsavedKeys(storeId) {
+  return Object.keys(_getChecksheetUnsaved()).filter(k => k.split('|')[0] === storeId);
+}
+function _checksheetUnsavedCount(storeId) {
+  const all = _getChecksheetUnsaved();
+  let n = 0;
+  _checksheetUnsavedKeys(storeId).forEach(k => Object.values(all[k]).forEach(day => { n += Object.keys(day).length; }));
+  return n;
+}
+// サーバーから取り直した値で未保存の入力が巻き戻らないよう、取得後のキャッシュに未保存分を上書きする
+function _applyChecksheetUnsaved(storeId) {
+  const unsaved = _getChecksheetUnsaved();
+  const keys = _checksheetUnsavedKeys(storeId);
+  if (!keys.length) return;
+  const all = JSON.parse(localStorage.getItem(CHECKSHEET_DATA_KEY) || '{}');
+  if (!all[storeId]) all[storeId] = {};
+  keys.forEach(k => {
+    const periodLabel = k.slice(storeId.length + 1);
+    if (!all[storeId][periodLabel]) all[storeId][periodLabel] = {};
+    Object.entries(unsaved[k]).forEach(([dayKey, items]) => {
+      all[storeId][periodLabel][dayKey] = Object.assign(all[storeId][periodLabel][dayKey] || {}, items);
+    });
+  });
+  localStorage.setItem(CHECKSHEET_DATA_KEY, JSON.stringify(all));
+}
+
 // 店舗×年月ごとに直列化してGASへ保存し、Firebaseで他端末に即時通知する
 // （発注データの同期と同じパターン。自分自身の保存通知で自分を再取得しないよう_CLIENT_IDで除外する）
 const _checksheetSyncChain = {};
 // 保存(GAS呼び出し、実測1.5〜5秒)が完了する前にページをリロード/離脱すると、リロード後の
 // 取得(loadChecksheetDataFromDb)が保存前の古い値をサーバーから拾ってきてしまい、直前に入力した
-// 数字が古い値に巻き戻って見えるバグが大塚店で報告された(2026-08-28)。保存中はリロードに警告を
-// 出す(beforeunload)ことと、入力欄の近くに「保存中…」を表示することの2本立てで対策する
+// 数字が古い値に巻き戻って見えるバグが大塚店で報告された(2026-08-28)。保存中・未保存ありの間は
+// リロードに警告を出し(beforeunload)、取得後は未保存分を上書きし直す(_applyChecksheetUnsaved)
 let _checksheetPendingSyncCount = 0;
 let _checksheetSavingIndicatorHideTimer = null;
-// okが未指定(=通常の再描画時など)なら保存中でない限り黙って非表示にするだけ。okが指定された
-// 呼び出し(_syncChecksheetToDb完了時)は、他に保存待ちが残っていなければ「保存しました/失敗しました」
-// を数秒表示してから消す。最後に入力した項目の保存が終わったことが分かるようにするため(2026-08-30)
+let _checksheetAutosaveTimer = null;
+// 保存バー(当日入力フォーム下部)の表示を更新する。okが指定された呼び出し(保存完了時)は、
+// 「保存しました/失敗しました」を数秒表示してから未保存件数の表示に戻す
 function _updateChecksheetSavingIndicator(ok) {
   const el = document.getElementById('checksheet-saving-indicator');
+  const btn = document.getElementById('checksheet-save-btn');
   if (!el) return;
+  const unsaved = _checksheetUnsavedCount(storeTab);
+  if (btn) {
+    btn.disabled = unsaved === 0 || _checksheetPendingSyncCount > 0;
+    btn.textContent = _checksheetPendingSyncCount > 0 ? '保存中…' : (unsaved ? `保存する（${unsaved}件）` : '保存済み');
+  }
   clearTimeout(_checksheetSavingIndicatorHideTimer);
   if (_checksheetPendingSyncCount > 0) {
-    el.style.display = '';
     el.style.color = '#c98a1a';
     el.textContent = '保存中…（完了までリロードしないでください）';
   } else if (ok !== undefined) {
-    el.style.display = '';
     el.style.color = ok ? '#22703d' : '#c0392b';
-    el.textContent = ok ? '✓ 保存しました' : '⚠ 保存に失敗しました。もう一度お試しください';
-    _checksheetSavingIndicatorHideTimer = setTimeout(() => { el.style.display = 'none'; }, 2500);
+    el.textContent = ok ? '✓ 保存しました' : '⚠ 保存に失敗しました。通信の良い場所で「保存する」を押してください';
+    if (ok) _checksheetSavingIndicatorHideTimer = setTimeout(() => _updateChecksheetSavingIndicator(), 2500);
+  } else if (unsaved) {
+    el.style.color = '#c0392b';
+    el.textContent = '未保存の入力があります';
   } else {
-    el.style.display = 'none';
+    el.style.color = '#888';
+    el.textContent = '入力が終わったら「保存する」を押してください';
   }
 }
 window.addEventListener('beforeunload', (e) => {
-  if (_checksheetPendingSyncCount > 0) { e.preventDefault(); e.returnValue = ''; }
+  if (_checksheetPendingSyncCount > 0 || _checksheetUnsavedCount(storeTab) > 0) { e.preventDefault(); e.returnValue = ''; }
 });
+// 押し忘れ対策：画面を閉じる・別アプリへ切り替える時は、未保存分をその場で送っておく
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') saveChecksheetNow();
+});
+function _scheduleChecksheetAutosave() {
+  clearTimeout(_checksheetAutosaveTimer);
+  _checksheetAutosaveTimer = setTimeout(() => { _checksheetAutosaveTimer = null; saveChecksheetNow(); }, CHECKSHEET_AUTOSAVE_MS);
+}
+// 未保存分を送る(保存ボタン・自動保存の共通入口)。storeIdを省略すると今見ている店舗
+function saveChecksheetNow(storeId) {
+  storeId = storeId || storeTab;
+  clearTimeout(_checksheetAutosaveTimer);
+  _checksheetAutosaveTimer = null;
+  return Promise.all(_checksheetUnsavedKeys(storeId).map(k => _syncChecksheetToDb(storeId, k.slice(storeId.length + 1))));
+}
 function _syncChecksheetToDb(storeId, periodLabel) {
   const key = storeId + '|' + periodLabel;
   const prev = _checksheetSyncChain[key] || Promise.resolve();
@@ -3390,10 +3468,25 @@ function _syncChecksheetToDb(storeId, periodLabel) {
   _updateChecksheetSavingIndicator();
   const run = prev.catch(() => {}).then(async () => {
     let ok = true;
+    // 直列化の順番が来た時点の未保存分を送る(前の保存中に追加された入力もここで一緒に送られる)
+    const data = _getChecksheetUnsaved()[key];
     try {
-      const data = getChecksheetData(storeId, periodLabel);
-      await gasPost('saveChecksheetData', { storeId, periodLabel, data });
+      if (!data) return; // 前の保存で送り終わっている(finallyで件数表示は戻す)
+      const res = await gasPost('saveChecksheetData', { storeId, periodLabel, data });
+      if (!res || res.error) throw new Error((res && res.error) || 'empty response');
+      // 送信中に同じ項目が書き換えられていたら、その項目は未保存のまま残す
+      const all = _getChecksheetUnsaved();
+      const cur = all[key] || {};
+      Object.entries(data).forEach(([dayKey, items]) => {
+        Object.entries(items).forEach(([itemKey, v]) => {
+          if (cur[dayKey] && cur[dayKey][itemKey] === v) delete cur[dayKey][itemKey];
+        });
+        if (cur[dayKey] && !Object.keys(cur[dayKey]).length) delete cur[dayKey];
+      });
+      if (Object.keys(cur).length) all[key] = cur; else delete all[key];
+      _setChecksheetUnsaved(all);
       _fbDb.ref('checksheet_updated').set({ ts: Date.now(), by: _CLIENT_ID, storeId, periodLabel });
+      _checkStockMismatchAfterSave(storeId, data);
     } catch(e) { console.error('checksheet sync error:', e); ok = false; }
     finally {
       _checksheetPendingSyncCount--;
@@ -3412,6 +3505,7 @@ async function loadChecksheetDataFromDb(storeId) {
     if (!all[storeId]) all[storeId] = {};
     rows.forEach(r => { all[storeId][r.period_label] = r.data || {}; });
     localStorage.setItem(CHECKSHEET_DATA_KEY, JSON.stringify(all));
+    _applyChecksheetUnsaved(storeId);
   } catch(e) { console.error('getChecksheetData error:', e); }
 }
 // 盗難検知①(表示専用)：「前回入力からの実売上」。チェックシートタブを開くたびに1回だけ取得する
@@ -3469,26 +3563,27 @@ function checksheetRemainingStock(productName) {
   const used = getInventoryDailyCount(storeTab, period.label, productName);
   return openStock - (used === '' ? 0 : Number(used));
 }
-// 盗難検知(水の客による無断持ち去り対策)：saveChecksheetDataの保存フロー(_checksheetSyncChain)とは
-// 完全に独立した別のデバウンス用タイマーマップ。既存の保存の直列化には一切触らない——連続タップの
-// たびに通知が連投されるのを防ぐためだけの目的で、データの保存タイミング・信頼性には影響を与えない。
+// 盗難検知(水の客による無断持ち去り対策)：GAS側はサーバーに保存済みのチェックシートを読んで判定する
+// ため、保存が成功した後に、その保存に含まれていた商品についてだけ呼ぶ(保存ボタン方式への変更に
+// 合わせ、2026-10-13に「入力から3秒後」から「保存成功後」へ移した。入力しただけで未保存の値は
+// サーバーに無く、以前のタイミングのままだと古い値で判定してしまうため)。
 // 2026-09-08に一度廃止したが(ステラ取り扱い商品のデイリーカウント入力自体を廃止したため)、
 // 水だけは客による無断持ち去りの検知に補充数の入力が必須と判明し(2026-09-09)、水のqty入力を
 // 復活させたのに合わせてこのトリガーも復活させた(theft-detection-notes.mdの🔄🔄再設計メモ2参照)。
-const _stockMismatchDebounceTimers = {};
-const STOCK_MISMATCH_DEBOUNCE_MS = 3000;
-function _scheduleStockMismatchCheck(storeId, itemKey) {
-  if (!itemKey.startsWith('prod:')) return; // 商品(数量)以外(清掃・点検項目等)は対象外
-  const product = itemKey.slice(5);
-  const key = storeId + '|' + product;
-  clearTimeout(_stockMismatchDebounceTimers[key]);
-  // 対象商品かどうか(STERA_SALES_MAPPINGに載っているか)はGAS側で判定する(クライアントには
-  // マッピング表を持たせない方針)。対象外ならGAS側が{skipped:'not_tracked'}を返すだけで無害
-  _stockMismatchDebounceTimers[key] = setTimeout(() => {
-    delete _stockMismatchDebounceTimers[key];
+// 対象商品かどうか(STERA_SALES_MAPPINGに載っているか)の最終判定はGAS側が行う(クライアントには
+// マッピング表を持たせない方針)。入力できるステラ扱い商品は水だけなので、呼ぶのは理論在庫の一覧に
+// 載っている商品と水に絞り、他の商品で無駄なGAS呼び出し(全店舗共通ロック待ち)を出さない
+function _checkStockMismatchAfterSave(storeId, data) {
+  const products = new Set();
+  Object.values(data).forEach(items => Object.keys(items).forEach(itemKey => {
+    if (!itemKey.startsWith('prod:')) return;
+    const product = itemKey.slice(5);
+    if (product === '水' || Object.prototype.hasOwnProperty.call(_steraStockEstimate || {}, product)) products.add(product);
+  }));
+  products.forEach(product => {
     gasPost('checkWaterStockMismatch', { storeId, product })
       .catch(e => console.error('checkWaterStockMismatch error:', e));
-  }, STOCK_MISMATCH_DEBOUNCE_MS);
+  });
 }
 function updateChecksheetField(dayKey, itemKey, rawValue, type) {
   // dayKeyの属する暦月を使う（当月1〜5日に前月分の履歴を編集するケースがあるため、常に「今日」の期間とは限らない）
@@ -3496,12 +3591,11 @@ function updateChecksheetField(dayKey, itemKey, rawValue, type) {
   const period = getChecksheetPeriod(new Date(y, m - 1, d));
   const value = type === 'check' ? !!rawValue : (rawValue === '' ? '' : Number(rawValue));
   setChecksheetField(storeTab, period.label, dayKey, itemKey, value);
-  _syncChecksheetToDb(storeTab, period.label);
+  _markChecksheetUnsaved(storeTab, period.label, dayKey, itemKey, value);
+  _scheduleChecksheetAutosave();
+  _updateChecksheetSavingIndicator();
   updateChecksheetTotals();
-  if (type === 'qty') {
-    _scheduleStockMismatchCheck(storeTab, itemKey);
-    if (itemKey.startsWith('prod:')) _updateChecksheetRemainingNote(itemKey);
-  }
+  if (type === 'qty' && itemKey.startsWith('prod:')) _updateChecksheetRemainingNote(itemKey);
 }
 // 残り在庫の表示を、行全体を再描画せずその場で更新する(qtyボタン連打でも軽く保つため)
 function _updateChecksheetRemainingNote(itemKey) {
@@ -3695,11 +3789,15 @@ function renderChecksheetTodayForm(wrap, subgroups) {
     </div>`).join('');
 
   wrap.innerHTML = `
-    <div style="font-size:12px;color:#888;margin-bottom:8px">${fmtChecksheetDay(new Date(dKey))} の入力（${esc(period.label)}分）
-      <span id="checksheet-saving-indicator" style="display:none;color:#c98a1a;font-weight:600;margin-left:6px">保存中…（完了までリロードしないでください）</span>
-    </div>
-    ${body}`;
+    <div style="font-size:12px;color:#888;margin-bottom:8px">${fmtChecksheetDay(new Date(dKey))} の入力（${esc(period.label)}分）</div>
+    ${body}
+    <div class="checksheet-save-bar">
+      <span id="checksheet-saving-indicator"></span>
+      <button id="checksheet-save-btn" onclick="saveChecksheetNow()">保存する</button>
+    </div>`;
   _updateChecksheetSavingIndicator();
+  // 前回保存しきれずに端末に残っていた入力があれば、押し忘れ時と同じく一定時間後に自動で送る
+  if (_checksheetUnsavedCount(storeTab) && !_checksheetAutosaveTimer) _scheduleChecksheetAutosave();
 }
 
 // 履歴表の見出しだけで使う短縮・改行表示（商品自体のlabelは変更しない）
@@ -3791,6 +3889,8 @@ function updateChecksheetTotals(period) {
 /* ===== パートナーポータル タブ切り替え ===== */
 let partnerTabCurrent = 'order';
 async function switchPartnerTab(tab) {
+  // チェックシートから別のタブへ移る時は、押し忘れの未保存分をここで送っておく
+  if (partnerTabCurrent === 'checklist' && tab !== 'checklist') saveChecksheetNow();
   partnerTabCurrent = tab;
   ['order','inventory','checklist','lost','attendance','bugreport'].forEach(t => {
     document.getElementById('ptab-'+t)?.classList.toggle('active', t===tab);
@@ -5487,6 +5587,7 @@ async function submitSiteLogin() {
       localStorage.setItem('last_login_store', storeId);
       document.getElementById('site-lock').classList.add('hidden');
       _saveCredential(STORES[storeId] || storeId, val);
+      if (storeTab !== storeId) saveChecksheetNow(storeTab); // 別店舗でログインし直す前に、元の店舗の未保存分を送る
       storeTab = storeId;
       showPage('store');
     }
@@ -5710,6 +5811,7 @@ function ensureBlankDraftRow(id) {
 }
 
 function switchStore(id) {
+  if (storeTab !== id) saveChecksheetNow(storeTab); // 店舗を切り替える前に、元の店舗の未保存分を送る
   storeTab = id;
   const lbl = document.getElementById('active-store-label');
   if (lbl) lbl.textContent = STORES[id] || id;

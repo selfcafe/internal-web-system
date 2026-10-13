@@ -277,7 +277,11 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 - **デイリーカウント対象**: 全店共通の1ルール(`_checksheetProductColumns`)。
   - apex/toyo/cs3は全商品、otherはペーパータオル・ストロー・トイレットペーパー、salesは水だけ。
   - 水・ペーパータオルを外さない理由: 「デイリーカウントが入っている = 在店した」という在店確認の代わりに使っているため。
-- **保存のマージ**: クライアントは月全体を毎回送り、サーバー(`_stampChecksheetEntryTimes_`)が日付・商品の両階層でマージする。日ごとに`_enteredAt`(入力時刻)が付く。
+- **保存は「保存する」ボタン方式**(2026-10-13〜、以前はタップのたびに月全体を自動保存していた):
+  - 入力は端末の未保存分(`localStorage`の`checksheet_unsaved`)に貯め、ボタンで1回だけ、**変更した日・項目だけ**を送る。押し忘れ対策として、最後の入力から60秒後・タブ切替・店舗切替・画面を離れる時(`visibilitychange`)にも自動で送る。未保存・保存中のリロードは`beforeunload`で警告する。
+  - サーバーから取り直した時は`_applyChecksheetUnsaved`で未保存分を上書きし直す(入力が巻き戻らないように)。送信中に同じ項目が書き換えられたら、その項目は未保存のまま残る。
+  - 水の盗難検知(`checkWaterStockMismatch`)はサーバー保存済みの値で判定するため、保存成功後に、保存に含まれた水(とステラ扱い商品)だけ呼ぶ。
+- **保存のマージ**: サーバー(`_stampChecksheetEntryTimes_`)が日付・商品の両階層でマージするので、送らなかった項目は消えない。日ごとに`_enteredAt`(その日の最終変更時刻)が付く。
 - **過去日の追加**: UIからはできないので直接APIで書く。キーは`'prod:'+商品名`。略称は、その店舗の既存データと`store_product_cfg`で確かめてから使う。
 - **Firebaseのルール**: Firebase RTDBのセキュリティルールはコンソールにしか無い。新しいパスを足したらルールにも追加する(`curl <db>/<path>.json`で"Permission denied"が出るかで確認できる)。
 - **CSSの罠**: グローバルの`input[type=number]{min-height:38px}`と、モバイルの`font-size:16px !important`には、インライン指定では勝てない。ID付きセレクタで上書きする。
