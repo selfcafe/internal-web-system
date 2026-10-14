@@ -93,7 +93,7 @@ URLがすでにコード内で公開されているもの:
 
 | どこで | 名前 | 内容 |
 |---|---|---|
-| Apps Script(時間トリガー) | `sendDailyOrderNotification` | 発注依頼の日次通知。機械内写真の30日自動削除も相乗り |
+| Apps Script(時間トリガー) | `sendDailyOrderNotification` | (発注依頼のエリア通知は2026-10-14に廃止。依頼は入った時点で塩川用Botへ)忘れ物・納品履歴・機械内写真の30日自動削除 |
 | 〃 | `sendDailyAttendanceCheck` | 業務開始(出勤)の確認通知 |
 | 〃 | `runMonthlyStockCheckBackstop` | 棚卸とステラ月間売上の突き合わせ(通知なし、シートに書くだけ) |
 | 〃 | `sendNewStoreCheckNotification` | 新規店舗の確認通知 |

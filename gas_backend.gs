@@ -576,6 +576,7 @@ function doPost(e) {
     else if (b.action === 'deleteBugReport')      result = deleteBugReport(b.issueId);
     else if (b.action === 'saveAnnouncement')   result = saveAnnouncement(b.id, b.title, b.body, b.publishDate, b.scope, b.status, b.adminName);
     else if (b.action === 'deleteAnnouncement') result = deleteAnnouncement(b.id);
+    else if (b.action === 'markAmazonOrdered')  result = markAmazonOrdered(b.apiKey, b.ids);
     else result = { error: 'Unknown action: ' + b.action };
   } catch(err) {
     result = { error: err.message };
@@ -620,6 +621,7 @@ function _dispatchNotifies_(result) {
       // 管理者向け(新規報告・追記)は登録済みの管理者全員へ送る(2026-09-25、管理者の複数人化に合わせて変更)
       else if (n.type === 'bugReportNew')          _bugReportAdminUserIds_().forEach(uid => sendBugReportBotNotification_(n.message, uid));
       else if (n.type === 'bugReportLineWorksAck') sendBugReportBotNotification_(n.message, n.userId);
+      else if (n.type === 'amazonOrderNew')        sendAmazonOrderToBot_(n.storeId, n.items);
     } catch (e) {
       console.error('LINE WORKS通知エラー(ロック解放後):', e.message);
     }
@@ -1038,12 +1040,18 @@ function saveOrders(storeId, rows) {
   const sheet = getSheet(SHEET_ORDERS);
   ensureHeaders(sheet, ORDER_COLS);
 
+  const wasNew = {};
   if (sheet.getLastRow() > 1) {
     const data   = sheet.getDataRange().getValues();
     const sidIdx = data[0].indexOf('store_id');
+    const idIdx  = data[0].indexOf('id');
+    const newIdx = data[0].indexOf('is_new');
     const toDel  = [];
     for (let i = 1; i < data.length; i++) {
-      if (String(data[i][sidIdx]) === String(storeId)) toDel.push(i + 1);
+      if (String(data[i][sidIdx]) === String(storeId)) {
+        toDel.push(i + 1);
+        if (data[i][newIdx] === true || String(data[i][newIdx]) === 'TRUE') wasNew[String(data[i][idIdx])] = true;
+      }
     }
     for (let i = toDel.length - 1; i >= 0; i--) sheet.deleteRow(toDel[i]);
   }
@@ -1063,7 +1071,7 @@ function saveOrders(storeId, rows) {
     sheet.getRange(startRow, 1, newRows.length, ORDER_COLS.length).setValues(newRows);
   }
 
-  return { ok: true };
+  return _withAmazonOrderNotify_({ ok: true }, storeId, rows.filter(r => !wasNew[String(r.id)]));
 }
 
 // saveOrdersの「その店舗の行を全削除してから書き込む」という2段階方式は、削除と
@@ -1078,9 +1086,15 @@ function upsertOrderRows(storeId, rows) {
 
   const idIdx = ORDER_COLS.indexOf('id');
   const idToRowNum = {};
+  const wasNew = {};
   if (sheet.getLastRow() > 1) {
     const ids = sheet.getRange(2, idIdx + 1, sheet.getLastRow() - 1, 1).getValues();
-    ids.forEach((r, i) => { if (r[0] !== '') idToRowNum[String(r[0])] = i + 2; });
+    const news = sheet.getRange(2, ORDER_COLS.indexOf('is_new') + 1, sheet.getLastRow() - 1, 1).getValues();
+    ids.forEach((r, i) => {
+      if (r[0] === '') return;
+      idToRowNum[String(r[0])] = i + 2;
+      if (news[i][0] === true || String(news[i][0]) === 'TRUE') wasNew[String(r[0])] = true;
+    });
   }
 
   const dateCols = ['request_date', 'order_date', 'delivery_date'];
@@ -1105,7 +1119,7 @@ function upsertOrderRows(storeId, rows) {
     sheet.getRange(startRow, 1, toAppend.length, ORDER_COLS.length).setValues(toAppend);
   }
 
-  return { ok: true };
+  return _withAmazonOrderNotify_({ ok: true }, storeId, rows.filter(r => !wasNew[String(r.id)]));
 }
 
 // 指定したidの行だけを個別に削除する。他の行（他店舗はもちろん、同じ店舗の
@@ -4606,70 +4620,85 @@ function _amazonUrlMap_() {
   return urls;
 }
 
-// 新着の発注依頼のうち Amazon で買う品（商品一覧に Amazon の URL がある品）を、店舗ごとに1通、
-// 商品ページを開くボタン付きで LINE WORKS に送る（sendDailyOrderNotification から毎朝。
-// エリアの「発注依頼があります」と同じチャンネル）。発注済みにするのは今まで通りポータルで
-function sendAmazonOrderButtons_(data) {
-  const urls = _amazonUrlMap_();
-  if (!Object.keys(urls).length) return 0;
-  const h = data[0];
-  const ix = c => h.indexOf(c);
-  const names = _storeNames_();
-  const byStore = {};
-  for (let i = 1; i < data.length; i++) {
-    const r = data[i];
-    const isNew = r[ix('is_new')], denied = r[ix('denied')];
-    if (isNew !== true && String(isNew) !== 'TRUE') continue;
-    if (denied === true || String(denied) === 'TRUE') continue;
-    const product = String(r[ix('product')]);
-    if (!urls[product]) continue;
-    const sid = String(r[ix('store_id')]);
-    (byStore[sid] = byStore[sid] || []).push({
-      label: String(r[ix('label')] || '') || product, qty: r[ix('qty')], unit: String(r[ix('unit')] || ''), url: urls[product],
-    });
-  }
-  const circled = '①②③④⑤⑥⑦⑧⑨⑩';
-  const cut = (s, n) => (s = String(s), s.length > n ? s.slice(0, n - 1) + '…' : s);
-  let sent = 0;
-  Object.keys(byStore).forEach(sid => {
-    const items = byStore[sid];
-    const lines = ['【Amazon】' + (names[sid] || sid) + 'の発注依頼', ''];
-    const actions = [];
-    items.forEach((it, k) => {
-      const mark = circled[k] || '・';
-      const url = _amazonUrl_(it.url);
-      lines.push(mark + ' ' + it.label + ' ×' + it.qty + it.unit);
-      if (actions.length < 10 && url) actions.push({ type: 'uri', label: cut(mark + ' ' + it.label, 20), uri: url });
-      else if (url) lines.push('　' + url); // ボタンは10個まで。あふれた分は本文にURL
-    });
-    lines.push('', 'ボタンで Amazon の商品ページが開きます（ビジネスアカウントで注文）。注文したらポータルで発注済みにしてください');
-    try {
-      sendLineWorksContent_({ type: 'button_template', contentText: cut(lines.join('\n'), 1000), actions: actions });
-      sent++;
-    } catch (e) { console.error('Amazon通知エラー:', sid, e.message); }
-  });
-  return sent;
+// 新しく入った発注依頼（保存で is_new が false/無し → true になった行。パートナーは下書きを保存してから
+// 「依頼」で is_new を true にするので、行の追加ではなくこの変化で見る）を、すぐに塩川用Bot
+// （gbp-photo-bot の Bot 13233186、表示名「セルフの亀崎」）へ1:1で送る（2026-10-14。発注依頼の通知はこれだけ。
+// 毎朝の発注チャンネルへの「◯◯エリアにて発注依頼があります。」と 10/13 の Amazon 通知は、全体の会話には不要とのことでやめた）。
+// Amazon で買う品（商品一覧に Amazon の URL がある品）は url 付きで送り、Bot が商品ページボタンと「発注した」ボタンを付ける。
+// それ以外の品は文字だけ（ポータルで処理）。文面は Bot 側（selfcafe-automation の gas/gbp-photo-bot/Amazon.gs）。
+// 「発注した」が押されると Bot がこのポータルの markAmazonOrdered を呼んで Amazon の品を発注済みにする。
+// スクリプト プロパティ: GBP_PHOTO_BOT_URL（Bot のウェブアプリ URL）、GBP_PHOTO_BOT_API_KEY（Bot の API_KEY と同じ値）
+function _withAmazonOrderNotify_(result, storeId, rows) {
+  try {
+    const urls = _amazonUrlMap_();
+    const items = (rows || []).filter(r => r && r.product &&
+      (r.is_new === true || String(r.is_new) === 'TRUE') && !(r.denied === true || String(r.denied) === 'TRUE'))
+      .map(r => ({ id: String(r.id), label: String(r.label || r.product), qty: r.qty, unit: String(r.unit || ''), url: urls[r.product] || '' }));
+    if (items.length) result._notify = { type: 'amazonOrderNew', storeId: String(storeId), items };
+  } catch (e) { console.error('_withAmazonOrderNotify_ error:', e.message); }
+  return result;
 }
 
-// テキスト以外（ボタン付きなど）を発注用チャンネル(LW_CHANNEL_ID)へ送る
-function sendLineWorksContent_(content, channelIdOverride) {
+function sendAmazonOrderToBot_(storeId, items) {
   const props = PropertiesService.getScriptProperties();
-  const url = 'https://www.worksapis.com/v1.0/bots/' + props.getProperty('LW_BOT_ID') + '/channels/' +
-    (channelIdOverride || props.getProperty('LW_CHANNEL_ID')) + '/messages';
-  const send = token => UrlFetchApp.fetch(url, {
-    method: 'POST', headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
-    payload: JSON.stringify({ content: content }), muteHttpExceptions: true,
-  });
-  let res = send(getLineWorksAccessToken_());
-  if (res.getResponseCode() === 401) res = send(getLineWorksAccessToken_(true));
-  if (res.getResponseCode() >= 300) throw new Error('LINE WORKS送信失敗 ' + res.getResponseCode() + ': ' + res.getContentText());
+  const url = props.getProperty('GBP_PHOTO_BOT_URL'), apiKey = props.getProperty('GBP_PHOTO_BOT_API_KEY');
+  if (!url || !apiKey) { console.warn('Amazon通知: GBP_PHOTO_BOT_URL / GBP_PHOTO_BOT_API_KEY が未設定のため送りません'); return; }
+  items = items.map(it => Object.assign({}, it, { url: it.url ? _amazonUrl_(it.url) : '' }));   // 短縮URLの展開は通信があるのでロックの外で
+  const res = UrlFetchApp.fetch(url, { method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+    payload: JSON.stringify({ action: 'amazonOrder', apiKey, storeId, store: _storeNames_()[storeId] || storeId, items }) });
+  let out = {};
+  try { out = JSON.parse(res.getContentText()); } catch (e) {}
+  if (!out.ok) throw new Error('Amazon通知の送信失敗 ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 200));
 }
 
-// 動作確認用（エディタから実行）: 今の新着の発注依頼で Amazon の通知だけ送る（発注用チャンネルに実際に届く）
-function testAmazonOrderButtons() {
-  const sheet = SpreadsheetApp.openById(SHEET_ID).getSheetByName(SHEET_ORDERS);
-  if (!sheet || sheet.getLastRow() <= 1) return { ok: true, sent: 0 };
-  return { ok: true, sent: sendAmazonOrderButtons_(sheet.getDataRange().getValues()) };
+// Bot の「発注した」ボタンから呼ばれる。ポータル管理画面の「発注済み」と同じ処理
+// （発注日が空なら今日を入れ、新着を外す）。否認済み・発注済みの行はそのまま
+function markAmazonOrdered(apiKey, ids) {
+  const key = PropertiesService.getScriptProperties().getProperty('GBP_PHOTO_BOT_API_KEY');
+  if (!key || apiKey !== key) return { error: 'unauthorized' };
+  const want = new Set((ids || []).map(String));
+  const sheet = getSheet(SHEET_ORDERS);
+  if (!want.size || sheet.getLastRow() <= 1) return { ok: true, marked: [], already: [], missing: Array.from(want) };
+  const data = sheet.getDataRange().getValues();
+  const h = data[0], ix = c => h.indexOf(c);
+  const today = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd');
+  const marked = [], already = [], found = new Set();
+  for (let i = 1; i < data.length; i++) {
+    const r = data[i], id = String(r[ix('id')]);
+    if (!want.has(id)) continue;
+    found.add(id);
+    const label = String(r[ix('label')] || r[ix('product')]);
+    const isNew = r[ix('is_new')] === true || String(r[ix('is_new')]) === 'TRUE';
+    const denied = r[ix('denied')] === true || String(r[ix('denied')]) === 'TRUE';
+    if (!isNew || denied) { already.push(label + (denied ? '（否認済み）' : '')); continue; }
+    if (!_dateStr(r[ix('order_date')])) sheet.getRange(i + 1, ix('order_date') + 1).setNumberFormat('@').setValue(today);
+    sheet.getRange(i + 1, ix('is_new') + 1).setValue(false);
+    marked.push(label);
+  }
+  // 開いているポータルの画面に再読み込みさせる（画面の保存と同じ合図。古い「新着」のまま上書きされないように）
+  if (marked.length) {
+    try {
+      UrlFetchApp.fetch('https://selfcafe-internal-web-system-default-rtdb.firebaseio.com/orders_updated.json', {
+        method: 'put', contentType: 'application/json', muteHttpExceptions: true,
+        payload: JSON.stringify({ ts: Date.now(), by: 'gas-amazon' }) });
+    } catch (e) { console.error('orders_updated の合図に失敗:', e.message); }
+  }
+  return { ok: true, marked, already, missing: Array.from(want).filter(id => !found.has(id)) };
+}
+
+// 動作確認用（エディタから実行）: 今の新着の Amazon の依頼を、店舗ごとに Bot へ送る（塩川さんに実際に届く）
+function testAmazonOrderToBot() {
+  const urls = _amazonUrlMap_();
+  const byStore = {};
+  getOrders().forEach(r => {
+    if (!r.is_new || r.denied || !urls[r.product]) return;
+    (byStore[r.store_id] = byStore[r.store_id] || []).push(r);
+  });
+  Object.keys(byStore).forEach(sid => {
+    const n = _withAmazonOrderNotify_({}, sid, byStore[sid])._notify;
+    if (n) sendAmazonOrderToBot_(n.storeId, n.items);
+  });
+  return { ok: true, stores: Object.keys(byStore).length };
 }
 
 function buildAmazonList(periodLabel) {
@@ -7144,45 +7173,8 @@ function sendDailyOrderNotification() {
   try { purgeOldDeliveryHistory(); } catch (e) { console.error('purgeOldDeliveryHistory error:', e.message); }
   try { purgeOldMachinePhotos(); } catch (e) { console.error('purgeOldMachinePhotos error:', e.message); }
   try { sendMachinePhotoReminder(); } catch (e) { console.error('sendMachinePhotoReminder error:', e.message); }
-  var ss = SpreadsheetApp.openById(SHEET_ID);
-  var sheet = ss.getSheetByName(SHEET_ORDERS);
-  if (!sheet || sheet.getLastRow() <= 1) return;
-  var data = sheet.getDataRange().getValues();
-  var headers = data[0];
-  var storeIdx = headers.indexOf('store_id');
-  var isNewIdx = headers.indexOf('is_new');
-  var deniedIdx = headers.indexOf('denied');
-  var hasTokai = false, hasKansai = false, hasKanto = false, hasKantoSelf = false, hasFC = false, hasGyomuItaku = false;
-  for (var i = 1; i < data.length; i++) {
-    var isNew = data[i][isNewIdx];
-    if (isNew !== true && String(isNew) !== 'TRUE') continue;
-    // 否認済み(denied)の行は、パートナーが取り下げるまでis_new=trueのまま残るが、
-    // 管理画面の「新着」一覧側は isNew && !denied で絞り込んでおり否認済みは表示されない
-    // （2026-09-22、否認済みのまま毎朝通知され続け「消えた発注依頼」に見える不具合として発覚）。
-    // 通知側もdeniedを除外し、両者の判定基準を揃える
-    var denied = data[i][deniedIdx];
-    if (denied === true || String(denied) === 'TRUE') continue;
-    var storeId = String(data[i][storeIdx]);
-    var area = _areaForStore_(storeId);
-    if (area === '東海') hasTokai = true;
-    if (area === '関西') hasKansai = true;
-    if (area === '関東') hasKanto = true;
-    // 関東ニッカ/FC/業務委託は基本的に発注機能を使わない想定だが、AREA_STORESに店舗が入っている
-    // 以上発注データが来る可能性はゼロではないため、見落とし防止の保険として他エリアと同じ
-    // 共通チャンネルへ通知する（2026-09-22追加。既存ループを流用するだけなのでデータ量・
-    // 処理コストは増えない。専用チャンネルが必要になれば別途LW_CHANNEL_ID_ORDER_FC等を追加する）
-    if (area === '関東ニッカ') hasKantoSelf = true;
-    if (area === 'FC') hasFC = true;
-    if (area === '業務委託') hasGyomuItaku = true;
-  }
-  if (hasTokai) sendLineWorksNotification('東海エリアにて発注依頼があります。');
-  if (hasKansai) sendLineWorksNotification('関西エリアにて発注依頼があります。');
-  if (hasKanto) sendLineWorksNotification('関東エリアにて発注依頼があります。');
-  if (hasKantoSelf) sendLineWorksNotification('関東ニッカエリアにて発注依頼があります。');
-  if (hasFC) sendLineWorksNotification('FCエリアにて発注依頼があります。');
-  if (hasGyomuItaku) sendLineWorksNotification('業務委託エリアにて発注依頼があります。');
-  // Amazon で買う品の依頼は、店舗ごとに商品ページのボタン付きでもう1通（2026-10-13）
-  try { sendAmazonOrderButtons_(data); } catch (e) { console.error('sendAmazonOrderButtons_ error:', e.message); }
+  // 「◯◯エリアにて発注依頼があります。」の毎朝のチャンネル通知は 2026-10-14 にやめた（全体の会話には不要）。
+  // 発注依頼は入った時点で塩川用Botへ1:1で届く（_withAmazonOrderNotify_）
 }
 
 // ----------------------------------------------------------------

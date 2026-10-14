@@ -225,7 +225,7 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
   - Firebaseへの通知が飛ばないので、開いているタブ・PWAは手動で再読み込みが必要。
   - POSTは302で`script.googleusercontent.com/...echo`に転送されるので、結果はGETで取り直す(`--post302`は失敗する)。
 - **ルールの二重持ち**: 同じ業務ルールが描画側とハンドラ側の2か所にあることがある(例: 発注「その他」の重複選択)。ルールを緩めるときはgrepで全箇所を探す。
-- **関数が残っていても使われているとは限らない**: `notifyNewOrder_`はテスト関数以外から呼ばれていない。発注通知は8:30の日次まとめ(`sendDailyOrderNotification`)だけ。
+- **関数が残っていても使われているとは限らない**: `notifyNewOrder_`はテスト関数以外から呼ばれていない。発注依頼の通知は2026-10-14から、依頼が入った時点(`upsertOrderRows`/`saveOrders`で is_new が true になった行)に塩川用Bot(selfcafe-automation の gas/gbp-photo-bot、Bot 13233186)へ1:1で送る(`_withAmazonOrderNotify_`→`sendAmazonOrderToBot_`)。Amazonの品は商品ページと「発注した」ボタン付きで、押すとBotが`markAmazonOrdered`を呼ぶ。8:30の`sendDailyOrderNotification`のエリア通知はやめた(忘れ物等の削除の相乗りだけ残る)。
 - **LINE WORKS**:
   - 通知を足すときは、まず既存の`sendLineWorksNotification`系で足りるか確認する。
   - チャンネル一覧を取るAPIは無い。Callback URLを一時的にGASへ向け、テスト投稿の`source.channelId`を読む。1:1トークには`channelId`が無く`userId`だけが入る。
