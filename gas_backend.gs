@@ -578,6 +578,8 @@ function doPost(e) {
     else if (b.action === 'deleteAnnouncement') result = deleteAnnouncement(b.id);
     else if (b.action === 'markAmazonOrdered')  result = markAmazonOrdered(b.apiKey, b.ids);
     else if (b.action === 'markAmazonDenied')   result = markAmazonDenied(b.apiKey, b.ids, b.reason);
+    else if (b.action === 'previewOrderText')   result = previewOrderText(b.apiKey, b.storeText, b.body);
+    else if (b.action === 'createOrderRequest') result = createOrderRequest(b.apiKey, b.storeId, b.items);
     else result = { error: 'Unknown action: ' + b.action };
   } catch(err) {
     result = { error: err.message };
@@ -4635,7 +4637,7 @@ function _withAmazonOrderNotify_(result, storeId, rows) {
     const urls = _amazonUrlMap_();
     const items = (rows || []).filter(r => r && r.product &&
       (r.is_new === true || String(r.is_new) === 'TRUE') && !(r.denied === true || String(r.denied) === 'TRUE'))
-      .map(r => ({ id: String(r.id), label: String(r.label || r.product), qty: r.qty, unit: String(r.unit || ''), url: urls[r.product] || '' }));
+      .map(r => ({ id: String(r.id), label: String(r.label || r.product), qty: r.qty, unit: r.unit_mode === 'case' ? 'ケース' : String(r.unit || ''), url: urls[r.product] || '' }));
     if (items.length) result._notify = { type: 'amazonOrderNew', storeId: String(storeId), items };
   } catch (e) { console.error('_withAmazonOrderNotify_ error:', e.message); }
   return result;
@@ -4710,6 +4712,112 @@ function _updateAmazonRows_(apiKey, ids, apply) {
     } catch (e) { console.error('orders_updated の合図に失敗:', e.message); }
   }
   return { ok: true, marked, already, missing: Array.from(want).filter(id => !found.has(id)) };
+}
+
+// ===== LINE WORKS で届いた連絡文から発注依頼を作る（2026-10-14） =====
+// 店舗グループに来た「ミネラルウォーターとココアが残り少なくなりました」のような連絡を、塩川用Botに転送すると
+// Bot が previewOrderText で店舗・商品を読み取り、確認のあと createOrderRequest でパートナーの「依頼」と同じ行を作る
+// （is_new=true・locked=true。作った時点で _withAmazonOrderNotify_ の通知が Bot に届く）。数は既定でケース注文のみの品は
+// 1ケース、それ以外は1（単位はその品の単位）。Bot の確認画面で直せる。
+// 連絡文の言い方と商品名が違うものはここに足す（キー＝ポータルの商品名）
+const ORDER_TEXT_ALIASES = {
+  '水': ['ミネラルウォーター', 'ウォーター', 'お水', '飲料水'],
+  'トイレットペーパー': ['トイペ', 'トイレペーパー'],
+};
+
+function _normJa_(s) { return String(s || '').normalize('NFKC').replace(/[\s　]/g, '').toLowerCase(); }
+
+// 店舗名の一部から店舗を探す。1店に決まれば {id, name}、決まらなければ {candidates:[name…]}
+function _matchStoreText_(text) {
+  const t = _normJa_(text).replace(/^セルフカフェ/, '').replace(/店$/, '');
+  if (!t) return { candidates: [] };
+  const names = _storeNames_();
+  const ids = Object.keys(names);
+  const norm = id => _normJa_(names[id]).replace(/^セルフカフェ/, '').replace(/店$/, '');
+  let hit = ids.filter(id => norm(id) === t || id === t);
+  if (!hit.length) hit = ids.filter(id => norm(id).includes(t) || t.includes(norm(id)));
+  if (hit.length === 1) return { id: hit[0], name: names[hit[0]] };
+  return { candidates: hit.map(id => names[id]) };
+}
+
+function _orderableProducts_(storeId) {
+  const all = _settingJson_('all_products', []);
+  const excluded = storeId ? (_settingJson_('store_product_cfg', {}) || {})[storeId] || [] : [];
+  return (Array.isArray(all) ? all : []).filter(p => p && p.name && p.name !== 'その他' && excluded.indexOf(p.name) < 0);
+}
+
+// 連絡文に出てくる商品を探す。カタカナ・漢字・英数字のかたまりごとに、商品名・表示名・ORDER_TEXT_ALIASES と照合する
+// （「ココア」→「プレミアムココア」のように、かたまりが商品名に含まれていれば当たり。1文字のかたまりは商品名と完全一致のみ）。
+// 1つのかたまりに2品以上当たり、ぴったり一致が1つに決まらないもの（「カップ」「ココア」を両方扱う店など）は ambiguous に入れる
+function _matchProductsText_(storeId, body) {
+  const products = _orderableProducts_(storeId);
+  const text = _normJa_(body);
+  const runs = Array.from(new Set(text.match(/[ァ-ヶー]+|[一-龠々]+|[a-z0-9]+/g) || []));
+  const found = {}, ambiguous = [];
+  runs.forEach(run => {
+    const hits = products.filter(p => {
+      const keys = [p.name, p.label].concat(ORDER_TEXT_ALIASES[p.name] || []).map(_normJa_).filter(Boolean);
+      return keys.some(k => k === run || (run.length >= 2 && (k.includes(run) || (k.length >= 2 && run.includes(k)))));
+    });
+    const exact = hits.filter(p => [p.name, p.label].concat(ORDER_TEXT_ALIASES[p.name] || []).map(_normJa_).indexOf(run) >= 0);
+    const pick = hits.length === 1 ? hits : exact.length === 1 ? exact : [];
+    if (pick.length) {
+      found[pick[0].name] = pick[0];
+    } else if (hits.length >= 2) {
+      ambiguous.push({ word: run, candidates: hits.slice(0, 5).map(p => p.label || p.name) });
+    }
+  });
+  return { items: Object.keys(found).map(n => found[n]), ambiguous };
+}
+
+function _orderItemOut_(p, qty, unitMode) {
+  return { product: p.name, label: p.label || p.name, qty: qty, unitMode: unitMode,
+    unitText: unitMode === 'case' ? 'ケース' : (p.unit || ''), amazon: !!p.amazon_url };
+}
+
+// Bot から: 店舗名（空でもよい）と連絡文を読み取って、登録前の確認用に返す（書き込みはしない）
+function previewOrderText(apiKey, storeText, body) {
+  const key = PropertiesService.getScriptProperties().getProperty('GBP_PHOTO_BOT_API_KEY');
+  if (!key || apiKey !== key) return { error: 'unauthorized' };
+  const store = storeText ? _matchStoreText_(storeText) : { candidates: [] };
+  // 店舗が決まらないときも、全商品で照合して「商品の連絡らしいか」（productCount）だけ返す（Bot が店舗を聞き返すかの判断）
+  if (!store.id) return { ok: true, store: null, storeCandidates: store.candidates || [], productCount: _matchProductsText_(null, body).items.length };
+  const m = _matchProductsText_(store.id, body);
+  return { ok: true, store: { id: store.id, name: store.name }, ambiguous: m.ambiguous,
+    items: m.items.map(p => p.caseOnly && p.caseUnit ? _orderItemOut_(p, 1, 'case') : _orderItemOut_(p, 1, 'piece')) };
+}
+
+// Bot から: 確認済みの品で発注依頼を作る。items=[{product, qty, unitMode}]。同じ店で依頼中（新着）の品は作らない
+function createOrderRequest(apiKey, storeId, items) {
+  const key = PropertiesService.getScriptProperties().getProperty('GBP_PHOTO_BOT_API_KEY');
+  if (!key || apiKey !== key) return { error: 'unauthorized' };
+  storeId = _normalizeStoreId_(storeId);
+  if (!_storeNames_()[storeId]) return { error: '店舗が見つかりません: ' + storeId };
+  const byName = {};
+  _orderableProducts_(storeId).forEach(p => { byName[p.name] = p; });
+  const pending = new Set(getOrders().filter(r => r.store_id === storeId && r.is_new && !r.denied).map(r => r.product));
+  const today = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd');
+  const groupId = Utilities.getUuid();
+  const rows = [], created = [], skipped = [];
+  (items || []).forEach(it => {
+    const p = byName[it.product];
+    const qty = Number(it.qty);
+    if (!p || !(qty > 0)) { skipped.push((it.product || '?') + '（この店で頼めない品か、数が不正）'); return; }
+    if (pending.has(p.name)) { skipped.push((p.label || p.name) + '（すでに依頼中）'); return; }
+    const unitMode = it.unitMode === 'case' && p.caseUnit ? 'case' : (p.caseOnly && p.caseUnit ? 'case' : 'piece');
+    rows.push({ id: Utilities.getUuid(), store_id: storeId, group_id: groupId, product: p.name, label: p.label || p.name,
+      qty: qty, unit: p.unit || '', case_unit: p.caseUnit || '', unit_mode: unitMode, note: 'LINE WORKS の連絡から本部が登録',
+      locked: true, is_new: true, request_date: today, created_at: new Date().toISOString(), denied: false });
+    created.push((p.label || p.name) + ' ×' + qty + (unitMode === 'case' ? 'ケース' : (p.unit || '')));
+  });
+  if (!rows.length) return { ok: true, created, skipped };
+  const res = upsertOrderRows(storeId, rows);   // 新着になった行として _notify（Bot への通知）が付く
+  try {
+    UrlFetchApp.fetch('https://selfcafe-internal-web-system-default-rtdb.firebaseio.com/orders_updated.json', {
+      method: 'put', contentType: 'application/json', muteHttpExceptions: true,
+      payload: JSON.stringify({ ts: Date.now(), by: 'gas-order-text' }) });
+  } catch (e) { console.error('orders_updated の合図に失敗:', e.message); }
+  return Object.assign(res, { created, skipped });
 }
 
 // 動作確認用（エディタから実行）: 今の新着の Amazon の依頼を、店舗ごとに Bot へ送る（塩川さんに実際に届く）
