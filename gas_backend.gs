@@ -577,6 +577,7 @@ function doPost(e) {
     else if (b.action === 'saveAnnouncement')   result = saveAnnouncement(b.id, b.title, b.body, b.publishDate, b.scope, b.status, b.adminName);
     else if (b.action === 'deleteAnnouncement') result = deleteAnnouncement(b.id);
     else if (b.action === 'markAmazonOrdered')  result = markAmazonOrdered(b.apiKey, b.ids);
+    else if (b.action === 'markAmazonDenied')   result = markAmazonDenied(b.apiKey, b.ids, b.reason);
     else result = { error: 'Unknown action: ' + b.action };
   } catch(err) {
     result = { error: err.message };
@@ -4627,6 +4628,7 @@ function _amazonUrlMap_() {
 // Amazon で買う品（商品一覧に Amazon の URL がある品）は url 付きで送り、Bot が商品ページボタンと「発注した」ボタンを付ける。
 // それ以外の品は文字だけ（ポータルで処理）。文面は Bot 側（selfcafe-automation の gas/gbp-photo-bot/Amazon.gs）。
 // 「発注した」が押されると Bot がこのポータルの markAmazonOrdered を呼んで Amazon の品を発注済みにする。
+// 「否認する」→理由の返信で markAmazonDenied（理由は備考に入る）。
 // スクリプト プロパティ: GBP_PHOTO_BOT_URL（Bot のウェブアプリ URL）、GBP_PHOTO_BOT_API_KEY（Bot の API_KEY と同じ値）
 function _withAmazonOrderNotify_(result, storeId, rows) {
   try {
@@ -4654,6 +4656,32 @@ function sendAmazonOrderToBot_(storeId, items) {
 // Bot の「発注した」ボタンから呼ばれる。ポータル管理画面の「発注済み」と同じ処理
 // （発注日が空なら今日を入れ、新着を外す）。否認済み・発注済みの行はそのまま
 function markAmazonOrdered(apiKey, ids) {
+  const today = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd');
+  return _updateAmazonRows_(apiKey, ids, (sheet, rowNum, r, ix) => {
+    if (!_dateStr(r[ix('order_date')])) sheet.getRange(rowNum, ix('order_date') + 1).setNumberFormat('@').setValue(today);
+    sheet.getRange(rowNum, ix('is_new') + 1).setValue(false);
+  });
+}
+
+// Bot の「否認する」→理由の返信から呼ばれる（2026-10-14）。ポータル管理画面の「否認」と同じ処理
+// （denied=true・is_new=true。パートナー画面に「否認されました。備考を確認してください。」が出る）。
+// 理由は備考(note)に「【否認理由】…」で足す（元の備考は残す）。reason が空なら備考は変えない。
+// 管理画面と同じく、発注日が入っている行は否認しない
+function markAmazonDenied(apiKey, ids, reason) {
+  const add = String(reason || '').trim() ? '【否認理由】' + String(reason).trim() : '';
+  return _updateAmazonRows_(apiKey, ids, (sheet, rowNum, r, ix) => {
+    if (_dateStr(r[ix('order_date')])) return '（発注日が入っているため否認できません）';
+    sheet.getRange(rowNum, ix('denied') + 1).setValue(true);
+    sheet.getRange(rowNum, ix('is_new') + 1).setValue(true);
+    if (add) {
+      const note = String(r[ix('note')] || '');
+      sheet.getRange(rowNum, ix('note') + 1).setValue(note ? note + '\n' + add : add);
+    }
+  });
+}
+
+// 新着（未対応）の行だけ apply する。apply が文字列を返したら処理せず already に理由付きで入れる
+function _updateAmazonRows_(apiKey, ids, apply) {
   const key = PropertiesService.getScriptProperties().getProperty('GBP_PHOTO_BOT_API_KEY');
   if (!key || apiKey !== key) return { error: 'unauthorized' };
   const want = new Set((ids || []).map(String));
@@ -4661,7 +4689,6 @@ function markAmazonOrdered(apiKey, ids) {
   if (!want.size || sheet.getLastRow() <= 1) return { ok: true, marked: [], already: [], missing: Array.from(want) };
   const data = sheet.getDataRange().getValues();
   const h = data[0], ix = c => h.indexOf(c);
-  const today = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd');
   const marked = [], already = [], found = new Set();
   for (let i = 1; i < data.length; i++) {
     const r = data[i], id = String(r[ix('id')]);
@@ -4670,10 +4697,9 @@ function markAmazonOrdered(apiKey, ids) {
     const label = String(r[ix('label')] || r[ix('product')]);
     const isNew = r[ix('is_new')] === true || String(r[ix('is_new')]) === 'TRUE';
     const denied = r[ix('denied')] === true || String(r[ix('denied')]) === 'TRUE';
-    if (!isNew || denied) { already.push(label + (denied ? '（否認済み）' : '')); continue; }
-    if (!_dateStr(r[ix('order_date')])) sheet.getRange(i + 1, ix('order_date') + 1).setNumberFormat('@').setValue(today);
-    sheet.getRange(i + 1, ix('is_new') + 1).setValue(false);
-    marked.push(label);
+    if (!isNew || denied) { already.push(label + (denied ? '（否認済み）' : '（発注済み）')); continue; }
+    const skip = apply(sheet, i + 1, r, ix);
+    if (skip) already.push(label + skip); else marked.push(label);
   }
   // 開いているポータルの画面に再読み込みさせる（画面の保存と同じ合図。古い「新着」のまま上書きされないように）
   if (marked.length) {
