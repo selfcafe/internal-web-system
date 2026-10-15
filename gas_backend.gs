@@ -445,6 +445,7 @@ function doGet(e) {
     else if (a === 'previewToyoReorder')        result = buildToyoReorder(e.parameter.store, e.parameter.periodLabel, true);
     else if (a === 'buildToyoReorder')          result = buildToyoReorder(e.parameter.store, e.parameter.periodLabel, false);
     else if (a === 'authStatus')                result = authStatus();
+    else if (a === 'debugOrderText')            result = debugOrderText(e.parameter.storeText || '', e.parameter.body || '');
     else if (a === 'buildAdhocApexOrder')       result = buildAdhocApexOrder(e.parameter.branch, e.parameter.items, e.parameter.dryRun === '1' || e.parameter.dryRun === 'true');
     else if (a === 'reorderStoreTabs')          result = reorderStoreTabs();
     else if (a === 'removeInventoryLabelColumn') result = removeInventoryLabelColumn();
@@ -4865,6 +4866,14 @@ function previewOrderText(apiKey, storeText, body) {
   const m = _matchProductsText_(store.id, body);
   return { ok: true, store: { id: store.id, name: store.name }, ambiguous: m.ambiguous,
     items: m.items.map(p => p.caseOnly && p.caseUnit ? _orderItemOut_(p, 1, 'case') : _orderItemOut_(p, 1, 'piece')) };
+}
+
+// 確認用（読むだけ、2026-10-15）: Bot と同じ読み取りの結果を返す。?action=debugOrderText&storeText=&body=...
+function debugOrderText(storeText, body) {
+  const store = storeText ? _matchStoreText_(storeText) : _findStoreInText_(body);
+  if (!store.id) return { ok: true, store: null, storeCandidates: store.candidates || [] };
+  const m = _matchProductsText_(store.id, body);
+  return { ok: true, store: store, items: m.items.map(p => p.name), ambiguous: m.ambiguous, orderable: _orderableProducts_(store.id).length };
 }
 
 // Bot から: 確認済みの品で発注依頼を作る。items=[{product, qty, unitMode}]。同じ店で依頼中（新着）の品は作らない
