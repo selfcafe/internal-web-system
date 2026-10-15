@@ -581,6 +581,7 @@ function doPost(e) {
     else if (b.action === 'markAmazonDenied')   result = markAmazonDenied(b.apiKey, b.ids, b.reason);
     else if (b.action === 'previewOrderText')   result = previewOrderText(b.apiKey, b.storeText, b.body);
     else if (b.action === 'createOrderRequest') result = createOrderRequest(b.apiKey, b.storeId, b.items);
+    else if (b.action === 'registerApexOrder')  result = registerApexOrder(b.storeId, b.items, b.source, b.document);
     else result = { error: 'Unknown action: ' + b.action };
   } catch(err) {
     result = { error: err.message };
@@ -4894,7 +4895,7 @@ function _apexDraftForOrderRows_(storeId, rows) {
     const bk = Object.keys(branches).find(k => branches[k].stores && Object.prototype.hasOwnProperty.call(branches[k].stores, storeId));
     if (!bk) return '【アペックス】この店は支店の発注書に登録されていないため、発注メールは作っていません';
     const spec = storeId + ':' + apexRows.map(r => (meta[r.product].code || r.product) + '=' + r.qty + (r.unit_mode === 'case' ? 'ケース' : '')).join(',');
-    const out = buildAdhocApexOrder(bk, spec, false);
+    const out = buildAdhocApexOrder(bk, spec, false, { source: 'アペックス 追加発注（Bot）', rowsBySid: { [storeId]: apexRows } });
     if (!out || !out.ok) return '【アペックス】発注メールの下書きを作れませんでした（' + ((out && (out.error + ' ' + (out.details || []).join(' '))) || '不明') + '）。PC から作り直してください';
     return '【アペックス】' + out.branch + '支店の発注メールの下書きを作りました（' + out.lines.map(l => l.split('　').slice(1, 3).join(' ')).join('・') +
       '、税抜' + Number(out.total).toLocaleString() + '円）。Gmail の下書きを確認して送ってください' + (out.warnings.length ? '。注意: ' + out.warnings.join(' / ') : '');
@@ -5111,6 +5112,23 @@ function buildBranchReorder(branchKey, periodLabel, dryRun) {
     const draftBody = mail.body || `${b.label}支店 ご担当者様\n\n発注書を添付いたします。ご確認のほどよろしくお願いいたします。`;
     existingDrafts.forEach(d => d.deleteDraft());   // 作り直すときは古い下書きを消してから（差出人を selfcafe001@gmail.com にするため更新ではなく作り直す）
     _createApexDraft_(to, b.cc || mail.cc, subject, draftBody, [pdf.blob]);
+    // 発注タブに「発注済み」（検品待ち）で入れる。棚卸のたびに作り直すので、行 id を支店×月×店×商品で固定し、
+    // 今回の発注に無くなった行（まだ検品されていないもの）は消す
+    const groupId = 'monthly_' + branchKey + '_' + periodLabel;
+    const meta2 = _productMeta_();
+    const keep = new Set();
+    Object.keys(perStore).forEach(sid => {
+      const items = perStore[sid].map(it => {
+        const m = meta2[it.product] || {};
+        const id = groupId + '_' + sid + '_' + it.code;
+        keep.add(id);
+        return { id, product: it.product, label: it.product, qty: it.qty, unit: (_settingJson_('all_products', []).find(p => p.name === it.product) || {}).unit || '',
+          unitPrice: m.price || 0, portalCode: String(it.code), sheetCode: String(codeMap[it.code] || it.code), vendor: m.vendor || '' };
+      });
+      try { _registerOrderedRows_(sid, items, 'アペックス 月初発注', pdf.name, { groupId }); } catch (e) { warnings.push('発注タブへの登録に失敗: ' + (names[sid] || sid) + ' ' + e.message); }
+    });
+    const stale = getOrders().filter(r => r.group_id === groupId && !keep.has(r.id)).map(r => r.id);
+    if (stale.length) { try { deleteOrderRows(stale); } catch (e) { warnings.push('古い行の削除に失敗: ' + e.message); } }
     return Object.assign({ ok: true, draft: existingDrafts.length ? 'updated' : 'created', to, sheetUrl: ss.getUrl(), warnings }, summary);
   } finally {
     lock.releaseLock();
@@ -5197,6 +5215,96 @@ function _apexOrderPdf_(ss, sh, label, parentFolder) {
   return { blob: file.getBlob().setName(name), name, url: file.getUrl() };
 }
 
+// ===== 発注を発注タブ（orders）に「発注済み」で入れ、明細を order_lines に残す（2026-10-15） =====
+// 塩川さんの方針: 発注の記録は現場の「検品済み」で確定させる。そのため、アペックスの発注を作ったら、その店の発注タブに
+// 発注日入りの行（＝現場から見て「検品待ち」）を入れる。現場が検品済みを押すと、いつもの流れで delivery_history と
+// 当月納品（自動）に入る。数量は袋・本・個（unit_mode=piece）。アペックスの発注書のケース入数で換算済みの数を入れる
+// （ポータルの商品マスタのケース数は発注書と違うことがあるため、ケースのまま入れない）。
+// order_lines は追記専用の明細（仕入先・単価・金額・発注書PDFの名前）。原価・発注履歴の元にする。
+// 同じ行 id が複数回書かれることがある（月初の支店まとめは棚卸のたびに作り直す）ので、読むときは id ごとに最後の行を使う
+const SHEET_ORDER_LINES = 'order_lines';
+const ORDER_LINE_COLS = ['id', 'store_id', 'order_date', 'vendor', 'source', 'product', 'portal_code', 'sheet_code',
+  'qty', 'unit', 'unit_price', 'amount', 'document', 'created_at'];
+
+function _logOrderLines_(storeId, lines) {
+  if (!lines.length) return;
+  const sheet = getSheet(SHEET_ORDER_LINES);
+  ensureHeaders(sheet, ORDER_LINE_COLS);
+  const values = lines.map(l => ORDER_LINE_COLS.map(c => c === 'store_id' ? storeId : (l[c] === undefined || l[c] === null ? '' : l[c])));
+  const start = sheet.getLastRow() + 1;
+  sheet.getRange(start, ORDER_LINE_COLS.indexOf('order_date') + 1, values.length, 1).setNumberFormat('@');
+  sheet.getRange(start, 1, values.length, ORDER_LINE_COLS.length).setValues(values);
+}
+
+// アペックスの発注書の商品コード → ポータルの商品（reorder_code_map の逆引き → all_products）
+function _portalProductForSheetCode_(sheetCode) {
+  const codeMap = _settingJson_('reorder_code_map', {});
+  const portalCode = Object.keys(codeMap).find(k => String(codeMap[k]) === String(sheetCode)) || String(sheetCode);
+  return (_settingJson_('all_products', []) || []).find(p => String(p.code) === portalCode) || null;
+}
+
+function _pingOrdersUpdated_(by) {
+  try {
+    UrlFetchApp.fetch('https://selfcafe-internal-web-system-default-rtdb.firebaseio.com/orders_updated.json', {
+      method: 'put', contentType: 'application/json', muteHttpExceptions: true,
+      payload: JSON.stringify({ ts: Date.now(), by: by }) });
+  } catch (e) { console.error('orders_updated の合図に失敗:', e.message); }
+}
+
+// items: [{product, label, qty（袋・本・個）, unit, unitPrice, portalCode, sheetCode, vendor, id?}]
+// opts.groupId: まとめる単位（月初の支店まとめは支店×月で固定にして、作り直しで行が増えないようにする）
+// opts.rows: すでにある依頼の行（Bot から登録した行）。渡したときは新しい行を作らず、その行を発注済みにする
+function _registerOrderedRows_(storeId, items, source, documentName, opts) {
+  opts = opts || {};
+  const today = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd');
+  const groupId = opts.groupId || Utilities.getUuid();
+  const tag = source + (documentName ? '（' + documentName + '）' : '');
+  const now = new Date().toISOString();
+  const rows = [];
+  const lines = [];
+  items.forEach(it => {
+    if (!it.product || !(Number(it.qty) > 0)) return;
+    const base = (opts.rows || []).find(r => r.product === it.product);
+    const row = Object.assign({}, base || {}, {
+      id: (base && base.id) || it.id || Utilities.getUuid(), store_id: storeId, group_id: (base && base.group_id) || groupId,
+      product: it.product, label: it.label || it.product, qty: Number(it.qty), actual_qty: '', unit: it.unit || '',
+      case_unit: '', unit_mode: 'piece', note: base && base.note ? base.note + '／' + tag : tag, locked: true, is_new: false,
+      request_date: (base && base.request_date) || today, order_date: today, delivery_date: '', created_at: (base && base.created_at) || now,
+      denied: false, image_url: (base && base.image_url) || '', actual_unit_mode: '' });
+    rows.push(row);
+    lines.push({ id: row.id, order_date: today, vendor: it.vendor || '', source: source, product: it.product, portal_code: it.portalCode || '',
+      sheet_code: it.sheetCode || '', qty: Number(it.qty), unit: it.unit || '', unit_price: Number(it.unitPrice) || 0,
+      amount: Math.round(Number(it.qty) * (Number(it.unitPrice) || 0)), document: documentName || '', created_at: now });
+  });
+  if (!rows.length) return { rows: 0 };
+  upsertOrderRows(storeId, rows);   // is_new=false なので Amazon の通知は出ない
+  _logOrderLines_(storeId, lines);
+  _pingOrdersUpdated_('gas-apex-order');
+  return { rows: rows.length, ids: rows.map(r => r.id) };
+}
+
+// 都度発注・PC から: 発注書の明細（sheetCode・qty・price）をポータルの商品にして登録する
+function _registerApexSheetItems_(storeId, sheetItems, source, documentName, opts) {
+  const items = [], unknown = [];
+  sheetItems.forEach(x => {
+    if (x.missing) return;
+    const p = _portalProductForSheetCode_(x.code);
+    if (!p) { unknown.push((x.name || '') + '（' + x.code + '）'); return; }
+    items.push({ product: p.name, label: p.label || p.name, qty: x.qty, unit: p.unit || x.unit || '', unitPrice: x.price,
+      portalCode: String(p.code), sheetCode: String(x.code), vendor: p.vendor || '' });
+  });
+  const res = _registerOrderedRows_(storeId, items, source, documentName, opts);
+  if (unknown.length) res.unknown = unknown;
+  return res;
+}
+
+// PC（selfcafe-automation の order_adhoc.py）から: {storeId, items:[{code, qty, price, name}], source, document}
+function registerApexOrder(storeId, items, source, documentName) {
+  storeId = _normalizeStoreId_(storeId);
+  if (!_storeNames_()[storeId]) return { error: '店舗が見つかりません: ' + storeId };
+  return Object.assign({ ok: true }, _registerApexSheetItems_(storeId, items || [], source || 'アペックス 追加発注（PC）', documentName || ''));
+}
+
 // ===== アペックスの都度発注（追加発注、2026-10-13） =====
 // 月初以外に現場から「○○店に抹茶1ケース」と頼まれたときの発注書と Gmail 下書き。PC の selfcafe-automation/scripts/order_adhoc.py と同じ動き。
 //   ?action=buildAdhocApexOrder&branch=名古屋北&items=ささしまライブ店:抹茶ラテ=18,カップ蓋=20,カップM=25;名駅西口店:抹茶ラテ=18&dryRun=1
@@ -5256,7 +5364,7 @@ function _adhocParseItems_(spec, stores, names, products, codeMap) {
   return { items: out, errors };
 }
 
-function buildAdhocApexOrder(branchKey, spec, dryRun) {
+function buildAdhocApexOrder(branchKey, spec, dryRun, opts) {
   const branches = _settingJson_('reorder_branches', {});
   const key = branches[branchKey] ? branchKey : Object.keys(branches).find(k => branches[k].label === branchKey);
   const b = branches[key];
@@ -5279,14 +5387,14 @@ function buildAdhocApexOrder(branchKey, spec, dryRun) {
     const c = String(values[r][0]).trim();
     if (c && c !== '商品コード') rowInfo[c] = { row: r + 1, name: String(values[r][1]).trim(), casePieces: Number(String(values[r][2]).replace(/,/g, '')) || 0, unit: String(values[r][3]).trim(), price: Number(String(values[r][4]).replace(/,/g, '')) || 0 };
   }
-  const warnings = [], lines = [], detail = {};
+  const warnings = [], lines = [], detail = {}, regs = {};
   let total = 0;
   Object.keys(parsed.items).forEach(sid => {
     const col = String(b.stores[sid] || '').replace(/\n/g, '');
     const ci = header.indexOf(col);
     if (ci < 0) { warnings.push(`発注書に店舗の列が無い: ${col}`); return; }
     let hasCase = false;
-    detail[names[sid] || sid] = parsed.items[sid].map(it => {
+    detail[names[sid] || sid] = regs[sid] = parsed.items[sid].map(it => {
       const info = rowInfo[it.code];
       if (!info) { warnings.push(`発注書に商品が無い: ${names[sid] || sid} ${it.name}（${it.code}）`); return { name: it.name, code: it.code, qty: it.qty, missing: true }; }
       if (it.cases) {   // 「1ケース」はアペックスの発注書のケース入数で換算（ポータルの商品マスタのケース数とは違うことがある）
@@ -5330,7 +5438,15 @@ function buildAdhocApexOrder(branchKey, spec, dryRun) {
   const pdf = _apexOrderPdf_(ss, sh, b.label, folder);   // PDF にして 4.塩川/アペックス発注書 に保存（2026-10-15〜）
   const draftBody = mail.body || `${b.label}支店 ご担当者様\n\n発注書を添付いたします。ご確認のほどよろしくお願いいたします。`;
   _createApexDraft_(to, b.cc || mail.cc, subject, draftBody, [pdf.blob]);   // 差出人は selfcafe001@gmail.com
-  return Object.assign(result, { draft: 'created', sheetUrl: ss.getUrl(), title, pdf: pdf.name, pdfUrl: pdf.url });
+  // 発注タブに「発注済み」（現場から見て検品待ち）で入れる。Bot からのとき（opts.rowsBySid）は依頼の行を発注済みにする
+  const registered = {};
+  Object.keys(regs).forEach(sid => {
+    try {
+      registered[names[sid] || sid] = _registerApexSheetItems_(sid, regs[sid], (opts && opts.source) || 'アペックス 追加発注', pdf.name,
+        { rows: opts && opts.rowsBySid ? opts.rowsBySid[sid] : null });
+    } catch (e) { registered[names[sid] || sid] = { error: e.message }; }
+  });
+  return Object.assign(result, { draft: 'created', sheetUrl: ss.getUrl(), title, pdf: pdf.name, pdfUrl: pdf.url, registered });
 }
 
 // ----------------------------------------------------------------
@@ -7458,7 +7574,7 @@ function sendDailyOrderNotification() {
   // 納品履歴の30日経過削除も同様、読み取りのたびではなくここでのみ行う。DELIVERY_HISTORY_SHEET_IDが
   // 未設定のうちはSpreadsheetApp.openByIdが例外を投げるため、それで発注の日次通知自体が
   // 止まってしまわないようtry/catchで囲む
-  try { purgeOldDeliveryHistory(); } catch (e) { console.error('purgeOldDeliveryHistory error:', e.message); }
+  // 納品の記録（delivery_history）は発注履歴・原価・消費量の元にするので消さない（2026-10-15 塩川さん。以前は30日で消していた）
   try { purgeOldMachinePhotos(); } catch (e) { console.error('purgeOldMachinePhotos error:', e.message); }
   try { sendMachinePhotoReminder(); } catch (e) { console.error('sendMachinePhotoReminder error:', e.message); }
   // 「◯◯エリアにて発注依頼があります。」の毎朝のチャンネル通知は 2026-10-14 にやめた（全体の会話には不要）。

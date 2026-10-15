@@ -240,3 +240,13 @@ Web アプリは selfcafe001 として動くので、selfcafe001 が appsscript.
 - 確認: `?action=authStatus`（読むだけ。ok / status / gmail を返す）。デプロイのたびに deploy-gas.yml の Auth check でも確かめ、足りなければジョブを失敗にします。
 - 毎朝8時台に `dailyAuthCheck` が同じ確認をし、足りなければ LINE WORKS（LW_CHANNEL_ID）に【要対応】を送ります（トリガーは authorizeAll を初めて実行したときに入ります）。
 - 直し方: selfcafe001 **だけ**でログインした Chrome（selfcafe001 専用の Chrome プロフィールを作っておく）で、Apps Script「社内ポータルスクリプト」のエディタを開き、関数 `authorizeAll` を実行して、承認画面で「すべて選択」にして許可する。Chrome に複数のアカウントでログインしていると、承認画面が別アカウントで開いて「現在、ファイルを開くことができません」になります。
+
+## 発注の記録と検品（2026-10-15〜、段階1）
+
+発注の記録は現場の「検品」で確定させます（塩川さんの方針）。
+
+- アペックスの発注（都度発注・月初の支店まとめ・Bot・PC の order_adhoc.py）を作ると、その店の発注タブ（orders）に発注日入りの行が入ります。現場から見ると「検品待ち」です。数量は袋・本・個（unit_mode=piece）で、アペックスの発注書のケース入数で換算した数です。
+- Bot から登録した依頼は、その行をそのまま発注済みにします（二重にしない）。月初の支店まとめは行 id を「monthly_支店キー_月_店_商品コード」で固定し、作り直しで行が増えないようにしています。
+- 明細は追記専用の `order_lines` タブ（id・店・発注日・仕入先・経路・商品・数量・単価・金額・発注書PDF）に残ります。同じ id が複数回書かれることがあるので、読むときは id ごとに最後の行を使います。
+- 現場が発注タブのボタンを押すと、今までどおり delivery_history と当月納品（自動）に入ります。delivery_history は30日で消す処理をやめ、発注履歴として残します。
+- PC からの登録窓口: doPost `registerApexOrder`（storeId・items[{code, qty, price, name}]・source・document）。
