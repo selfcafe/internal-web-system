@@ -4739,7 +4739,9 @@ function authStatus() {
     out.status = String(ScriptApp.getAuthorizationInfo(ScriptApp.AuthMode.FULL).getAuthorizationStatus());
   } catch (e) { out.status = 'ERROR: ' + e.message; }
   try { GmailApp.getDrafts(); out.gmail = true; } catch (e) { out.gmailError = e.message; }
-  out.ok = out.gmail && out.status === 'NOT_REQUIRED';
+  // 下書き作成に使う Gmail の高度なサービス（Gmail API）が使えるか（2026-10-15 追加。承認とは別に API の有効化が要る）
+  try { Gmail.Users.getProfile('me'); out.gmailApi = true; } catch (e) { out.gmailApi = false; out.gmailApiError = e.message; }
+  out.ok = out.gmail && out.gmailApi && out.status === 'NOT_REQUIRED';
   if (!out.ok) out.fix = 'selfcafe001 だけでログインした Chrome で Apps Script「社内ポータルスクリプト」のエディタを開き、関数 authorizeAll を実行して、承認画面で「すべて選択」にして許可する';
   return out;
 }
@@ -5161,12 +5163,10 @@ function _createApexDraft_(to, cc, subject, body, attachments) {
   });
   parts.push('--' + boundary + '--', '');
   const raw = Utilities.base64EncodeWebSafe(Utilities.newBlob(head.concat(parts).join('\r\n')).getBytes());
-  const res = UrlFetchApp.fetch('https://gmail.googleapis.com/gmail/v1/users/me/drafts', {
-    method: 'post', contentType: 'application/json', muteHttpExceptions: true,
-    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
-    payload: JSON.stringify({ message: { raw: raw } }) });
-  if (res.getResponseCode() >= 300) throw new Error('下書きの作成に失敗 ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 200));
-  return JSON.parse(res.getContentText()).id;
+  // Gmail の高度なサービス（appsscript.json の enabledAdvancedServices）で作る。UrlFetch で REST を直接呼ぶと、
+  // スクリプトの GCP プロジェクトで Gmail API を有効にしていないため 403 になる（2026-10-15、野並店の Bot 経由で発覚）
+  const draft = Gmail.Users.Drafts.create({ message: { raw: raw } }, 'me');
+  return draft.id;
 }
 
 // ===== アペックスの発注書を PDF にして保存する（2026-10-15） =====
