@@ -4768,6 +4768,9 @@ function dailyAuthCheck() {
 const ORDER_TEXT_ALIASES = {
   '水': ['ミネラルウォーター', 'ウォーター', 'お水', '飲料水'],
   'トイレットペーパー': ['トイペ', 'トイレペーパー'],
+  '清掃用アルコール': ['アルコール原液', 'アルコールの原液', 'アルコール詰め替え', 'スキッシュ'],   // 2026-10-15 原店の連絡
+  '粘着クリーナー': ['コロコロ', '粘着テープ', 'カーペットクリーナー'],
+  '抹茶ラテ': ['抹茶オレ', '抹茶オーレ'],
 };
 
 function _normJa_(s) { return String(s || '').normalize('NFKC').replace(/[\s　]/g, '').toLowerCase(); }
@@ -4815,8 +4818,22 @@ function _orderableProducts_(storeId) {
 function _matchProductsText_(storeId, body) {
   const products = _orderableProducts_(storeId);
   const text = _normJa_(body);
-  const runs = Array.from(new Set(text.match(/[ァ-ヶー]+|[一-龠々]+|[a-z0-9]+/g) || []));
-  const found = {}, ambiguous = [];
+  const keysOf = p => [p.name, p.label].concat(ORDER_TEXT_ALIASES[p.name] || []).map(_normJa_).filter(Boolean);
+  const found = {}, ambiguous = [], used = [];
+  // 1) 商品名・表示名・言い方（3文字以上）が文の中にそのまま入っていれば、それで決める（長いものから。2026-10-15）。
+  //    「アルコール原液」をかたまりに分けると「アルコール」が清掃用・トイレ用の両方に当たって決められなかったため
+  const whole = {};
+  products.forEach(p => keysOf(p).forEach(k => { if (k.length >= 3 && text.indexOf(k) >= 0) (whole[k] = whole[k] || []).push(p); }));
+  Object.keys(whole).sort((a, b) => b.length - a.length).forEach(k => {
+    if (used.some(u => u !== k && u.indexOf(k) >= 0)) return;   // もっと長い一致の一部なら使わない
+    let ps = whole[k];
+    const names = Array.from(new Set(ps.map(p => p.name)));
+    if (names.length > 1) { const ex = ps.filter(p => _normJa_(p.name) === k); if (ex.length) ps = ex; }
+    if (Array.from(new Set(ps.map(p => p.name))).length === 1) { found[ps[0].name] = ps[0]; used.push(k); }
+    else ambiguous.push({ word: k, candidates: names.slice(0, 5).map(n => (products.find(p => p.name === n) || {}).label || n) });
+  });
+  // 2) 残りは、カタカナ・漢字・英数字のかたまりごとに照合する（1 で決めた言葉の一部は飛ばす）
+  const runs = Array.from(new Set(text.match(/[ァ-ヶー]+|[一-龠々]+|[a-z0-9]+/g) || [])).filter(run => !used.some(u => u.indexOf(run) >= 0));
   runs.forEach(run => {
     const hits = products.filter(p => {
       const keys = [p.name, p.label].concat(ORDER_TEXT_ALIASES[p.name] || []).map(_normJa_).filter(Boolean);
