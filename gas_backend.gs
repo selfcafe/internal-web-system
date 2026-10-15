@@ -4714,6 +4714,17 @@ function _updateAmazonRows_(apiKey, ids, apply) {
   return { ok: true, marked, already, missing: Array.from(want).filter(id => !found.has(id)) };
 }
 
+// ===== 権限の承認のやり直し（2026-10-15） =====
+// Google の承認画面は項目ごとにチェックを外せるため、Gmail だけ承認されていない状態になることがある
+// （Gmail を使わない関数の実行では承認画面が出ないので気づきにくい。症状: 下書き作成で「The script does not have permission … gmail.compose」）。
+// エディタでこの関数を選んで実行すると、appsscript.json の oauthScopes のうち未承認のものがあれば承認画面を出す。全部承認済みなら何も起きない
+function authorizeAll() {
+  ScriptApp.requireAllScopes(ScriptApp.AuthMode.FULL);
+  const drafts = GmailApp.getDrafts().length;   // Gmail が使えるかの確認（読むだけ）
+  console.log('すべての権限が承認されています。Gmail の下書き数: ' + drafts);
+  return { ok: true, drafts };
+}
+
 // ===== LINE WORKS で届いた連絡文から発注依頼を作る（2026-10-14） =====
 // 店舗グループに来た「ミネラルウォーターとココアが残り少なくなりました」のような連絡を、塩川用Botに転送すると
 // Bot が previewOrderText で店舗・商品を読み取り、確認のあと createOrderRequest でパートナーの「依頼」と同じ行を作る
