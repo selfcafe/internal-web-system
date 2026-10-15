@@ -4740,6 +4740,24 @@ function _matchStoreText_(text) {
   return { candidates: hit.map(id => names[id]) };
 }
 
+// 連絡文の本文から店舗を探す（2026-10-15。「依頼 店名」の行が無くても、本文に「野並店」「セルフカフェ新守山店」などがあれば決める）。
+// 店舗名（「セルフカフェ」「店」を除いた形）が本文に含まれていれば候補。1文字の店名（栄・原）は「栄店」のように「店」付きのときだけ。
+// 「栄」と「栄生」「ナディアパーク栄」のように、ほかの候補の名前に含まれる短い名前は外す。1店に決まったときだけ返す
+function _findStoreInText_(body) {
+  const text = _normJa_(body);
+  if (!text) return { candidates: [] };
+  const names = _storeNames_();
+  const norm = id => _normJa_(names[id]).replace(/^セルフカフェ/, '').replace(/店$/, '');
+  let hit = Object.keys(names).filter(id => {
+    const n = norm(id);
+    if (!n) return false;
+    return n.length >= 2 ? text.indexOf(n) >= 0 : text.indexOf(n + '店') >= 0;
+  });
+  hit = hit.filter(a => !hit.some(b => b !== a && norm(b).length > norm(a).length && norm(b).indexOf(norm(a)) >= 0));
+  if (hit.length === 1) return { id: hit[0], name: names[hit[0]] };
+  return { candidates: hit.map(id => names[id]) };
+}
+
 function _orderableProducts_(storeId) {
   const all = _settingJson_('all_products', []);
   const excluded = storeId ? (_settingJson_('store_product_cfg', {}) || {})[storeId] || [] : [];
@@ -4779,7 +4797,7 @@ function _orderItemOut_(p, qty, unitMode) {
 function previewOrderText(apiKey, storeText, body) {
   const key = PropertiesService.getScriptProperties().getProperty('GBP_PHOTO_BOT_API_KEY');
   if (!key || apiKey !== key) return { error: 'unauthorized' };
-  const store = storeText ? _matchStoreText_(storeText) : { candidates: [] };
+  const store = storeText ? _matchStoreText_(storeText) : _findStoreInText_(body);   // 店舗名の行が無ければ本文から探す
   // 店舗が決まらないときも、全商品で照合して「商品の連絡らしいか」（productCount）だけ返す（Bot が店舗を聞き返すかの判断）
   if (!store.id) return { ok: true, store: null, storeCandidates: store.candidates || [], productCount: _matchProductsText_(null, body).items.length };
   const m = _matchProductsText_(store.id, body);
