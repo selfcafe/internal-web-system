@@ -582,6 +582,7 @@ function doPost(e) {
     else if (b.action === 'markAmazonDenied')   result = markAmazonDenied(b.apiKey, b.ids, b.reason);
     else if (b.action === 'previewOrderText')   result = previewOrderText(b.apiKey, b.storeText, b.body);
     else if (b.action === 'createOrderRequest') result = createOrderRequest(b.apiKey, b.storeId, b.items);
+    else if (b.action === 'getProductAlternatives') result = getProductAlternatives(b.apiKey, b.text);
     else if (b.action === 'registerApexOrder')  result = registerApexOrder(b.storeId, b.items, b.source, b.document);
     else result = { error: 'Unknown action: ' + b.action };
   } catch(err) {
@@ -4874,6 +4875,23 @@ function debugOrderText(storeText, body) {
   if (!store.id) return { ok: true, store: null, storeCandidates: store.candidates || [] };
   const m = _matchProductsText_(store.id, body);
   return { ok: true, store: store, items: m.items.map(p => p.name), ambiguous: m.ambiguous, orderable: _orderableProducts_(store.id).length };
+}
+
+// ===== 品切れのときの代替品（2026-10-15） =====
+// 商品一覧（all_products）の各商品に amazon_alts: [{label, url}] を持てる（1番目から順に代わりに買う）。
+// Bot に「清掃用アルコールが品切れ」と送ると、この窓口で商品を読み取り、代替品の一覧を返す（Bot がボタンにして返事する）。
+// Claude が Amazon のカートに入れるときも、いつもの商品が品切れならこの順に切り替える
+function getProductAlternatives(apiKey, text) {
+  const key = PropertiesService.getScriptProperties().getProperty('GBP_PHOTO_BOT_API_KEY');
+  if (!key || apiKey !== key) return { error: 'unauthorized' };
+  const clean = String(text || '').replace(/(品切れ|品切|在庫切れ|在庫なし|在庫無し|売り切れ|売切れ|欠品|入荷待ち|代替品|代わり)/g, ' ');
+  const m = _matchProductsText_(null, clean);
+  const items = m.items.map(p => ({
+    name: p.name, label: p.label || p.name,
+    url: p.amazon_url ? _amazonUrl_(p.amazon_url) : '',
+    alts: (Array.isArray(p.amazon_alts) ? p.amazon_alts : []).filter(a => a && a.url).map(a => ({ label: a.label || '', url: _amazonUrl_(a.url) })),
+  }));
+  return { ok: true, items, ambiguous: m.ambiguous };
 }
 
 // Bot から: 確認済みの品で発注依頼を作る。items=[{product, qty, unitMode}]。同じ店で依頼中（新着）の品は作らない

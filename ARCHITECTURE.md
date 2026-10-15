@@ -250,3 +250,9 @@ Web アプリは selfcafe001 として動くので、selfcafe001 が appsscript.
 - 明細は追記専用の `order_lines` タブ（id・店・発注日・仕入先・経路・商品・数量・単価・金額・発注書PDF）に残ります。同じ id が複数回書かれることがあるので、読むときは id ごとに最後の行を使います。
 - 現場が発注タブのボタンを押すと、今までどおり delivery_history と当月納品（自動）に入ります。delivery_history は30日で消す処理をやめ、発注履歴として残します。
 - PC からの登録窓口: doPost `registerApexOrder`（storeId・items[{code, qty, price, name}]・source・document）。
+
+## 品切れのときの代替品（2026-10-15〜）
+
+- 商品一覧（all_products）の商品に `amazon_alts: [{label, url}]` を持てます。1番目から順に、いつもの商品（amazon_url）が品切れのときに代わりに買う商品です。
+- 塩川用Botに「○○が品切れ」と送ると、Bot が doPost `getProductAlternatives`（apiKey・text）で商品を読み取り、代替品を商品ページのボタン付きで返します。
+- 代替品で買っても、ポータルでは同じ商品として検品・在庫の記録をします。登録は今のところ PC の scripts/portal_amazon_alts.py（管理画面は未対応）。
