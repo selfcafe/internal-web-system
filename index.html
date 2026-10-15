@@ -25,7 +25,13 @@
       const url = scope === 'all' ? base + '?action=getSettings'
         : base + '?action=getStoreSettings&storeId=' + encodeURIComponent(scope.slice(6));
       window.__earlySettingsScope = scope;
-      window.__earlySettings = fetch(url).then(r => r.json()).catch(() => null);
+      // 通信が途中で止まる端末(電波の弱い場所・混雑した回線など)では、fetchが失敗もせず
+      // 返ってもこないまま待ち続け、ログインボタンが「読み込み中…」のまま固まっていた
+      // (2026-10-15、巣鴨駅南口)。12秒で打ち切り、失敗として扱う(取り直し→端末に残る前回分で表示)
+      const ctl = window.AbortController ? new AbortController() : null;
+      const timer = ctl ? setTimeout(() => ctl.abort(), 12000) : null;
+      window.__earlySettings = fetch(url, ctl ? { signal: ctl.signal } : {}).then(r => r.json()).catch(() => null)
+        .finally(() => { if (timer) clearTimeout(timer); });
     })();
     // 業務開始の押し忘れリマインダーが出るまでの待ち時間を縮めるため、セッション復元(前回ログイン
     // 済みで再度開いた)の場合は店舗が既にわかっているので、getAttendanceもここで先行発火しておく
@@ -1183,9 +1189,15 @@ const SETTINGS_SCOPE_KEY = 'settings_scope';
 // getStoreSettingsで自店舗分だけに絞られるキー(gas_backend.gsのSTORE_SCOPED_SETTING_KEYSと揃える)
 const STORE_SCOPED_SETTING_KEYS = ['store_product_cfg', 'store_checksheet_cfg'];
 function _cachedSettingsScope() { return localStorage.getItem(SETTINGS_SCOPE_KEY) || 'all'; }
+// 設定の読み込みだけは12秒で打ち切る(ページ先頭の先行読み込みと同じ理由)。gasGet全体には
+// 付けない——月次の集計など、正常でも時間のかかる読み込みがあるため
 function _fetchSettings(scope) {
-  return (scope === 'all' ? gasGet('getSettings') : gasGet('getStoreSettings', { storeId: scope.slice(6) }))
-    .catch(() => null);
+  const q = new URLSearchParams(scope === 'all' ? { action: 'getSettings' } : { action: 'getStoreSettings', storeId: scope.slice(6) });
+  const ctl = window.AbortController ? new AbortController() : null;
+  const timer = ctl ? setTimeout(() => ctl.abort(), 12000) : null;
+  return fetch(GAS_URL + '?' + q, ctl ? { signal: ctl.signal } : {}).then(r => r.json())
+    .catch(() => null)
+    .finally(() => { if (timer) clearTimeout(timer); });
 }
 
 async function initGas() {
