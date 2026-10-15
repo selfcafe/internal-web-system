@@ -5113,10 +5113,9 @@ function buildBranchReorder(branchKey, periodLabel, dryRun) {
       sh.getRange('I2').setValue(`'${now.getMonth() + 1}/${now.getDate()}`);
     }
     SpreadsheetApp.flush();
-    const xlsx = UrlFetchApp.fetch(`https://docs.google.com/spreadsheets/d/${copy.getId()}/export?format=xlsx`,
-      { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() } }).getBlob().setName(title + '.xlsx');
+    const pdf = _apexOrderPdf_(ss, sh, b.label, folder);   // PDF にして 4.塩川/アペックス発注書 に保存（2026-10-15〜）
     const draftBody = mail.body || `${b.label}支店 ご担当者様\n\n発注書を添付いたします。ご確認のほどよろしくお願いいたします。`;
-    const opts = { attachments: [xlsx] };
+    const opts = { attachments: [pdf.blob] };
     if (b.cc || mail.cc) opts.cc = b.cc || mail.cc;
     if (existingDrafts.length) {
       existingDrafts[0].update(to, subject, draftBody, opts);
@@ -5128,6 +5127,52 @@ function buildBranchReorder(branchKey, periodLabel, dryRun) {
   } finally {
     lock.releaseLock();
   }
+}
+
+// ===== アペックスの発注書を PDF にして保存する（2026-10-15） =====
+// 塩川さんの方針: アペックスへの発注メールは PDF を添付する（スマホでメールを見て確認できるように）。送った発注書は保存しておく。
+// 写しのスプレッドシートで、数量の入っていない店の列・商品の行を隠してから PDF に書き出す（値は消さない）。
+// 上の見出し部分（宛先・年度・注文日）に値がある列は、店の列でも隠さない（注文日が店の列と重なっている発注書がある）。
+// 保存先は reorder_mail.folder（4.塩川）の中の「アペックス発注書」フォルダ。名前は「発注日_店名_アペックス発注書（支店）.pdf」。
+// PC の selfcafe-automation/scripts/order_pdf.py と同じ動き
+function _apexPdfFolder_(parent) {
+  const it = parent.getFoldersByName('アペックス発注書');
+  return it.hasNext() ? it.next() : parent.createFolder('アペックス発注書');
+}
+
+function _apexOrderPdf_(ss, sh, label, parentFolder) {
+  const HR = 5;
+  const values = sh.getDataRange().getDisplayValues();
+  const header = values[HR - 1].map(h => String(h).replace(/\n/g, ''));
+  const storeCols = header.map((h, i) => i).filter(i => i >= 5 && header[i] && header[i] !== '合計');
+  const filled = (r, i) => i < r.length && ['', '0'].indexOf(String(r[i]).trim()) < 0;
+  const isSub = r => String(r[0] || '').trim() === '商品コード';
+  const isItem = r => String(r[0] || '').trim() && !isSub(r);
+  const body = [];
+  for (let n = HR; n < values.length; n++) body.push(n);
+  const usedCols = storeCols.filter(i => body.some(n => isItem(values[n]) && filled(values[n], i)));
+  const show = new Set(body.filter(n => isItem(values[n]) && usedCols.some(i => filled(values[n], i))));
+  const subs = body.filter(n => isSub(values[n]));
+  subs.forEach((n, k) => {
+    const end = k + 1 < subs.length ? subs[k + 1] : values.length;
+    for (let m = n + 1; m < end; m++) if (show.has(m)) { show.add(n); break; }
+  });
+  const top = i => values.slice(0, HR - 1).some(r => i < r.length && String(r[i]).trim());
+  body.forEach(n => { if (!show.has(n)) sh.hideRows(n + 1); });
+  storeCols.forEach(i => { if (usedCols.indexOf(i) < 0 && !top(i)) sh.hideColumns(i + 1); });
+  SpreadsheetApp.flush();
+  const url = `https://docs.google.com/spreadsheets/d/${ss.getId()}/export?format=pdf&gid=${sh.getSheetId()}&size=A4&portrait=false` +
+    '&fitw=true&gridlines=false&printtitle=false&sheetnames=false&pagenum=UNDEFINED&fzr=false';
+  const blob = UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() } }).getBlob();
+  const d = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd');
+  const stores = usedCols.map(i => header[i]).join('・') || label;
+  const folder = _apexPdfFolder_(parentFolder);
+  const base = `${d}_${stores}_アペックス発注書（${label}）`;
+  let name = base + '.pdf';
+  for (let k = 2; folder.getFilesByName(name).hasNext(); k++) name = `${base}(${k}).pdf`;
+  blob.setName(name).setContentType('application/pdf');
+  const file = folder.createFile(blob);
+  return { blob: file.getBlob().setName(name), name, url: file.getUrl() };
 }
 
 // ===== アペックスの都度発注（追加発注、2026-10-13） =====
@@ -5260,13 +5305,12 @@ function buildAdhocApexOrder(branchKey, spec, dryRun) {
     sh.getRange('I2').setValue(`'${md}`);
   }
   SpreadsheetApp.flush();
-  const xlsx = UrlFetchApp.fetch(`https://docs.google.com/spreadsheets/d/${copy.getId()}/export?format=xlsx`,
-    { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() } }).getBlob().setName(title + '.xlsx');
+  const pdf = _apexOrderPdf_(ss, sh, b.label, folder);   // PDF にして 4.塩川/アペックス発注書 に保存（2026-10-15〜）
   const draftBody = mail.body || `${b.label}支店 ご担当者様\n\n発注書を添付いたします。ご確認のほどよろしくお願いいたします。`;
-  const opts = { attachments: [xlsx] };
+  const opts = { attachments: [pdf.blob] };
   if (b.cc || mail.cc) opts.cc = b.cc || mail.cc;
   GmailApp.createDraft(to, subject, draftBody, opts);
-  return Object.assign(result, { draft: 'created', sheetUrl: ss.getUrl(), title });
+  return Object.assign(result, { draft: 'created', sheetUrl: ss.getUrl(), title, pdf: pdf.name, pdfUrl: pdf.url });
 }
 
 // ----------------------------------------------------------------
