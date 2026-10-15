@@ -197,7 +197,7 @@ sequenceDiagram
   - 数量は基準値 − 月末在庫をそのまま（1袋から買えるのでケースに丸めない）。商品マスタに caseUnit がある商品（ブレンドA/B＝4袋＝1kg、カップ・蓋＝1ケース）だけ、その単位に切り上げます。原料の caseUnit は空にしてあります。
   - 税抜 20,000 円以上で送料無料。満たない月は、いちばん早く切れる品を1単位ずつ足して乗せます（メモに「送料無料に乗せるため+n」と出ます）。無料メンテナンスを毎月1回入れる行も付きます。
   - 単価は商品マスタの `price`（Bカートの税抜単価）。計算だけ確かめる: `?action=previewToyoReorder&store=<店舗ID>&periodLabel=YYYY-MM`。
-- **アペックスの都度発注（2026-10-13〜）**: 月初以外の追加発注は `?action=buildAdhocApexOrder&branch=<支店の label か キー>&items=<店舗:商品=数,…;店舗:…>&dryRun=1` で、支店の発注書の写し（reorder_mail.folder、「{支店} 注文表 {年}年{月}月分（追加 M/D）」）と Gmail 下書き（件名は reorder_mail.subject＋「（支店 追加 M/D）」、宛先は発注書の C1）を作ります。dryRun=1 は計算と確認だけ。店舗は店舗IDか表示名、商品はポータルの商品名かコード、数量は袋・本・個。店舗ごとに1品は1ケース以上という最低条件を満たさないときは warnings に出します。送信は人が行います。
+- **アペックスの都度発注（2026-10-13〜）**: 月初以外の追加発注は `?action=buildAdhocApexOrder&branch=<支店の label か キー>&items=<店舗:商品=数,…;店舗:…>&dryRun=1` で、支店の発注書の写し（reorder_mail.folder、「{支店} 注文表 {年}年{月}月分（追加 M/D）」）と Gmail 下書き（件名は reorder_mail.subject＋「（支店 追加 M/D）」、宛先は発注書の C1）を作ります。dryRun=1 は計算と確認だけ。数量は「1ケース」とも書け、アペックスの発注書のケース入数で換算します。LINE WORKS の連絡文から依頼を作ったとき（createOrderRequest）も、アペックス・CS3 の品があればこの入口で支店の発注書と下書きを自動で作り、Bot の返事に1行出します（2026-10-15〜）。店舗は店舗IDか表示名、商品はポータルの商品名かコード、数量は袋・本・個。店舗ごとに1品は1ケース以上という最低条件を満たさないときは warnings に出します。送信は人が行います。
   - 計算だけ確かめる: `?action=previewBranchReorder&branch=<支店キー>&periodLabel=YYYY-MM`。作り直す: `?action=buildBranchReorder&...`。
   - 送信済みの月は作り直しません。下書きは人が確認して送ります。
 - 基準値の作り方（使用数 × 35/30 日分）と一括反映のスクリプトは、別リポジトリ（PC の `selfcafe-automation`、塩川さん管理）の `scripts/portal_targets.py` / `portal_targets_sync.py` / `portal_store_machines.py` にあります。反映はポータル自身の `saveSettingMerge` を使い、書き込む前に控えを取ります。

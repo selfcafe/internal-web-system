@@ -4817,7 +4817,31 @@ function createOrderRequest(apiKey, storeId, items) {
       method: 'put', contentType: 'application/json', muteHttpExceptions: true,
       payload: JSON.stringify({ ts: Date.now(), by: 'gas-order-text' }) });
   } catch (e) { console.error('orders_updated の合図に失敗:', e.message); }
-  return Object.assign(res, { created, skipped });
+  // アペックス（apex・cs3）の品は、その店の支店の都度発注書と Gmail 下書きも作る（2026-10-15。それまでは登録だけで止まっていた）。
+  // 結果は Bot の返事に出るよう created の最後に1行足す（Bot 側は created をそのまま並べて表示している）
+  const apex = _apexDraftForOrderRows_(storeId, rows);
+  if (apex) created.push(apex);
+  return Object.assign(res, { created, skipped, apexDraft: apex || '' });
+}
+
+// 依頼の行（product・qty・unit_mode）のうちアペックスの品で buildAdhocApexOrder を呼び、Bot に出す1行を返す（無ければ null）
+function _apexDraftForOrderRows_(storeId, rows) {
+  try {
+    const meta = _productMeta_();
+    const apexRows = rows.filter(r => APEX_ORDER_VENDORS.indexOf((meta[r.product] || {}).vendor || '') >= 0);
+    if (!apexRows.length) return null;
+    const branches = _settingJson_('reorder_branches', {});
+    const bk = Object.keys(branches).find(k => branches[k].stores && Object.prototype.hasOwnProperty.call(branches[k].stores, storeId));
+    if (!bk) return '【アペックス】この店は支店の発注書に登録されていないため、発注メールは作っていません';
+    const spec = storeId + ':' + apexRows.map(r => (meta[r.product].code || r.product) + '=' + r.qty + (r.unit_mode === 'case' ? 'ケース' : '')).join(',');
+    const out = buildAdhocApexOrder(bk, spec, false);
+    if (!out || !out.ok) return '【アペックス】発注メールの下書きを作れませんでした（' + ((out && (out.error + ' ' + (out.details || []).join(' '))) || '不明') + '）。PC から作り直してください';
+    return '【アペックス】' + out.branch + '支店の発注メールの下書きを作りました（' + out.lines.map(l => l.split('　').slice(1, 3).join(' ')).join('・') +
+      '、税抜' + Number(out.total).toLocaleString() + '円）。Gmail の下書きを確認して送ってください' + (out.warnings.length ? '。注意: ' + out.warnings.join(' / ') : '');
+  } catch (e) {
+    console.error('_apexDraftForOrderRows_ error:', e.message);
+    return '【アペックス】発注メールの下書きを作れませんでした（' + e.message + '）。PC から作り直してください';
+  }
 }
 
 // 動作確認用（エディタから実行）: 今の新着の Amazon の依頼を、店舗ごとに Bot へ送る（塩川さんに実際に届く）
@@ -5092,12 +5116,14 @@ function _adhocParseItems_(spec, stores, names, products, codeMap) {
     part.slice(i + 1).split(',').map(x => x.trim()).filter(Boolean).forEach(kv => {
       const j = kv.lastIndexOf('=');
       if (j < 0) { errors.push('数量が無い: ' + kv); return; }
-      const name = kv.slice(0, j).trim(), qty = Number(kv.slice(j + 1));
+      const name = kv.slice(0, j).trim();
+      const qm = kv.slice(j + 1).normalize('NFKC').trim().match(/^(\d+(?:\.\d+)?)\s*(ケース|cs|case)?$/i);
+      const qty = qm ? Number(qm[1]) : NaN;
       if (!(qty > 0)) { errors.push('数量が不正: ' + kv); return; }
       const portalCode = _adhocProductCode_(name, products) || name; // 見つからなければコードが直接書かれたものとみなす
       const code = codeMap[portalCode] || portalCode;
       out[sid] = out[sid] || [];
-      out[sid].push({ name, code, qty });
+      out[sid].push({ name, code, qty, cases: !!qm[2] });
     });
   });
   return { items: out, errors };
@@ -5136,6 +5162,10 @@ function buildAdhocApexOrder(branchKey, spec, dryRun) {
     detail[names[sid] || sid] = parsed.items[sid].map(it => {
       const info = rowInfo[it.code];
       if (!info) { warnings.push(`発注書に商品が無い: ${names[sid] || sid} ${it.name}（${it.code}）`); return { name: it.name, code: it.code, qty: it.qty, missing: true }; }
+      if (it.cases) {   // 「1ケース」はアペックスの発注書のケース入数で換算（ポータルの商品マスタのケース数とは違うことがある）
+        if (!info.casePieces) warnings.push(`${names[sid] || sid} ${info.name}: 発注書にケース入数が無いので ${it.qty} として書きます`);
+        it.qty = it.qty * (info.casePieces || 1);
+      }
       const amount = it.qty * info.price;
       total += amount;
       if (info.casePieces && it.qty >= info.casePieces) hasCase = true;
