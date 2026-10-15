@@ -5022,15 +5022,9 @@ function processMonthlyReorder(storeId, periodLabel) {
   docFile.setTrashed(true);
 
   const draftBody = `いつもお世話になっております。\n${storeName}の${periodJa}分棚卸に基づく発注書を添付いたします。\nご確認のほど、よろしくお願いいたします。`;
-  const draftOptions = { cc: recipient.cc, attachments: [pdfBlob] };
-  if (existingDrafts.length) {
-    existingDrafts[0].update(recipient.to, subject, draftBody, draftOptions);
-    existingDrafts.slice(1).forEach(d => d.deleteDraft()); // この修正前に既にできていた重複の掃除
-    return { ok: true, items: items.length, draftUpdated: true };
-  }
-  GmailApp.createDraft(recipient.to, subject, draftBody, draftOptions);
-
-  return { ok: true, items: items.length, draftCreated: true };
+  existingDrafts.forEach(d => d.deleteDraft());   // 作り直すときは古い下書きを消してから（差出人を selfcafe001@gmail.com にするため）
+  _createApexDraft_(recipient.to, recipient.cc, subject, draftBody, [pdfBlob]);
+  return { ok: true, items: items.length, draftUpdated: existingDrafts.length > 0, draftCreated: !existingDrafts.length };
 }
 
 // 支店まとめの発注書と下書きを作り直す。dryRun=true は計算結果を返すだけ(ファイル・下書きは作らない)。
@@ -5115,18 +5109,46 @@ function buildBranchReorder(branchKey, periodLabel, dryRun) {
     SpreadsheetApp.flush();
     const pdf = _apexOrderPdf_(ss, sh, b.label, folder);   // PDF にして 4.塩川/アペックス発注書 に保存（2026-10-15〜）
     const draftBody = mail.body || `${b.label}支店 ご担当者様\n\n発注書を添付いたします。ご確認のほどよろしくお願いいたします。`;
-    const opts = { attachments: [pdf.blob] };
-    if (b.cc || mail.cc) opts.cc = b.cc || mail.cc;
-    if (existingDrafts.length) {
-      existingDrafts[0].update(to, subject, draftBody, opts);
-      existingDrafts.slice(1).forEach(d => d.deleteDraft());
-    } else {
-      GmailApp.createDraft(to, subject, draftBody, opts);
-    }
+    existingDrafts.forEach(d => d.deleteDraft());   // 作り直すときは古い下書きを消してから（差出人を selfcafe001@gmail.com にするため更新ではなく作り直す）
+    _createApexDraft_(to, b.cc || mail.cc, subject, draftBody, [pdf.blob]);
     return Object.assign({ ok: true, draft: existingDrafts.length ? 'updated' : 'created', to, sheetUrl: ss.getUrl(), warnings }, summary);
   } finally {
     lock.releaseLock();
   }
+}
+
+// ===== アペックス宛ての下書きは selfcafe001@gmail.com から（2026-10-15 塩川さん） =====
+// selfcafe001 の Gmail は既定の差出人が selfcafe@wood-designpark.jp（送信元アドレスの設定）なので、GmailApp.createDraft だと
+// そちらになる。Gmail の REST API で From を selfcafe001@gmail.com にした下書きを作る（権限は mail.google.com のまま）。
+// CC が差出人と同じなら付けない
+const APEX_SENDER = 'selfcafe001@gmail.com';
+const APEX_SENDER_NAME = 'セルフカフェ';
+
+function _mimeWord_(s) { return '=?UTF-8?B?' + Utilities.base64Encode(Utilities.newBlob(String(s)).getBytes()) + '?='; }
+function _b64Lines_(bytes) { return Utilities.base64Encode(bytes).replace(/.{76}/g, '$&\r\n'); }
+
+function _createApexDraft_(to, cc, subject, body, attachments) {
+  const ccList = String(cc || '').split(',').map(x => x.trim()).filter(x => x && x.toLowerCase() !== APEX_SENDER);
+  const boundary = 'b' + Utilities.getUuid().replace(/-/g, '');
+  const head = ['From: ' + _mimeWord_(APEX_SENDER_NAME) + ' <' + APEX_SENDER + '>', 'To: ' + to]
+    .concat(ccList.length ? ['Cc: ' + ccList.join(', ')] : [])
+    .concat(['Subject: ' + _mimeWord_(subject), 'MIME-Version: 1.0', 'Content-Type: multipart/mixed; boundary="' + boundary + '"', '']);
+  const parts = ['--' + boundary, 'Content-Type: text/plain; charset=UTF-8', 'Content-Transfer-Encoding: base64', '',
+    _b64Lines_(Utilities.newBlob(String(body)).getBytes())];
+  (attachments || []).forEach(blob => {
+    const name = blob.getName();
+    parts.push('--' + boundary, 'Content-Type: ' + (blob.getContentType() || 'application/octet-stream') + '; name="' + _mimeWord_(name) + '"',
+      'Content-Disposition: attachment; filename="' + _mimeWord_(name) + '"; filename*=UTF-8\'\'' + encodeURIComponent(name),
+      'Content-Transfer-Encoding: base64', '', _b64Lines_(blob.getBytes()));
+  });
+  parts.push('--' + boundary + '--', '');
+  const raw = Utilities.base64EncodeWebSafe(Utilities.newBlob(head.concat(parts).join('\r\n')).getBytes());
+  const res = UrlFetchApp.fetch('https://gmail.googleapis.com/gmail/v1/users/me/drafts', {
+    method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+    payload: JSON.stringify({ message: { raw: raw } }) });
+  if (res.getResponseCode() >= 300) throw new Error('下書きの作成に失敗 ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 200));
+  return JSON.parse(res.getContentText()).id;
 }
 
 // ===== アペックスの発注書を PDF にして保存する（2026-10-15） =====
@@ -5307,9 +5329,7 @@ function buildAdhocApexOrder(branchKey, spec, dryRun) {
   SpreadsheetApp.flush();
   const pdf = _apexOrderPdf_(ss, sh, b.label, folder);   // PDF にして 4.塩川/アペックス発注書 に保存（2026-10-15〜）
   const draftBody = mail.body || `${b.label}支店 ご担当者様\n\n発注書を添付いたします。ご確認のほどよろしくお願いいたします。`;
-  const opts = { attachments: [pdf.blob] };
-  if (b.cc || mail.cc) opts.cc = b.cc || mail.cc;
-  GmailApp.createDraft(to, subject, draftBody, opts);
+  _createApexDraft_(to, b.cc || mail.cc, subject, draftBody, [pdf.blob]);   // 差出人は selfcafe001@gmail.com
   return Object.assign(result, { draft: 'created', sheetUrl: ss.getUrl(), title, pdf: pdf.name, pdfUrl: pdf.url });
 }
 
