@@ -4902,7 +4902,11 @@ function createOrderRequest(apiKey, storeId, items) {
   if (!_storeNames_()[storeId]) return { error: '店舗が見つかりません: ' + storeId };
   const byName = {};
   _orderableProducts_(storeId).forEach(p => { byName[p.name] = p; });
-  const pending = new Set(getOrders().filter(r => r.store_id === storeId && r.is_new && !r.denied).map(r => r.product));
+  // 同じ店で依頼中（新着・未否認）の品。二重には作らないが、Amazon の品は商品ボタン付きの通知をもう一度送る（2026-10-15、
+  // 「すでに依頼中」で飛ばすと Bot に通知が来ず、商品ページを開けなかった）
+  const pendingRows = getOrders().filter(r => r.store_id === storeId && r.is_new && !r.denied);
+  const pending = new Set(pendingRows.map(r => r.product));
+  const resend = [];
   const today = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd');
   const groupId = Utilities.getUuid();
   const rows = [], created = [], skipped = [];
@@ -4910,14 +4914,28 @@ function createOrderRequest(apiKey, storeId, items) {
     const p = byName[it.product];
     const qty = Number(it.qty);
     if (!p || !(qty > 0)) { skipped.push((it.product || '?') + '（この店で頼めない品か、数が不正）'); return; }
-    if (pending.has(p.name)) { skipped.push((p.label || p.name) + '（すでに依頼中）'); return; }
+    if (pending.has(p.name)) {
+      skipped.push((p.label || p.name) + '（すでに依頼中）');
+      pendingRows.filter(r => r.product === p.name).forEach(r => resend.push(r));
+      return;
+    }
     const unitMode = it.unitMode === 'case' && p.caseUnit ? 'case' : (p.caseOnly && p.caseUnit ? 'case' : 'piece');
     rows.push({ id: Utilities.getUuid(), store_id: storeId, group_id: groupId, product: p.name, label: p.label || p.name,
       qty: qty, unit: p.unit || '', case_unit: p.caseUnit || '', unit_mode: unitMode, note: 'LINE WORKS の連絡から本部が登録',
       locked: true, is_new: true, request_date: today, created_at: new Date().toISOString(), denied: false });
     created.push((p.label || p.name) + ' ×' + qty + (unitMode === 'case' ? 'ケース' : (p.unit || '')));
   });
-  if (!rows.length) return { ok: true, created, skipped };
+  // 依頼中の品の通知（もう一度）。新しく作った行の通知とまとめて1通にする
+  const addResend = res => {
+    if (!resend.length) return res;
+    const again = _withAmazonOrderNotify_({}, storeId, resend)._notify;
+    if (!again) return res;
+    if (res._notify && res._notify.type === 'amazonOrderNew') res._notify.items = res._notify.items.concat(again.items);
+    else res._notify = again;
+    created.push('依頼中の品の通知をもう一度送ります（' + again.items.map(i => i.label).join('、') + '）');
+    return res;
+  };
+  if (!rows.length) return addResend({ ok: true, created, skipped });
   const res = upsertOrderRows(storeId, rows);   // 新着になった行として _notify（Bot への通知）が付く
   try {
     UrlFetchApp.fetch('https://selfcafe-internal-web-system-default-rtdb.firebaseio.com/orders_updated.json', {
@@ -4928,7 +4946,7 @@ function createOrderRequest(apiKey, storeId, items) {
   // 結果は Bot の返事に出るよう created の最後に1行足す（Bot 側は created をそのまま並べて表示している）
   const apex = _apexDraftForOrderRows_(storeId, rows);
   if (apex) created.push(apex);
-  return Object.assign(res, { created, skipped, apexDraft: apex || '' });
+  return addResend(Object.assign(res, { created, skipped, apexDraft: apex || '' }));
 }
 
 // 依頼の行（product・qty・unit_mode）のうちアペックスの品で buildAdhocApexOrder を呼び、Bot に出す1行を返す（無ければ null）
