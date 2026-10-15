@@ -444,6 +444,7 @@ function doGet(e) {
     else if (a === 'buildBranchReorder')        result = buildBranchReorder(e.parameter.branch, e.parameter.periodLabel, false);
     else if (a === 'previewToyoReorder')        result = buildToyoReorder(e.parameter.store, e.parameter.periodLabel, true);
     else if (a === 'buildToyoReorder')          result = buildToyoReorder(e.parameter.store, e.parameter.periodLabel, false);
+    else if (a === 'authStatus')                result = authStatus();
     else if (a === 'buildAdhocApexOrder')       result = buildAdhocApexOrder(e.parameter.branch, e.parameter.items, e.parameter.dryRun === '1' || e.parameter.dryRun === 'true');
     else if (a === 'reorderStoreTabs')          result = reorderStoreTabs();
     else if (a === 'removeInventoryLabelColumn') result = removeInventoryLabelColumn();
@@ -4721,8 +4722,38 @@ function _updateAmazonRows_(apiKey, ids, apply) {
 function authorizeAll() {
   ScriptApp.requireAllScopes(ScriptApp.AuthMode.FULL);
   const drafts = GmailApp.getDrafts().length;   // Gmail が使えるかの確認（読むだけ）
+  // 毎朝の権限チェック（dailyAuthCheck）のトリガーが無ければ入れる。承認が外れたら LINE WORKS（LW_CHANNEL_ID）に知らせる
+  if (!ScriptApp.getProjectTriggers().some(t => t.getHandlerFunction() === 'dailyAuthCheck')) {
+    ScriptApp.newTrigger('dailyAuthCheck').timeBased().everyDays(1).atHour(8).create();
+    console.log('毎朝8時台の権限チェック（dailyAuthCheck）のトリガーを入れました');
+  }
   console.log('すべての権限が承認されています。Gmail の下書き数: ' + drafts);
   return { ok: true, drafts };
+}
+
+// 権限の状態（読むだけ）。?action=authStatus でも返す。Web アプリは selfcafe001 として動くので、selfcafe001 の承認の状態になる
+function authStatus() {
+  const out = { ok: true, status: '', gmail: false };
+  try {
+    out.status = String(ScriptApp.getAuthorizationInfo(ScriptApp.AuthMode.FULL).getAuthorizationStatus());
+  } catch (e) { out.status = 'ERROR: ' + e.message; }
+  try { GmailApp.getDrafts(); out.gmail = true; } catch (e) { out.gmailError = e.message; }
+  out.ok = out.gmail && out.status === 'NOT_REQUIRED';
+  if (!out.ok) out.fix = 'selfcafe001 だけでログインした Chrome で Apps Script「社内ポータルスクリプト」のエディタを開き、関数 authorizeAll を実行して、承認画面で「すべて選択」にして許可する';
+  return out;
+}
+
+// 毎朝の権限チェック（authorizeAll が入れるトリガーから）。承認が外れていたら、下書きが作れなくなる前に LINE WORKS へ知らせる
+function dailyAuthCheck() {
+  const st = authStatus();
+  if (st.ok) return st;
+  try {
+    sendLineWorksNotification('【要対応】社内ポータルスクリプトの権限の承認が外れています\n' +
+      '（このままだと月初発注・追加発注の Gmail 下書きが作れません）\n\n' +
+      '状態: ' + st.status + (st.gmail ? '' : ' / Gmail が使えません') + '\n' +
+      '直し方: ' + st.fix);
+  } catch (e) { console.error('dailyAuthCheck の通知に失敗:', e.message); }
+  return st;
 }
 
 // ===== LINE WORKS で届いた連絡文から発注依頼を作る（2026-10-14） =====

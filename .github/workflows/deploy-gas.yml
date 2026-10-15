@@ -146,3 +146,16 @@ jobs:
             echo "::error::デプロイ後の応答がJSONではありません(承認切れの可能性)。先頭: $(head -c 200 body.txt)"
             exit 1
           fi
+
+      # 権限の承認の確認(2026-10-15)。Googleの承認画面は項目ごとにチェックを外せるため、Gmailだけ未承認になり
+      # 下書き作成だけが失敗することがある(getSettingsの疎通確認では分からない)。selfcafeの承認の状態を見る
+      - name: Auth check (Gmailなどの権限が承認されているか)
+        env:
+          CLASP_DEPLOYMENT_ID: ${{ secrets.CLASP_DEPLOYMENT_ID }}
+        run: |
+          curl -s -L "https://script.google.com/macros/s/${CLASP_DEPLOYMENT_ID}/exec?action=authStatus" -o auth.json
+          node -e "
+            const a = JSON.parse(require('fs').readFileSync('auth.json','utf8'));
+            console.log('承認の状態: ' + a.status + ' / Gmail: ' + a.gmail);
+            if (!a.ok) { console.log('::error::権限の承認が足りません。' + (a.fix || '')); process.exit(1); }
+          "

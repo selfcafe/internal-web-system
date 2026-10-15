@@ -230,3 +230,11 @@ HANDOVER.md 3章の表のとおりです（Apps Script の時間トリガー、�
 - ローカルで試すときは、本番の Apps Script・Firebase への通信を止めてから（CLAUDE.md「管理者ガイド・テスト」）。
 - `gas_backend.gs` のスプレッドシートID類は空欄のまま（実値は GitHub Secrets）。
 - 設定画面のページを変えたら、この設計図の 2-3 と `admin-guide.html` の該当箇所も直す。
+
+## 権限の承認（2026-10-15）
+
+Web アプリは selfcafe001 として動くので、selfcafe001 が appsscript.json の oauthScopes（7つ）をすべて承認している必要があります。Google の承認画面は項目ごとにチェックを外せるため、Gmail だけ未承認になると、ポータルは動くのに Gmail の下書き（月初発注・追加発注）だけが「The script does not have permission … gmail.compose」で失敗します。
+
+- 確認: `?action=authStatus`（読むだけ。ok / status / gmail を返す）。デプロイのたびに deploy-gas.yml の Auth check でも確かめ、足りなければジョブを失敗にします。
+- 毎朝8時台に `dailyAuthCheck` が同じ確認をし、足りなければ LINE WORKS（LW_CHANNEL_ID）に【要対応】を送ります（トリガーは authorizeAll を初めて実行したときに入ります）。
+- 直し方: selfcafe001 **だけ**でログインした Chrome（selfcafe001 専用の Chrome プロフィールを作っておく）で、Apps Script「社内ポータルスクリプト」のエディタを開き、関数 `authorizeAll` を実行して、承認画面で「すべて選択」にして許可する。Chrome に複数のアカウントでログインしていると、承認画面が別アカウントで開いて「現在、ファイルを開くことができません」になります。
