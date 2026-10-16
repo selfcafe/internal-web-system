@@ -4844,6 +4844,20 @@ const ORDER_TEXT_ALIASES = {
 
 function _normJa_(s) { return String(s || '').normalize('NFKC').replace(/[\s　]/g, '').toLowerCase(); }
 
+// 店が決まらないときの候補: 店名の2文字のかたまりが文に多く入っている店（2026-10-16。Bot が候補をボタンにする）
+function _similarStores_(text, limit) {
+  const names = _storeNames_();
+  const t = _normJa_(text);
+  const norm = id => _normJa_(names[id]).replace(/^セルフカフェ/, '').replace(/店$/, '');
+  return Object.keys(names).map(id => {
+    const n = norm(id);
+    let sc = 0;
+    for (let i = 0; i + 1 < n.length; i++) if (t.indexOf(n.slice(i, i + 2)) >= 0) sc++;
+    if (n.length === 1 && t.indexOf(n) >= 0) sc = 1;
+    return { id, sc };
+  }).filter(x => x.sc > 0).sort((a, b) => b.sc - a.sc).slice(0, limit || 8).map(x => names[x.id]);
+}
+
 // 店舗名の一部から店舗を探す。1店に決まれば {id, name}、決まらなければ {candidates:[name…]}
 function _matchStoreText_(text) {
   const t = _normJa_(text).replace(/^セルフカフェ/, '').replace(/店$/, '');
@@ -4854,7 +4868,7 @@ function _matchStoreText_(text) {
   let hit = ids.filter(id => norm(id) === t || id === t);
   if (!hit.length) hit = ids.filter(id => norm(id).includes(t) || t.includes(norm(id)));
   if (hit.length === 1) return { id: hit[0], name: names[hit[0]] };
-  return { candidates: hit.map(id => names[id]) };
+  return { candidates: hit.length ? hit.map(id => names[id]) : _similarStores_(text) };
 }
 
 // 連絡文の本文から店舗を探す（2026-10-15。「依頼 店名」の行が無くても、本文に「野並店」「セルフカフェ新守山店」などがあれば決める）。
@@ -4863,12 +4877,15 @@ function _matchStoreText_(text) {
 function _findStoreInText_(body) {
   const text = _normJa_(body);
   if (!text) return { candidates: [] };
+  const raw = String(body).normalize('NFKC');
   const names = _storeNames_();
   const norm = id => _normJa_(names[id]).replace(/^セルフカフェ/, '').replace(/店$/, '');
+  // 1文字の店名（栄・原）は「栄店」か、前後が空白・句読点のとき（「栄 プリングルズ」。「アルコール原液」の原は読まない。2026-10-16）
+  const alone = n => new RegExp('(^|[\\s、,。・:：/])' + n + '(?=[\\s、,。・:：/]|$)').test(raw);
   let hit = Object.keys(names).filter(id => {
     const n = norm(id);
     if (!n) return false;
-    return n.length >= 2 ? text.indexOf(n) >= 0 : text.indexOf(n + '店') >= 0;
+    return n.length >= 2 ? text.indexOf(n) >= 0 : text.indexOf(n + '店') >= 0 || alone(n);
   });
   hit = hit.filter(a => !hit.some(b => b !== a && norm(b).length > norm(a).length && norm(b).indexOf(norm(a)) >= 0));
   if (hit.length === 1) return { id: hit[0], name: names[hit[0]] };
@@ -4882,7 +4899,7 @@ function _findStoreInText_(body) {
     return n && runs.some(r => n.indexOf(r) === 0 || (r.length >= 3 && n.indexOf(r) >= 0));
   });
   if (part.length === 1) return { id: part[0], name: names[part[0]] };
-  return { candidates: part.map(id => names[id]) };
+  return { candidates: part.length ? part.map(id => names[id]) : _similarStores_(body) };
 }
 
 function _orderableProducts_(storeId) {
