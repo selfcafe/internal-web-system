@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         セルフカフェ Bカート自動カート入れ
 // @namespace    https://selfcafe.github.io/internal-web-system/
-// @version      1.1.0
+// @version      1.1.1
 // @description  ポータル・Bot の「トーベンのカートに入れる」リンク（#sc-cart=商品番号x数,…）を開くと、ミル挽き珈琲CAFE（Bカート）のカートに品と数を入れる。注文の確定は人が押す
 // @match        https://mirubiki-coffee.i16.bcart.jp/*
 // @run-at       document-end
@@ -81,7 +81,7 @@
     const { loggedOut, doc } = await getDoc('/product.php?id=' + id);
     if (loggedOut) throw new Error('ログインしていません');
     const form = [...doc.forms].find(f => f.querySelector('.__js-add-cart'));
-    if (!form) throw new Error('このアカウントでは商品' + id + 'を注文できません');
+    if (!form) throw new Error(/品切れ/.test(doc.body.innerText) ? '品切れ中でカートに入れられません（無料メンテナンスなら今月分は受付終了か、トーヨーに確認）' : 'このアカウントでは商品' + id + 'を注文できません');
     const num = form.querySelector('input[type=number]');
     const name = ((doc.querySelector('title') || {}).textContent || ('商品' + id)).replace(/\s*\|.*$/, '').trim();
     const body = new URLSearchParams(new FormData(form));
