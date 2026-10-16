@@ -256,3 +256,9 @@ Web アプリは selfcafe001 として動くので、selfcafe001 が appsscript.
 - 商品一覧（all_products）の商品に `amazon_alts: [{label, url}]` を持てます。1番目から順に、いつもの商品（amazon_url）が品切れのときに代わりに買う商品です。
 - 塩川用Botに「○○が品切れ」と送ると、Bot が doPost `getProductAlternatives`（apiKey・text）で商品を読み取り、代替品を商品ページのボタン付きで返します。
 - 代替品で買っても、ポータルでは同じ商品として検品・在庫の記録をします。登録は今のところ PC の scripts/portal_amazon_alts.py（管理画面は未対応）。
+
+## トーベンのカートに入れる（2026-10-16〜）
+
+- トーヨー（Bカート「ミル挽き珈琲CAFE」）には注文する側の API が無いため、iPhone の Safari 拡張「Userscripts」に入れた `tools/selfcafe-bcart.user.js` がカートに入れる。リンク `https://mirubiki-coffee.i16.bcart.jp/list.php#sc-cart=商品番号x数,…,mx1&store=店名&area=関東` を開くと、ログイン中のまま商品ページのフォームを読んで `cart/add` に送る（パスワードは扱わない。確定は人）。設定手順は `tools/bcart-setup.html`。
+- 商品コード→商品番号は `TOYO_BCART_IDS`（関東・東海で同じ）、店→アカウントのエリアは `TOYO_STORE_AREA`。数は Bカートの単位に切り上げ（豆 1kg＝4袋、カップ・蓋はケース。`_toyoSiteQty_`）。`mx1` は無料メンテナンス（アカウントで見える商品を検索して入れる）。
+- 発注依頼の通知（`_withAmazonOrderNotify_` → Bot）に、依頼のトーヨーの品だけのリンク `toyo` を付ける（Bot が「トーベンのカートに入れる」ボタンにする）。月初の発注メモ（`buildToyoReorder`）の下書きにも `cartUrl` を載せる。

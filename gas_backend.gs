@@ -628,7 +628,7 @@ function _dispatchNotifies_(result) {
       // 管理者向け(新規報告・追記)は登録済みの管理者全員へ送る(2026-09-25、管理者の複数人化に合わせて変更)
       else if (n.type === 'bugReportNew')          _bugReportAdminUserIds_().forEach(uid => sendBugReportBotNotification_(n.message, uid));
       else if (n.type === 'bugReportLineWorksAck') sendBugReportBotNotification_(n.message, n.userId);
-      else if (n.type === 'amazonOrderNew')        sendAmazonOrderToBot_(n.storeId, n.items);
+      else if (n.type === 'amazonOrderNew')        sendAmazonOrderToBot_(n.storeId, n.items, n.toyo);
     } catch (e) {
       console.error('LINE WORKS通知エラー(ロック解放後):', e.message);
     }
@@ -4460,6 +4460,53 @@ function _applyReorderRounding_(raw) {
 //   ・無料メンテナンスは毎月1つ必ず入れる（自動では来ない。単品注文不可）
 //   ・単価は商品マスタの price（Bカートの税抜単価、袋・本・箱・個あたり）
 const TOYO_FREE_SHIPPING = 20000;
+
+// ===== 「トーベンのカートに入れる」リンク（2026-10-16） =====
+// iPhone の Safari（Userscripts）に入れた tools/selfcafe-bcart.user.js が、このリンクの #sc-cart=商品番号x数 を読み、
+// ログイン中の Bカート「ミル挽き珈琲CAFE」のカートに入れる（注文の確定は人）。手順は tools/bcart-setup.html。
+// 商品番号は product.php?id=（関東・東海のアカウントで同じ、2026-10-16 確認）。商品コード → 番号。
+const TOYO_BCART_IDS = { '888381199': 8, '888381200': 9, '760000004': 12, '756071413': 13, '756078979': 24, '756416832': 25,
+  '751157638': 26, '903000354': 61, '1071216': 53, '77777777': 29, '903000406': 56, '701741004': 15, '710000000': 20 };
+// 店のアカウントのエリア（リンクに入れ、スクリプトがログイン中のアカウントと違えばログインし直しを頼む）。関西はフル委託のため無し
+const TOYO_STORE_AREA = { otsuka: '関東', kamisato: '関東', chitose_karasuyama: '関東',
+  fujigaoka: '東海', gifu_kitagata: '東海', cs_1791361315672: '東海' };
+const TOYO_BEAN_CODES = ['888381199', '888381200'];   // 豆は 1kg＝4袋 単位
+
+// ポータルの数（袋・本・箱、またはケース）→ Bカートの単位の数（豆 kg、カップ・蓋 ケース）。端数は切り上げ（6袋→2kg＝8袋）
+function _toyoSiteQty_(meta, qty, unitMode) {
+  const n = Number(qty) || 0;
+  if (unitMode === 'case') return n;
+  const lot = meta && meta.casePieces > 1 ? meta.casePieces : 1;
+  return Math.ceil(n / lot);
+}
+function _toyoSiteQtyText_(meta, siteQty, unit) {
+  const lot = meta && meta.casePieces > 1 ? meta.casePieces : 1;
+  if (TOYO_BEAN_CODES.indexOf(String(meta && meta.code)) >= 0) return siteQty + 'kg（' + siteQty * lot + '袋）';
+  return lot > 1 ? siteQty + 'ケース' : siteQty + (unit || '');
+}
+// lines: [{code, siteQty}]。無料メンテナンス（毎月・店ごと、mx1）も入れる（Bカートの在庫で今月分が終わっていれば入らない）
+function _toyoCartUrl_(storeId, lines) {
+  const parts = lines.filter(l => TOYO_BCART_IDS[l.code] && l.siteQty > 0).map(l => TOYO_BCART_IDS[l.code] + 'x' + l.siteQty);
+  if (!parts.length) return '';
+  parts.push('mx1');
+  const area = TOYO_STORE_AREA[storeId] || '';
+  return 'https://mirubiki-coffee.i16.bcart.jp/list.php#sc-cart=' + parts.join(',') +
+    '&store=' + encodeURIComponent(_storeNames_()[storeId] || storeId) + (area ? '&area=' + encodeURIComponent(area) : '');
+}
+// 発注依頼の行のうちトーヨーの品から、Bot の通知に付けるリンクと文面を作る（依頼の品だけ。無ければ null）
+function _toyoCartForRows_(storeId, rows) {
+  const meta = _productMeta_();
+  const toyo = (rows || []).filter(r => (meta[r.product] || {}).vendor === 'toyo');
+  if (!toyo.length) return null;
+  const lines = toyo.map(r => {
+    const m = meta[r.product] || {};
+    const siteQty = _toyoSiteQty_(m, r.qty, r.unit_mode);
+    return { id: String(r.id), code: String(m.code || ''), siteQty,
+      text: String(r.label || r.product).replace(/^㋣/, '') + ' → ' + _toyoSiteQtyText_(m, siteQty, r.unit) };
+  });
+  const url = _toyoCartUrl_(storeId, lines);
+  return url ? { url, ids: lines.map(l => l.id), lines: lines.map(l => l.text), area: TOYO_STORE_AREA[storeId] || '' } : null;
+}
 const TOYO_MAINTENANCE_NAME = '無料メンテナンス';
 
 function _storeIsToyo_(storeId) {
@@ -4531,7 +4578,9 @@ function buildToyoReorder(storeId, periodLabel, dryRun) {
   const periodJa = _periodLabelJa_(periodLabel);
   const lines = items.map(it => `${String(it.product).replace(/^㋣/, '')}：${_toyoQtyText_(it)}${it.added ? `（送料無料に乗せるため+${it.added}）` : ''}　${(it.qty * it.unitPrice).toLocaleString()}円`);
   lines.push(`${TOYO_MAINTENANCE_NAME}：1回（毎月。単品注文不可）`);
-  const result = { ok: true, store: storeId, periodLabel, items, total, freeShipping: total >= TOYO_FREE_SHIPPING, lines };
+  // 「トーベンのカートに入れる」リンク（2026-10-16）。qty はポータルの数（lot の倍数）なので lot で割ると Bカートの単位
+  const cartUrl = _toyoCartUrl_(storeId, items.map(it => ({ code: String(it.code), siteQty: Math.round(it.qty / (it.lot || 1)) })));
+  const result = { ok: true, store: storeId, periodLabel, items, total, freeShipping: total >= TOYO_FREE_SHIPPING, lines, cartUrl };
   if (dryRun) return result;
   const mail = _settingJson_('reorder_mail', {});
   const to = mail.toyo_to || mail.cc || Session.getEffectiveUser().getEmail();
@@ -4543,7 +4592,8 @@ function buildToyoReorder(storeId, periodLabel, dryRun) {
   }
   const body = [`${storeName}の${periodJa}分棚卸に基づく、Bカート「ミル挽き珈琲CAFE」で入れる数量です。`, '']
     .concat(lines, ['', `商品総額（税抜） ${total.toLocaleString()}円 → ${total >= TOYO_FREE_SHIPPING ? '送料無料' : `送料がかかります（${TOYO_FREE_SHIPPING.toLocaleString()}円未満）`}`,
-      '', '配送先はこの店舗を選び、注文確定は人が行います。']).join('\n');
+      '', '配送先はこの店舗を選び、注文確定は人が行います。']
+      .concat(cartUrl ? ['', 'トーベンのカートに入れる（iPhone の Safari で開く。設定は https://selfcafe.github.io/internal-web-system/tools/bcart-setup.html ）:', cartUrl] : [])).join('\n');
   if (existing.length) {
     existing[0].update(to, subject, body);
     existing.slice(1).forEach(d => d.deleteDraft());
@@ -4642,18 +4692,21 @@ function _withAmazonOrderNotify_(result, storeId, rows) {
     const items = (rows || []).filter(r => r && r.product &&
       (r.is_new === true || String(r.is_new) === 'TRUE') && !(r.denied === true || String(r.denied) === 'TRUE'))
       .map(r => ({ id: String(r.id), label: String(r.label || r.product), qty: r.qty, unit: r.unit_mode === 'case' ? 'ケース' : String(r.unit || ''), url: urls[r.product] || '' }));
-    if (items.length) result._notify = { type: 'amazonOrderNew', storeId: String(storeId), items };
+    // トーヨーの品は「トーベンのカートに入れる」リンクを付ける（2026-10-16。依頼の品＋無料メンテナンスだけ）
+    const ids = items.map(it => it.id);
+    const toyo = _toyoCartForRows_(storeId, (rows || []).filter(r => r && ids.indexOf(String(r.id)) >= 0));
+    if (items.length) result._notify = { type: 'amazonOrderNew', storeId: String(storeId), items, toyo };
   } catch (e) { console.error('_withAmazonOrderNotify_ error:', e.message); }
   return result;
 }
 
-function sendAmazonOrderToBot_(storeId, items) {
+function sendAmazonOrderToBot_(storeId, items, toyo) {
   const props = PropertiesService.getScriptProperties();
   const url = props.getProperty('GBP_PHOTO_BOT_URL'), apiKey = props.getProperty('GBP_PHOTO_BOT_API_KEY');
   if (!url || !apiKey) { console.warn('Amazon通知: GBP_PHOTO_BOT_URL / GBP_PHOTO_BOT_API_KEY が未設定のため送りません'); return; }
   items = items.map(it => Object.assign({}, it, { url: it.url ? _amazonUrl_(it.url) : '' }));   // 短縮URLの展開は通信があるのでロックの外で
   const res = UrlFetchApp.fetch(url, { method: 'post', contentType: 'application/json', muteHttpExceptions: true,
-    payload: JSON.stringify({ action: 'amazonOrder', apiKey, storeId, store: _storeNames_()[storeId] || storeId, items }) });
+    payload: JSON.stringify({ action: 'amazonOrder', apiKey, storeId, store: _storeNames_()[storeId] || storeId, items, toyo: toyo || null }) });
   let out = {};
   try { out = JSON.parse(res.getContentText()); } catch (e) {}
   if (!out.ok) throw new Error('Amazon通知の送信失敗 ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 200));
@@ -4950,7 +5003,10 @@ function createOrderRequest(apiKey, storeId, items) {
     if (!resend.length) return res;
     const again = _withAmazonOrderNotify_({}, storeId, resend)._notify;
     if (!again) return res;
-    if (res._notify && res._notify.type === 'amazonOrderNew') res._notify.items = res._notify.items.concat(again.items);
+    if (res._notify && res._notify.type === 'amazonOrderNew') {
+      res._notify.items = res._notify.items.concat(again.items);
+      if (!res._notify.toyo) res._notify.toyo = again.toyo;
+    }
     else res._notify = again;
     created.push('依頼中の品の通知をもう一度送ります（' + again.items.map(i => i.label).join('、') + '）');
     return res;
