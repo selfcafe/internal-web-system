@@ -4942,7 +4942,7 @@ function _orderItemFromText_(p, q) {
   if (!q) return p.caseOnly && cu ? _orderItemOut_(p, 1, 'case') : _orderItemOut_(p, 1, 'piece');
   const n = q.n, u = q.unit;
   if ((u === 'ケース' || u === 'cs') && cu) return _orderItemOut_(p, n, 'case');
-  if ((u === 'kg' || u === 'キロ') && cu === 4) return _orderItemOut_(p, n * 4, 'piece');   // 豆 1kg＝4袋
+  if ((u === 'kg' || u === 'キロ') && cu === 4) return p.caseOnly ? _orderItemOut_(p, n, 'case') : _orderItemOut_(p, n * 4, 'piece');   // 豆 1kg＝4袋＝1ケース
   if (p.caseOnly && cu) return _orderItemOut_(p, u ? Math.max(1, Math.ceil(n / cu)) : n, 'case');   // ケースのみ: 単位なしはケース、袋・本などはケースに切り上げ
   return _orderItemOut_(p, n, 'piece');
 }
