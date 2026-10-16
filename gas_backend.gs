@@ -4502,7 +4502,8 @@ function _toyoCartForRows_(storeId, rows) {
     const m = meta[r.product] || {};
     const siteQty = _toyoSiteQty_(m, r.qty, r.unit_mode);
     return { id: String(r.id), code: String(m.code || ''), siteQty,
-      text: String(r.label || r.product).replace(/^㋣/, '') + ' → ' + _toyoSiteQtyText_(m, siteQty, r.unit) };
+      text: String(r.label || r.product).replace(/^㋣/, '') + ' ×' + r.qty + (r.unit_mode === 'case' ? 'ケース' : String(r.unit || '')) +
+        ' → Bカート ' + _toyoSiteQtyText_(m, siteQty, r.unit) };   // 依頼の数と、切り上げた Bカートの数の両方を出す
   });
   const url = _toyoCartUrl_(storeId, lines);
   return url ? { url, ids: lines.map(l => l.id), lines: lines.map(l => l.text), area: TOYO_STORE_AREA[storeId] || '' } : null;
