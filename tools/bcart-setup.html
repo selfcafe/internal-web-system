@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Bカート自動カート入れ 設定</title>
+<style>
+  :root { --bg: #ffffff; --fg: #1f2328; --muted: #57606a; --card: #f6f8fa; --line: #d0d7de; --accent: #2f7d43; --accent-fg: #ffffff; --warn: #9a6700; }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) { --bg: #16181c; --fg: #e6edf3; --muted: #9aa4ae; --card: #22262c; --line: #3a4048; --accent: #4fa865; --accent-fg: #0d1117; --warn: #e3b341; }
+  }
+  :root[data-theme="dark"] { --bg: #16181c; --fg: #e6edf3; --muted: #9aa4ae; --card: #22262c; --line: #3a4048; --accent: #4fa865; --accent-fg: #0d1117; --warn: #e3b341; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg); font: 17px/1.7 -apple-system, BlinkMacSystemFont, "Hiragino Sans", sans-serif; }
+  main { max-width: 640px; margin: 0 auto; padding: 20px 16px 48px; }
+  h1 { font-size: 22px; line-height: 1.4; margin: 0 0 6px; }
+  .lead { color: var(--muted); margin: 0 0 20px; font-size: 15px; }
+  ol { list-style: none; padding: 0; margin: 0; counter-reset: step; }
+  li { counter-increment: step; background: var(--card); border: 1px solid var(--line); border-radius: 12px; padding: 14px 14px 14px 56px; margin-bottom: 12px; position: relative; }
+  li::before { content: counter(step); position: absolute; left: 14px; top: 14px; width: 30px; height: 30px; border-radius: 50%; background: var(--accent); color: var(--accent-fg); font-weight: 700; text-align: center; line-height: 30px; }
+  li b { display: block; margin-bottom: 4px; }
+  .path { display: inline-block; font-weight: 600; }
+  .btn { display: block; text-align: center; margin-top: 10px; padding: 12px; border-radius: 10px; background: var(--accent); color: var(--accent-fg); text-decoration: none; font-weight: 700; }
+  .note { color: var(--muted); font-size: 14px; margin-top: 6px; }
+  .warn { color: var(--warn); font-size: 14px; margin-top: 6px; }
+  h2 { font-size: 18px; margin: 28px 0 10px; }
+  p { margin: 0 0 10px; }
+</style>
+</head>
+<body>
+<main>
+  <h1>Bカート自動カート入れ<br>iPhone の設定</h1>
+  <p class="lead">トーヨー（ミル挽き珈琲CAFE）の発注で、リンクを開くだけで品と数がカートに入るようにします。注文の確定は今までどおり自分で押します。</p>
+
+  <ol>
+    <li><b>Userscripts アプリを入れる</b>
+      App Store の「Userscripts」（無料）。<br>
+      アプリを開くと「CURRENT DIRECTORY: Userscripts App Documents」と出ます。<span class="path">そのままで OK</span>（変えなくてよい）。</li>
+
+    <li><b>Safari で Userscripts をオンにする</b>
+      <span class="path">設定 → アプリ → Safari → 機能拡張 → Userscripts</span><br>
+      「機能拡張を許可」をオン。下の「その他の Web サイト」を「許可」にする。
+      <div class="note">iOS が古いときは「設定 → Safari → 機能拡張」にあります。</div></li>
+
+    <li><b>スクリプトを入れる</b>
+      下のボタンを Safari で開く（文字だらけの画面になりますが正常です）。<br>
+      アドレスバー左の <span class="path">「ぁあ」または パズルのマーク</span> → <span class="path">Userscripts</span> → 「Userscript Detected」の <span class="path">Install</span> を押す。
+      <a class="btn" href="https://selfcafe.github.io/internal-web-system/tools/selfcafe-bcart.user.js">スクリプトを開く</a>
+      <div class="note">Userscripts の一覧に「セルフカフェ Bカート自動カート入れ」が出ていれば完了です。</div></li>
+
+    <li><b>Bカートにログインしておく</b>
+      Safari で Bカートを開いてログイン。「ログイン状態を保持する」にチェック。<br>
+      関東・関西・東海でアカウントが別なので、使う地域のアカウントで。
+      <a class="btn" href="https://mirubiki-coffee.i16.bcart.jp/login.php">Bカートを開く</a></li>
+
+    <li><b>試す</b>
+      下のボタンで、専用グラニュー糖が 1 袋カートに入ります。画面の上に「✓ 専用グラニュー糖 ×1」と出れば成功。
+      <a class="btn" href="https://mirubiki-coffee.i16.bcart.jp/list.php#sc-cart=12x1&amp;store=%E3%83%86%E3%82%B9%E3%83%88">試しにカートに入れる</a>
+      <div class="warn">試したあとは、カートの画面で砂糖を「削除」してください。</div>
+      <div class="note">初めての時に Safari が「Userscripts にこのサイトへのアクセスを許可しますか」と聞いたら「許可」。</div></li>
+  </ol>
+
+  <h2>うまくいかないとき</h2>
+  <p>・何も出ない → 2 の「許可」と、3 の一覧に入っているかを確認。</p>
+  <p>・「ログインしていません」→ 4 でログインしてから、もう一度リンクを開く。</p>
+  <p>・それでもだめなら、画面のスクショを Claude に送ってください。</p>
+</main>
+</body>
+</html>
