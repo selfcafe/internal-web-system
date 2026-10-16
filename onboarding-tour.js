@@ -46,7 +46,7 @@
       <p style="line-height:1.7;text-align:left;font-size:13.5px">ポータルの使い方を、実際の画面で順番に練習します。<br>
         <b>練習で操作した内容は本番には送られません。</b>安心して押してみてください。</p>
       <label class="site-lock-field-label" for="onb-name">お名前</label>
-      <input class="pin-input" id="onb-name" type="text" placeholder="例：山田 花子" value="${esc(lastName)}" autocomplete="off">
+      <input class="pin-input" id="onb-name" type="text" placeholder="例：山田 花子（10文字まで）" value="${esc(lastName)}" maxlength="10" autocomplete="off">
       <label class="site-lock-field-label" for="onb-store" style="margin-top:10px">配属される店舗</label>
       <select class="pin-input" id="onb-store" style="text-align:left"><option value="">選んでください</option>${groups}</select>
       <div class="pin-error" id="onb-start-error"></div>
@@ -63,6 +63,8 @@
     const sid = document.getElementById('onb-store')?.value || '';
     const err = document.getElementById('onb-start-error');
     if (!name || !sid) { if (err) err.textContent = !name ? 'お名前を入れてください' : '配属される店舗を選んでください'; return; }
+    // 名前は10文字まで(管理画面の受講状況の表が崩れないように)。maxlengthに加えて、貼り付け等でも超えないよう確かめる
+    if ([...name].length > 10) { if (err) err.textContent = 'お名前は10文字までにしてください'; return; }
     try { localStorage.setItem('onb_last_name', name); } catch (_) {}
     sessionStorage.setItem('onboarding', '1');
     sessionStorage.setItem('onb_name', name);
