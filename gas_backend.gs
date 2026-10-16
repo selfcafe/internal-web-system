@@ -4837,6 +4837,9 @@ const ORDER_TEXT_ALIASES = {
   'CS3用カップL（14オンス）SVT-420-2': ['Lカップ', 'カップL', 'Lサイズカップ', 'カップLサイズ', '14オンスカップ'],
   '㋣断熱発泡カップ（9オンス）': ['Mカップ', 'カップM', 'Mサイズカップ', '9オンスカップ'],
   '㋣カップ（12オンス）': ['Lカップ', 'カップL', 'Lサイズカップ', '12オンスカップ'],
+  // 2026-10-16 「岐阜北方 ブレンドA 8袋」が「ブレンド」で A・B を決められなかった
+  '㋣ミル挽き珈琲　ブレンドA': ['ブレンドA', 'Aブレンド', 'A豆', '豆A'],
+  '㋣ミル挽き珈琲　ブレンドB': ['ブレンドB', 'Bブレンド', 'B豆', '豆B'],
 };
 
 function _normJa_(s) { return String(s || '').normalize('NFKC').replace(/[\s　]/g, '').toLowerCase(); }
@@ -4895,7 +4898,7 @@ function _matchProductsText_(storeId, body) {
   const products = _orderableProducts_(storeId);
   const text = _normJa_(body);
   const keysOf = p => [p.name, p.label].concat(ORDER_TEXT_ALIASES[p.name] || []).map(_normJa_).filter(Boolean);
-  const found = {}, ambiguous = [], used = [];
+  const found = {}, ambiguous = [], used = [], ends = {};   // ends: 商品名 → 文中で一致した言葉の終わり（すぐ後ろの数を読む）
   // 1) 商品名・表示名・言い方（3文字以上）が文の中にそのまま入っていれば、それで決める（長いものから。2026-10-15）。
   //    「アルコール原液」をかたまりに分けると「アルコール」が清掃用・トイレ用の両方に当たって決められなかったため
   const whole = {};
@@ -4905,7 +4908,7 @@ function _matchProductsText_(storeId, body) {
     let ps = whole[k];
     const names = Array.from(new Set(ps.map(p => p.name)));
     if (names.length > 1) { const ex = ps.filter(p => _normJa_(p.name) === k); if (ex.length) ps = ex; }
-    if (Array.from(new Set(ps.map(p => p.name))).length === 1) { found[ps[0].name] = ps[0]; used.push(k); }
+    if (Array.from(new Set(ps.map(p => p.name))).length === 1) { found[ps[0].name] = ps[0]; used.push(k); ends[ps[0].name] = text.indexOf(k) + k.length; }
     else ambiguous.push({ word: k, candidates: names.slice(0, 5).map(n => (products.find(p => p.name === n) || {}).label || n) });
   });
   // 2) 残りは、カタカナ・漢字・英数字のかたまりごとに照合する（1 で決めた言葉の一部は飛ばす）
@@ -4919,11 +4922,29 @@ function _matchProductsText_(storeId, body) {
     const pick = hits.length === 1 ? hits : exact.length === 1 ? exact : [];
     if (pick.length) {
       found[pick[0].name] = pick[0];
+      if (!(pick[0].name in ends)) ends[pick[0].name] = text.indexOf(run) + run.length;
     } else if (hits.length >= 2) {
       ambiguous.push({ word: run, candidates: hits.slice(0, 5).map(p => p.label || p.name) });
     }
   });
-  return { items: Object.keys(found).map(n => found[n]), ambiguous };
+  // 品名のすぐ後ろの数（「ブレンドA 8袋」「ココア×3」「カップM 2ケース」）。「残り5本」のように間に言葉があるものは読まない（残りの数）
+  const qtys = {};
+  Object.keys(ends).forEach(n => {
+    const q = text.slice(ends[n]).match(/^[×x*:=＝・\-]*(\d+)(ケース|cs|kg|キロ|箱|袋|個|本|枚|ロール|パック|つ)?/i);
+    if (q && Number(q[1]) > 0) qtys[n] = { n: Number(q[1]), unit: (q[2] || '').toLowerCase() };
+  });
+  return { items: Object.keys(found).map(n => found[n]), ambiguous, qtys };
+}
+
+// 連絡文の数を、ポータルの依頼の数と単位（バラ／ケース）にする（2026-10-16）。数が書いていなければ今までどおり 1（ケースのみの品は1ケース）
+function _orderItemFromText_(p, q) {
+  const cu = Number((String(p.caseUnit || '').match(/\d+/) || [0])[0]) || 0;
+  if (!q) return p.caseOnly && cu ? _orderItemOut_(p, 1, 'case') : _orderItemOut_(p, 1, 'piece');
+  const n = q.n, u = q.unit;
+  if ((u === 'ケース' || u === 'cs') && cu) return _orderItemOut_(p, n, 'case');
+  if ((u === 'kg' || u === 'キロ') && cu === 4) return _orderItemOut_(p, n * 4, 'piece');   // 豆 1kg＝4袋
+  if (p.caseOnly && cu) return _orderItemOut_(p, u ? Math.max(1, Math.ceil(n / cu)) : n, 'case');   // ケースのみ: 単位なしはケース、袋・本などはケースに切り上げ
+  return _orderItemOut_(p, n, 'piece');
 }
 
 function _orderItemOut_(p, qty, unitMode) {
@@ -4943,7 +4964,7 @@ function previewOrderText(apiKey, storeText, body) {
   }
   const m = _matchProductsText_(store.id, body);
   return { ok: true, store: { id: store.id, name: store.name }, ambiguous: m.ambiguous,
-    items: m.items.map(p => p.caseOnly && p.caseUnit ? _orderItemOut_(p, 1, 'case') : _orderItemOut_(p, 1, 'piece')) };
+    items: m.items.map(p => _orderItemFromText_(p, m.qtys[p.name])) };
 }
 
 // 確認用（読むだけ、2026-10-15）: Bot と同じ読み取りの結果を返す。?action=debugOrderText&storeText=&body=...
@@ -4951,7 +4972,8 @@ function debugOrderText(storeText, body) {
   const store = storeText ? _matchStoreText_(storeText) : _findStoreInText_(body);
   if (!store.id) return { ok: true, store: null, storeCandidates: store.candidates || [] };
   const m = _matchProductsText_(store.id, body);
-  return { ok: true, store: store, items: m.items.map(p => p.name), ambiguous: m.ambiguous, orderable: _orderableProducts_(store.id).length };
+  return { ok: true, store: store, items: m.items.map(p => { const o = _orderItemFromText_(p, m.qtys[p.name]); return p.name + ' ×' + o.qty + o.unitText; }),
+    ambiguous: m.ambiguous, orderable: _orderableProducts_(store.id).length };
 }
 
 // ===== 品切れのときの代替品（2026-10-15） =====
