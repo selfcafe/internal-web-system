@@ -119,6 +119,10 @@ const ATTENDANCE_THRESHOLD_M = 300;
 // 休み申請ログ。1回の申請で1行追加（append-only、承認ステップなしで即時確定）
 const SHEET_ATTENDANCE_LEAVE = 'attendance_leave';
 const ATTENDANCE_LEAVE_COLS = ['id','store_id','name','leave_date','submitted_at'];
+// 初めての人向けガイダンス(練習モード)の章ごとの修了記録(2026-10-16)。練習中の操作は端末内だけで
+// 完結し本番には送らないが、修了の記録だけはここに残して管理者画面の「受講状況」で見る
+const SHEET_ONBOARDING = 'onboarding_log';
+const ONBOARDING_COLS = ['id','name','store_id','chapter','chapter_title','completed_at','device_id'];
 
 // バグ報告・修正依頼掲示板（2026-09-15追加）。issue1件=bug_reportsの1行、スレッドの
 // コメント・返信・ステータス変更ログはbug_report_commentsにissue_idで紐づく別行として追記する
@@ -505,6 +509,7 @@ function doGet(e) {
     else if (a === 'getAttendance')             result = getAttendance(e.parameter.storeId);
     else if (a === 'getLeaveRequests')          result = getLeaveRequests(e.parameter.storeId);
     else if (a === 'getAttendanceTabData')      result = getAttendanceTabData(e.parameter.storeId);
+    else if (a === 'getOnboardingProgress')     result = getOnboardingProgress(e.parameter.name);
     else if (a === 'getDeliveryHistory')        result = getDeliveryHistory(e.parameter.storeId, e.parameter.month);
     else if (a === 'getMachinePhotoStatus')     result = getMachinePhotoStatus();
     else if (a === 'getMachinePhotoHistory')    result = getMachinePhotoHistory(e.parameter.storeId);
@@ -567,6 +572,7 @@ function doPost(e) {
     else if (b.action === 'reportScriptRecovery') result = reportScriptRecovery(b.message, b.key);
     else if (b.action === 'saveAttendance')      result = saveAttendance(b.storeId, b.name, b.lat, b.lng);
     else if (b.action === 'saveLeaveRequest')    result = saveLeaveRequest(b.storeId, b.name, b.leaveDate);
+    else if (b.action === 'saveOnboardingProgress') result = saveOnboardingProgress(b.name, b.storeId, b.chapter, b.chapterTitle, b.deviceId);
     else if (b.action === 'deleteLeaveRequest')  result = deleteLeaveRequest(b.id);
     else if (b.action === 'deleteAttendance')    result = deleteAttendance(b.id);
     else if (b.action === 'saveDeliveryHistory') result = saveDeliveryHistory(b.storeId, b.row);
@@ -2339,6 +2345,27 @@ function getLeaveRequests(storeId) {
 // オーバーヘッドは並列化しても1回分減らせないため、getInventoryTabDataと同じ狙いで
 // 往復回数を2回→1回に減らすのが目的（各データの中身・絞り込みロジックは変えていない）。
 // 片方が例外を投げても他方を巻き添えにしないよう個別にtry/catchする
+// ----------------------------------------------------------------
+// onboarding(ガイダンスの修了記録)
+// ----------------------------------------------------------------
+// 同じ人が同じ章をやり直した時も行を足す(やり直しの記録も残す)。一覧側で最初の修了日を使う
+function saveOnboardingProgress(name, storeId, chapter, chapterTitle, deviceId) {
+  name = String(name || '').trim();
+  if (!name || !chapter) return { error: 'name/chapterは必須です' };
+  const sheet = getSheet(SHEET_ONBOARDING);
+  ensureHeaders(sheet, ONBOARDING_COLS);
+  sheet.appendRow([Utilities.getUuid(), name, storeId || '', String(chapter), chapterTitle || '', new Date(), deviceId || '']);
+  return { ok: true };
+}
+// nameを指定するとその人の分だけ(別の端末で続きをする時に、終わった章を引き継ぐため)
+function getOnboardingProgress(name) {
+  const sheet = getSheet(SHEET_ONBOARDING);
+  ensureHeaders(sheet, ONBOARDING_COLS);
+  let rows = sheetRows(sheet, ONBOARDING_COLS).map(r => Object.assign(r, { completed_at: _dateTimeStr(r.completed_at) }));
+  if (name) rows = rows.filter(r => String(r.name).trim() === String(name).trim());
+  return rows;
+}
+
 function getAttendanceTabData(storeId) {
   const result = { history: [], leaveRequests: [] };
   try { result.history = getAttendance(storeId); }

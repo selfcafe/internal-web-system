@@ -2,6 +2,9 @@
 <html lang="ja">
 <head>
   <meta charset="UTF-8">
+  <!-- 初めての人向けガイダンス(練習モード)の時だけ、通信と端末内の保存先を練習用に差し替える。
+       下の設定の先行読み込みより前に入れる必要がある(通常のログインでは何もしない) -->
+  <script src="onboarding-sandbox.js"></script>
   <!-- ログインに必要な設定データの取得を最優先で開始する。
        Firebase読み込み(下2行)はHTML解析をブロックするため、
        ここで先に発火させておかないとgetSettingsの通信開始が
@@ -46,6 +49,15 @@
   <link rel="manifest" href="manifest.json">
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-app-compat.js"></script>
   <script src="https://www.gstatic.com/firebasejs/10.12.0/firebase-database-compat.js"></script>
+  <script>
+    // 練習モードでは他端末への更新通知(Firebase)に一切つながない(練習の保存を本番の端末に知らせないため)
+    if (window.__ONB && window.firebase) {
+      const stubRef = { on() {}, off() {}, once() { return Promise.resolve({ val: () => null }); },
+        set() { return Promise.resolve(); }, update() { return Promise.resolve(); }, remove() { return Promise.resolve(); } };
+      stubRef.child = () => stubRef; stubRef.push = () => stubRef;
+      firebase.database = () => ({ ref: () => stubRef, goOffline() {}, goOnline() {} });
+    }
+  </script>
   <link rel="apple-touch-icon" href="apple-touch-icon.png">
   <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
   <link rel="icon" type="image/png" sizes="512x512" href="icon-512.png">
@@ -1273,6 +1285,7 @@ async function _loadSettings(scope, prefetched) {
       if (r.key === 'attendance_store_default_schedule') localStorage.setItem(ATTENDANCE_STORE_DEFAULT_SCHEDULE_KEY, clean(r.value));
       if (r.key === 'machine_photo_disabled_stores') localStorage.setItem(MACHINE_PHOTO_DISABLED_KEY, clean(r.value));
       if (r.key === 'machine_photo_machine_counts') localStorage.setItem(MACHINE_PHOTO_COUNT_KEY, clean(r.value));
+      if (r.key === 'onboarding_password') localStorage.setItem('onboarding_password', clean(r.value));
     });
     localStorage.setItem(SETTINGS_SCOPE_KEY, scope);
     if (gasKeys.has('all_products') || gasKeys.has('vendor_config')) {
@@ -5787,6 +5800,7 @@ function adminLogout() {
 }
 
 function siteLogout() {
+  if (window.__ONB) { onbExit(); return; } // 練習モードを終えていつものログイン画面へ
   sessionStorage.removeItem('site_authed');
   sessionStorage.removeItem('site_authed_store');
   sessionStorage.removeItem('admin_authed');
@@ -5827,6 +5841,8 @@ async function submitSiteLogin() {
   const val = document.getElementById('site-pw-input').value.trim();
   const err = document.getElementById('site-pw-error');
   if (!val) { err.textContent = 'パスワードを入力してください'; setTimeout(() => { err.textContent=''; }, 2000); return; }
+  // ガイダンス(練習)用のパスワードなら、名前と配属店を選ぶ開始画面へ(onboarding-tour.js)
+  if (window.onbIsTrainingPassword && onbIsTrainingPassword(val)) { onbShowStartScreen(); return; }
   try {
     // store_passwordsから照合（{storeId: password}形式）
     let customPws = {};
@@ -8732,7 +8748,69 @@ const SETTINGS_MENU = [
     { key:'add',      label:'項目の追加', build:_spCsAdd },
     { key:'category', label:'カテゴリ',   build:_spCsCategory },
   ]},
+  { key:'onboarding', label:'ガイダンス', pages:[
+    { key:'progress', label:'受講状況',         build:_spOnboardingProgress },
+    { key:'pw',       label:'練習用パスワード', build:_spOnboardingPw },
+  ]},
 ];
+
+/* --- ガイダンス(初めての人向けの練習モード、onboarding-*.js)の設定 --- */
+function _spOnboardingPw() {
+  let cur = '';
+  try { cur = JSON.parse(localStorage.getItem('onboarding_password') || '""'); } catch (e) {}
+  return `
+    <div style="${_SP_NOTE}">ログイン画面でこのパスワードを入れると、名前と配属店を選んでガイダンス(練習)が始まります。全員共通で1つです。
+      練習で操作した内容は本番には送られません(修了の記録だけ「受講状況」に残ります)。空にするとガイダンスは使えなくなります。
+      店舗のパスワードと同じにはしないでください。</div>
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+      <input id="onb-pw-input" type="text" value="${esc(cur)}" placeholder="例：guide2026"
+        style="border:1px solid #ddd;border-radius:6px;padding:8px 10px;font-size:14px;font-family:inherit;min-width:200px">
+      <button onclick="saveOnboardingPw()" style="${_SP_BTN}">保存</button>
+      <span id="onb-pw-msg" style="${_SP_MSG}"></span>
+    </div>`;
+}
+async function saveOnboardingPw() {
+  const val = (document.getElementById('onb-pw-input')?.value || '').trim();
+  const msg = document.getElementById('onb-pw-msg');
+  let storePws = {};
+  try { storePws = JSON.parse(localStorage.getItem(STORE_PW_KEY) || '{}'); } catch (e) {}
+  if (val && (Object.values(storePws).includes(val) || val === SITE_PW)) { if (msg) msg.textContent = '店舗・管理者のパスワードと同じものは使えません'; return; }
+  localStorage.setItem('onboarding_password', JSON.stringify(val));
+  const ok = await _gasSaveSetting('onboarding_password', JSON.stringify(val));
+  if (msg) msg.textContent = ok ? (val ? '保存しました' : 'ガイダンスを使えなくしました') : '保存に失敗しました';
+}
+function _spOnboardingProgress() {
+  setTimeout(loadOnboardingProgressTable, 0);
+  return `
+    <div style="${_SP_NOTE}">ガイダンスを受けた人と、終えた章です(章の名前の下は最初に終えた日)。</div>
+    <div id="onb-progress-wrap" style="overflow-x:auto"><div style="color:#aaa;font-size:13px;padding:8px 0">読み込み中…</div></div>`;
+}
+async function loadOnboardingProgressTable() {
+  const wrap = document.getElementById('onb-progress-wrap');
+  if (!wrap) return;
+  let rows = [];
+  try { rows = await gasGet('getOnboardingProgress') || []; } catch (e) { wrap.innerHTML = '<div style="color:#c0392b;font-size:13px">読み込めませんでした</div>'; return; }
+  const chapters = window.ONB_CHAPTER_LIST || [];
+  const people = {};
+  rows.forEach(r => {
+    const p = people[r.name] = people[r.name] || { name: r.name, store: r.store_id, done: {}, last: '' };
+    if (!p.done[r.chapter] || r.completed_at < p.done[r.chapter]) p.done[r.chapter] = r.completed_at;
+    if (r.completed_at > p.last) { p.last = r.completed_at; p.store = r.store_id; }
+  });
+  const list = Object.values(people).sort((a, b) => String(b.last).localeCompare(String(a.last)));
+  if (!list.length) { wrap.innerHTML = '<div style="color:#aaa;font-size:13px;padding:8px 0">まだ受講した人はいません</div>'; return; }
+  const th = 'padding:6px 8px;font-size:12px;background:#22703d;color:white;white-space:nowrap;text-align:center';
+  const td = 'padding:6px 8px;font-size:12px;border-bottom:1px solid #eee;text-align:center;white-space:nowrap';
+  wrap.innerHTML = `<table style="border-collapse:collapse;background:white;overflow:visible">
+    <thead><tr><th style="${th};text-align:left">名前</th><th style="${th}">練習した店</th><th style="${th}">修了</th>
+      ${chapters.map(c => `<th style="${th}">${esc(c.title)}</th>`).join('')}</tr></thead>
+    <tbody>${list.map(p => {
+      const n = chapters.filter(c => p.done[c.key]).length;
+      return `<tr><td style="${td};text-align:left;font-weight:700">${esc(p.name)}</td><td style="${td}">${esc(STORES[p.store] || p.store || '')}</td>
+        <td style="${td};font-weight:700;color:${n === chapters.length ? '#16a34a' : '#555'}">${n} / ${chapters.length}</td>
+        ${chapters.map(c => `<td style="${td}">${p.done[c.key] ? `<span style="color:#16a34a;font-weight:700">✓</span><br><span style="color:#888;font-size:11px">${esc(String(p.done[c.key]).slice(5, 10).replace('-', '/'))}</span>` : '<span style="color:#ddd">－</span>'}</td>`).join('')}</tr>`;
+    }).join('')}</tbody></table>`;
+}
 
 function _settingsCurrent() {
   let saved = '';
@@ -9921,5 +9999,6 @@ if (!(sessionStorage.getItem('admin_authed') === '1' || isSiteAuthed())) {
   }
 })();
 </script>
+<script src="onboarding-tour.js"></script>
 </body>
 </html>
