@@ -4475,7 +4475,8 @@ const TOYO_BEAN_CODES = ['888381199', '888381200'];   // 豆は 1kg＝4袋 単�
 // ポータルの数（袋・本・箱、またはケース）→ Bカートの単位の数（豆 kg、カップ・蓋 ケース）。端数は切り上げ（6袋→2kg＝8袋）
 function _toyoSiteQty_(meta, qty, unitMode) {
   const n = Number(qty) || 0;
-  if (unitMode === 'case') return n;
+  // ケースのみの品（カップなど）は、行の unit_mode がバラのままでもポータルの画面ではケースとして扱う（2026-10-16 大塚のカップ「2」＝2ケース）
+  if (unitMode === 'case' || (meta && meta.caseOnly)) return n;
   const lot = meta && meta.casePieces > 1 ? meta.casePieces : 1;
   return Math.ceil(n / lot);
 }
@@ -4502,7 +4503,7 @@ function _toyoCartForRows_(storeId, rows) {
     const m = meta[r.product] || {};
     const siteQty = _toyoSiteQty_(m, r.qty, r.unit_mode);
     return { id: String(r.id), code: String(m.code || ''), siteQty,
-      text: String(r.label || r.product).replace(/^㋣/, '') + ' ×' + r.qty + (r.unit_mode === 'case' ? 'ケース' : String(r.unit || '')) +
+      text: String(r.label || r.product).replace(/^㋣/, '') + ' ×' + r.qty + (r.unit_mode === 'case' || m.caseOnly ? 'ケース' : String(r.unit || '')) +
         ' → Bカート ' + _toyoSiteQtyText_(m, siteQty, r.unit) };   // 依頼の数と、切り上げた Bカートの数の両方を出す
   });
   const url = _toyoCartUrl_(storeId, lines);
@@ -4690,9 +4691,11 @@ function _amazonUrlMap_() {
 function _withAmazonOrderNotify_(result, storeId, rows) {
   try {
     const urls = _amazonUrlMap_();
+    const meta = _productMeta_();   // ケースのみの品は unit_mode がバラのままでもケース（ポータルの画面と同じ扱い）
     const items = (rows || []).filter(r => r && r.product &&
       (r.is_new === true || String(r.is_new) === 'TRUE') && !(r.denied === true || String(r.denied) === 'TRUE'))
-      .map(r => ({ id: String(r.id), label: String(r.label || r.product), qty: r.qty, unit: r.unit_mode === 'case' ? 'ケース' : String(r.unit || ''), url: urls[r.product] || '' }));
+      .map(r => ({ id: String(r.id), label: String(r.label || r.product), qty: r.qty,
+        unit: r.unit_mode === 'case' || (meta[r.product] || {}).caseOnly ? 'ケース' : String(r.unit || ''), url: urls[r.product] || '' }));
     // トーヨーの品は「トーベンのカートに入れる」リンクを付ける（2026-10-16。依頼の品＋無料メンテナンスだけ）
     const ids = items.map(it => it.id);
     const toyo = _toyoCartForRows_(storeId, (rows || []).filter(r => r && ids.indexOf(String(r.id)) >= 0));
