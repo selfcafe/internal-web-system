@@ -4815,7 +4815,8 @@ function _findStoreInText_(body) {
   if (hit.length) return { candidates: hit.map(id => names[id]) };
   // 店名を丸ごと書いていないとき（2026-10-16、「心斎橋」→ 心斎橋東急ビル、「梅田」→ 梅田センタービル）:
   // 本文の漢字・カタカナ・英数字のかたまり（2文字以上。末尾の「店」は除く）が店名の頭と同じ店、3文字以上なら店名に含まれる店。1店に決まったときだけ
-  const runs = (text.match(/[ァ-ヶー]+|[一-龠々]+|[a-z0-9]+/g) || []).map(r => r.replace(/店$/, '')).filter(r => r.length >= 2);
+  const runs = (String(body).normalize('NFKC').toLowerCase().match(/[ァ-ヶー]+|[一-龠々]+|[a-z0-9]+/g) || [])   // 空白でも区切る（「盛岡 水」）
+    .map(r => r.replace(/店$/, '')).filter(r => r.length >= 2);
   const part = Object.keys(names).filter(id => {
     const n = norm(id);
     return n && runs.some(r => n.indexOf(r) === 0 || (r.length >= 3 && n.indexOf(r) >= 0));
