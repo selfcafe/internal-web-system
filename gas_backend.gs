@@ -4773,6 +4773,13 @@ const ORDER_TEXT_ALIASES = {
   '清掃用アルコール': ['アルコール原液', 'アルコールの原液', 'アルコール詰め替え', 'スキッシュ'],   // 2026-10-15 原店の連絡
   '粘着クリーナー': ['コロコロ', '粘着テープ', 'カーペットクリーナー'],
   '抹茶ラテ': ['抹茶オレ', '抹茶オーレ'],
+  // 2026-10-16 「心斎橋　Mカップ残り5本」が「カップ」と「M」に分かれて決められなかった。店ごとに扱うカップは1種類なので、大きさの言い方で決める
+  '100RS用カップM（9オンス）GDRV09PO': ['Mカップ', 'カップM', 'Mサイズカップ', 'カップMサイズ', '9オンスカップ'],
+  '100RS用カップL（12オンス）SV-350P': ['Lカップ', 'カップL', 'Lサイズカップ', 'カップLサイズ', '12オンスカップ'],
+  '55D用カップM（ビビ＆けん）GCCVZ9P0': ['Mカップ', 'カップM', 'Mサイズカップ', 'カップMサイズ'],
+  'CS3用カップL（14オンス）SVT-420-2': ['Lカップ', 'カップL', 'Lサイズカップ', 'カップLサイズ', '14オンスカップ'],
+  '㋣断熱発泡カップ（9オンス）': ['Mカップ', 'カップM', 'Mサイズカップ', '9オンスカップ'],
+  '㋣カップ（12オンス）': ['Lカップ', 'カップL', 'Lサイズカップ', '12オンスカップ'],
 };
 
 function _normJa_(s) { return String(s || '').normalize('NFKC').replace(/[\s　]/g, '').toLowerCase(); }
@@ -4805,7 +4812,16 @@ function _findStoreInText_(body) {
   });
   hit = hit.filter(a => !hit.some(b => b !== a && norm(b).length > norm(a).length && norm(b).indexOf(norm(a)) >= 0));
   if (hit.length === 1) return { id: hit[0], name: names[hit[0]] };
-  return { candidates: hit.map(id => names[id]) };
+  if (hit.length) return { candidates: hit.map(id => names[id]) };
+  // 店名を丸ごと書いていないとき（2026-10-16、「心斎橋」→ 心斎橋東急ビル、「梅田」→ 梅田センタービル）:
+  // 本文の漢字・カタカナ・英数字のかたまり（2文字以上。末尾の「店」は除く）が店名の頭と同じ店、3文字以上なら店名に含まれる店。1店に決まったときだけ
+  const runs = (text.match(/[ァ-ヶー]+|[一-龠々]+|[a-z0-9]+/g) || []).map(r => r.replace(/店$/, '')).filter(r => r.length >= 2);
+  const part = Object.keys(names).filter(id => {
+    const n = norm(id);
+    return n && runs.some(r => n.indexOf(r) === 0 || (r.length >= 3 && n.indexOf(r) >= 0));
+  });
+  if (part.length === 1) return { id: part[0], name: names[part[0]] };
+  return { candidates: part.map(id => names[id]) };
 }
 
 function _orderableProducts_(storeId) {
@@ -4863,7 +4879,10 @@ function previewOrderText(apiKey, storeText, body) {
   if (!key || apiKey !== key) return { error: 'unauthorized' };
   const store = storeText ? _matchStoreText_(storeText) : _findStoreInText_(body);   // 店舗名の行が無ければ本文から探す
   // 店舗が決まらないときも、全商品で照合して「商品の連絡らしいか」（productCount）だけ返す（Bot が店舗を聞き返すかの判断）
-  if (!store.id) return { ok: true, store: null, storeCandidates: store.candidates || [], productCount: _matchProductsText_(null, body).items.length };
+  if (!store.id) {
+    const m0 = _matchProductsText_(null, body);
+    return { ok: true, store: null, storeCandidates: store.candidates || [], productCount: m0.items.length + m0.ambiguous.length };
+  }
   const m = _matchProductsText_(store.id, body);
   return { ok: true, store: { id: store.id, name: store.name }, ambiguous: m.ambiguous,
     items: m.items.map(p => p.caseOnly && p.caseUnit ? _orderItemOut_(p, 1, 'case') : _orderItemOut_(p, 1, 'piece')) };
