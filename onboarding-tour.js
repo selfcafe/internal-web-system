@@ -145,6 +145,8 @@
     .onb-bubble .onb-count{font-size:12px;color:#9ca3af}
     .onb-btn{background:#22703d;color:#fff;border:none;border-radius:8px;padding:9px 18px;font-size:14px;font-weight:700;cursor:pointer;font-family:inherit}
     .onb-btn.sub{background:#f3f4f6;color:#374151}
+    .onb-btn:disabled{background:#c7d2cb;cursor:default}
+    .onb-bubble .onb-hint{font-size:12px;color:#9ca3af;text-align:right;margin-top:4px}
     .onb-modal-bg{position:fixed;inset:0;z-index:99995;background:rgba(15,23,42,.6);display:flex;align-items:center;justify-content:center;padding:16px}
     .onb-modal{background:#fff;border-radius:16px;max-width:480px;width:100%;max-height:90vh;overflow:auto;padding:18px 18px 14px;box-sizing:border-box}
     .onb-modal h3{margin:0 0 4px;font-size:18px;color:#22703d}
@@ -305,23 +307,28 @@
       };
       cur = { step, idx, total, chapter, finish };
       const isNext = !step.wait || step.wait === 'next';
+      // 文字・数字・日付などを入れる手順は、1文字目で勝手に進むと分かりにくいので、入力が終わったら
+      // 本人が「次へ」を押して進む(入力があるまで「次へ」は押せない)(2026-10-16)
+      const isConfirm = !!step.confirm && typeof step.wait === 'function';
       bubble.innerHTML = `
         <div class="onb-ch">${esc(chapter.title)}</div>
         <div class="onb-text">${typeof step.text === 'function' ? step.text() : step.text}</div>
         <div class="onb-foot">
           <div class="onb-links">
-            ${isNext ? '' : '<a data-act="skip">この手順を飛ばす</a>'}
+            ${isNext || isConfirm ? '' : '<a data-act="skip">この手順を飛ばす</a>'}
             <a data-act="menu">目次へ</a>
           </div>
           <div style="display:flex;align-items:center;gap:10px">
             <span class="onb-count">${idx + 1} / ${total}</span>
             ${isNext ? `<button class="onb-btn" data-act="next">${esc(step.nextLabel || '次へ')}</button>` : ''}
+            ${isConfirm ? '<button class="onb-btn" data-act="next" disabled>次へ</button>' : ''}
           </div>
-        </div>`;
+        </div>
+        ${isConfirm ? '<div class="onb-hint">入力が終わったら「次へ」を押してください</div>' : ''}`;
       bubble.querySelectorAll('[data-act]').forEach(a => a.addEventListener('click', e => {
         e.preventDefault();
         const act = a.dataset.act;
-        if (act === 'next') finish('done');
+        if (act === 'next') { if (a.disabled) return; finish('done'); }
         if (act === 'skip') finish('skipped');
         if (act === 'menu') { finish('abort'); }
       }));
@@ -332,6 +339,9 @@
           if (resolveTarget(step.target).some(el => el.contains(e.target))) setTimeout(() => finish('done'), step.delay ?? 450);
         };
         document.addEventListener('click', onClick, true);
+      } else if (isConfirm) {
+        const btn = bubble.querySelector('[data-act=next]');
+        poll = setInterval(() => { let ok = false; try { ok = !!step.wait(); } catch (_) {} if (btn) btn.disabled = !ok; }, 200);
       } else if (typeof step.wait === 'function') {
         poll = setInterval(() => { try { if (step.wait()) setTimeout(() => finish('done'), step.delay ?? 300); } catch (_) {} }, 250);
       }
@@ -528,7 +538,7 @@
       steps: () => [
         { text: '店に着いたら、最初に「<b>業務開始</b>」を押して出勤を記録します。<br>休みの申請も、同じ画面からできます。' },
         { target: attBtn, wait: 'click', text: '右上の「<b>業務管理</b>」を押してください。' },
-        { target: '#attendance-name-sel', wait: () => document.getElementById('attendance-name-sel')?.value === NAME,
+        { confirm: true, target: '#attendance-name-sel', wait: () => document.getElementById('attendance-name-sel')?.value === NAME,
           text: `ここで自分の名前を選びます。「<b>${esc(NAME)}</b>」を選んでください。` },
         { target: '#attendance-clockin-btn', wait: () => { const t = document.getElementById('attendance-msg')?.textContent || ''; return t && !t.includes('取得しています'); },
           text: '「<b>業務開始</b>」を押してください。<br>位置情報を使ってよいか聞かれたら「<b>許可</b>」を押します。<br><span style="font-size:13px;color:#6b7280">練習では位置情報はどこにも送りません。</span>' },
@@ -537,7 +547,7 @@
             : '位置情報が使えませんでした。<br>本番では位置情報を<b>許可</b>しないと記録できません。スマホの設定で、このブラウザの位置情報を「許可」にしておきましょう。' },
         { target: () => one('#partner-tab-attendance .settings-accordion-hdr'), wait: 'click', text: '「<b>業務開始履歴</b>」を押すと、これまでの記録が見られます。' },
         { target: '#attendance-history-wrap', text: '押した日時と、店の近くで押せたか（✓）が出ます。' },
-        { target: '#leave-date-input', wait: () => !!document.getElementById('leave-date-input')?.value,
+        { confirm: true, target: '#leave-date-input', wait: () => !!document.getElementById('leave-date-input')?.value,
           text: '次は<b>休み申請</b>です。休みたい日を選んでください（練習なので、どの日でも大丈夫です）。' },
         { target: () => one('#partner-tab-attendance button[onclick="submitLeaveRequest()"]'),
           wait: () => !!one('#leave-request-list-wrap button[onclick^="cancelLeaveRequest"]') || !!leaveOverlay(),
@@ -567,7 +577,7 @@
         { target: () => T.qtyPlus(0), wait: () => T.qtyVal(0) >= 2, text: '「<b>＋</b>」を押して、数を <b>2</b> にしてください。' },
         { optional: true, target: () => T.rowOf(0)?.querySelector('.unit-toggle-btn')?.parentElement,
           text: 'この商品は<b>バラ</b>と<b>ケース</b>を切り替えられます。ケースで頼むときはここを押します。' },
-        { target: () => T.rowOf(0)?.querySelector('td.c-note textarea'), wait: () => !!T.rowOf(0)?.querySelector('td.c-note textarea')?.value.trim(),
+        { confirm: true, target: () => T.rowOf(0)?.querySelector('td.c-note textarea'), wait: () => !!T.rowOf(0)?.querySelector('td.c-note textarea')?.value.trim(),
           text: '伝えたいことがあれば<b>備考</b>に書きます。「練習」と入れてみてください。' },
         { target: () => [...(T.groupBar()?.querySelectorAll('label') || [])].find(l => l.textContent.includes('撮影')),
           wait: () => !!T.groupBar()?.querySelector('img'),
@@ -652,7 +662,7 @@
         { target: '#ptab-lost', wait: 'click', text: '「<b>忘れ物</b>」のタブを押してください。' },
         { target: () => one('#partner-tab-lost > div > div:nth-child(2)'), text: '財布やスマホなどの<b>貴重品</b>は、交番か警察署に届けたうえで登録します。<br>それ以外の物は、登録して<b>店で1か月保管</b>したあと処分します。' },
         { target: '#lost-date-input', text: '見つけた日です。今日の日付が入っています。' },
-        { target: '#lost-note-input', wait: () => !!document.getElementById('lost-note-input')?.value.trim(),
+        { confirm: true, target: '#lost-note-input', wait: () => !!document.getElementById('lost-note-input')?.value.trim(),
           text: 'どんな物か、どこにあったかを書きます。「黒い傘・入口の傘立て」のように入れてみてください。' },
         { target: () => all('#partner-tab-lost label').find(l => l.textContent.includes('撮影')), wait: () => !!one('#lost-image-preview img'),
           text: '写真を付けます。「<b>📷 撮影</b>」を押して、何か1枚撮ってください。' },
@@ -672,7 +682,7 @@
         { text: '<b>月末</b>に、店にある商品の数（在庫）を数えて送ります。これを<b>棚卸</b>といいます。<br><span style="font-size:13px;color:#6b7280">練習では、1品目以外の数は入れておきました。</span>' },
         { target: '#ptab-inventory', wait: 'click', setup: async () => { switchPartnerTab('order'); await sleep(100); }, text: '「<b>棚卸表</b>」のタブを押してください。' },
         { setup: prepareInventory, target: () => one('#inventory-table-wrap thead'), text: '商品ごとに、数えた数を入れる表です。見出しの「期末在庫」の列に数を入れます。' },
-        { target: () => invCell('endStock'), wait: () => !!invCell('endStock')?.querySelector('input')?.value,
+        { confirm: true, target: () => invCell('endStock'), wait: () => !!invCell('endStock')?.querySelector('input')?.value,
           text: '1品目の「<b>期末在庫</b>」に、数えた数を入れます。練習なので「<b>5</b>」と入れてください。' },
         { optional: true, target: () => invFirstRow()?.querySelector('input[type=date]')?.closest('td'),
           text: '消費期限がある商品は、期限の日付と、その期限の個数も入れます。期限が近い物・切れた物は色が変わります。' },
@@ -680,7 +690,7 @@
           text: '期限切れなどで捨てた数は「<b>処分数量</b>」に入れます（無ければ空のままで大丈夫です）。' },
         { target: () => one('#inventory-table-wrap button[onclick="goToInventoryConfirm()"]'), wait: 'click', text: '全部入れたら「<b>確認 →</b>」を押します。' },
         { target: () => one('#inventory-table-wrap thead'), text: '確認画面です。先月の在庫・届いた数・今回の数から、使った数（<b>消費量</b>）が自動で計算されます。' },
-        { optional: true, target: () => one('#inventory-table-wrap input[onchange^="updateInventoryPeriodField(\'anomalyNote\'"]')?.closest('tr'),
+        { confirm: true, optional: true, target: () => one('#inventory-table-wrap input[onchange^="updateInventoryPeriodField(\'anomalyNote\'"]')?.closest('tr'),
           wait: () => all('#inventory-table-wrap input[onchange^="updateInventoryPeriodField(\'anomalyNote\'"]').every(i => i.value.trim()),
           text: '先月より使った数がとても多い商品には、<b>理由</b>を書きます。「イベントで多く出た」などと入れてください。' },
         { target: '#inventory-submit-btn', wait: () => !!getInventoryPeriodData(STORE, getInventoryPeriod().label).lastSentAt,
@@ -696,7 +706,7 @@
         { target: '#ptab-bugreport', wait: 'click', text: '「<b>バグ報告</b>」のタブを押してください。' },
         { target: () => [one('#bugreport-kind-bug'), one('#bugreport-kind-request')].filter(Boolean), wait: 'click',
           text: '不具合なら左、要望なら右を選びます。どちらか押してください。' },
-        { target: '#bugreport-content-input', wait: () => !!document.getElementById('bugreport-content-input')?.value.trim(),
+        { confirm: true, target: '#bugreport-content-input', wait: () => !!document.getElementById('bugreport-content-input')?.value.trim(),
           text: '何があったかを書きます。「練習の投稿です」と入れてください。<br><span style="font-size:13px;color:#6b7280">本番では、どの画面で何をしたらどうなったか、を書くと助かります。写真も付けられます。</span>' },
         { setup: () => { snap = window.__onbDb.get().bugs.length; },
           target: '#bugreport-submit-btn', wait: () => window.__onbDb.get().bugs.length > snap && !!bugItem(), text: '「<b>投稿する</b>」を押してください。' },
