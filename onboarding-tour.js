@@ -147,6 +147,14 @@
     .onb-btn.sub{background:#f3f4f6;color:#374151}
     .onb-btn:disabled{background:#c7d2cb;cursor:default}
     .onb-bubble .onb-hint{font-size:12px;color:#9ca3af;text-align:right;margin-top:4px}
+    /* 入力欄に文字を打っている間は、説明をたたんで1行にする(キーボードで見える範囲が狭く、入力欄にかぶるため) */
+    .onb-bubble .onb-typing{display:none;font-size:13.5px;color:#374151;font-weight:700}
+    .onb-bubble.onb-compact{padding:7px 10px 7px 14px;border-radius:12px}
+    .onb-bubble.onb-compact .onb-ch,.onb-bubble.onb-compact .onb-text,.onb-bubble.onb-compact .onb-links,
+    .onb-bubble.onb-compact .onb-count,.onb-bubble.onb-compact .onb-hint{display:none}
+    .onb-bubble.onb-compact .onb-foot{margin-top:0}
+    .onb-bubble.onb-compact .onb-typing{display:block}
+    .onb-bubble.onb-compact .onb-btn{padding:7px 16px}
     .onb-modal-bg{position:fixed;inset:0;z-index:99995;background:rgba(15,23,42,.6);display:flex;align-items:center;justify-content:center;padding:16px}
     .onb-modal{background:#fff;border-radius:16px;max-width:480px;width:100%;max-height:90vh;overflow:auto;padding:18px 18px 14px;box-sizing:border-box}
     .onb-modal h3{margin:0 0 4px;font-size:18px;color:#22703d}
@@ -243,6 +251,12 @@
     const vv = window.visualViewport;
     const vTop = vv ? vv.offsetTop : 0, vH = vv ? vv.height : H, vLeft = vv ? vv.offsetLeft : 0, vW = vv ? vv.width : W;
     const zoom = vv && vv.scale > 1.01 ? vv.scale : 1;
+    // 押す所の中の入力欄に文字を打っている間(=スマホならキーボードが出ている間)は説明を1行にたたむ
+    const ae = document.activeElement;
+    const typing = !!rect && !!ae && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName) && !/^(file|checkbox|radio|button|submit)$/.test(ae.type || '')
+      && els.some(el => el.contains(ae));
+    const compact = typing && (isMobile() || zoom > 1);
+    bubble.classList.toggle('onb-compact', compact);
     const screenW = vW * zoom;
     const cssW = isMobile() || zoom > 1 ? screenW - 24 : Math.min(380, screenW - 24);
     bubble.style.width = cssW + 'px';
@@ -251,7 +265,17 @@
     const bw = cssW / zoom;
     const bh = bubble.offsetHeight / zoom;
     let top, left;
+    const overlapsRect = y => !(y + bh <= rect.top || y >= rect.bottom);
     if (!rect) { top = vTop + (vH - bh) / 2; left = vLeft + (vW - bw) / 2; }
+    else if (compact) {
+      // 入力欄のすぐ上か下(広い方を先に)。どちらも無理なら見えている範囲の上か下で、かぶらない方
+      const minY = vTop + 4 / zoom, maxY = vTop + vH - bh - 4 / zoom;
+      const above = rect.top - bh - 6 / zoom, below = rect.bottom + 6 / zoom;
+      const order = (rect.top - vTop) > (vTop + vH - rect.bottom) ? [above, below, minY, maxY] : [below, above, maxY, minY];
+      top = order.find(y => y >= minY && y <= maxY && !overlapsRect(y));
+      if (top === undefined) top = order.find(y => y >= minY && y <= maxY) ?? minY;
+      left = vLeft + 12 / zoom;
+    }
     else if (isMobile() || zoom > 1) {
       // スマホは見えている範囲の上か下に置き、スクロールしても位置を変えない(押す所に重なる時だけ反対側へ)
       const posTop = vTop + 38 / zoom, posBottom = vTop + vH - bh - 10 / zoom;
@@ -269,7 +293,7 @@
       else top = vTop + vH - bh - 12;
       left = Math.min(Math.max(vLeft + 12, (rect.left + rect.right) / 2 - bw / 2), vLeft + vW - bw - 12);
     }
-    bubble.style.top = Math.max(vTop + 36 / zoom, top) + 'px';
+    bubble.style.top = (compact ? top : Math.max(vTop + 36 / zoom, top)) + 'px';
     bubble.style.left = left + 'px';
   }
   function loop() { if (!cur) return; layout(); requestAnimationFrame(loop); }
@@ -283,6 +307,7 @@
   // 動き続けて次の章の案内と混ざらないようにするため(2026-10-16、マシン撮影の途中で忘れ物の章を始めると
   // マシン撮影の案内が出てくる不具合)
   let activeRun = null;
+  let lastBubblePress = 0;
   function abortCurrent() {
     if (activeRun) { activeRun.aborted = true; activeRun = null; }
     if (cur && cur.finish) cur.finish('abort');
@@ -321,6 +346,7 @@
         <div class="onb-ch">${esc(chapter.title)}</div>
         <div class="onb-text">${typeof step.text === 'function' ? step.text() : step.text}</div>
         <div class="onb-foot">
+          <span class="onb-typing">${isConfirm ? '入力中… 終わったら「次へ」' : '入力中…'}</span>
           <div class="onb-links">
             ${isNext || isConfirm ? '' : '<a data-act="skip">この手順を飛ばす</a>'}
             <a data-act="menu">目次へ</a>
@@ -332,13 +358,30 @@
           </div>
         </div>
         ${isConfirm ? '<div class="onb-hint">入力が終わったら「次へ」を押してください</div>' : ''}`;
-      bubble.querySelectorAll('[data-act]').forEach(a => a.addEventListener('click', e => {
+      // 押した瞬間(pointerdown)に反応する。clickを待つと、入力中の欄から外れた時点で吹き出しが元の大きさに
+      // 戻って動き、指を離す前にボタンが指の下から逃げて押せないことがあったため(1行にたたんだ時)。
+      // pointerdownで既定動作を止めると入力欄から外れないので、外す・保存するのは下で行う
+      const onAct = (a, e) => {
         e.preventDefault();
+        // pointerdownで進んだ直後に来るclickは、同じ場所に出た次の手順の「次へ」を押してしまうので無視する
+        if (e.type === 'click' && Date.now() - lastBubblePress < 700) return;
+        if (e.type === 'pointerdown') lastBubblePress = Date.now();
         const act = a.dataset.act;
-        if (act === 'next') { if (a.disabled) return; finish('done'); }
+        if (act === 'next') {
+          if (a.disabled) return;
+          // 入力欄にカーソルが残ったままだと(iPhoneのSafariはボタンを押しても入力欄から外れない)、
+          // 入力した内容の保存(onchange)が起きないので、先に入力欄から外して保存させてから次へ進む
+          const ae = document.activeElement;
+          if (ae && ae !== document.body && /^(INPUT|TEXTAREA|SELECT)$/.test(ae.tagName)) { ae.blur(); setTimeout(() => finish('done'), 120); }
+          else finish('done');
+        }
         if (act === 'skip') finish('skipped');
         if (act === 'menu') { finish('abort'); }
-      }));
+      };
+      bubble.querySelectorAll('[data-act]').forEach(a => {
+        a.addEventListener('pointerdown', e => onAct(a, e));
+        a.addEventListener('click', e => onAct(a, e)); // キーボード操作など(二重に進まないよう finish 側で1回だけにしている)
+      });
       bubble.style.display = 'block';
       requestAnimationFrame(loop);
       if (step.wait === 'click') {
