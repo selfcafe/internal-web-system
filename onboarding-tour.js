@@ -133,8 +133,8 @@
       display:flex;align-items:center;justify-content:space-between;gap:8px;padding:5px 10px;box-shadow:0 1px 4px rgba(0,0,0,.2)}
     .onb-ribbon button{background:#fff;color:#b45309;border:none;border-radius:999px;padding:4px 12px;font-size:12px;font-weight:700;cursor:pointer;font-family:inherit}
     body.onb-on{padding-top:30px}
-    .onb-block{position:fixed;z-index:99991;background:rgba(15,23,42,.55)}
-    .onb-ring{position:fixed;z-index:99992;pointer-events:none;border-radius:10px;box-shadow:0 0 0 3px #fbbf24,0 0 18px 4px rgba(251,191,36,.9);transition:all .15s}
+    .onb-block{position:absolute;z-index:99991;background:rgba(15,23,42,.55)}
+    .onb-ring{position:absolute;z-index:99992;pointer-events:none;border-radius:10px;box-shadow:0 0 0 3px #fbbf24,0 0 18px 4px rgba(251,191,36,.9)}
     .onb-bubble{position:fixed;z-index:99993;background:#fff;border-radius:14px;box-shadow:0 10px 30px rgba(0,0,0,.35);padding:14px 16px 12px;
       font-size:15px;line-height:1.65;color:#1f2937;box-sizing:border-box}
     .onb-bubble .onb-ch{font-size:11.5px;color:#b45309;font-weight:700;margin-bottom:4px}
@@ -192,44 +192,75 @@
     if (!Array.isArray(r)) r = [r];
     return r.filter(isVisible);
   }
+  // 押す所の矩形(画面上の座標)。横スクロールする表などの中にある時は、その枠からはみ出た部分を除く
   function unionRect(els) {
     let l = Infinity, t = Infinity, r = -Infinity, b = -Infinity;
-    els.forEach(el => { const x = el.getBoundingClientRect(); l = Math.min(l, x.left); t = Math.min(t, x.top); r = Math.max(r, x.right); b = Math.max(b, x.bottom); });
+    els.forEach(el => {
+      const x = el.getBoundingClientRect();
+      let rr = { left: x.left, top: x.top, right: x.right, bottom: x.bottom };
+      for (let p = el.parentElement; p && p !== document.body; p = p.parentElement) {
+        const cs = getComputedStyle(p);
+        if (/(auto|scroll|hidden)/.test(cs.overflowX + ' ' + cs.overflowY)) {
+          const pr = p.getBoundingClientRect();
+          rr = { left: Math.max(rr.left, pr.left), top: Math.max(rr.top, pr.top), right: Math.min(rr.right, pr.right), bottom: Math.min(rr.bottom, pr.bottom) };
+        }
+      }
+      l = Math.min(l, rr.left); t = Math.min(t, rr.top); r = Math.max(r, rr.right); b = Math.max(b, rr.bottom);
+    });
     const P = 6;
     return { left: l - P, top: t - P, right: r + P, bottom: b + P };
   }
+  // 暗い部分と枠はページ上の位置(position:absolute)で置く。画面に固定(fixed)だとスクロール中や
+  // スマホのキーボードが出た時に遅れて・ずれて動き、入力欄が暗い部分に隠れることがあったため(2026-10-16、棚卸)
   function layout() {
     if (!cur) return;
     const W = window.innerWidth, H = window.innerHeight;
+    const sx = window.scrollX, sy = window.scrollY;
+    const page = document.getElementById('page-store');
+    const docW = document.documentElement.clientWidth + sx;
+    const docH = Math.max(sy + H, (page ? page.getBoundingClientRect().bottom + sy : 0) + 40);
     const els = resolveTarget(cur.step.target);
     let rect = null;
+    const set = (d, x, y, w, h) => Object.assign(d.style, { display: 'block', left: x + 'px', top: y + 'px', width: Math.max(0, w) + 'px', height: Math.max(0, h) + 'px' });
     if (els.length) {
       rect = unionRect(els);
-      const L = Math.max(0, rect.left), T = Math.max(0, rect.top), R = Math.min(W, rect.right), B = Math.min(H, rect.bottom);
-      const set = (d, x, y, w, h) => Object.assign(d.style, { display: 'block', left: x + 'px', top: y + 'px', width: Math.max(0, w) + 'px', height: Math.max(0, h) + 'px' });
-      set(blocks[0], 0, 0, W, T);
-      set(blocks[1], 0, B, W, H - B);
+      const L = rect.left + sx, T = rect.top + sy, R = rect.right + sx, B = rect.bottom + sy;
+      set(blocks[0], 0, 0, docW, T);
+      set(blocks[1], 0, B, docW, docH - B);
       set(blocks[2], 0, T, L, B - T);
-      set(blocks[3], R, T, W - R, B - T);
-      Object.assign(ring.style, { display: 'block', left: L + 'px', top: T + 'px', width: (R - L) + 'px', height: (B - T) + 'px' });
+      set(blocks[3], R, T, docW - R, B - T);
+      set(ring, L, T, R - L, B - T);
     } else {
-      Object.assign(blocks[0].style, { display: 'block', left: 0, top: 0, width: W + 'px', height: H + 'px' });
+      set(blocks[0], 0, 0, docW, docH);
       blocks.slice(1).forEach(b => { b.style.display = 'none'; });
       ring.style.display = 'none';
     }
-    // 吹き出しは明るい所に重ならない側へ。どちらにも入らなければ画面の下に固定
-    const bw = isMobile() ? W - 24 : Math.min(380, W - 24);
+    // 吹き出しは画面に固定。スマホのキーボードが出ている時は、見えている範囲(visualViewport)の中に置く
+    const vv = window.visualViewport;
+    const vTop = vv ? vv.offsetTop : 0, vH = vv ? vv.height : H, vLeft = vv ? vv.offsetLeft : 0, vW = vv ? vv.width : W;
+    const bw = isMobile() ? vW - 24 : Math.min(380, vW - 24);
     bubble.style.width = bw + 'px';
     const bh = bubble.offsetHeight;
     let top, left;
-    if (!rect) { top = (H - bh) / 2; left = (W - bw) / 2; }
-    else {
-      if (H - rect.bottom >= bh + 14) top = rect.bottom + 10;
-      else if (rect.top >= bh + 44) top = rect.top - bh - 10;
-      else top = H - bh - 12;
-      left = isMobile() ? 12 : Math.min(Math.max(12, (rect.left + rect.right) / 2 - bw / 2), W - bw - 12);
+    if (!rect) { top = vTop + (vH - bh) / 2; left = vLeft + (vW - bw) / 2; }
+    else if (isMobile()) {
+      // スマホは見えている範囲の上か下に置き、スクロールしても位置を変えない(押す所に重なる時だけ反対側へ)
+      const posTop = vTop + 38, posBottom = vTop + vH - bh - 10;
+      const overlaps = y => !(y + bh <= rect.top || y >= rect.bottom);
+      if (!cur.side) cur.side = (rect.top + rect.bottom) / 2 > vTop + vH * 0.55 ? 'top' : 'bottom';
+      let y = cur.side === 'top' ? posTop : posBottom;
+      if (overlaps(y)) {
+        const other = cur.side === 'top' ? posBottom : posTop;
+        if (!overlaps(other)) { cur.side = cur.side === 'top' ? 'bottom' : 'top'; y = other; }
+      }
+      top = y; left = vLeft + 12;
+    } else {
+      if (vTop + vH - rect.bottom >= bh + 14) top = rect.bottom + 10;
+      else if (rect.top - vTop >= bh + 44) top = rect.top - bh - 10;
+      else top = vTop + vH - bh - 12;
+      left = Math.min(Math.max(vLeft + 12, (rect.left + rect.right) / 2 - bw / 2), vLeft + vW - bw - 12);
     }
-    bubble.style.top = Math.max(36, top) + 'px';
+    bubble.style.top = Math.max(vTop + 36, top) + 'px';
     bubble.style.left = left + 'px';
   }
   function loop() { if (!cur) return; layout(); requestAnimationFrame(loop); }
@@ -259,7 +290,8 @@
       const el = resolveTarget(step.target)[0];
       if (el && step.scroll !== false) {
         const r = el.getBoundingClientRect();
-        if (r.top < 40 || r.bottom > window.innerHeight - 160) el.scrollIntoView({ block: 'center', behavior: 'instant' });
+        if (r.top < 40 || r.bottom > window.innerHeight - 160 || r.left < 0 || r.right > window.innerWidth)
+          el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
       }
     }
     return new Promise(resolve => {
@@ -435,6 +467,7 @@
     setInventoryPeriodData(STORE, period.label, rec);
     renderInventory();
   }
+  const invCell = section => invFirstRow()?.querySelector(`input[onchange^="updateInventoryPeriodField('${section}'"]`)?.closest('td') || null;
   const invFirstRow = () => all('#inventory-table-wrap tr').find(tr => tr.querySelector('input[onchange^="updateInventoryPeriodField(\'endStock\'"]')) || null;
   // 管理者(本部)からの返信を再現する
   async function simulateBugReply() {
@@ -639,11 +672,11 @@
         { text: '<b>月末</b>に、店にある商品の数（在庫）を数えて送ります。これを<b>棚卸</b>といいます。<br><span style="font-size:13px;color:#6b7280">練習では、1品目以外の数は入れておきました。</span>' },
         { target: '#ptab-inventory', wait: 'click', setup: async () => { switchPartnerTab('order'); await sleep(100); }, text: '「<b>棚卸表</b>」のタブを押してください。' },
         { setup: prepareInventory, target: () => one('#inventory-table-wrap thead'), text: '商品ごとに、数えた数を入れる表です。見出しの「期末在庫」の列に数を入れます。' },
-        { target: () => invFirstRow(), wait: () => !!invFirstRow()?.querySelector('input[onchange^="updateInventoryPeriodField(\'endStock\'"]')?.value,
+        { target: () => invCell('endStock'), wait: () => !!invCell('endStock')?.querySelector('input')?.value,
           text: '1品目の「<b>期末在庫</b>」に、数えた数を入れます。練習なので「<b>5</b>」と入れてください。' },
         { optional: true, target: () => invFirstRow()?.querySelector('input[type=date]')?.closest('td'),
           text: '消費期限がある商品は、期限の日付と、その期限の個数も入れます。期限が近い物・切れた物は色が変わります。' },
-        { target: () => invFirstRow()?.querySelector('input[onchange^="updateInventoryPeriodField(\'disposedQty\'"]'),
+        { target: () => invCell('disposedQty'),
           text: '期限切れなどで捨てた数は「<b>処分数量</b>」に入れます（無ければ空のままで大丈夫です）。' },
         { target: () => one('#inventory-table-wrap button[onclick="goToInventoryConfirm()"]'), wait: 'click', text: '全部入れたら「<b>確認 →</b>」を押します。' },
         { target: () => one('#inventory-table-wrap thead'), text: '確認画面です。先月の在庫・届いた数・今回の数から、使った数（<b>消費量</b>）が自動で計算されます。' },
