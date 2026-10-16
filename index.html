@@ -7349,6 +7349,31 @@ function showAdminTable() {
 }
 
 let adminOverviewOpen = new Set();
+// 新着依頼のカードは未対応の品だけを出す(2026-10-16、発注済み・否認済みの過去の品が新着に混ざって邪魔との要望)。
+// 対応済みの品は「対応済みの依頼も表示」を押した店舗だけ一緒に出す(全件は「店舗別に確認」でも見られる)
+let adminOverviewShowDone = new Set();
+const _isPendingOrderRow = r => r.isNew && !r.denied;
+function _buildNewCardDetail(sid) {
+  const rows = loadA(sid).filter(r => r.locked);
+  const doneCnt = rows.filter(r => !_isPendingOrderRow(r)).length;
+  const showDone = adminOverviewShowDone.has(sid);
+  const shown = showDone ? rows : rows.filter(_isPendingOrderRow);
+  const groups = buildGroups(shown.map(r => ({...r, _sid:sid, _sname:STORES[sid]||sid})));
+  const body = groups.length
+    ? buildStoreOrderDetail(sid, groups)
+    : '<div style="color:#aaa;font-size:13px;padding:12px 16px">依頼はありません</div>';
+  const toggle = doneCnt
+    ? `<div style="padding:4px 16px 14px"><button type="button" onclick="toggleOverviewShowDone('${esc(sid)}')"
+        style="background:none;border:none;padding:6px 0;color:#22703d;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">
+        ${showDone ? '▲ 対応済みの依頼を隠す' : `▼ 対応済み（発注済み・否認済み）の依頼も表示（${doneCnt}件）`}</button></div>`
+    : '';
+  return body + toggle;
+}
+function toggleOverviewShowDone(sid) {
+  if (adminOverviewShowDone.has(sid)) adminOverviewShowDone.delete(sid); else adminOverviewShowDone.add(sid);
+  const detail = document.getElementById('store-detail-' + sid);
+  if (detail) detail.innerHTML = _buildNewCardDetail(sid); else renderOverview();
+}
 let adminOverviewDropdownStore = '';
 let _overviewStoreDataCache = [];
 
@@ -7389,7 +7414,7 @@ function renderOverview() {
   const newCards = newStores.map(({sid, sname, groups, newCnt}) => {
     const isOpen  = adminOverviewOpen.has(sid);
     const badge   = `<span style="background:#ef4444;color:white;font-size:11px;font-weight:700;border-radius:99px;padding:2px 10px;margin-left:8px">${newCnt}件 NEW</span>`;
-    const detail  = isOpen && groups.length ? buildStoreOrderDetail(sid, groups) : '';
+    const detail  = isOpen ? _buildNewCardDetail(sid) : '';
     return `
       <div class="settings-card" style="margin-bottom:10px;padding:0;overflow:hidden">
         <button type="button" onclick="toggleOverviewStore('${esc(sid)}')"
@@ -7461,11 +7486,7 @@ function toggleOverviewStore(sid) {
   const isOpening = !adminOverviewOpen.has(sid);
   if (isOpening) {
     adminOverviewOpen.add(sid);
-    const rows   = loadA(sid).filter(r => r.locked);
-    const groups = buildGroups(rows.map(r => ({...r, _sid:sid, _sname:STORES[sid]||sid})));
-    detail.innerHTML = groups.length
-      ? buildStoreOrderDetail(sid, groups)
-      : '<div style="color:#aaa;font-size:13px;padding:12px 16px">依頼はありません</div>';
+    detail.innerHTML = _buildNewCardDetail(sid);
     detail.style.display = '';
   } else {
     adminOverviewOpen.delete(sid);

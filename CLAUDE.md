@@ -297,6 +297,7 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
   - 実際数量の単位の既定値は`effectiveActualUnitMode`に一本化している。独自の判定を書くと、ケース単位の商品がバラで確定する事故が再発する。
   - 「納品済み」ボタンは`_markDeliveredInProgress`で二重送信を防いでいる。
 - **商品設定の優先順位**: 保存値(`all_products`)はコード内の`PRODUCTS`初期値より優先される。保存値を初期値に戻すと、管理者が直した値を巻き戻してしまう。
+- **管理者の発注依頼一覧・新着依頼カード**(2026-10-16〜): 未対応(`isNew && !denied`)の品だけを出す(`_buildNewCardDetail`)。発注済み・否認済みはカード下の「対応済みの依頼も表示」で店舗ごとに開く。「店舗別に確認」のプルダウンは従来どおり全件。
 - **納品済み・バッジ**: 納品済みボタンは商品ごとに独立(同じ納品予定日でも到着がずれるため)。NEWバッジの既読は`localStorage`の`seen_attention_{店舗}`。
 - **発注数量**: 随時発注の数量自動入力(消費量×1.5)は2026-09-29に廃止。月初発注(`processMonthlyReorder`)は別系統で、基準値をもとに計算し、対象店舗はGmail下書きを作る。今も稼働中。
 - **手動納品シート**: `MANUAL_DELIVERY_SHEET_ID`はdeploy-gas.ymlで値が差し込まれないため、本番では常に空(未使用)。
