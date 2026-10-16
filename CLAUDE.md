@@ -369,6 +369,16 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
   - スマホ幅のヘッダー(`partner-hdr-pinwheel`)は4ピース構成。左上(`phw-tl`)は管理者は空き(背景色と同じ)、パートナーは「ホーム」(2026-10-13〜)。
   - パートナーのホーム(`goPartnerHome`、ロゴ・ホームボタン)はログイン直後と同じ状態に戻す: 業務連絡の一覧/詳細を閉じ、最初のタブ(FC店舗はチェックシート、他は発注)を開いて先頭へ。管理者のホームは`goAdminHome`(発注依頼一覧)。
 
+### ガイダンス(初めての人向けの練習モード、2026-10-16〜)
+- **入口**: ログイン画面で練習用パスワード(settings `onboarding_password`、管理画面「設定 › ガイダンス › 練習用パスワード」、空なら無効)→名前と配属店を選ぶ→`sessionStorage.onboarding='1'`でページを開き直す。
+- **本番に送らない仕組み**(`onboarding-sandbox.js`、`<head>`の最初で読む):
+  - localStorageはキーの頭に`onb:`を付けた別の場所を使う(端末に残っている本番の未保存分を練習で上書きしない・練習の分が本番ログインで送られない)。
+  - GAS通信は`fetch`ごと差し替え。本物に届くのは読むだけの`getSettings`/`getStoreSettings`/`getSteraStockEstimate`/`getSteraProductGroups`/`getOnboardingProgress`と、修了記録の`saveOnboardingProgress`だけ。他は端末内の練習データ(`onb_db`)で返し、知らないactionもGETは`[]`、POSTは`{ok:true}`(本番に送らない側に倒す)。**新しいactionを足したら、練習で必要なら`onboarding-sandbox.js`のGET/POSTにも足す**。
+  - Firebase(他端末への通知)は`index.html`の`<head>`でスタブに差し替え。
+  - 練習では配属店の設定に関係なく業務開始・マシン撮影を出す(`adjustSettings`)。位置情報は許可の流れだけ体験し、判定は常に範囲内・どこにも送らない。
+- **案内**(`onboarding-tour.js`): 押す所だけ明るく＋吹き出し、明るい所以外は押せない。章は好きな順・章ごとに修了。修了は`onboarding_log`シートに記録し、管理画面「設定 › ガイダンス › 受講状況」で見る。章のキーは`ONB_CHAPTER_LIST`と`CHAPTERS`でそろえる。
+- **画面を変えたら**: 案内は要素のid・class・ボタンの文言で場所を探している。パートナー画面のid・文言を変えたら`onboarding-tour.js`の該当の手順も直し、全章を通すテストで確かめる。
+
 ### 外部PC・Bot・clasp
 - **80000785 PC**(前任者PC):
   - 2026-10-12に、ステラ取り込み2本・ポータル監視(`InternalPortalHealthWatchdog`)・会費ペイ用runner(`KaihipayActionsRunner`/`KaihipayRunnerWatchdog`)をすべて無効化した。このリポジトリの運用はPC非依存。

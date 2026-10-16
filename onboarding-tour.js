@@ -263,7 +263,7 @@
       const isNext = !step.wait || step.wait === 'next';
       bubble.innerHTML = `
         <div class="onb-ch">${esc(chapter.title)}</div>
-        <div class="onb-text">${step.text}</div>
+        <div class="onb-text">${typeof step.text === 'function' ? step.text() : step.text}</div>
         <div class="onb-foot">
           <div class="onb-links">
             ${isNext ? '' : '<a data-act="skip">この手順を飛ばす</a>'}
@@ -379,6 +379,59 @@
     groupBar: () => one('#store-tbody .btn-request')?.closest('tr') || null,
   };
   let doneBtnCount = 0;
+  let snap = 0; // 手順の前後で数を比べるための一時置き場
+  const attBtn = () => isMobile() ? one('#ptab-attendance-sp') : one('#ptab-attendance-pc');
+  const csQtyRow = i => all('#checksheet-table-wrap .checksheet-today-row').filter(r => r.querySelector('input[type=number]'))[i] || null;
+  const csPlus = i => [...(csQtyRow(i)?.querySelectorAll('.qty-btn') || [])].find(b => b.textContent.trim() === '＋') || null;
+  const csMinus = i => [...(csQtyRow(i)?.querySelectorAll('.qty-btn') || [])].find(b => b.textContent.trim() === '－') || null;
+  const csVal = i => Number(csQtyRow(i)?.querySelector('input[type=number]')?.value || 0);
+  const csUnsaved = () => (typeof _checksheetUnsavedCount === 'function' ? _checksheetUnsavedCount(STORE) : 0);
+  const csLoaded = () => !!one('#checksheet-table-wrap .cs-saved-note') && !all('#checksheet-table-wrap .cs-saved-note').some(n => n.textContent.includes('読み込み'));
+  const mpCard = () => one('#machine-photo-machines > div');
+  const mpCell = k => mpCard()?.children[1]?.children[k] || null;
+  const mpFilled = k => !!mpCell(k)?.querySelector('img');
+  const leaveOverlay = () => { const o = document.getElementById('leave-groupchat-overlay'); return o && getComputedStyle(o).display !== 'none' ? o : null; };
+  const bugItem = () => one('#bugreport-list > div');
+  // 棚卸の練習用に、先月分の棚卸(期首在庫・先月の消費量)を練習データに用意し、
+  // 1品目以外の期末在庫は「先月と同じ消費量」になる数で埋めておく(全部を入れなくても練習できるように)
+  async function prepareInventory() {
+    const period = getInventoryPeriod();
+    const prev = _prevPeriodLabel(period.label);
+    const db = window.__onbDb.get();
+    const products = _inventoryProductList();
+    if (!db.invHistory[prev] || !db.invHistory[prev].length) {
+      db.invHistory[prev] = products.map(pr => ({ period_label: prev, store_id: STORE, code: pr.code || '', product: pr.name,
+        open_stock: 10, delivery: 5, end_stock: 12, consumption: 3, disposed_qty: 0, price: pr.price || '', amount: '', remarks: '', anomaly_note: '', daily_count: '', matched: '', store_type: '' }));
+      window.__onbDb.save();
+    }
+    inventoryStep = 'input'; inventoryShowLastMonth = false;
+    await loadInventoryTabData(STORE, period.label);
+    const rec = getInventoryPeriodData(STORE, period.label);
+    products.forEach((pr, i) => {
+      if (i === 0) { delete rec.endStock[pr.name]; delete rec.anomalyNote[pr.name]; return; }
+      const open = Number(getInventoryOpeningStock(STORE, period.label, pr.name) || 0);
+      const deliv = Number(getInventoryDelivery(STORE, period.label, pr.name) || 0);
+      rec.endStock[pr.name] = String(Math.max(0, open + deliv - 3));
+    });
+    rec.lastSentAt = null;
+    setInventoryPeriodData(STORE, period.label, rec);
+    renderInventory();
+  }
+  const invFirstRow = () => all('#inventory-table-wrap tr').find(tr => tr.querySelector('input[onchange^="updateInventoryPeriodField(\'endStock\'"]')) || null;
+  // 管理者(本部)からの返信を再現する
+  async function simulateBugReply() {
+    const db = window.__onbDb.get();
+    const issue = db.bugs.filter(b => b.store_id === STORE).sort((a, b) => b.created_at.localeCompare(a.created_at))[0];
+    if (!issue) return;
+    const t = new Date(Date.now() + 2000);
+    const at = window.__onbDb.ymdhms(t);
+    db.comments.push({ report_no: issue.no, id: window.__onbDb.uid(), issue_id: issue.id, poster_type: 'admin', poster_name: '本部',
+      store_id: STORE, text: '報告ありがとうございます！確認して対応します。（これは練習用の返信です）', created_at: at });
+    issue.status = '対応中'; issue.updated_at = at;
+    window.__onbDb.save();
+    await loadBugReportsFromDb(STORE);
+    renderBugReports();
+  }
   // 管理者が発注した状態を再現する(練習データの「確認中」の依頼を発注済み・本日納品予定にする)
   async function simulateOrdered() {
     const db = window.__onbDb.get();
@@ -420,7 +473,31 @@
     },
     {
       key: 'attendance', title: '業務開始・休み申請', desc: '出勤したら業務開始を押す／休みの申請', minutes: 8,
-      steps: null,
+      prepare: async () => { goPartnerHome(); await sleep(200); },
+      steps: () => [
+        { text: '店に着いたら、最初に「<b>業務開始</b>」を押して出勤を記録します。<br>休みの申請も、同じ画面からできます。' },
+        { target: attBtn, wait: 'click', text: '右上の「<b>業務管理</b>」を押してください。' },
+        { target: '#attendance-name-sel', wait: () => document.getElementById('attendance-name-sel')?.value === NAME,
+          text: `ここで自分の名前を選びます。「<b>${esc(NAME)}</b>」を選んでください。` },
+        { target: '#attendance-clockin-btn', wait: () => { const t = document.getElementById('attendance-msg')?.textContent || ''; return t && !t.includes('取得しています'); },
+          text: '「<b>業務開始</b>」を押してください。<br>位置情報を使ってよいか聞かれたら「<b>許可</b>」を押します。<br><span style="font-size:13px;color:#6b7280">練習では位置情報はどこにも送りません。</span>' },
+        { target: '#attendance-msg', text: () => (document.getElementById('attendance-msg')?.textContent || '').includes('記録しました')
+            ? '記録できました！<br>本番では、<b>店から300m以内</b>で押したときに出勤として記録されます。'
+            : '位置情報が使えませんでした。<br>本番では位置情報を<b>許可</b>しないと記録できません。スマホの設定で、このブラウザの位置情報を「許可」にしておきましょう。' },
+        { target: () => one('#partner-tab-attendance .settings-accordion-hdr'), wait: 'click', text: '「<b>業務開始履歴</b>」を押すと、これまでの記録が見られます。' },
+        { target: '#attendance-history-wrap', text: '押した日時と、店の近くで押せたか（✓）が出ます。' },
+        { target: '#leave-date-input', wait: () => !!document.getElementById('leave-date-input')?.value,
+          text: '次は<b>休み申請</b>です。休みたい日を選んでください（練習なので、どの日でも大丈夫です）。' },
+        { target: () => one('#partner-tab-attendance button[onclick="submitLeaveRequest()"]'),
+          wait: () => !!one('#leave-request-list-wrap button[onclick^="cancelLeaveRequest"]') || !!leaveOverlay(),
+          text: '「<b>申請する</b>」を押してください。' },
+        { optional: true, when: () => !!leaveOverlay(), target: () => leaveOverlay()?.querySelector('button'), wait: 'click',
+          text: '<b>当日</b>休むときは、申請に加えて<b>店のグループトーク</b>にも連絡します。「閉じる」を押してください。' },
+        { target: '#leave-request-list-wrap', text: '申請した休みがここに出ます。' },
+        { target: () => one('#leave-request-list-wrap button[onclick^="cancelLeaveRequest"]'), wait: () => !one('#leave-request-list-wrap button[onclick^="cancelLeaveRequest"]'),
+          text: '予定が変わったら「<b>キャンセル</b>」で取り消せます。押して、確認が出たら「OK」を押してください。' },
+        { text: 'これで「業務開始・休み申請」はおしまいです。<br>店に着いたら、まず「業務管理」→「業務開始」です。', nextLabel: '章を終える' },
+      ],
     },
     {
       key: 'order', title: '発注依頼', desc: '商品を選んで依頼する／届いたら納品済み', minutes: 15,
@@ -463,12 +540,136 @@
         { text: 'これで「発注依頼」はおしまいです。<br>・足りない物は「発注」から依頼する<br>・届いたら「納品済み」を押す<br>この2つを覚えておきましょう。', nextLabel: '章を終える' },
       ],
     },
-    { key: 'checksheet', title: 'チェックシート（毎日）', desc: '補充した数・清掃のチェック・修正', minutes: 15, steps: null },
-    { key: 'machinephoto', title: 'マシン撮影（5の倍数の日）', desc: '5・10・15…日に庫内の写真を送る', minutes: 10, steps: null },
-    { key: 'lost', title: '忘れ物', desc: '忘れ物を見つけたら登録する', minutes: 5, steps: null },
-    { key: 'inventory', title: '棚卸（月末）', desc: '月末に在庫を数えて送る', minutes: 15, steps: null },
-    { key: 'bugreport', title: 'バグ報告', desc: '困ったこと・要望を送る／返信を読む', minutes: 5, steps: null },
-    { key: 'finish', title: '仕上げ', desc: 'ホームとログアウト', minutes: 2, steps: null },
+    {
+      key: 'checksheet', title: 'チェックシート（毎日）', desc: '補充した数・清掃のチェック・修正', minutes: 15,
+      prepare: async () => {
+        goPartnerHome(); await sleep(200);
+        if (checksheetEditDay) endChecksheetPastEdit();
+        checksheetActiveView = 'today'; checksheetActiveCategory = 'daily_count';
+      },
+      steps: () => [
+        { text: 'チェックシートは<b>毎日</b>つけます。<br>補充した商品の数と、清掃・点検をしたかを記録します。' },
+        { target: '#ptab-checklist', wait: 'click', text: '「<b>チェックシート</b>」のタブを押してください。' },
+        { target: '#checksheet-cat-daily_count', wait: csLoaded, text: '「<b>デイリーカウント</b>」は、補充した商品の数をつける所です。<br><span style="font-size:13px;color:#6b7280">今日の数を読み込んでいます…</span>' },
+        { target: () => csQtyRow(0), text: '商品の下の小さい字が、今日すでに保存されている数です。<br>大きい欄には「<b>今回補充した数</b>」を入れます。' },
+        { target: () => csPlus(0), wait: () => csVal(0) >= 2, text: 'この商品を2個補充したことにしましょう。「<b>＋</b>」を2回押してください。' },
+        { target: () => csQtyRow(0), text: '小さい字が「保存後 ○」に変わりました。保存すると、今日の数に足されます。' },
+        { target: '#checksheet-save-btn', wait: () => csUnsaved() === 0 && csVal(0) === 0,
+          text: '入力が終わったら「<b>保存する</b>」を押します。<br><span style="font-size:13px;color:#6b7280">押し忘れても1分たつと自動で保存されます。</span>' },
+        { target: () => csMinus(0), wait: () => csVal(0) <= -1, text: '多く保存してしまったときは「<b>－</b>」で減らせます。1回押してみてください。' },
+        { target: '#checksheet-cancel-btn', wait: () => csUnsaved() === 0,
+          text: 'やっぱりやめるときは「<b>キャンセル</b>」で入力前に戻せます。押して、確認が出たら「OK」を押してください。' },
+        { target: '#checksheet-cat-clean_check', wait: 'click', text: '次は「<b>清掃・点検</b>」です。押してください。' },
+        { target: () => one('#checksheet-table-wrap .checksheet-today-row input[type=checkbox]')?.closest('.checksheet-today-row'),
+          wait: () => all('#checksheet-table-wrap .checksheet-today-row input[type=checkbox]').some(c => c.checked),
+          text: 'やった作業にチェックを付けます。1つチェックを付けてください。' },
+        { target: '#checksheet-save-btn', wait: () => csUnsaved() === 0, text: '「<b>保存する</b>」を押してください。' },
+        { target: () => one('#checksheet-table-wrap .checksheet-past-edit-btn'), wait: 'click',
+          text: '前の日の分や、保存した合計を直したいときは「<b>保存済みの分を修正する</b>」を押します。押してください。' },
+        { target: () => one('.checksheet-past-edit select'), text: 'ここで直したい日を選びます（今月と先月の分）。この画面では、<b>その日の合計そのもの</b>を正しい数にして保存します。' },
+        { target: () => one('.checksheet-past-edit button'), wait: 'click', text: '今は直さずに「<b>今日の入力に戻る</b>」を押してください。' },
+        { target: '#checksheet-view-toggle', wait: 'click', text: '「<b>当月のチェックシート履歴</b>」を押すと、今月の記録が表で見られます。' },
+        { target: '#checksheet-table-wrap', text: '日ごとの記録と、下に合計が出ます。今日の行は黄色です。' },
+        { target: '#checksheet-view-toggle', wait: 'click', text: 'もう一度押すと、今日の入力に戻ります。' },
+        { text: 'これで「チェックシート」はおしまいです。<br>・補充したら＋で数を入れて保存<br>・清掃・点検はチェックを付けて保存', nextLabel: '章を終える' },
+      ],
+    },
+    {
+      key: 'machinephoto', title: 'マシン撮影（5の倍数の日）', desc: '5・10・15…日に庫内の写真を送る', minutes: 10,
+      prepare: async () => { goPartnerHome(); await sleep(200); },
+      steps: () => [
+        { text: '毎月<b>5日・10日・15日・20日・25日・30日</b>に、マシンの中の写真を撮って送ります。<br>フィルター切れや材料切れを防ぐための点検です。<br><span style="font-size:13px;color:#6b7280">店にいない場合は、何を撮っても練習になります。</span>' },
+        { target: '#ptab-checklist', wait: 'click', text: '「<b>チェックシート</b>」のタブを押してください。' },
+        { target: '#checksheet-cat-album', wait: 'click', text: '「<b>アルバム</b>」を押してください。' },
+        { target: '#machine-photo-samples', text: '撮り方の<b>お手本</b>です。押すと大きく見られます。お手本と同じ向き・同じ場所を撮りましょう。' },
+        ...[0, 1, 2, 3, 4].map(k => ({
+          target: () => mpCell(k), wait: () => mpFilled(k),
+          text: () => `マシン①の「<b>${esc(MACHINE_PHOTO_SLOTS[k].label)}</b>」を撮ります。📷を押して撮影してください。<br><span style="font-size:13px;color:#6b7280">お手本${k + 1}と同じように撮ります（${k + 1} / 5枚目）</span>`,
+        })),
+        { setup: () => { snap = window.__onbDb.get().photos.length; },
+          target: () => mpCard()?.querySelector('button[onclick^="submitMachinePhotoForMachine"]'), wait: () => window.__onbDb.get().photos.length > snap,
+          text: '5枚そろったら「<b>マシン①をアップロード</b>」を押します。' },
+        { target: () => document.getElementById('machine-photo-last-0'), text: '送った日時がここに出ます。<br>マシンが2台以上ある店は、<b>向かって左から</b>①②③…の順に、同じように撮って送ります。' },
+        { text: 'これで「マシン撮影」はおしまいです。<b>5の倍数の日</b>を忘れないようにしましょう。', nextLabel: '章を終える' },
+      ],
+    },
+    {
+      key: 'lost', title: '忘れ物', desc: '忘れ物を見つけたら登録する', minutes: 5,
+      prepare: async () => { goPartnerHome(); await sleep(200); },
+      steps: () => [
+        { text: 'お客様の忘れ物を見つけたら、ポータルに登録します。' },
+        { target: '#ptab-lost', wait: 'click', text: '「<b>忘れ物</b>」のタブを押してください。' },
+        { target: () => one('#partner-tab-lost > div > div:nth-child(2)'), text: '財布やスマホなどの<b>貴重品</b>は、交番か警察署に届けたうえで登録します。<br>それ以外の物は、登録して<b>店で1か月保管</b>したあと処分します。' },
+        { target: '#lost-date-input', text: '見つけた日です。今日の日付が入っています。' },
+        { target: '#lost-note-input', wait: () => !!document.getElementById('lost-note-input')?.value.trim(),
+          text: 'どんな物か、どこにあったかを書きます。「黒い傘・入口の傘立て」のように入れてみてください。' },
+        { target: () => all('#partner-tab-lost label').find(l => l.textContent.includes('撮影')), wait: () => !!one('#lost-image-preview img'),
+          text: '写真を付けます。「<b>📷 撮影</b>」を押して、何か1枚撮ってください。' },
+        { setup: () => { snap = window.__onbDb.get().lost.length; },
+          target: '#lost-add-btn', wait: () => window.__onbDb.get().lost.length > snap && !!one('#lost-items-list button[onclick^="deleteLostItem"]'),
+          text: '「<b>追加</b>」を押すと登録されます。' },
+        { target: '#lost-items-list', text: '登録した忘れ物の一覧です。写真を押すと大きく見られます。<br>登録から30日たつと自動で消えます。' },
+        { target: () => one('#lost-items-list button[onclick^="deleteLostItem"]'), wait: () => window.__onbDb.get().lost.length < snap + 1,
+          text: 'お客様に返したら「<b>削除</b>」を押します。練習なので押してみてください。' },
+        { text: 'これで「忘れ物」はおしまいです。', nextLabel: '章を終える' },
+      ],
+    },
+    {
+      key: 'inventory', title: '棚卸（月末）', desc: '月末に在庫を数えて送る', minutes: 15,
+      prepare: async () => { goPartnerHome(); await sleep(200); },
+      steps: () => [
+        { text: '<b>月末</b>に、店にある商品の数（在庫）を数えて送ります。これを<b>棚卸</b>といいます。<br><span style="font-size:13px;color:#6b7280">練習では、1品目以外の数は入れておきました。</span>' },
+        { target: '#ptab-inventory', wait: 'click', setup: async () => { switchPartnerTab('order'); await sleep(100); }, text: '「<b>棚卸表</b>」のタブを押してください。' },
+        { setup: prepareInventory, target: () => one('#inventory-table-wrap thead'), text: '商品ごとに、数えた数を入れる表です。見出しの「期末在庫」の列に数を入れます。' },
+        { target: () => invFirstRow(), wait: () => !!invFirstRow()?.querySelector('input[onchange^="updateInventoryPeriodField(\'endStock\'"]')?.value,
+          text: '1品目の「<b>期末在庫</b>」に、数えた数を入れます。練習なので「<b>5</b>」と入れてください。' },
+        { optional: true, target: () => invFirstRow()?.querySelector('input[type=date]')?.closest('td'),
+          text: '消費期限がある商品は、期限の日付と、その期限の個数も入れます。期限が近い物・切れた物は色が変わります。' },
+        { target: () => invFirstRow()?.querySelector('input[onchange^="updateInventoryPeriodField(\'disposedQty\'"]'),
+          text: '期限切れなどで捨てた数は「<b>処分数量</b>」に入れます（無ければ空のままで大丈夫です）。' },
+        { target: () => one('#inventory-table-wrap button[onclick="goToInventoryConfirm()"]'), wait: 'click', text: '全部入れたら「<b>確認 →</b>」を押します。' },
+        { target: () => one('#inventory-table-wrap thead'), text: '確認画面です。先月の在庫・届いた数・今回の数から、使った数（<b>消費量</b>）が自動で計算されます。' },
+        { optional: true, target: () => one('#inventory-table-wrap input[onchange^="updateInventoryPeriodField(\'anomalyNote\'"]')?.closest('tr'),
+          wait: () => all('#inventory-table-wrap input[onchange^="updateInventoryPeriodField(\'anomalyNote\'"]').every(i => i.value.trim()),
+          text: '先月より使った数がとても多い商品には、<b>理由</b>を書きます。「イベントで多く出た」などと入れてください。' },
+        { target: '#inventory-submit-btn', wait: () => !!getInventoryPeriodData(STORE, getInventoryPeriod().label).lastSentAt,
+          text: '最後に「<b>棚卸完了</b>」を押して送ります。確認が出たら「OK」を押してください。' },
+        { text: 'これで「棚卸」はおしまいです。<br>月末の数日のうちに、全部の商品を数えて送りましょう。間違えたら、もう一度送り直せます。', nextLabel: '章を終える' },
+      ],
+    },
+    {
+      key: 'bugreport', title: 'バグ報告', desc: '困ったこと・要望を送る／返信を読む', minutes: 5,
+      prepare: async () => { goPartnerHome(); await sleep(200); },
+      steps: () => [
+        { text: 'ポータルがうまく動かないときや「こうしてほしい」という要望は、「バグ報告」から本部に送れます。' },
+        { target: '#ptab-bugreport', wait: 'click', text: '「<b>バグ報告</b>」のタブを押してください。' },
+        { target: () => [one('#bugreport-kind-bug'), one('#bugreport-kind-request')].filter(Boolean), wait: 'click',
+          text: '不具合なら左、要望なら右を選びます。どちらか押してください。' },
+        { target: '#bugreport-content-input', wait: () => !!document.getElementById('bugreport-content-input')?.value.trim(),
+          text: '何があったかを書きます。「練習の投稿です」と入れてください。<br><span style="font-size:13px;color:#6b7280">本番では、どの画面で何をしたらどうなったか、を書くと助かります。写真も付けられます。</span>' },
+        { setup: () => { snap = window.__onbDb.get().bugs.length; },
+          target: '#bugreport-submit-btn', wait: () => window.__onbDb.get().bugs.length > snap && !!bugItem(), text: '「<b>投稿する</b>」を押してください。' },
+        { setup: simulateBugReply, target: bugItem,
+          text: '本部から返事が来ると「<b>返信あり</b>」と出ます。<br><span style="font-size:13px;color:#6b7280">（練習なので、いま本部が返信したことにしました）</span>' },
+        { target: () => bugItem()?.querySelector('[onclick^="toggleBugReportThread"]'), wait: () => !!one('#bugreport-list input[id^="bugreport-reply-input-"]'),
+          text: '下の部分を押すと、やり取りが開きます。' },
+        { target: () => one('#bugreport-list input[id^="bugreport-reply-input-"]')?.parentElement,
+          wait: () => window.__onbDb.get().comments.filter(c => c.poster_type === 'partner').length > 0,
+          text: '返事を書いて送れます。「ありがとうございます」と入れて「送信」を押してください。' },
+        { text: 'これで「バグ報告」はおしまいです。困ったら遠慮なく送ってください。', nextLabel: '章を終える' },
+      ],
+    },
+    {
+      key: 'finish', title: '仕上げ', desc: 'ホームとログアウト', minutes: 2,
+      prepare: async () => { goPartnerHome(); await sleep(200); },
+      steps: () => [
+        { target: T.homeBtn, text: '迷ったら「<b>ホーム</b>」。最初の画面に戻れます。' },
+        { target: () => isMobile() ? one('.partner-hdr-pinwheel .phw-tr') : one('.partner-hdr-btns .portal-logout-btn'),
+          text: '仕事が終わったら「<b>ログアウト</b>」を押します。<br>何もしないまま30分たつと、自動でログアウトします。<br><span style="font-size:13px;color:#6b7280">（練習中にここを押すと、ガイダンスが終わります）</span>' },
+        { text: 'スマホの<b>ホーム画面にアイコンを追加</b>しておくと、すぐに開けて便利です。やり方は「使い方ガイド」に載っています。' },
+        { text: 'おつかれさまでした！ 目次で、まだ終わっていない章があれば進めてください。<br>全部終わったら「練習を終える」で、いつものログイン画面に戻ります。', nextLabel: '章を終える' },
+      ],
+    },
   ];
 
   // ---------- 起動 ----------
