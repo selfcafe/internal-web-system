@@ -237,17 +237,24 @@
       blocks.slice(1).forEach(b => { b.style.display = 'none'; });
       ring.style.display = 'none';
     }
-    // 吹き出しは画面に固定。スマホのキーボードが出ている時は、見えている範囲(visualViewport)の中に置く
+    // 吹き出しは画面に固定。スマホのキーボードが出ている時は、見えている範囲(visualViewport)の中に置く。
+    // 画面が拡大されている時(ピンチ等)は、吹き出しが一緒に大きくなって入力欄を覆わないよう、拡大の分だけ縮めて
+    // いつもの大きさで見せる(以下の bw・bh・余白は「画面上の大きさ」を拡大率で割ったページ上の大きさ)
     const vv = window.visualViewport;
     const vTop = vv ? vv.offsetTop : 0, vH = vv ? vv.height : H, vLeft = vv ? vv.offsetLeft : 0, vW = vv ? vv.width : W;
-    const bw = isMobile() ? vW - 24 : Math.min(380, vW - 24);
-    bubble.style.width = bw + 'px';
-    const bh = bubble.offsetHeight;
+    const zoom = vv && vv.scale > 1.01 ? vv.scale : 1;
+    const screenW = vW * zoom;
+    const cssW = isMobile() || zoom > 1 ? screenW - 24 : Math.min(380, screenW - 24);
+    bubble.style.width = cssW + 'px';
+    bubble.style.transformOrigin = '0 0';
+    bubble.style.transform = zoom > 1 ? `scale(${1 / zoom})` : '';
+    const bw = cssW / zoom;
+    const bh = bubble.offsetHeight / zoom;
     let top, left;
     if (!rect) { top = vTop + (vH - bh) / 2; left = vLeft + (vW - bw) / 2; }
-    else if (isMobile()) {
+    else if (isMobile() || zoom > 1) {
       // スマホは見えている範囲の上か下に置き、スクロールしても位置を変えない(押す所に重なる時だけ反対側へ)
-      const posTop = vTop + 38, posBottom = vTop + vH - bh - 10;
+      const posTop = vTop + 38 / zoom, posBottom = vTop + vH - bh - 10 / zoom;
       const overlaps = y => !(y + bh <= rect.top || y >= rect.bottom);
       if (!cur.side) cur.side = (rect.top + rect.bottom) / 2 > vTop + vH * 0.55 ? 'top' : 'bottom';
       let y = cur.side === 'top' ? posTop : posBottom;
@@ -255,14 +262,14 @@
         const other = cur.side === 'top' ? posBottom : posTop;
         if (!overlaps(other)) { cur.side = cur.side === 'top' ? 'bottom' : 'top'; y = other; }
       }
-      top = y; left = vLeft + 12;
+      top = y; left = vLeft + 12 / zoom;
     } else {
       if (vTop + vH - rect.bottom >= bh + 14) top = rect.bottom + 10;
       else if (rect.top - vTop >= bh + 44) top = rect.top - bh - 10;
       else top = vTop + vH - bh - 12;
       left = Math.min(Math.max(vLeft + 12, (rect.left + rect.right) / 2 - bw / 2), vLeft + vW - bw - 12);
     }
-    bubble.style.top = Math.max(vTop + 36, top) + 'px';
+    bubble.style.top = Math.max(vTop + 36 / zoom, top) + 'px';
     bubble.style.left = left + 'px';
   }
   function loop() { if (!cur) return; layout(); requestAnimationFrame(loop); }
@@ -293,7 +300,7 @@
       if (el && step.scroll !== false) {
         const r = el.getBoundingClientRect();
         if (r.top < 40 || r.bottom > window.innerHeight - 160 || r.left < 0 || r.right > window.innerWidth)
-          el.scrollIntoView({ block: 'center', inline: 'center', behavior: 'instant' });
+          el.scrollIntoView({ block: 'center', inline: 'nearest', behavior: 'instant' });
       }
     }
     return new Promise(resolve => {

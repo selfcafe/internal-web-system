@@ -394,7 +394,9 @@
       .table-wrap { border-radius:10px; }
       table.card-mode td.c-note textarea { min-height:72px; }
       table.card-mode td.c-req { width:auto; }
-      input[type="date"], input[type="number"], .prod-input, textarea { font-size:16px !important; }
+      /* iPhoneのSafariは16px未満の入力欄を押すと画面を拡大してしまうため、スマホでは入力欄を16pxにそろえる。
+         2026-10-16に1行の文字入力・選択欄も追加(棚卸の「理由」欄で拡大され、ガイダンスの説明に隠れて見えなかった) */
+      input[type="date"], input[type="number"], input[type="text"], input[type="search"], input:not([type]), select, .prod-input, textarea { font-size:16px !important; }
       input[type="number"] { width:80px; }
       .unit-label { font-size:14px; }
       .unit-toggle-btn { font-size:13px; padding:6px 12px; }
