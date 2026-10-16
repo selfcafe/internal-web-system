@@ -236,13 +236,23 @@
     ring.style.display = 'none';
     bubble.style.display = 'none';
   }
-  function abortCurrent() { if (cur && cur.finish) cur.finish('abort'); }
+  // 動いている章(1つだけ)。目次を開いたり別の章を始めたりしたら aborted にして、その章の続きを止める。
+  // 手順の準備中・押す場所が出るのを待っている間(吹き出しが出る前)に目次を開いた時も、前の章が裏で
+  // 動き続けて次の章の案内と混ざらないようにするため(2026-10-16、マシン撮影の途中で忘れ物の章を始めると
+  // マシン撮影の案内が出てくる不具合)
+  let activeRun = null;
+  function abortCurrent() {
+    if (activeRun) { activeRun.aborted = true; activeRun = null; }
+    if (cur && cur.finish) cur.finish('abort');
+  }
 
-  async function runStep(chapter, step, idx, total) {
+  async function runStep(run, chapter, step, idx, total) {
     if (step.setup) { try { await step.setup(); } catch (e) { console.error('onb setup', e); } }
+    if (run.aborted) return 'abort';
     if (step.when && !step.when()) return 'skipped';
     if (step.target) {
-      const found = await waitUntil(() => resolveTarget(step.target).length > 0, step.optional ? 1200 : 6000);
+      const found = await waitUntil(() => run.aborted || resolveTarget(step.target).length > 0, step.optional ? 1200 : 6000);
+      if (run.aborted) return 'abort';
       if (!found && step.optional) return 'skipped';
       const el = resolveTarget(step.target)[0];
       if (el && step.scroll !== false) {
@@ -295,13 +305,19 @@
   }
 
   async function runChapter(ch) {
+    abortCurrent();
+    const run = { aborted: false };
+    activeRun = run;
     closeModal();
     try { if (ch.prepare) await ch.prepare(); } catch (e) { console.error('onb prepare', e); }
+    if (run.aborted) return;
     const steps = ch.steps();
     for (let i = 0; i < steps.length; i++) {
-      const res = await runStep(ch, steps[i], i, steps.length);
+      const res = await runStep(run, ch, steps[i], i, steps.length);
+      if (run.aborted) return; // 目次を開いた・別の章を始めた(目次はそちらで出ている)
       if (res === 'abort') { openMenu(); return; }
     }
+    if (activeRun === run) activeRun = null;
     saveDone(ch.key);
     try { await gasPost('saveOnboardingProgress', { name: NAME, storeId: STORE, chapter: ch.key, chapterTitle: ch.title, deviceId }); } catch (_) {}
     const left = CHAPTERS.filter(c => isAvailable(c) === true && !myProgress().done[c.key]);
