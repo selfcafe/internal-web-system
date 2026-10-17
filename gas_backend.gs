@@ -8151,3 +8151,218 @@ function setNewStoreCheckTrigger() {
   }
   ScriptApp.newTrigger('sendNewStoreCheckNotification').timeBased().atHour(9).nearMinute(0).everyDays(1).inTimezone('Asia/Tokyo').create();
 }
+
+// ================================================================
+// パートナー請求書（2026-10-17〜作り直し。前の請求書機能は 2026-10-05 に削除済み、commit f2e58af）
+// 設計書: selfcafe-automation リポジトリの docs/partner-invoice-design.md
+//
+// 請求書は「請求先」（業者コードの持ち主＝個人または会社）ごとに1枚。明細は1行1件で、行の種類は
+//   monthly  … 月額の日割り（月額 ÷ 基準日数 × 出勤日数、切り捨て。出勤日数は打刻から）
+//   per_visit… 回数×単価（回数の初期値は打刻の日数）
+//   oneoff   … 単発の作業（リフレッシュ清掃など）
+//   expense  … 経費（立替。領収書が必須）
+//   discount … 値引き（マイナスの金額）
+// このブロックは今のところ「下書きの計算」だけ。画面・PDF・提出は後続で足す。
+//
+// 口座・住所・契約の月額は invoice_payees / invoice_contracts タブに置き、getSettings では返さない
+// （ポータルは誰でも呼べるWebアプリで、app_settings は全部画面に配られるため）。
+// ================================================================
+const SHEET_INVOICE_CONTRACTS = 'invoice_contracts';
+// kind: monthly | per_visit。amount: monthly は月額、per_visit は単価（どちらも税込の円）。
+// base_days_mode: schedule（打刻の予定から。既定）| calendar（月の日数）| fixed（base_days_fixed 日）。
+// staff_name: 打刻で選ぶ名前。店にスタッフ名の登録が無い店は空文字（打刻も名前なしで記録される）。
+// from_month / to_month: 'yyyy-MM'。to_month が空なら終わりなし。
+const INVOICE_CONTRACT_COLS = ['id','payee_id','store_id','staff_name','kind','amount','base_days_mode','base_days_fixed','from_month','to_month','note'];
+const INVOICE_LINE_KINDS = ['monthly', 'per_visit', 'oneoff', 'expense', 'discount'];
+
+// 'yyyy-MM' → 年・月(0始まり)・日数。形式が違えば null
+function _invoiceMonth_(period) {
+  const m = String(period || '').match(/^(\d{4})-(\d{2})$/);
+  if (!m) return null;
+  const year = +m[1], month0 = +m[2] - 1;
+  if (month0 < 0 || month0 > 11) return null;
+  return { year: year, month0: month0, label: m[1] + '-' + m[2], daysInMonth: new Date(Date.UTC(year, month0 + 1, 0)).getUTCDate() };
+}
+
+// その月の基準日数。schedule は attendance_staff_schedule / attendance_store_default_schedule の値
+// （{type:'interval', intervalDays:N} か {type:'weekday', weekdays:[0..6]}）。無ければ月の日数。
+// interval は sendMonthlyAttendanceCheck と同じく ceil(月の日数 ÷ N)。
+// 前の請求書機能の baseDaysMode 'halfRoundUp'（巣鴨）は intervalDays:2 と同じ。
+function invoiceBaseDays_(schedule, period) {
+  const mi = _invoiceMonth_(period);
+  if (!mi) return 0;
+  if (schedule && schedule.type === 'weekday' && Array.isArray(schedule.weekdays) && schedule.weekdays.length) {
+    let n = 0;
+    for (let d = 1; d <= mi.daysInMonth; d++) {
+      if (schedule.weekdays.indexOf(new Date(Date.UTC(mi.year, mi.month0, d)).getUTCDay()) >= 0) n++;
+    }
+    return n;
+  }
+  const interval = (schedule && Number(schedule.intervalDays)) || 1;
+  return Math.ceil(mi.daysInMonth / interval);
+}
+
+// 打刻の予定を店・名前から引く（sendMonthlyAttendanceCheck と同じ決め方）。
+// 店にスタッフ名の登録があれば名前ごとの予定（無ければ毎日）、登録が無ければ店の既定の予定。どちらも無ければ null。
+function invoiceScheduleFor_(storeId, staffName, staffMap, scheduleMap, storeDefaultScheduleMap) {
+  const names = (staffMap || {})[storeId] || [];
+  if (names.length) return ((scheduleMap || {})[storeId] || {})[staffName] || { type: 'interval', intervalDays: 1 };
+  return (storeDefaultScheduleMap || {})[storeId] || null;
+}
+
+// その月の出勤日（営業日。AM4:30締め）を打刻から数える。同じ営業日に何回押しても1日。
+// within_range が false の日（店から離れた場所での打刻）も数えるが outOfRange に入れて「要確認」にする
+// （2026-10-17 決定）。基準座標が未設定で判定できなかった日（空）は印を付けない。
+// 休み申請の日に打刻がある日も数え、onLeave に入れて「要確認」にする。
+function invoiceAttendanceDays_(attendanceRows, leaveRows, storeId, staffName, period) {
+  const mi = _invoiceMonth_(period);
+  const name = staffName || '';
+  const byDay = {};
+  (attendanceRows || []).forEach(r => {
+    if (String(r.store_id) !== String(storeId) || (r.name || '') !== name) return;
+    const bizDate = _businessDateFromDateTime_(_dateTimeStr(r.clocked_at));
+    if (!bizDate || !mi || bizDate.slice(0, 7) !== mi.label) return;
+    const inRange = !(r.within_range === false || String(r.within_range).toLowerCase() === 'false');
+    byDay[bizDate] = byDay[bizDate] || inRange; // その日に1回でも範囲内なら範囲内
+  });
+  const leaveSet = new Set((leaveRows || [])
+    .filter(r => String(r.store_id) === String(storeId) && (r.name || '') === name)
+    .map(r => String(_dateStr(r.leave_date) || '')));
+  const days = Object.keys(byDay).sort();
+  return {
+    days: days,
+    outOfRange: days.filter(d => !byDay[d]),
+    onLeave: days.filter(d => leaveSet.has(d)),
+  };
+}
+
+// 月額の日割り。出勤日数が基準日数を超えても月額まで（over_base の印）。端数は切り捨て。
+function invoiceMonthlyAmount_(fullAmount, baseDays, days) {
+  const full = Math.floor(Number(fullAmount) || 0);
+  const base = Math.floor(Number(baseDays) || 0);
+  const d = Math.max(0, Math.floor(Number(days) || 0));
+  if (full <= 0 || base <= 0) return 0;
+  return Math.floor(full * Math.min(d, base) / base);
+}
+
+// 契約がその月に有効か
+function _invoiceContractActive_(c, period) {
+  if (c.from_month && String(c.from_month) > period) return false;
+  if (c.to_month && String(c.to_month) < period) return false;
+  return true;
+}
+
+// 下書きの明細を作る（シートを読まない計算だけ。テストは scripts/test_partner_invoice.js）。
+// data: { contracts, attendance, leaves, staffMap, scheduleMap, storeDefaultScheduleMap, storeNames, storeCodes }
+function buildInvoiceDraftLines_(payeeId, period, data) {
+  if (!_invoiceMonth_(period)) throw new Error('対象月の形式が違います: ' + period);
+  const lines = [];
+  (data.contracts || [])
+    .filter(c => String(c.payee_id) === String(payeeId) && _invoiceContractActive_(c, period))
+    .forEach(c => {
+      const storeId = String(c.store_id);
+      const staff = c.staff_name || '';
+      const att = invoiceAttendanceDays_(data.attendance, data.leaves, storeId, staff, period);
+      const base = {
+        contract_id: c.id, store_id: storeId,
+        store_code: (data.storeCodes || {})[storeId] != null ? String(data.storeCodes[storeId]) : '',
+        store_name: (data.storeNames || {})[storeId] || storeId,
+        staff_name: staff, dates: att.days, out_of_range: att.outOfRange, on_leave: att.onLeave,
+      };
+      if (c.kind === 'per_visit') {
+        const unit = Math.floor(Number(c.amount) || 0);
+        lines.push(Object.assign(base, { kind: 'per_visit', unit_price: unit, count: att.days.length, auto_count: att.days.length, amount: unit * att.days.length }));
+        return;
+      }
+      let baseDays;
+      if (c.base_days_mode === 'fixed' && Number(c.base_days_fixed) > 0) baseDays = Math.floor(Number(c.base_days_fixed));
+      else if (c.base_days_mode === 'calendar') baseDays = _invoiceMonth_(period).daysInMonth;
+      else baseDays = invoiceBaseDays_(invoiceScheduleFor_(storeId, staff, data.staffMap, data.scheduleMap, data.storeDefaultScheduleMap), period);
+      const full = Math.floor(Number(c.amount) || 0);
+      lines.push(Object.assign(base, {
+        kind: 'monthly', full_amount: full, base_days: baseDays,
+        days: att.days.length, auto_days: att.days.length, over_base: att.days.length > baseDays,
+        amount: invoiceMonthlyAmount_(full, baseDays, att.days.length),
+      }));
+    });
+  lines.sort((a, b) => (Number(a.store_code) || 9999) - (Number(b.store_code) || 9999) || String(a.staff_name).localeCompare(String(b.staff_name)));
+  return lines;
+}
+
+// 提出された明細をサーバー側で計算し直す（画面の金額は使わない）。draftLines は同じ月の下書き。
+// 返り値: { lines, total, errors: [文言], flags: [本部の一覧に出す要確認の文言] }
+//   monthly  … days だけ直せる（下書きと違えば reason 必須）。full_amount・base_days は下書きの値を使う
+//   per_visit… count だけ直せる（打刻の日数と違えば reason 必須）。単価は下書きの値
+//   oneoff / expense … amount（1円以上）と内容 note 必須。expense は receipt（領収書あり）必須
+//   discount … amount はマイナス（プラスで来てもマイナスにする）、内容 note 必須
+function recomputeInvoiceLines_(submitted, draftLines) {
+  const errors = [], flags = [];
+  const draftByContract = {};
+  (draftLines || []).forEach(l => { if (l.contract_id) draftByContract[l.contract_id] = l; });
+  const used = new Set();
+  const out = [];
+  (submitted || []).forEach((s, i) => {
+    const no = (i + 1) + '行目';
+    const kind = s && s.kind;
+    if (INVOICE_LINE_KINDS.indexOf(kind) < 0) { errors.push(no + ': 種類が分かりません'); return; }
+    if (kind === 'monthly' || kind === 'per_visit') {
+      const d = draftByContract[s.contract_id];
+      if (!d || d.kind !== kind) { errors.push(no + ': 契約が見つかりません'); return; }
+      if (used.has(s.contract_id)) { errors.push(no + ': 同じ契約の行が2つあります'); return; }
+      used.add(s.contract_id);
+      const label = d.store_name + (d.staff_name ? '（' + d.staff_name + '）' : '');
+      const reason = String(s.reason || '').trim();
+      if (kind === 'monthly') {
+        const days = Math.floor(Number(s.days));
+        if (!(days >= 0) || days > 31) { errors.push(no + ': 日数が正しくありません'); return; }
+        if (days !== d.auto_days && !reason) { errors.push(no + ': 打刻の日数（' + d.auto_days + '日）と違うので理由を書いてください'); return; }
+        if (days !== d.auto_days) flags.push(label + ' 日数を ' + d.auto_days + '→' + days + ' に修正（理由: ' + reason + '）');
+        out.push(Object.assign({}, d, { days: days, reason: reason, over_base: days > d.base_days, amount: invoiceMonthlyAmount_(d.full_amount, d.base_days, days) }));
+      } else {
+        const count = Math.floor(Number(s.count));
+        if (!(count >= 0) || count > 100) { errors.push(no + ': 回数が正しくありません'); return; }
+        if (count !== d.auto_count && !reason) { errors.push(no + ': 打刻の日数（' + d.auto_count + '回）と違うので理由を書いてください'); return; }
+        if (count !== d.auto_count) flags.push(label + ' 回数を ' + d.auto_count + '→' + count + ' に修正（理由: ' + reason + '）');
+        out.push(Object.assign({}, d, { count: count, reason: reason, amount: d.unit_price * count }));
+      }
+      if (d.out_of_range && d.out_of_range.length) flags.push(label + ' 店から離れた場所での打刻: ' + d.out_of_range.join(', '));
+      if (d.on_leave && d.on_leave.length) flags.push(label + ' 休み申請の日に打刻: ' + d.on_leave.join(', '));
+      return;
+    }
+    const note = String(s.note || '').trim();
+    let amount = Math.floor(Math.abs(Number(s.amount) || 0));
+    if (!note) { errors.push(no + ': 内容を書いてください'); return; }
+    if (amount <= 0) { errors.push(no + ': 金額を入れてください'); return; }
+    if (kind === 'expense' && !s.receipt) { errors.push(no + ': 経費は領収書の写真が必要です'); return; }
+    if (kind === 'discount') amount = -amount;
+    out.push({ kind: kind, store_id: s.store_id || '', store_code: s.store_code || '', store_name: s.store_name || '', staff_name: s.staff_name || '', note: note, amount: amount, receipt: !!s.receipt });
+  });
+  // 下書きにある契約の行が提出から抜けていたらエラー（勝手に消えないように。請求しない月は0にしてもらう）
+  (draftLines || []).forEach(d => {
+    if (d.contract_id && !used.has(d.contract_id)) errors.push(d.store_name + (d.staff_name ? '（' + d.staff_name + '）' : '') + ' の行がありません（請求しない月は日数・回数を0にしてください）');
+  });
+  const total = out.reduce((t, l) => t + l.amount, 0);
+  if (total < 0) errors.push('合計がマイナスです');
+  return { lines: out, total: total, errors: errors, flags: flags };
+}
+
+// シートと設定から data を組み立てて下書きを作る（画面・1日のバッチから呼ぶ想定。doGet/doPost には後続で足す）
+function getInvoiceDraft_(payeeId, period) {
+  const contracts = sheetRows(getSheet(SHEET_INVOICE_CONTRACTS), INVOICE_CONTRACT_COLS);
+  const storeCfg = _settingJson_('invoice_store_cfg', {});
+  const storeCodes = {};
+  Object.keys(storeCfg).forEach(id => { if (storeCfg[id] && storeCfg[id].storeCode != null && storeCfg[id].storeCode !== '') storeCodes[id] = storeCfg[id].storeCode; });
+  const storeNames = Object.assign({}, _storeNames_());
+  const custom = _settingJson_('custom_stores', {});
+  Object.keys(custom).forEach(id => { if (custom[id] && custom[id].name) storeNames[id] = custom[id].name; });
+  const lines = buildInvoiceDraftLines_(payeeId, period, {
+    contracts: contracts,
+    attendance: getAttendance(),
+    leaves: getLeaveRequests(),
+    staffMap: _settingJson_('attendance_staff_list', {}),
+    scheduleMap: _settingJson_('attendance_staff_schedule', {}),
+    storeDefaultScheduleMap: _settingJson_('attendance_store_default_schedule', {}),
+    storeNames: storeNames, storeCodes: storeCodes,
+  });
+  return { payee_id: payeeId, period: period, lines: lines, total: lines.reduce((t, l) => t + l.amount, 0) };
+}
