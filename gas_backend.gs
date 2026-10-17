@@ -4722,7 +4722,9 @@ function _withAmazonOrderNotify_(result, storeId, rows) {
     const items = (rows || []).filter(r => r && r.product &&
       (r.is_new === true || String(r.is_new) === 'TRUE') && !(r.denied === true || String(r.denied) === 'TRUE'))
       .map(r => ({ id: String(r.id), label: String(r.label || r.product), qty: r.qty,
-        unit: r.unit_mode === 'case' || (meta[r.product] || {}).caseOnly ? 'ケース' : String(r.unit || ''), url: urls[r.product] || '' }));
+        unit: r.unit_mode === 'case' || (meta[r.product] || {}).caseOnly ? 'ケース' : String(r.unit || ''), url: urls[r.product] || '',
+        // 「その他」は中身が備考欄に書かれるので、通知にも備考を載せる（2026-10-17 塩川さん。例: その他 ×1（パイプユニッシュ））
+        note: r.product === 'その他' ? String(r.note || '').trim() : '' }));
     // トーヨーの品は「トーベンのカートに入れる」リンクを付ける（2026-10-16。依頼の品＋無料メンテナンスだけ）
     const ids = items.map(it => it.id);
     const toyo = _toyoCartForRows_(storeId, (rows || []).filter(r => r && ids.indexOf(String(r.id)) >= 0));
