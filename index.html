@@ -1237,7 +1237,8 @@ function _loadOrders() {
 }
 async function initGas() {
   if (_authToken()) _loadOrders();
-  else { _ordersLoadFailed = false; _ordersReady = Promise.resolve(); }
+  // 読んでいない間は「失敗」扱いにして、空の発注一覧を前提にした保存(空の下書き行の自動保存など)をさせない
+  else { _ordersLoadFailed = true; _ordersReady = Promise.resolve(); }
   // ページ最上部で先行発火済みの読み込みがあればそれを使う（早く始まっている分だけ速い）
   return _loadSettings(window.__earlySettingsScope || 'all', window.__earlySettings);
 }
@@ -10453,7 +10454,9 @@ if (!(sessionStorage.getItem('admin_authed') === '1' || isSiteAuthed())) {
   }
   _initRealtime();
   _initChecksheetRealtime();
-  if (isAuthed()) {
+  if ((isAuthed() || isSiteAuthed()) && !_authToken() && !window.__ONB) {
+    autoLogout('ポータルを新しくしたため、もう一度ログインしてください。');
+  } else if (isAuthed()) {
     showPage('admin');
   } else if (isSiteAuthed()) {
     showPage('store');
