@@ -8943,3 +8943,85 @@ function _invoiceRouteAdmin_(b) {
   else if (b.action === 'invoiceAdminDeleteContract') return invoiceAdminDeleteContract_(b.token, b.id);
   return null;
 }
+
+// ----- パートナー請求書: 毎月1日の下書きの知らせ・3日の催促（2026-10-17） -----
+// 下書きは画面を開いたときに打刻から作るので、1日は「下書きができた」ことを知らせるだけ。
+// 知らせ先は打刻の知らせと同じエリアごとのトーク（_attendanceChannelForArea_）。本部向けの文面にする。
+// トリガーは setInvoiceMonthlyTriggers() を Apps Script のエディタで1回だけ手動実行して登録する
+// （setMonthlyAttendanceTrigger と同じ運用。コードを push・デプロイしただけでは登録されない）。
+
+// その月に有効な契約を持つ請求先ごとに、契約の店のエリアをまとめる（シートを触らない。テストあり）
+// areaFn: storeId → エリア名（null はエリア未設定）
+function invoicePayeeAreas_(payees, contracts, period, areaFn) {
+  const out = {};
+  payees.forEach(p => {
+    const areas = [];
+    contracts.filter(c => String(c.payee_id) === String(p.id) && _invoiceContractActive_(c, period)).forEach(c => {
+      const a = areaFn(String(c.store_id)) || '(エリア未設定)';
+      if (areas.indexOf(a) < 0) areas.push(a);
+    });
+    if (areas.length) out[p.id] = areas;
+  });
+  return out;
+}
+
+// 未提出（提出が無い・差し戻しのまま）の請求先。有効な契約がある請求先だけ（シートを触らない。テストあり）
+function invoiceUnsubmitted_(payees, contracts, subs, period) {
+  return payees.filter(p => {
+    if (!contracts.some(c => String(c.payee_id) === String(p.id) && _invoiceContractActive_(c, period))) return false;
+    const s = subs.find(x => String(x.payee_id) === String(p.id) && String(x.period) === period);
+    return !s || s.status === 'returned';
+  });
+}
+
+function _invoicePrevPeriod_(now) { return invoiceAllowedPeriods_(now)[0]; }
+
+function _invoiceSendByArea_(byArea, header) {
+  Object.keys(byArea).forEach(area => {
+    const lines = byArea[area];
+    if (!lines.length) return;
+    try {
+      sendLineWorksNotification('【' + area + '】\n' + header + '\n' + lines.join('\n'), _attendanceChannelForArea_(area === '(エリア未設定)' ? null : area));
+    } catch (e) { console.error('請求書の知らせに失敗:', area, e.message); }
+  });
+}
+
+// 毎月1日 9時：前月分の下書きができたことを知らせる
+function sendInvoiceMonthStartNotice() {
+  const period = _invoicePrevPeriod_(new Date());
+  const mi = _invoiceMonth_(period);
+  const payees = _invoiceRows_(SHEET_INVOICE_PAYEES, INVOICE_PAYEE_COLS);
+  const contracts = _invoiceRows_(SHEET_INVOICE_CONTRACTS, INVOICE_CONTRACT_COLS);
+  const areas = invoicePayeeAreas_(payees, contracts, period, _areaForStore_);
+  const byArea = {};
+  payees.forEach(p => (areas[p.id] || []).forEach(a => { (byArea[a] = byArea[a] || []).push('・' + p.name + (p.pin_hash ? '' : '（暗証番号未発行）')); }));
+  _invoiceSendByArea_(byArea, '【請求書】' + mi.year + '年' + (mi.month0 + 1) + '月分の下書きができました。'
+    + 'パートナーは「業務管理」→「請求書を開く」で確かめて、5日までに提出します。周知をお願いします。\n対象の請求先:');
+}
+
+// 毎月3日 9時：前月分を出していない請求先を知らせる（差し戻しのままも含む）
+function sendInvoiceReminder() {
+  const period = _invoicePrevPeriod_(new Date());
+  const mi = _invoiceMonth_(period);
+  const payees = _invoiceRows_(SHEET_INVOICE_PAYEES, INVOICE_PAYEE_COLS);
+  const contracts = _invoiceRows_(SHEET_INVOICE_CONTRACTS, INVOICE_CONTRACT_COLS);
+  const subs = _invoiceRows_(SHEET_INVOICE_SUBMISSIONS, INVOICE_SUBMISSION_COLS);
+  const late = invoiceUnsubmitted_(payees, contracts, subs, period);
+  if (!late.length) return;
+  const areas = invoicePayeeAreas_(late, contracts, period, _areaForStore_);
+  const byArea = {};
+  late.forEach(p => {
+    const s = subs.find(x => String(x.payee_id) === String(p.id) && String(x.period) === period);
+    (areas[p.id] || []).forEach(a => { (byArea[a] = byArea[a] || []).push('・' + p.name + (s ? '（差し戻しのまま）' : '')); });
+  });
+  _invoiceSendByArea_(byArea, '【請求書の催促】' + mi.year + '年' + (mi.month0 + 1) + '月分をまだ出していない請求先です。締め切りは5日です。声かけをお願いします。');
+}
+
+// Apps Script のエディタで1回だけ手動実行する（何度実行しても重複しない）
+function setInvoiceMonthlyTriggers() {
+  ScriptApp.getProjectTriggers().forEach(t => {
+    if (['sendInvoiceMonthStartNotice', 'sendInvoiceReminder'].indexOf(t.getHandlerFunction()) >= 0) ScriptApp.deleteTrigger(t);
+  });
+  ScriptApp.newTrigger('sendInvoiceMonthStartNotice').timeBased().onMonthDay(1).atHour(9).inTimezone('Asia/Tokyo').create();
+  ScriptApp.newTrigger('sendInvoiceReminder').timeBased().onMonthDay(3).atHour(9).inTimezone('Asia/Tokyo').create();
+}

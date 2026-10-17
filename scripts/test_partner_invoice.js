@@ -166,6 +166,16 @@ function runPartnerInvoiceTests() {
     '店を選んでください', '月額を円で入れてください', '固定の基準日数は1〜31で入れてください', '開始月の形式が違います（例: 2026-10）']);
   check('契約: 終了月が開始月より前', invoiceValidateContract_({ payee_id: 'p1', store_id: 'x', kind: 'per_visit', amount: 100, from_month: '2026-10', to_month: '2026-09' }), ['終了月が開始月より前です']);
 
+  // ⑩ 毎月の知らせ・催促
+  var ps = [{ id: 'p1', name: 'A' }, { id: 'p2', name: 'B' }, { id: 'p3', name: 'C' }, { id: 'p4', name: 'D' }];
+  var cs = [{ payee_id: 'p1', store_id: 'hibino', from_month: '', to_month: '' }, { payee_id: 'p1', store_id: 'tenma', from_month: '', to_month: '' },
+            { payee_id: 'p2', store_id: 'hara', from_month: '', to_month: '' }, { payee_id: 'p3', store_id: 'abeno', from_month: '', to_month: '2026-08' },
+            { payee_id: 'p4', store_id: 'zzz', from_month: '', to_month: '' }];
+  var area = function (sid) { return { hibino: '東海', hara: '東海', tenma: '関西', abeno: '関西' }[sid] || null; };
+  check('知らせ: 請求先ごとのエリア（終わった契約は除く・エリア未設定）', invoicePayeeAreas_(ps, cs, '2026-09', area), { p1: ['東海', '関西'], p2: ['東海'], p4: ['(エリア未設定)'] });
+  var subs = [{ payee_id: 'p1', period: '2026-09', status: 'submitted' }, { payee_id: 'p2', period: '2026-09', status: 'returned' }];
+  check('催促: 未提出と差し戻しのまま（契約の無い請求先は除く）', invoiceUnsubmitted_(ps, cs, subs, '2026-09').map(function (p) { return p.id; }), ['p2', 'p4']);
+
   results.push(failed ? ('失敗 ' + failed + ' 件') : 'すべて成功');
   return results.join('\n');
 }
