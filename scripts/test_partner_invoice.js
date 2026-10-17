@@ -147,6 +147,18 @@ function runPartnerInvoiceTests() {
   var c3 = {}; invoiceSheetCells_(Object.assign({}, payee, { tax_exempt: 'TRUE', registration_no: '' }), '2026-09', [lines2[0]], 1, 1, 14000, ['亀島']).forEach(function (c) { c3[c[0]] = c[1]; });
   check('セル: 課税事業者でない＝■、1店は店名', [c3.Q7, c3.L7, c3.B9], ['■', '', 'セルフカフェ　亀島店']);
 
+  // ⑧ 画面の窓口（シートを触らない部分）
+  check('提出できる月: 10/17 なら 9・8・7月', invoiceAllowedPeriods_(new Date(2026, 9, 17)), ['2026-09', '2026-08', '2026-07']);
+  check('提出できる月: 1月なら前年12・11・10月', invoiceAllowedPeriods_(new Date(2027, 0, 5)), ['2026-12', '2026-11', '2026-10']);
+  check('初回登録: 正しい内容は誤りなし', invoiceValidateProfile_(payee), []);
+  check('初回登録: 免税なら登録番号は空', invoiceValidateProfile_(Object.assign({}, payee, { tax_exempt: true, registration_no: '' })), []);
+  check('初回登録: 誤りを全部返す', invoiceValidateProfile_({ name: '', address: 'x', tel: '12', registration_no: 'T123', bank_name: 'b', bank_code: '12', branch_name: 'c', branch_code: '1234', account_type: '', account_no: 'abc', account_kana: 'yamada' }), [
+    '社名（お名前）を入れてください', '電話番号を正しく入れてください', '登録番号は T と13桁の数字で入れてください（無い場合は「課税事業者ではない」にチェック）',
+    '銀行コードは4桁の数字で入れてください', '支店コードは3桁の数字で入れてください', '口座種別（普通・当座）を選んでください',
+    '口座番号は8桁までの数字で入れてください', '口座名義はカタカナで入れてください']);
+  var m = invoiceMaskPayee_(Object.assign({}, payee, { address: '名古屋市テスト区1-2-3', account_no: '1234567', tel: '090-1234-5678' }));
+  check('伏せ字: 口座・電話・住所は一部だけ', [m.account_no, m.tel, m.address, m.profile_complete], ['＊＊＊＊567', '＊＊＊＊5678', '名古屋市テス…', true]);
+
   results.push(failed ? ('失敗 ' + failed + ' 件') : 'すべて成功');
   return results.join('\n');
 }

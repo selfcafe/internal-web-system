@@ -532,6 +532,9 @@ function doGet(e) {
 }
 
 function doPost(e) {
+  // パートナー請求書の action は全体のロックを取らずに処理する（PDF づくりで他の店の保存を待たせない）
+  const invoiceResult = _invoiceRoutePost_(e);
+  if (invoiceResult) return json(invoiceResult);
   const lock = LockService.getScriptLock();
   // ロック待ち時間を計測してログに残す（2026-08-12、doPostが同時に何件も来た時に
   // 「ロック待ちで詰まっている」のか「処理自体が遅い」のかを次回切り分けられるようにするため）
@@ -8166,6 +8169,7 @@ function setNewStoreCheckTrigger() {
 //
 // 口座・住所・契約の月額は invoice_payees / invoice_contracts タブに置き、getSettings では返さない
 // （ポータルは誰でも呼べるWebアプリで、app_settings は全部画面に配られるため）。
+// タブはメインとは別のスプレッドシート（スクリプトプロパティ INVOICE_DB_SHEET_ID）に置く（後述の窓口のブロック参照）。
 // ================================================================
 const SHEET_INVOICE_CONTRACTS = 'invoice_contracts';
 // kind: monthly | per_visit。amount: monthly は月額、per_visit は単価（どちらも税込の円）。
@@ -8348,7 +8352,7 @@ function recomputeInvoiceLines_(submitted, draftLines) {
 
 // シートと設定から data を組み立てて下書きを作る（画面・1日のバッチから呼ぶ想定。doGet/doPost には後続で足す）
 function getInvoiceDraft_(payeeId, period) {
-  const contracts = sheetRows(getSheet(SHEET_INVOICE_CONTRACTS), INVOICE_CONTRACT_COLS);
+  const contracts = _invoiceRows_(SHEET_INVOICE_CONTRACTS, INVOICE_CONTRACT_COLS);
   const storeCfg = _settingJson_('invoice_store_cfg', {});
   const storeCodes = {};
   Object.keys(storeCfg).forEach(id => { if (storeCfg[id] && storeCfg[id].storeCode != null && storeCfg[id].storeCode !== '') storeCodes[id] = storeCfg[id].storeCode; });
@@ -8546,4 +8550,204 @@ function buildInvoiceReceiptPdf_(payee, period, images) {
   } finally {
     docFile.setTrashed(true);
   }
+}
+
+// ----- パートナー請求書: 画面からの窓口（暗証番号・初回登録・下書き・提出）（2026-10-17） -----
+// 請求書のデータ（invoice_payees / invoice_contracts / invoice_submissions）はメインのスプレッドシートではなく
+// 別のスプレッドシート（スクリプトプロパティ INVOICE_DB_SHEET_ID）に置く。メインのほうはタブを読む窓口
+// （_peekMainSheetTabByGid など）が誰でも呼べるため、口座・住所を置かない。
+// 画面からは doPost の action 'invoiceLogin' / 'invoiceSaveProfile' / 'invoiceGetMonth' / 'invoiceSubmit'。
+// 暗証番号（6桁、請求先ごと）はサーバーで照合し、合えば 6 時間有効の token を返す。以後は token で呼ぶ。
+// PDF づくりは時間がかかるので、doPost 全体のロック（他の店の保存を待たせる）は取らずに処理する。
+const SHEET_INVOICE_SUBMISSIONS = 'invoice_submissions';
+// status: submitted（提出済み）| returned（差し戻し）| approved（確認済み）。請求先・月ごとに1行（出し直しは上書き）
+const INVOICE_SUBMISSION_COLS = ['id','payee_id','period','status','total','lines_json','flags_json','pdf_url','receipt_pdf_url',
+  'submitted_at','returned_reason','reviewed_at','reviewed_by'];
+const INVOICE_ACTIONS = ['invoiceLogin', 'invoiceSaveProfile', 'invoiceGetMonth', 'invoiceSubmit'];
+const INVOICE_TOKEN_SEC = 6 * 3600;
+const INVOICE_PIN_FAIL_LIMIT = 10;      // 15分で10回まちがえたら、しばらく受け付けない（総当たり対策）
+const INVOICE_PIN_FAIL_WINDOW_SEC = 900;
+
+function _invoiceDb_() { return SpreadsheetApp.openById(_invoiceProp_('INVOICE_DB_SHEET_ID')); }
+function _invoiceSheet_(name, cols) {
+  const ss = _invoiceDb_();
+  const sh = ss.getSheetByName(name) || ss.insertSheet(name);
+  ensureHeaders(sh, cols);
+  return sh;
+}
+function _invoiceRows_(name, cols) { return sheetRows(_invoiceSheet_(name, cols), cols); }
+
+// 行を id で探して上書き、無ければ足す（請求書のタブ専用。列は cols の順に並んでいる前提）
+function _invoiceUpsertRow_(name, cols, obj) {
+  const sh = _invoiceSheet_(name, cols);
+  const row = cols.map(c => obj[c] == null ? '' : obj[c]);
+  const last = sh.getLastRow();
+  if (last > 1) {
+    const ids = sh.getRange(2, 1, last - 1, 1).getValues();
+    for (let i = 0; i < ids.length; i++) {
+      if (String(ids[i][0]) === String(obj.id)) { sh.getRange(i + 2, 1, 1, cols.length).setValues([row]); return; }
+    }
+  }
+  sh.appendRow(row);
+}
+
+function _invoiceHashPin_(pin) {
+  const bytes = Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, 'selfcafe-invoice:' + String(pin), Utilities.Charset.UTF_8);
+  return bytes.map(b => ('0' + (b & 0xff).toString(16)).slice(-2)).join('');
+}
+
+// 提出できる月：前月から3か月前まで（打刻は3か月で消えるため）。now は Date
+function invoiceAllowedPeriods_(now) {
+  const out = [];
+  for (let k = 1; k <= 3; k++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - k, 1);
+    out.push(d.getFullYear() + '-' + ('0' + (d.getMonth() + 1)).slice(-2));
+  }
+  return out;
+}
+
+function _invoiceTruthy_(v) { return v === true || String(v).toLowerCase() === 'true'; }
+
+// 画面に返す請求先の情報。口座番号・住所・電話は伏せる（全部は PDF を作るときにサーバーの中でだけ使う）
+function invoiceMaskPayee_(p) {
+  const tail = (s, n) => { s = String(s || ''); return s ? '＊＊＊＊' + s.slice(-n) : ''; };
+  const head = (s, n) => { s = String(s || ''); return s ? s.slice(0, n) + (s.length > n ? '…' : '') : ''; };
+  return {
+    type: p.type || '', biz_code: String(p.biz_code || ''), name: p.name || '',
+    registration_no: p.registration_no || '', tax_exempt: _invoiceTruthy_(p.tax_exempt),
+    address: head(p.address, 6), tel: tail(p.tel, 4),
+    bank_name: p.bank_name || '', branch_name: p.branch_name || '', account_type: p.account_type || '',
+    account_no: tail(p.account_no, 3), account_kana: p.account_kana || '',
+    profile_complete: invoiceValidateProfile_(p).length === 0,
+  };
+}
+
+// 初回登録（請求先の情報）の確認。誤りの文言を返す（空なら OK）
+function invoiceValidateProfile_(p) {
+  const e = [];
+  const s = k => String(p[k] == null ? '' : p[k]).trim();
+  if (!s('name')) e.push('社名（お名前）を入れてください');
+  if (!s('address')) e.push('住所を入れてください');
+  if (!/^[0-9０-９\-－ー]{10,13}$/.test(s('tel'))) e.push('電話番号を正しく入れてください');
+  if (_invoiceTruthy_(p.tax_exempt)) { if (s('registration_no')) e.push('「課税事業者ではない」のときは登録番号を空にしてください'); }
+  else if (!/^T\d{13}$/.test(s('registration_no'))) e.push('登録番号は T と13桁の数字で入れてください（無い場合は「課税事業者ではない」にチェック）');
+  if (!s('bank_name')) e.push('金融機関名を入れてください');
+  if (!/^\d{4}$/.test(s('bank_code'))) e.push('銀行コードは4桁の数字で入れてください');
+  if (!s('branch_name')) e.push('支店名を入れてください');
+  if (!/^\d{3}$/.test(s('branch_code'))) e.push('支店コードは3桁の数字で入れてください');
+  if (['普', '当'].indexOf(s('account_type')) < 0) e.push('口座種別（普通・当座）を選んでください');
+  if (!/^\d{1,8}$/.test(s('account_no'))) e.push('口座番号は8桁までの数字で入れてください');
+  if (!/^[ァ-ヶー゛゜（）()．.・\s　]+$/.test(s('account_kana'))) e.push('口座名義はカタカナで入れてください');
+  return e;
+}
+
+function _invoicePayeeByToken_(token) {
+  const id = token ? CacheService.getScriptCache().get('inv_tok_' + token) : null;
+  if (!id) throw new Error('時間がたったので、もう一度暗証番号を入れてください');
+  const p = _invoiceRows_(SHEET_INVOICE_PAYEES, INVOICE_PAYEE_COLS).find(r => String(r.id) === String(id));
+  if (!p) throw new Error('請求先が見つかりません。本部に連絡してください');
+  return p;
+}
+
+function invoiceLogin_(pin) {
+  const cache = CacheService.getScriptCache();
+  const fails = Number(cache.get('inv_pin_fail') || 0);
+  if (fails >= INVOICE_PIN_FAIL_LIMIT) return { error: '暗証番号のまちがいが続いたため、15分ほどあけてからやり直してください' };
+  if (!/^\d{6}$/.test(String(pin || ''))) return { error: '暗証番号は6桁の数字です' };
+  const hash = _invoiceHashPin_(pin);
+  const p = _invoiceRows_(SHEET_INVOICE_PAYEES, INVOICE_PAYEE_COLS).find(r => r.pin_hash && String(r.pin_hash) === hash);
+  if (!p) { cache.put('inv_pin_fail', String(fails + 1), INVOICE_PIN_FAIL_WINDOW_SEC); return { error: '暗証番号が違います' }; }
+  const token = Utilities.getUuid();
+  cache.put('inv_tok_' + token, String(p.id), INVOICE_TOKEN_SEC);
+  return { ok: true, token: token, payee: invoiceMaskPayee_(p), periods: invoiceAllowedPeriods_(new Date()) };
+}
+
+function invoiceSaveProfile_(token, prof) {
+  const p = _invoicePayeeByToken_(token);
+  const keys = ['name', 'registration_no', 'tax_exempt', 'address', 'tel', 'bank_name', 'bank_code', 'branch_name', 'branch_code', 'account_type', 'account_no', 'account_kana'];
+  const next = Object.assign({}, p);
+  keys.forEach(k => { if (prof && prof[k] != null) next[k] = typeof prof[k] === 'string' ? prof[k].trim() : prof[k]; });
+  next.tax_exempt = _invoiceTruthy_(next.tax_exempt);
+  next.tel = String(next.tel || '').replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).replace(/[－ー]/g, '-');
+  const errors = invoiceValidateProfile_(next);
+  if (errors.length) return { errors: errors };
+  next.updated_at = new Date();
+  const lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try { _invoiceUpsertRow_(SHEET_INVOICE_PAYEES, INVOICE_PAYEE_COLS, next); } finally { lock.releaseLock(); }
+  return { ok: true, payee: invoiceMaskPayee_(next) };
+}
+
+function _invoiceSubmission_(payeeId, period) {
+  return _invoiceRows_(SHEET_INVOICE_SUBMISSIONS, INVOICE_SUBMISSION_COLS)
+    .find(r => String(r.payee_id) === String(payeeId) && String(r.period) === String(period)) || null;
+}
+function _invoiceParse_(s, fallback) { try { return s ? JSON.parse(s) : fallback; } catch (e) { return fallback; } }
+
+function invoiceGetMonth_(token, period) {
+  const p = _invoicePayeeByToken_(token);
+  if (invoiceAllowedPeriods_(new Date()).indexOf(period) < 0) return { error: 'この月の請求書は扱えません' };
+  const draft = getInvoiceDraft_(p.id, period);
+  const sub = _invoiceSubmission_(p.id, period);
+  return {
+    ok: true, period: period, draft: draft.lines,
+    submission: sub ? {
+      status: sub.status, total: Number(sub.total) || 0, lines: _invoiceParse_(sub.lines_json, []),
+      submitted_at: _dateTimeStr(sub.submitted_at), returned_reason: sub.returned_reason || '',
+    } : null,
+  };
+}
+
+// receipts: [{ line_index（提出する明細の何行目か、0始まり）, base64, mime, name }]
+function invoiceSubmit_(token, period, lines, receipts) {
+  const p = _invoicePayeeByToken_(token);
+  if (invoiceAllowedPeriods_(new Date()).indexOf(period) < 0) return { error: 'この月の請求書は扱えません' };
+  if (invoiceValidateProfile_(p).length) return { error: '先に請求先の情報（住所・口座など）を登録してください' };
+  const prev = _invoiceSubmission_(p.id, period);
+  if (prev && prev.status === 'approved') return { error: 'この月は本部が確認済みのため、出し直せません。本部に連絡してください' };
+  receipts = (receipts || []).filter(x => x && x.base64);
+  const withReceipt = (lines || []).map((l, i) => Object.assign({}, l, { receipt: receipts.some(x => Number(x.line_index) === i) }));
+  const draft = getInvoiceDraft_(p.id, period);
+  const r = recomputeInvoiceLines_(withReceipt, draft.lines);
+  if (r.errors.length) return { errors: r.errors };
+  if (!r.lines.length) return { errors: ['明細がありません'] };
+  const pdf = buildInvoicePdf_(p, period, r.lines);
+  const receiptPdf = buildInvoiceReceiptPdf_(p, period, receipts.map(x => ({
+    base64: x.base64, mime: x.mime, name: (r.lines[Number(x.line_index)] || {}).note || x.name || '領収書' })));
+  const row = {
+    id: prev ? prev.id : Utilities.getUuid(), payee_id: p.id, period: period, status: 'submitted', total: r.total,
+    lines_json: JSON.stringify(r.lines.map(l => { const c = Object.assign({}, l); delete c.dates; return c; })),
+    flags_json: JSON.stringify(r.flags), pdf_url: pdf.url, receipt_pdf_url: receiptPdf ? receiptPdf.url : '',
+    submitted_at: new Date(), returned_reason: '', reviewed_at: '', reviewed_by: '',
+  };
+  const lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try { _invoiceUpsertRow_(SHEET_INVOICE_SUBMISSIONS, INVOICE_SUBMISSION_COLS, row); } finally { lock.releaseLock(); }
+  const mi = _invoiceMonth_(period);
+  const msg = '【請求書】' + p.name + '（業者コード ' + (p.biz_code || '未設定') + '）が ' + mi.year + '年' + (mi.month0 + 1) + '月分を'
+    + (prev ? '出し直しました' : '提出しました') + '。合計 ' + r.total.toLocaleString('ja-JP') + '円'
+    + (r.flags.length ? '\n要確認:\n・' + r.flags.join('\n・') : '');
+  return { ok: true, total: r.total, flags: r.flags, resubmitted: !!prev, _notify: { type: 'invoiceSubmitted', message: msg } };
+}
+
+// doPost の入口から最初に呼ぶ。請求書の action なら処理して結果を返し、それ以外は null
+function _invoiceRoutePost_(e) {
+  let b;
+  try { b = JSON.parse(e.postData.contents); } catch (err) { return null; }
+  if (!b || INVOICE_ACTIONS.indexOf(b.action) < 0) return null;
+  let result;
+  try {
+    if      (b.action === 'invoiceLogin')       result = invoiceLogin_(b.pin);
+    else if (b.action === 'invoiceSaveProfile') result = invoiceSaveProfile_(b.token, b.profile);
+    else if (b.action === 'invoiceGetMonth')    result = invoiceGetMonth_(b.token, b.period);
+    else if (b.action === 'invoiceSubmit')      result = invoiceSubmit_(b.token, b.period, b.lines, b.receipts);
+  } catch (err) {
+    result = { error: err.message };
+    if (!/暗証番号|請求先が見つかりません/.test(err.message)) {
+      try { sendStockBotNotification_('【システムエラー】doPost action=' + b.action + '\n' + err.message); } catch (e2) {}
+    }
+  }
+  if (result && result._notify) {
+    const n = result._notify; delete result._notify;
+    try { if (n.type === 'invoiceSubmitted') sendLineWorksNotification(n.message); } catch (e3) { console.error('請求書の通知に失敗:', e3.message); }
+  }
+  return result;
 }

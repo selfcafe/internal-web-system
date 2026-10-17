@@ -751,6 +751,12 @@
         <div id="attendance-msg" style="font-size:13px;margin-top:8px;min-height:18px"></div>
       </div>
 
+      <div style="font-weight:700;font-size:14px;color:#22703d;margin-bottom:8px">請求書</div>
+      <div style="background:white;border-radius:10px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:16px">
+        <div class="note-box">毎月1日に、前月分の請求書の下書きを打刻から作ります。確かめて<b>翌月5日まで</b>に提出してください。</div>
+        <button onclick="openPartnerInvoice()" style="width:100%;background:#22703d;color:white;padding:12px;font-size:16px;font-weight:700;border-radius:8px;border:none;cursor:pointer;font-family:inherit;margin-top:10px">請求書を開く</button>
+      </div>
+
       <div style="font-weight:700;font-size:14px;color:#22703d;margin-bottom:8px">休み申請</div>
       <div style="background:white;border-radius:10px;padding:16px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:16px">
         <div class="note-box">当日休む場合は申請＋該当店舗のグループトークに連絡してください。</div>
@@ -10004,5 +10010,6 @@ if (!(sessionStorage.getItem('admin_authed') === '1' || isSiteAuthed())) {
 })();
 </script>
 <script src="onboarding-tour.js"></script>
+<script src="partner-invoice.js"></script>
 </body>
 </html>
