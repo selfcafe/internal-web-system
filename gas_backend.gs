@@ -8366,3 +8366,184 @@ function getInvoiceDraft_(payeeId, period) {
   });
   return { payee_id: payeeId, period: period, lines: lines, total: lines.reduce((t, l) => t + l.amount, 0) };
 }
+
+// ----- パートナー請求書: PDF を作って保存する（2026-10-17） -----
+// 様式は今の「パートナー様請求書用紙（税込）」を Google スプレッドシートにしたもの（シート名「請求書」）。
+// テンプレートと保存先の ID はリポジトリが公開なので書かず、スクリプトプロパティに置く:
+//   INVOICE_TEMPLATE_ID     … テンプレートのスプレッドシート
+//   INVOICE_SCAN_FOLDER_ID  … 請求書を集めている「スキャン」フォルダ
+// 保存先は「スキャン › YYYY年M月利用分（M+1月支払） › パートナー（ポータル提出）」（無ければ作る）。
+const INVOICE_TEMPLATE_SHEET = '請求書';
+const INVOICE_SUBFOLDER_NAME = 'パートナー（ポータル提出）';
+const INVOICE_ROWS_PER_PAGE = 20;   // 明細は 21〜40 行目の 20 行。超えたら 2 枚目に続ける
+const INVOICE_FIRST_ITEM_ROW = 21;
+const INVOICE_LAST_ROW = 41;        // 合計の行。これより下と U 列より右は消して 1 ページに収める
+const INVOICE_LAST_COL = 21;        // U 列
+// 請求先（個人・会社）。口座・住所はここだけに置く（getSettings では返さない）。
+// pin_hash は請求書の画面を開くときの暗証番号（SHA-256、後続で使う）。
+const SHEET_INVOICE_PAYEES = 'invoice_payees';
+const INVOICE_PAYEE_COLS = ['id','type','biz_code','name','pin_hash','registration_no','tax_exempt','address','tel',
+  'bank_name','bank_code','branch_name','branch_code','account_type','account_no','account_kana','updated_at'];
+
+function _invoiceProp_(key) {
+  const v = PropertiesService.getScriptProperties().getProperty(key);
+  if (!v) throw new Error('スクリプトプロパティ ' + key + ' が設定されていません');
+  return v;
+}
+
+// 'yyyy-MM' → 「2026年9月利用分（10月支払）」（事務員さんが作っている月フォルダの名前）
+function invoiceMonthFolderName_(period) {
+  const mi = _invoiceMonth_(period);
+  if (!mi) throw new Error('対象月の形式が違います: ' + period);
+  return mi.year + '年' + (mi.month0 + 1) + '月利用分（' + ((mi.month0 + 1) % 12 + 1) + '月支払）';
+}
+
+// 明細の「店舗名」欄。様式の記入見本と同じ「セルフカフェ◯◯店」
+function _invoiceStoreLabel_(storeName) {
+  const n = String(storeName || '');
+  if (!n) return '';
+  return 'セルフカフェ' + n + (/店$/.test(n) ? '' : '店');
+}
+
+// 明細の「備考」欄
+function invoiceLineNote_(l) {
+  if (l.kind === 'monthly') return '出勤' + l.days + '/' + l.base_days + '日';
+  if (l.kind === 'per_visit') return Number(l.unit_price).toLocaleString('ja-JP') + '円×' + l.count + '回';
+  return String(l.note || '');
+}
+
+// 1 ページ分のセルの値を [[A1, 値], ...] で返す（シートを触らない計算だけ。テストあり）。
+// 合計は全ページの合計。2 枚以上のときは見出しに (1/2) を付け、途中のページの合計欄は小計にする。
+function invoiceSheetCells_(payee, period, pageLines, pageNo, pageCount, total, storeNames) {
+  const mi = _invoiceMonth_(period);
+  const cells = [
+    ['P3', String(payee.biz_code || '')],
+    ['O5', '令和' + (mi.year - 2018)], ['R5', mi.month0 + 1], ['T5', mi.daysInMonth],   // 作成日は対象月の末日
+    ['L7', String(payee.registration_no || '')],
+    ['Q7', (payee.tax_exempt === true || String(payee.tax_exempt).toLowerCase() === 'true') ? '■' : '□'],
+    ['L8', String(payee.name || '')],
+    ['L9', String(payee.address || '')], ['L10', String(payee.tel || '')],
+    ['N13', String(payee.bank_name || '')], ['L14', payee.bank_code ? '（' + payee.bank_code + '）' : ''],
+    ['N15', String(payee.branch_name || '')], ['L16', payee.branch_code ? '（' + payee.branch_code + '）' : ''],
+    ['L17', String(payee.account_type || '普')], ['M17', String(payee.account_no || '')], ['M18', String(payee.account_kana || '')],
+    ['C11', total],
+  ];
+  // 店舗名の欄：1 店なら「セルフカフェ◯◯店」、2 店以上なら「セルフカフェ　N店舗」
+  cells.push(['B9', storeNames.length === 1 ? 'セルフカフェ　' + storeNames[0] + (/店$/.test(storeNames[0]) ? '' : '店')
+                                            : storeNames.length ? 'セルフカフェ　' + storeNames.length + '店舗' : 'セルフカフェ']);
+  for (let i = 0; i < INVOICE_ROWS_PER_PAGE; i++) {
+    const r = INVOICE_FIRST_ITEM_ROW + i, l = pageLines[i];
+    cells.push(['A' + r, l ? String(l.store_code || '') : ''], ['C' + r, l ? _invoiceStoreLabel_(l.store_name) : ''],
+               ['H' + r, l ? String(l.staff_name || '') : ''], ['K' + r, l ? l.amount : ''], ['O' + r, l ? invoiceLineNote_(l) : '']);
+  }
+  if (pageCount > 1) {
+    cells.push(['G3', '請　　求　　書（' + pageNo + '/' + pageCount + '）']);
+    cells.push(['A41', pageNo === pageCount ? '合計金額' : '小計（' + pageNo + '/' + pageCount + '）']);
+    if (pageNo === pageCount) cells.push(['K41', total]);
+  }
+  return cells;
+}
+
+// 明細を 20 行ずつのページに分ける。店舗の数は店舗IDのある行で数える（経費・値引きの行は数えない）
+function invoicePages_(lines) {
+  const pages = [];
+  for (let i = 0; i < lines.length; i += INVOICE_ROWS_PER_PAGE) pages.push(lines.slice(i, i + INVOICE_ROWS_PER_PAGE));
+  if (!pages.length) pages.push([]);
+  const names = [];
+  lines.forEach(l => { if (l.store_id && l.store_name && names.indexOf(l.store_name) < 0) names.push(l.store_name); });
+  return { pages: pages, storeNames: names };
+}
+
+// 保存先の月フォルダ › パートナー（ポータル提出）を返す（無ければ作る）
+function _invoiceSaveFolder_(period) {
+  const scan = DriveApp.getFolderById(_invoiceProp_('INVOICE_SCAN_FOLDER_ID'));
+  const monthName = invoiceMonthFolderName_(period);
+  const it = scan.getFoldersByName(monthName);
+  const month = it.hasNext() ? it.next() : scan.createFolder(monthName);
+  const it2 = month.getFoldersByName(INVOICE_SUBFOLDER_NAME);
+  return it2.hasNext() ? it2.next() : month.createFolder(INVOICE_SUBFOLDER_NAME);
+}
+
+// 同じ名前のファイルがあれば「【差し替え前】」を付けて残す（差し戻し後の出し直し。消さない）
+function _invoiceRenameOld_(folder, name) {
+  const it = folder.getFilesByName(name);
+  while (it.hasNext()) { const f = it.next(); f.setName('【差し替え前】' + name); }
+}
+
+function invoiceFileBaseName_(payee, period) {
+  const mi = _invoiceMonth_(period);
+  return mi.year + '年' + (mi.month0 + 1) + '月利用分_パートナー_' + String(payee.name || '').replace(/[\\/:*?"<>|]/g, '') + '_' + String(payee.biz_code || '');
+}
+
+// 請求書の PDF を作って保存する。lines は recomputeInvoiceLines_ を通した明細。返り値 { fileId, url, name }
+function buildInvoicePdf_(payee, period, lines) {
+  const folder = _invoiceSaveFolder_(period);
+  const baseName = invoiceFileBaseName_(payee, period);
+  const total = lines.reduce((t, l) => t + l.amount, 0);
+  const pg = invoicePages_(lines);
+  const work = DriveApp.getFileById(_invoiceProp_('INVOICE_TEMPLATE_ID')).makeCopy(baseName + '_作業用', folder);
+  try {
+    const ss = SpreadsheetApp.openById(work.getId());
+    const base = ss.getSheetByName(INVOICE_TEMPLATE_SHEET);
+    if (!base) throw new Error('テンプレートに「' + INVOICE_TEMPLATE_SHEET + '」シートがありません');
+    ss.getSheets().forEach(s => { if (s.getSheetId() !== base.getSheetId()) ss.deleteSheet(s); });
+    if (base.getMaxRows() > INVOICE_LAST_ROW) base.deleteRows(INVOICE_LAST_ROW + 1, base.getMaxRows() - INVOICE_LAST_ROW);
+    if (base.getMaxColumns() > INVOICE_LAST_COL) base.deleteColumns(INVOICE_LAST_COL + 1, base.getMaxColumns() - INVOICE_LAST_COL);
+    // 備考欄（O:Q 結合）は狭いので左寄せ・小さめの字にする（「リフレッシュ清掃」が切れないように）
+    base.getRange('O' + INVOICE_FIRST_ITEM_ROW + ':O' + (INVOICE_FIRST_ITEM_ROW + INVOICE_ROWS_PER_PAGE - 1)).setHorizontalAlignment('left').setFontSize(8);
+    const sheets = [base];
+    for (let p = 1; p < pg.pages.length; p++) {
+      const s = base.copyTo(ss).setName(INVOICE_TEMPLATE_SHEET + (p + 1));
+      ss.setActiveSheet(s); ss.moveActiveSheet(p + 1);
+      sheets.push(s);
+    }
+    sheets.forEach((s, i) => {
+      invoiceSheetCells_(payee, period, pg.pages[i], i + 1, pg.pages.length, total, pg.storeNames)
+        .forEach(c => s.getRange(c[0]).setValue(c[1]));
+    });
+    SpreadsheetApp.flush();
+    const url = 'https://docs.google.com/spreadsheets/d/' + work.getId() + '/export?format=pdf&size=A4&portrait=true&scale=4'
+      + '&gridlines=false&printtitle=false&sheetnames=false&pagenum=UNDEFINED&fzr=false'
+      + '&top_margin=0.5&bottom_margin=0.5&left_margin=0.5&right_margin=0.5&horizontal_alignment=CENTER';
+    const res = UrlFetchApp.fetch(url, { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) throw new Error('PDF の書き出しに失敗しました（' + res.getResponseCode() + '）');
+    const name = baseName + '.pdf';
+    _invoiceRenameOld_(folder, name);
+    const file = folder.createFile(res.getBlob().setName(name));
+    return { fileId: file.getId(), url: file.getUrl(), name: name };
+  } finally {
+    work.setTrashed(true);
+  }
+}
+
+// 領収書の写真をまとめた PDF を作って請求書の横に保存する。images: [{ base64, mime, name }]
+// 1 枚 1 ページ、ページ幅に合わせて縮める。返り値 { fileId, url, name }（写真が無ければ null）
+function buildInvoiceReceiptPdf_(payee, period, images) {
+  if (!images || !images.length) return null;
+  const folder = _invoiceSaveFolder_(period);
+  const name = invoiceFileBaseName_(payee, period) + '_領収書.pdf';
+  const doc = DocumentApp.create(name.replace(/\.pdf$/, '') + '_作業用');
+  const docFile = DriveApp.getFileById(doc.getId());
+  docFile.moveTo(folder); // マイドライブ直下に作業用が残らないように
+  try {
+    const body = doc.getBody();
+    const maxW = body.getPageWidth() - body.getMarginLeft() - body.getMarginRight();
+    const maxH = body.getPageHeight() - body.getMarginTop() - body.getMarginBottom() - 40;
+    images.forEach((img, i) => {
+      if (i > 0) body.appendPageBreak();
+      body.appendParagraph((i + 1) + '. ' + String(img.name || '領収書'));
+      const blob = Utilities.newBlob(Utilities.base64Decode(img.base64), img.mime || 'image/jpeg', img.name || ('receipt' + (i + 1)));
+      const pic = body.appendImage(blob);
+      const k = Math.min(1, maxW / pic.getWidth(), maxH / pic.getHeight());
+      pic.setWidth(Math.floor(pic.getWidth() * k)).setHeight(Math.floor(pic.getHeight() * k));
+    });
+    const first = body.getChild(0);
+    if (first && first.getType() === DocumentApp.ElementType.PARAGRAPH && !first.asParagraph().getText()) first.removeFromParent();
+    doc.saveAndClose();
+    _invoiceRenameOld_(folder, name);
+    const file = folder.createFile(docFile.getAs('application/pdf').setName(name));
+    return { fileId: file.getId(), url: file.getUrl(), name: name };
+  } finally {
+    docFile.setTrashed(true);
+  }
+}

@@ -128,6 +128,25 @@ function runPartnerInvoiceTests() {
     '原（スタッフC） の行がありません（請求しない月は日数・回数を0にしてください）',
   ]);
 
+  // ⑦ PDF づくり（シートを触らない部分）
+  check('月フォルダ名: 9月分は10月支払', invoiceMonthFolderName_('2026-09'), '2026年9月利用分（10月支払）');
+  check('月フォルダ名: 12月分は1月支払', invoiceMonthFolderName_('2026-12'), '2026年12月利用分（1月支払）');
+  check('備考: 月額・回数・単発', [invoiceLineNote_(r.lines[2]), invoiceLineNote_(r.lines[1]), invoiceLineNote_(r.lines[4])], ['出勤30/30日', '2,750円×5回', 'リフレッシュ清掃']);
+  var payee = { biz_code: '50000000', registration_no: 'T0000000000000', tax_exempt: false, name: 'テスト商事（架空）', address: 'テスト市1-2-3', tel: '000-0000-0000',
+    bank_name: 'テスト銀行', bank_code: '0000', branch_name: '本店', branch_code: '000', account_type: '普', account_no: '0000000', account_kana: 'テスト' };
+  var pg1 = invoicePages_(r.lines);
+  check('ページ分け: 7行は1枚・店は経費や値引きを除かず店舗IDのある行で数える', [pg1.pages.length, pg1.storeNames], [1, ['御器所', '桜山', '日比野', '原', '名駅西口']]);
+  var c1 = {}; invoiceSheetCells_(payee, '2026-09', pg1.pages[0], 1, 1, r.total, pg1.storeNames).forEach(function (c) { c1[c[0]] = c[1]; });
+  check('セル(1枚): 作成日・合計・店舗欄・明細', [c1.O5, c1.R5, c1.T5, c1.C11, c1.B9, c1.A21, c1.C21, c1.K27, c1.Q7, c1.A41], ['令和8', 9, 30, 117480, 'セルフカフェ　5店舗', '34', 'セルフカフェ御器所店', -3300, '□', undefined]);
+  var many = []; for (var k = 0; k < 23; k++) many.push({ kind: 'oneoff', store_id: 's' + k, store_name: '店' + k, note: '作業', amount: 1000 });
+  var pg2 = invoicePages_(many);
+  var c2 = {}; invoiceSheetCells_(payee, '2026-09', pg2.pages[1], 2, 2, 23000, pg2.storeNames).forEach(function (c) { c2[c[0]] = c[1]; });
+  var c2a = {}; invoiceSheetCells_(payee, '2026-09', pg2.pages[0], 1, 2, 23000, pg2.storeNames).forEach(function (c) { c2a[c[0]] = c[1]; });
+  check('セル(2枚): 20行＋3行、最後のページに合計', [pg2.pages.length, pg2.pages[1].length, c2.A41, c2.K41, c2.A24, c2.G3], [2, 3, '合計金額', 23000, '', '請　　求　　書（2/2）']);
+  check('セル(2枚): 1枚目は小計', [c2a.A41, c2a.K41], ['小計（1/2）', undefined]);
+  var c3 = {}; invoiceSheetCells_(Object.assign({}, payee, { tax_exempt: 'TRUE', registration_no: '' }), '2026-09', [lines2[0]], 1, 1, 14000, ['亀島']).forEach(function (c) { c3[c[0]] = c[1]; });
+  check('セル: 課税事業者でない＝■、1店は店名', [c3.Q7, c3.L7, c3.B9], ['■', '', 'セルフカフェ　亀島店']);
+
   results.push(failed ? ('失敗 ' + failed + ' 件') : 'すべて成功');
   return results.join('\n');
 }
