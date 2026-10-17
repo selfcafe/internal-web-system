@@ -4725,12 +4725,23 @@ function _withAmazonOrderNotify_(result, storeId, rows) {
         unit: r.unit_mode === 'case' || (meta[r.product] || {}).caseOnly ? 'ケース' : String(r.unit || ''), url: urls[r.product] || '',
         // 「その他」は中身が備考欄に書かれるので、通知にも備考を載せる（2026-10-17 塩川さん。例: その他 ×1（パイプユニッシュ））
         note: r.product === 'その他' ? String(r.note || '').trim() : '' }));
+    // 「その他」の備考から Amazon のボタンを作る（2026-10-17）: 商品一覧の品に当たればその商品ページ、当たらなければ Amazon の検索画面
+    items.forEach(it => { if (it.note && !it.url) it.url = _amazonUrlForNote_(storeId, it.note, urls); });
     // トーヨーの品は「トーベンのカートに入れる」リンクを付ける（2026-10-16。依頼の品＋無料メンテナンスだけ）
     const ids = items.map(it => it.id);
     const toyo = _toyoCartForRows_(storeId, (rows || []).filter(r => r && ids.indexOf(String(r.id)) >= 0));
     if (items.length) result._notify = { type: 'amazonOrderNew', storeId: String(storeId), items, toyo };
   } catch (e) { console.error('_withAmazonOrderNotify_ error:', e.message); }
   return result;
+}
+
+function _amazonUrlForNote_(storeId, note, urls) {
+  try {
+    const m = _matchProductsText_(storeId, note);
+    const hit = m.items.filter(p => urls[p.name]);
+    if (hit.length === 1) return urls[hit[0].name];
+  } catch (e) { console.error('_amazonUrlForNote_ error:', e.message); }
+  return 'https://www.amazon.co.jp/s?k=' + encodeURIComponent(String(note).replace(/\s+/g, ' ').slice(0, 60));
 }
 
 function sendAmazonOrderToBot_(storeId, items, toyo) {
