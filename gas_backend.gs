@@ -632,7 +632,10 @@ function _dispatchNotifies_(result) {
       else if (n.type === 'leaveRequestCancelled') notifyLeaveRequestCancelled_(n.storeId, n.name, n.leaveDate);
       else if (n.type === 'stockInquiryReply')     sendStockBotNotification_(n.message, n.userId);
       // 管理者向け(新規報告・追記)は登録済みの管理者全員へ送る(2026-09-25、管理者の複数人化に合わせて変更)
-      else if (n.type === 'bugReportNew')          _bugReportAdminUserIds_().forEach(uid => sendBugReportBotNotification_(n.message, uid));
+      else if (n.type === 'bugReportNew') {
+        _bugReportAdminUserIds_().forEach(uid => sendBugReportBotNotification_(n.message, uid));
+        sendBugReportToOwnerBot_(n.message);
+      }
       else if (n.type === 'bugReportLineWorksAck') sendBugReportBotNotification_(n.message, n.userId);
       else if (n.type === 'amazonOrderNew')        sendAmazonOrderToBot_(n.storeId, n.items, n.toyo);
     } catch (e) {
@@ -4742,6 +4745,20 @@ function _amazonUrlForNote_(storeId, note, urls) {
     if (hit.length === 1) return urls[hit[0].name];
   } catch (e) { console.error('_amazonUrlForNote_ error:', e.message); }
   return 'https://www.amazon.co.jp/s?k=' + encodeURIComponent(String(note).replace(/\s+/g, ' ').slice(0, 60));
+}
+
+// バグ報告(新規・追記)を、発注依頼と同じ塩川用Bot(selfcafe-automation の gas/gbp-photo-bot、Bot 13233186)にも送る
+// (2026-10-17、バグ報告Botの管理者が佐藤さんだけで、塩川さんが気づけなかったため)。Bot側の窓口は BugReport.gs の
+// apiBugReport_(action 'bugReport')。Bot側がまだ対応していない時は受け取られないだけで、バグ報告Botへの通知は今まで通り届く
+function sendBugReportToOwnerBot_(message) {
+  const props = PropertiesService.getScriptProperties();
+  const url = props.getProperty('GBP_PHOTO_BOT_URL'), apiKey = props.getProperty('GBP_PHOTO_BOT_API_KEY');
+  if (!url || !apiKey) { console.warn('バグ報告の塩川用Bot通知: GBP_PHOTO_BOT_URL / GBP_PHOTO_BOT_API_KEY が未設定のため送りません'); return; }
+  const res = UrlFetchApp.fetch(url, { method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+    payload: JSON.stringify({ action: 'bugReport', apiKey, text: message }) });
+  let out = {};
+  try { out = JSON.parse(res.getContentText()); } catch (e) {}
+  if (!out.ok) console.warn('バグ報告の塩川用Bot通知が受け取られませんでした(Bot側が未対応の可能性) ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 120));
 }
 
 function sendAmazonOrderToBot_(storeId, items, toyo) {
