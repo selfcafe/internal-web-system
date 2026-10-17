@@ -159,6 +159,13 @@ function runPartnerInvoiceTests() {
   var m = invoiceMaskPayee_(Object.assign({}, payee, { address: '名古屋市テスト区1-2-3', account_no: '1234567', tel: '090-1234-5678' }));
   check('伏せ字: 口座・電話・住所は一部だけ', [m.account_no, m.tel, m.address, m.profile_complete], ['＊＊＊＊567', '＊＊＊＊5678', '名古屋市テス…', true]);
 
+  // ⑨ 管理者の契約の確認
+  check('契約: 月額・打刻の予定は誤りなし', invoiceValidateContract_({ payee_id: 'p1', store_id: 'hara', kind: 'monthly', amount: 33000, base_days_mode: 'schedule', from_month: '2026-10', to_month: '' }), []);
+  check('契約: 回数×単価は誤りなし', invoiceValidateContract_({ payee_id: 'p1', store_id: 'sakurayama', kind: 'per_visit', amount: 2750 }), []);
+  check('契約: 誤りを全部返す', invoiceValidateContract_({ payee_id: 'p1', store_id: '', kind: 'monthly', amount: 0, base_days_mode: 'fixed', base_days_fixed: 40, from_month: '2026-13', to_month: '2026-01' }), [
+    '店を選んでください', '月額を円で入れてください', '固定の基準日数は1〜31で入れてください', '開始月の形式が違います（例: 2026-10）']);
+  check('契約: 終了月が開始月より前', invoiceValidateContract_({ payee_id: 'p1', store_id: 'x', kind: 'per_visit', amount: 100, from_month: '2026-10', to_month: '2026-09' }), ['終了月が開始月より前です']);
+
   results.push(failed ? ('失敗 ' + failed + ' 件') : 'すべて成功');
   return results.join('\n');
 }

@@ -8665,6 +8665,15 @@ function renderAttendanceAdmin() {
   container.style.display = 'block';
 
   container.innerHTML = `
+    <!-- パートナー請求書（2026-10-17〜、本体は admin-invoice.js） -->
+    <div class="settings-card">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span style="font-weight:700">パートナー請求書</span>
+        <span style="font-size:12px;color:#888;flex:1">月ごとの提出状況・確認と差し戻し・請求先と契約・暗証番号の発行</span>
+        <button onclick="openAdminInvoice()" style="background:#22703d;color:white;padding:8px 14px;font-size:13px;font-weight:700;border-radius:6px;border:none;cursor:pointer;font-family:inherit">開く</button>
+      </div>
+    </div>
+
     <!-- 業務開始管理（試験導入・店舗ごとON/OFF） -->
     <div class="settings-card">
       <div class="settings-accordion-hdr" onclick="toggleAttendanceGroup()">
@@ -10011,5 +10020,6 @@ if (!(sessionStorage.getItem('admin_authed') === '1' || isSiteAuthed())) {
 </script>
 <script src="onboarding-tour.js"></script>
 <script src="partner-invoice.js"></script>
+<script src="admin-invoice.js"></script>
 </body>
 </html>

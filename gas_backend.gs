@@ -8732,16 +8732,17 @@ function invoiceSubmit_(token, period, lines, receipts) {
 function _invoiceRoutePost_(e) {
   let b;
   try { b = JSON.parse(e.postData.contents); } catch (err) { return null; }
-  if (!b || INVOICE_ACTIONS.indexOf(b.action) < 0) return null;
+  if (!b || (INVOICE_ACTIONS.indexOf(b.action) < 0 && INVOICE_ADMIN_ACTIONS.indexOf(b.action) < 0)) return null;
   let result;
   try {
     if      (b.action === 'invoiceLogin')       result = invoiceLogin_(b.pin);
     else if (b.action === 'invoiceSaveProfile') result = invoiceSaveProfile_(b.token, b.profile);
     else if (b.action === 'invoiceGetMonth')    result = invoiceGetMonth_(b.token, b.period);
     else if (b.action === 'invoiceSubmit')      result = invoiceSubmit_(b.token, b.period, b.lines, b.receipts);
+    else                                        result = _invoiceRouteAdmin_(b);
   } catch (err) {
     result = { error: err.message };
-    if (!/暗証番号|請求先が見つかりません/.test(err.message)) {
+    if (!/暗証番号|パスワード|請求先が見つかりません/.test(err.message)) {
       try { sendStockBotNotification_('【システムエラー】doPost action=' + b.action + '\n' + err.message); } catch (e2) {}
     }
   }
@@ -8750,4 +8751,195 @@ function _invoiceRoutePost_(e) {
     try { if (n.type === 'invoiceSubmitted') sendLineWorksNotification(n.message); } catch (e3) { console.error('請求書の通知に失敗:', e3.message); }
   }
   return result;
+}
+
+// ----- パートナー請求書: 管理者の窓口（一覧・確認/差し戻し・請求先と契約・暗証番号）（2026-10-17） -----
+// 管理者ポータルのログインは画面側の照合だけなので、請求書の管理はサーバーで別のパスワードを照合する
+// （スクリプトプロパティ INVOICE_ADMIN_PASSWORD。リポジトリには書かない）。合えば 6 時間有効の管理者 token。
+// 口座・住所の全部はここでも返さない（本部が見るときは請求書のスプレッドシートを直接開く）。
+const INVOICE_ADMIN_ACTIONS = ['invoiceAdminLogin', 'invoiceAdminList', 'invoiceAdminReview', 'invoiceAdminSavePayee',
+  'invoiceAdminIssuePin', 'invoiceAdminSaveContract', 'invoiceAdminDeleteContract'];
+
+function _invoiceAdminCheck_(token) {
+  if (!token || !CacheService.getScriptCache().get('inv_adm_' + token)) throw new Error('時間がたったので、もう一度請求書管理のパスワードを入れてください');
+}
+
+function invoiceAdminLogin_(password) {
+  const cache = CacheService.getScriptCache();
+  const fails = Number(cache.get('inv_adm_fail') || 0);
+  if (fails >= INVOICE_PIN_FAIL_LIMIT) return { error: 'パスワードのまちがいが続いたため、15分ほどあけてからやり直してください' };
+  const expected = PropertiesService.getScriptProperties().getProperty('INVOICE_ADMIN_PASSWORD');
+  if (!expected) return { error: '請求書管理のパスワードが未設定です（スクリプトプロパティ INVOICE_ADMIN_PASSWORD）' };
+  if (_invoiceHashPin_(password || '') !== _invoiceHashPin_(expected)) {
+    cache.put('inv_adm_fail', String(fails + 1), INVOICE_PIN_FAIL_WINDOW_SEC);
+    return { error: 'パスワードが違います' };
+  }
+  const token = Utilities.getUuid();
+  cache.put('inv_adm_' + token, '1', INVOICE_TOKEN_SEC);
+  return { ok: true, token: token, periods: invoiceAllowedPeriods_(new Date()) };
+}
+
+// 月の一覧。請求先ごとに、提出の状態（未提出なら下書きの合計）・要確認・契約を返す
+function invoiceAdminList_(token, period) {
+  _invoiceAdminCheck_(token);
+  if (!_invoiceMonth_(period)) return { error: '対象月の形式が違います' };
+  const payees = _invoiceRows_(SHEET_INVOICE_PAYEES, INVOICE_PAYEE_COLS);
+  const contracts = _invoiceRows_(SHEET_INVOICE_CONTRACTS, INVOICE_CONTRACT_COLS);
+  const subs = _invoiceRows_(SHEET_INVOICE_SUBMISSIONS, INVOICE_SUBMISSION_COLS).filter(s => String(s.period) === period);
+  // 下書きは打刻・設定を1回だけ読んでから全請求先分を作る
+  const storeCfg = _settingJson_('invoice_store_cfg', {});
+  const storeCodes = {};
+  Object.keys(storeCfg).forEach(id => { if (storeCfg[id] && storeCfg[id].storeCode != null && storeCfg[id].storeCode !== '') storeCodes[id] = storeCfg[id].storeCode; });
+  const storeNames = Object.assign({}, _storeNames_());
+  const custom = _settingJson_('custom_stores', {});
+  Object.keys(custom).forEach(id => { if (custom[id] && custom[id].name) storeNames[id] = custom[id].name; });
+  const data = {
+    contracts: contracts, attendance: getAttendance(), leaves: getLeaveRequests(),
+    staffMap: _settingJson_('attendance_staff_list', {}), scheduleMap: _settingJson_('attendance_staff_schedule', {}),
+    storeDefaultScheduleMap: _settingJson_('attendance_store_default_schedule', {}), storeNames: storeNames, storeCodes: storeCodes,
+  };
+  const rows = payees.map(p => {
+    const s = subs.find(x => String(x.payee_id) === String(p.id));
+    let draftTotal = null, draftFlags = [];
+    if (!s) {
+      const lines = buildInvoiceDraftLines_(p.id, period, data);
+      draftTotal = lines.reduce((t, l) => t + l.amount, 0);
+      lines.forEach(l => {
+        const label = l.store_name + (l.staff_name ? '（' + l.staff_name + '）' : '');
+        if (l.out_of_range.length) draftFlags.push(label + ' 店から離れた場所での打刻: ' + l.out_of_range.join(', '));
+        if (l.on_leave.length) draftFlags.push(label + ' 休み申請の日に打刻: ' + l.on_leave.join(', '));
+      });
+    }
+    return {
+      id: p.id, type: p.type || '', biz_code: String(p.biz_code || ''), name: p.name || '',
+      has_pin: !!p.pin_hash, profile_complete: invoiceValidateProfile_(p).length === 0,
+      contracts: contracts.filter(c => String(c.payee_id) === String(p.id)),
+      submission: s ? {
+        status: s.status, total: Number(s.total) || 0, flags: _invoiceParse_(s.flags_json, []), lines: _invoiceParse_(s.lines_json, []),
+        pdf_url: s.pdf_url || '', receipt_pdf_url: s.receipt_pdf_url || '', submitted_at: _dateTimeStr(s.submitted_at),
+        returned_reason: s.returned_reason || '', reviewed_at: _dateTimeStr(s.reviewed_at), reviewed_by: s.reviewed_by || '',
+      } : null,
+      draft_total: draftTotal, draft_flags: draftFlags,
+    };
+  });
+  return { ok: true, period: period, payees: rows, storeNames: storeNames, storeCodes: storeCodes, staffMap: data.staffMap };
+}
+
+// 確認済み（approved）または差し戻し（returned、理由必須）にする
+function invoiceAdminReview_(token, payeeId, period, status, reason, by) {
+  _invoiceAdminCheck_(token);
+  if (['approved', 'returned'].indexOf(status) < 0) return { error: '状態が違います' };
+  if (status === 'returned' && !String(reason || '').trim()) return { error: '差し戻しの理由を書いてください' };
+  const lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    const s = _invoiceSubmission_(payeeId, period);
+    if (!s) return { error: 'この月の提出がありません' };
+    s.status = status; s.returned_reason = status === 'returned' ? String(reason).trim() : '';
+    s.reviewed_at = new Date(); s.reviewed_by = String(by || '');
+    _invoiceUpsertRow_(SHEET_INVOICE_SUBMISSIONS, INVOICE_SUBMISSION_COLS, s);
+  } finally { lock.releaseLock(); }
+  return { ok: true };
+}
+
+// 請求先の追加・修正（本部が決める項目だけ：種別・業者コード・名前）。口座などは本人が登録する
+function invoiceAdminSavePayee_(token, payee) {
+  _invoiceAdminCheck_(token);
+  payee = payee || {};
+  const name = String(payee.name || '').trim(), biz = String(payee.biz_code || '').trim();
+  if (!name) return { error: '名前（社名）を入れてください' };
+  if (!/^\d{8}$/.test(biz)) return { error: '業者コードは8桁の数字で入れてください' };
+  if (['individual', 'company'].indexOf(payee.type) < 0) return { error: '種別（個人・会社）を選んでください' };
+  const lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    const rows = _invoiceRows_(SHEET_INVOICE_PAYEES, INVOICE_PAYEE_COLS);
+    if (rows.some(r => String(r.biz_code) === biz && String(r.id) !== String(payee.id || ''))) return { error: 'この業者コードの請求先はもうあります' };
+    const cur = payee.id ? rows.find(r => String(r.id) === String(payee.id)) : null;
+    if (payee.id && !cur) return { error: '請求先が見つかりません' };
+    const next = Object.assign({}, cur || { id: 'p_' + Utilities.getUuid().slice(0, 8) }, { type: payee.type, biz_code: biz, name: name, updated_at: new Date() });
+    _invoiceUpsertRow_(SHEET_INVOICE_PAYEES, INVOICE_PAYEE_COLS, next);
+    return { ok: true, id: next.id };
+  } finally { lock.releaseLock(); }
+}
+
+// 暗証番号を新しく発行する（前の番号は使えなくなる）。番号はこのとき1回だけ返す
+function invoiceAdminIssuePin_(token, payeeId) {
+  _invoiceAdminCheck_(token);
+  const lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    const rows = _invoiceRows_(SHEET_INVOICE_PAYEES, INVOICE_PAYEE_COLS);
+    const p = rows.find(r => String(r.id) === String(payeeId));
+    if (!p) return { error: '請求先が見つかりません' };
+    const used = new Set(rows.map(r => String(r.pin_hash || '')));
+    let pin = '', hash = '';
+    for (let i = 0; i < 50; i++) {
+      pin = ('00000' + Math.floor(Math.random() * 1000000)).slice(-6);
+      if (/^(\d)\1{5}$/.test(pin) || pin === '123456') continue; // わかりやすすぎる番号は避ける
+      hash = _invoiceHashPin_(pin);
+      if (!used.has(hash)) break;
+    }
+    p.pin_hash = hash; p.updated_at = new Date();
+    _invoiceUpsertRow_(SHEET_INVOICE_PAYEES, INVOICE_PAYEE_COLS, p);
+    return { ok: true, pin: pin };
+  } finally { lock.releaseLock(); }
+}
+
+// 契約の確認（シートを触らない。テストあり）。誤りの文言を返す
+function invoiceValidateContract_(c) {
+  const e = [];
+  if (!c.payee_id) e.push('請求先がありません');
+  if (!c.store_id) e.push('店を選んでください');
+  if (['monthly', 'per_visit'].indexOf(c.kind) < 0) e.push('種類（月額・回数×単価）を選んでください');
+  if (!(Number(c.amount) > 0) || Math.floor(Number(c.amount)) !== Number(c.amount)) e.push(c.kind === 'per_visit' ? '単価を円で入れてください' : '月額を円で入れてください');
+  if (c.kind === 'monthly') {
+    if (['schedule', 'calendar', 'fixed', ''].indexOf(c.base_days_mode || '') < 0) e.push('基準日数の決め方が違います');
+    if (c.base_days_mode === 'fixed' && !(Number(c.base_days_fixed) >= 1 && Number(c.base_days_fixed) <= 31)) e.push('固定の基準日数は1〜31で入れてください');
+  }
+  if (c.from_month && !_invoiceMonth_(c.from_month)) e.push('開始月の形式が違います（例: 2026-10）');
+  if (c.to_month && !_invoiceMonth_(c.to_month)) e.push('終了月の形式が違います（例: 2027-03）');
+  if (_invoiceMonth_(c.from_month) && _invoiceMonth_(c.to_month) && c.from_month > c.to_month) e.push('終了月が開始月より前です');
+  return e;
+}
+
+function invoiceAdminSaveContract_(token, contract) {
+  _invoiceAdminCheck_(token);
+  const c = {};
+  INVOICE_CONTRACT_COLS.forEach(k => { c[k] = contract && contract[k] != null ? (typeof contract[k] === 'string' ? contract[k].trim() : contract[k]) : ''; });
+  c.amount = Number(c.amount);
+  const errors = invoiceValidateContract_(c);
+  if (errors.length) return { errors: errors };
+  if (c.kind === 'per_visit') { c.base_days_mode = ''; c.base_days_fixed = ''; }
+  if (c.base_days_mode !== 'fixed') c.base_days_fixed = '';
+  const lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    if (!_invoiceRows_(SHEET_INVOICE_PAYEES, INVOICE_PAYEE_COLS).some(p => String(p.id) === String(c.payee_id))) return { error: '請求先が見つかりません' };
+    if (!c.id) c.id = 'c_' + Utilities.getUuid().slice(0, 8);
+    _invoiceUpsertRow_(SHEET_INVOICE_CONTRACTS, INVOICE_CONTRACT_COLS, c);
+  } finally { lock.releaseLock(); }
+  return { ok: true, id: c.id };
+}
+
+// 契約の削除。過去の月の下書きにも出なくなるので、やめた契約はふつう終了月を入れて残す（画面でもそう案内する）
+function invoiceAdminDeleteContract_(token, id) {
+  _invoiceAdminCheck_(token);
+  const lock = LockService.getScriptLock(); lock.waitLock(20000);
+  try {
+    const sh = _invoiceSheet_(SHEET_INVOICE_CONTRACTS, INVOICE_CONTRACT_COLS);
+    const last = sh.getLastRow();
+    if (last > 1) {
+      const ids = sh.getRange(2, 1, last - 1, 1).getValues();
+      for (let i = 0; i < ids.length; i++) if (String(ids[i][0]) === String(id)) { sh.deleteRow(i + 2); return { ok: true }; }
+    }
+    return { error: '契約が見つかりません' };
+  } finally { lock.releaseLock(); }
+}
+
+function _invoiceRouteAdmin_(b) {
+  if      (b.action === 'invoiceAdminLogin')          return invoiceAdminLogin_(b.password);
+  else if (b.action === 'invoiceAdminList')           return invoiceAdminList_(b.token, b.period);
+  else if (b.action === 'invoiceAdminReview')         return invoiceAdminReview_(b.token, b.payeeId, b.period, b.status, b.reason, b.by);
+  else if (b.action === 'invoiceAdminSavePayee')      return invoiceAdminSavePayee_(b.token, b.payee);
+  else if (b.action === 'invoiceAdminIssuePin')       return invoiceAdminIssuePin_(b.token, b.payeeId);
+  else if (b.action === 'invoiceAdminSaveContract')   return invoiceAdminSaveContract_(b.token, b.contract);
+  else if (b.action === 'invoiceAdminDeleteContract') return invoiceAdminDeleteContract_(b.token, b.id);
+  return null;
 }
