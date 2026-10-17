@@ -430,6 +430,7 @@ function doGet(e) {
     else if (a === 'getInventoryDeliveryAuto') result = getInventoryDeliveryAuto(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'getInventoryDeliveryManual') result = getInventoryDeliveryManual(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'getInventoryTabData')       result = getInventoryTabData(e.parameter.storeId, e.parameter.periodLabel, e.parameter.prevPeriodLabel);
+    else if (a === 'getInventoryTransfers')     result = getInventoryTransfers(e.parameter.storeIds, e.parameter.periodLabel);
     else if (a === 'geocodeStoreAddress')       result = geocodeStoreAddress(e.parameter.query);
     else if (a === 'migrateOrderColumns')       result = migrateOrderColumns();
     else if (a === 'migrateInventoryColumns')   result = migrateInventoryColumns();
@@ -562,6 +563,8 @@ function doPost(e) {
     else if (b.action === 'saveChecksheetData') result = saveChecksheetData(b.storeId, b.periodLabel, b.data);
     else if (b.action === 'saveInventorySnapshot') result = saveInventorySnapshot(b.storeId, b.periodLabel, b.rows, b.remarks);
     else if (b.action === 'recordInventoryDelivery') result = recordInventoryDelivery(b.storeId, b.periodLabel, b.product, b.qty);
+    else if (b.action === 'recordInventoryTransfer') result = recordInventoryTransfer(b.managerId, b.fromStore, b.toStore, b.product, b.qty, b.note);
+    else if (b.action === 'cancelInventoryTransfer') result = cancelInventoryTransfer(b.managerId, b.transferId);
     else if (b.action === 'importSteraOrdersCsv') result = importSteraOrdersCsv(b.csvText);
     else if (b.action === 'importSteraDailySales') result = importSteraDailySales(b.dateStr, b.csvText);
     else if (b.action === 'importSteraDailySalesBulk') result = importSteraDailySalesBulk(b.csvText);
@@ -3018,6 +3021,122 @@ function getInventoryDeliveryAuto(storeId, periodLabel) {
 }
 
 // ----------------------------------------------------------------
+// inventory_transfer（複数店舗の担当者が入力する店舗間の在庫移動、2026-10-17）
+// ----------------------------------------------------------------
+// 担当者はsettingsのmulti_store_managers（[{id,name,password,stores:[店舗ID…]}]、管理画面
+// 「設定 › 店舗 › 複数店舗の担当者」）に登録された人。移動元・移動先とも担当店舗の中だけ入力できる。
+// 記録は2か所: ①このシート(誰が・いつ・どこからどこへ。取り消しの管理用)
+// ②inventory_delivery_autoに「移動先 +数量」「移動元 −数量」の2行。当月納品として合計されるので、
+// 棚卸の消費量・店舗タブ・月初発注・在庫推定は既存の計算のまま移動を反映する。
+// 取り消しは①にcancelled_atを入れ、②に逆の2行を追記する(追記だけのログなので行は消さない)。
+// ⚠ GAS側には今もログイン確認が無い(担当者IDを信じるだけ)。担当店舗の確認は入力ミス防止のためのもの。
+const SHEET_INV_TRANSFER = 'inventory_transfer';
+const INV_TRANSFER_COLS  = ['transfer_id', 'period_label', 'from_store', 'to_store', 'product', 'qty',
+                            'manager_id', 'manager_name', 'note', 'created_at', 'cancelled_at'];
+
+function getInventoryTransferSheet(sheetId) {
+  const ss = SpreadsheetApp.openById(sheetId || INVENTORY_SHEET_ID);
+  return ss.getSheetByName(SHEET_INV_TRANSFER) || ss.insertSheet(SHEET_INV_TRANSFER);
+}
+
+function _multiStoreManager_(managerId) {
+  const entry = getSettings().find(s => s.key === 'multi_store_managers');
+  if (!entry || !entry.value) return null;
+  let list;
+  try { list = JSON.parse(entry.value); } catch (e) { return null; }
+  if (!Array.isArray(list)) return null;
+  const m = list.find(x => x && String(x.id) === String(managerId));
+  if (!m) return null;
+  return { id: String(m.id), name: String(m.name || ''), stores: (m.stores || []).map(s => _normalizeStoreId_(String(s))) };
+}
+
+function _currentPeriodLabel_() {
+  return Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM');
+}
+
+function recordInventoryTransfer(managerId, fromStore, toStore, product, qty, note) {
+  const m = _multiStoreManager_(managerId);
+  if (!m) return { error: '担当者が登録されていません。管理者に確認してください' };
+  fromStore = _normalizeStoreId_(String(fromStore || ''));
+  toStore   = _normalizeStoreId_(String(toStore || ''));
+  if (!fromStore || !toStore || fromStore === toStore) return { error: '移動元と移動先に別々の店舗を選んでください' };
+  if (m.stores.indexOf(fromStore) < 0 || m.stores.indexOf(toStore) < 0) return { error: '担当店舗の間でしか移動できません' };
+  product = String(product || '').trim();
+  if (!product) return { error: '商品を選んでください' };
+  const n = Number(qty);
+  if (!(n > 0) || Math.floor(n) !== n) return { error: '数量は1以上の整数で入力してください' };
+
+  const periodLabel = _currentPeriodLabel_();
+  const sheetId = _inventorySheetIdForPeriod_(periodLabel);
+  const sheet = getInventoryTransferSheet(sheetId);
+  ensureHeaders(sheet, INV_TRANSFER_COLS);
+  const rec = {
+    transfer_id: 'tr_' + Date.now() + '_' + Math.floor(Math.random() * 1000),
+    period_label: periodLabel, from_store: fromStore, to_store: toStore, product: product, qty: n,
+    manager_id: m.id, manager_name: m.name, note: String(note || '').slice(0, 200),
+    created_at: new Date().toISOString(), cancelled_at: '',
+  };
+  const startRow = sheet.getLastRow() + 1;
+  // 期間ラベル・日時が日付型に自動変換されないよう、数量以外は文字列で固定する
+  sheet.getRange(startRow, 1, 1, INV_TRANSFER_COLS.length).setNumberFormat('@');
+  sheet.getRange(startRow, INV_TRANSFER_COLS.indexOf('qty') + 1).setNumberFormat('0');
+  sheet.getRange(startRow, 1, 1, INV_TRANSFER_COLS.length).setValues([INV_TRANSFER_COLS.map(c => rec[c])]);
+  recordInventoryDelivery(toStore, periodLabel, product, n);
+  recordInventoryDelivery(fromStore, periodLabel, product, -n);
+  return { ok: true, transfer: rec };
+}
+
+// 指定店舗(カンマ区切り)のどれかが移動元・移動先になっている移動を、指定期間(省略時は今月)について新しい順で返す
+function getInventoryTransfers(storeIdsCsv, periodLabel) {
+  const label = String(periodLabel || _currentPeriodLabel_());
+  const ids = String(storeIdsCsv || '').split(',').map(s => _normalizeStoreId_(s.trim())).filter(Boolean);
+  const sheetId = _inventorySheetIdForPeriod_(label);
+  const sheet = getInventoryTransferSheet(sheetId);
+  if (sheet.getLastRow() <= 1) return [];
+  const data = sheet.getDataRange().getValues();
+  const hdrs = data[0].map(String);
+  return data.slice(1).map(row => {
+    const r = {};
+    INV_TRANSFER_COLS.forEach(c => { const i = hdrs.indexOf(c); r[c] = i < 0 ? '' : row[i]; });
+    r.period_label = _invMonthLabelStr(r.period_label, sheetId);
+    r.qty = Number(r.qty || 0);
+    ['transfer_id', 'from_store', 'to_store', 'product', 'manager_id', 'manager_name', 'note', 'created_at', 'cancelled_at']
+      .forEach(c => { r[c] = r[c] instanceof Date ? r[c].toISOString() : String(r[c] === undefined || r[c] === null ? '' : r[c]); });
+    return r;
+  }).filter(r => r.period_label === label && (!ids.length || ids.indexOf(r.from_store) >= 0 || ids.indexOf(r.to_store) >= 0))
+    .sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+}
+
+// 取り消しは今月の分だけ(締めた月の棚卸・発注の数字を後から動かさないため)
+function cancelInventoryTransfer(managerId, transferId) {
+  const m = _multiStoreManager_(managerId);
+  if (!m) return { error: '担当者が登録されていません。管理者に確認してください' };
+  const periodLabel = _currentPeriodLabel_();
+  const sheetId = _inventorySheetIdForPeriod_(periodLabel);
+  const sheet = getInventoryTransferSheet(sheetId);
+  if (sheet.getLastRow() <= 1) return { error: '移動の記録が見つかりません' };
+  const data = sheet.getDataRange().getValues();
+  const hdrs = data[0].map(String);
+  const col = c => hdrs.indexOf(c);
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][col('transfer_id')]) !== String(transferId)) continue;
+    const label = _invMonthLabelStr(data[i][col('period_label')], sheetId);
+    if (label !== periodLabel) return { error: '先月以前の移動は取り消せません。管理者に連絡してください' };
+    if (String(data[i][col('cancelled_at')] || '')) return { error: 'すでに取り消し済みです' };
+    const fromStore = String(data[i][col('from_store')]), toStore = String(data[i][col('to_store')]);
+    if (m.stores.indexOf(fromStore) < 0 || m.stores.indexOf(toStore) < 0) return { error: '担当店舗の移動ではないため取り消せません' };
+    const product = String(data[i][col('product')]), n = Number(data[i][col('qty')] || 0);
+    const cell = sheet.getRange(i + 1, col('cancelled_at') + 1);
+    cell.setNumberFormat('@');
+    cell.setValue(new Date().toISOString());
+    recordInventoryDelivery(toStore, periodLabel, product, -n);
+    recordInventoryDelivery(fromStore, periodLabel, product, n);
+    return { ok: true };
+  }
+  return { error: '移動の記録が見つかりません' };
+}
+
+// ----------------------------------------------------------------
 // inventory_delivery_manual（月初納品分など、アプリを通さない納品を本部が手入力）
 // ----------------------------------------------------------------
 // 本部が直接編集する外部スプレッドシート。読み取りのみ（appは書き込まない）。
@@ -4066,7 +4185,7 @@ function buildStoreInventorySheet(storeId, periodLabel) {
 const STORE_INV_SOURCE_COL_NOTES = {
   open_stock: '元データ: inventory_log の期首在庫。修正は inventory_log 側で行い、店舗タブを作り直してください(このタブを直接直しても作り直すと元に戻ります)。',
   end_stock: '元データ: inventory_log の期末在庫(棚卸で送られた数字)。修正は inventory_log 側で行い、店舗タブを作り直してください(このタブを直接直しても作り直すと元に戻ります)。',
-  delivery: '元データ: inventory_delivery_auto(「納品済み」ボタンの記録)の合計。修正は inventory_delivery_auto に補正行を追記し、inventory_log の当月納品・消費量も直してから、店舗タブを作り直してください。',
+  delivery: '元データ: inventory_delivery_auto(「納品済み」ボタンの記録と、店舗間の在庫移動=移動先+・移動元−)の合計。修正は inventory_delivery_auto に補正行を追記し、inventory_log の当月納品・消費量も直してから、店舗タブを作り直してください。',
   disposed_qty: '元データ: inventory_log の処分数量。修正は inventory_log 側で行い、店舗タブを作り直してください。',
   daily_count: '元データ: inventory_log のデイリーカウント(棚卸送信時点のチェックシート合計)。修正は inventory_log 側で行い、店舗タブを作り直してください。',
   reorder_target: '元データ: 管理者ポータルの「発注基準値設定(月初発注)」。修正はポータルで行い、店舗タブを作り直してください。',

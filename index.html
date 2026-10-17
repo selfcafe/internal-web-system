@@ -660,6 +660,9 @@
   </div>
 
 
+  <!-- 複数店舗の担当者だけ: 担当店舗の切り替えボタンと在庫移動(renderMultiStoreBar) -->
+  <div id="multi-store-bar" style="display:none"></div>
+
   <!-- 業務連絡ウィジェット(常時表示)・一覧/詳細(タブの上に被さって表示) -->
   <div id="announce-widget-wrap"></div>
   <div id="announce-drill-wrap" style="display:none"></div>
@@ -1290,6 +1293,7 @@ async function _loadSettings(scope, prefetched) {
       if (r.key === 'machine_photo_disabled_stores') localStorage.setItem(MACHINE_PHOTO_DISABLED_KEY, clean(r.value));
       if (r.key === 'machine_photo_machine_counts') localStorage.setItem(MACHINE_PHOTO_COUNT_KEY, clean(r.value));
       if (r.key === 'onboarding_password') localStorage.setItem('onboarding_password', clean(r.value));
+      if (r.key === 'multi_store_managers') localStorage.setItem(MULTI_MGR_KEY, clean(r.value));
     });
     localStorage.setItem(SETTINGS_SCOPE_KEY, scope);
     if (gasKeys.has('all_products') || gasKeys.has('vendor_config')) {
@@ -5808,6 +5812,7 @@ function siteLogout() {
   sessionStorage.removeItem('site_authed');
   sessionStorage.removeItem('site_authed_store');
   sessionStorage.removeItem('admin_authed');
+  sessionStorage.removeItem('multi_mgr');
   document.getElementById('page-store').classList.remove('active');
   document.getElementById('page-admin').classList.remove('active');
   const lock = document.getElementById('site-lock');
@@ -5823,6 +5828,7 @@ function autoLogout() {
   sessionStorage.removeItem('site_authed');
   sessionStorage.removeItem('site_authed_store');
   sessionStorage.removeItem('admin_authed');
+  sessionStorage.removeItem('multi_mgr');
   document.getElementById('page-store').classList.remove('active');
   document.getElementById('page-admin').classList.remove('active');
   const lock = document.getElementById('site-lock');
@@ -5852,6 +5858,16 @@ async function submitSiteLogin() {
     let customPws = {};
     try { customPws = JSON.parse(localStorage.getItem(STORE_PW_KEY) || '{}'); } catch(_) { localStorage.removeItem(STORE_PW_KEY); }
     let storeId = Object.entries(customPws).find(([, pw]) => pw === val)?.[0] || null;
+    // 複数店舗の担当者のパスワードなら、前回見ていた担当店舗(無ければ先頭)で開く
+    const mgr = !storeId ? _findMultiStoreManagerByPw(val) : null;
+    if (mgr) {
+      storeId = _multiMgrStartStore(mgr);
+      if (!storeId) {
+        err.textContent = '担当店舗が登録されていません。管理者に確認してください';
+        setTimeout(() => { err.textContent = ''; }, 3000);
+        return;
+      }
+    }
 
     // GAS未ロード時のフォールバック：SITE_PWで管理者ログイン
     if (!storeId && val === SITE_PW) storeId = '__admin__';
@@ -5887,9 +5903,10 @@ async function submitSiteLogin() {
       sessionStorage.setItem('site_authed', '1');
       sessionStorage.setItem('site_authed_store', storeId);
       sessionStorage.setItem('last_active', String(Date.now()));
+      if (mgr) sessionStorage.setItem('multi_mgr', String(mgr.id)); else sessionStorage.removeItem('multi_mgr');
       localStorage.setItem('last_login_store', storeId);
       document.getElementById('site-lock').classList.add('hidden');
-      _saveCredential(STORES[storeId] || storeId, val);
+      _saveCredential(mgr ? (mgr.name || '担当者') : (STORES[storeId] || storeId), val);
       if (storeTab !== storeId) saveChecksheetNow(storeTab); // 別店舗でログインし直す前に、元の店舗の未保存分を送る
       storeTab = storeId;
       showPage('store');
@@ -5908,6 +5925,356 @@ function _saveCredential(id, password) {
     const cred = new PasswordCredential({ id, password });
     navigator.credentials.store(cred).catch(() => {});
   } catch(_) {}
+}
+
+/* ===== 複数店舗の担当者（店舗の切り替え・店舗間の在庫移動、2026-10-17） =====
+   settings multi_store_managers = [{id, name, password, stores:[店舗ID…]}]（管理画面「設定 › 店舗 › 複数店舗の担当者」）。
+   担当者のパスワードでログインすると、前回見ていた担当店舗(無ければ先頭)でパートナー画面を開き、
+   ヘッダーの下の店舗ボタンでパスワードを打ち直さずに切り替えられる。sessionStorage multi_mgr=担当者ID。
+   切り替えは別店舗でログインし直すのと同じ手順(未保存のチェックシートを送る→その店舗の設定を読む→画面を開く)。
+   在庫移動は担当店舗の間だけ入力でき、GAS側で当月納品(移動先+・移動元−)として記録する(recordInventoryTransfer)。 */
+const MULTI_MGR_KEY = 'multi_store_managers';
+function getMultiStoreManagers() {
+  try {
+    const list = JSON.parse(localStorage.getItem(MULTI_MGR_KEY) || '[]');
+    return Array.isArray(list) ? list.filter(m => m && m.id) : [];
+  } catch (_) { return []; }
+}
+function _findMultiStoreManagerByPw(pw) {
+  return getMultiStoreManagers().find(m => m.password && m.password === pw) || null;
+}
+// ログイン中の担当者(担当店舗は今ある店舗だけ)。担当者でなければnull
+function currentMultiStoreManager() {
+  const id = sessionStorage.getItem('multi_mgr');
+  if (!id) return null;
+  const m = getMultiStoreManagers().find(x => String(x.id) === id);
+  if (!m) return null;
+  return { ...m, stores: (m.stores || []).filter(sid => STORES[sid]) };
+}
+function _multiMgrStartStore(m) {
+  const stores = (m.stores || []).filter(sid => STORES[sid]);
+  const last = localStorage.getItem('multi_mgr_last_store_' + m.id);
+  return stores.includes(last) ? last : (stores[0] || null);
+}
+
+const MSB_BTN = 'padding:7px 12px;font-size:13px;font-weight:700;border-radius:16px;cursor:pointer;font-family:inherit;white-space:nowrap;';
+let _storeSwitching = false;
+function renderMultiStoreBar() {
+  const bar = document.getElementById('multi-store-bar');
+  if (!bar) return;
+  const m = currentMultiStoreManager();
+  if (!m || m.stores.length < 1) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
+  bar.style.display = '';
+  bar.innerHTML = `
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;background:#f0f7e8;border:1px solid #cfe3bd;border-radius:10px;padding:8px 10px;margin:8px 0">
+      <span style="font-size:12px;color:#22703d;font-weight:700;white-space:nowrap">${esc(m.name || '担当者')}さんの担当店舗</span>
+      ${m.stores.map(sid => sid === storeTab
+        ? `<button disabled style="${MSB_BTN}background:#22703d;color:white;border:1px solid #22703d">${esc(STORES[sid])}</button>`
+        : `<button onclick="switchManagedStore('${esc(sid)}')" id="msb-${esc(sid)}" style="${MSB_BTN}background:white;color:#22703d;border:1px solid #22703d">${esc(STORES[sid])}</button>`
+      ).join('')}
+      ${m.stores.length >= 2 ? `<button onclick="openInventoryTransfer()" style="${MSB_BTN}margin-left:auto;background:#b6952f;color:white;border:1px solid #b6952f">在庫移動</button>` : ''}
+    </div>`;
+}
+
+async function switchManagedStore(sid) {
+  const m = currentMultiStoreManager();
+  if (!m || !m.stores.includes(sid) || sid === storeTab || _storeSwitching) return;
+  _storeSwitching = true;
+  const btn = document.getElementById('msb-' + sid);
+  if (btn) btn.textContent = '切り替え中…';
+  try {
+    saveChecksheetNow(storeTab); // 切り替える前に、元の店舗の未保存分を送る
+    await ensureSettingsScope('store:' + sid);
+    sessionStorage.setItem('site_authed_store', sid);
+    touchActivity();
+    localStorage.setItem('last_login_store', sid);
+    localStorage.setItem('multi_mgr_last_store_' + m.id, sid);
+    storeTab = sid;
+    const keepTab = partnerTabCurrent;
+    await showPage('store');
+    // 見ていたタブのまま切り替える(発注タブはshowPageで描き直し済み。FC店で発注タブが無いときはチェックシートへ移っている)
+    if (keepTab === 'attendance' && !isAttendanceEnabled(sid)) goPartnerHome();
+    else if (keepTab !== 'order' && partnerTabCurrent === keepTab) await switchPartnerTab(keepTab);
+  } catch (e) {
+    console.error('switchManagedStore:', e);
+    alert('店舗を切り替えられませんでした。通信環境の良い場所でもう一度お試しください。');
+  } finally {
+    _storeSwitching = false;
+    renderMultiStoreBar();
+  }
+}
+
+/* --- 在庫移動の入力画面 --- */
+let _transferRows = [];
+function _transferProducts() {
+  const excluded = new Set(VENDOR_CONFIG.filter(v => v.excludeFromInventory).map(v => v.key));
+  return getAvailableProducts(storeTab).filter(p => p.name !== 'その他' && !excluded.has(p.vendor));
+}
+function openInventoryTransfer() {
+  const m = currentMultiStoreManager();
+  if (!m) return;
+  let ov = document.getElementById('transfer-overlay');
+  if (!ov) {
+    ov = document.createElement('div');
+    ov.id = 'transfer-overlay';
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:1500;display:flex;align-items:flex-start;justify-content:center;overflow-y:auto;padding:24px 12px';
+    ov.addEventListener('click', e => { if (e.target === ov) closeInventoryTransfer(); });
+    document.body.appendChild(ov);
+  }
+  const others = m.stores.filter(sid => sid !== storeTab);
+  const VENDOR_LABELS = Object.fromEntries(VENDOR_CONFIG.map(v => [v.key, v.label]));
+  const prods = _transferProducts();
+  const prodOpts = VENDOR_CONFIG.map(v => {
+    const items = prods.filter(p => p.vendor === v.key);
+    if (!items.length) return '';
+    return `<optgroup label="${esc(VENDOR_LABELS[v.key] || v.key)}">${items.map(p =>
+      `<option value="${esc(p.name)}">${esc(p.label || p.name)}${p.caseUnit ? '（' + esc(p.caseUnit) + '）' : ''}</option>`).join('')}</optgroup>`;
+  }).join('');
+  const field = 'width:100%;box-sizing:border-box;border:1px solid #d1d5db;border-radius:8px;padding:10px;font-size:16px;font-family:inherit;background:white';
+  const lbl = 'display:block;font-size:12px;font-weight:700;color:#555;margin:12px 0 4px';
+  const radio = 'flex:1;display:flex;align-items:center;gap:6px;border:1px solid #d1d5db;border-radius:8px;padding:10px;font-size:14px';
+  ov.innerHTML = `
+    <div style="background:white;border-radius:12px;max-width:520px;width:100%;padding:18px 16px;box-shadow:0 10px 30px rgba(0,0,0,.25)">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <div style="font-size:16px;font-weight:700;color:#22703d">店舗間の在庫移動</div>
+        <button onclick="closeInventoryTransfer()" style="background:#f3f4f6;border:none;border-radius:6px;padding:6px 12px;font-size:13px;cursor:pointer;font-family:inherit">閉じる</button>
+      </div>
+      <div style="font-size:12px;color:#666;margin-top:6px;line-height:1.6">移動した数は、移動先の当月納品に＋、移動元に−として棚卸に入ります。</div>
+      <label style="${lbl}">向き</label>
+      <div style="display:flex;gap:6px">
+        <label style="${radio}"><input type="radio" name="tr-dir" value="out" checked onchange="_updateTransferPreview()">${esc(STORES[storeTab])}から出す</label>
+        <label style="${radio}"><input type="radio" name="tr-dir" value="in" onchange="_updateTransferPreview()">${esc(STORES[storeTab])}へ受け取る</label>
+      </div>
+      <label style="${lbl}" for="tr-other">相手の店舗</label>
+      <select id="tr-other" style="${field}" onchange="_updateTransferPreview()">${others.map(sid => `<option value="${esc(sid)}">${esc(STORES[sid])}</option>`).join('')}</select>
+      <label style="${lbl}" for="tr-product">商品（${esc(STORES[storeTab])}の取扱商品）</label>
+      <select id="tr-product" style="${field}" onchange="_updateTransferPreview()"><option value="">選んでください</option>${prodOpts}</select>
+      <label style="${lbl}" for="tr-qty">数量（個・袋などバラの数）</label>
+      <input id="tr-qty" type="number" inputmode="numeric" min="1" step="1" style="${field}" oninput="_updateTransferPreview()">
+      <label style="${lbl}" for="tr-note">メモ（任意）</label>
+      <input id="tr-note" type="text" maxlength="200" style="${field}" placeholder="例：在庫切れのため">
+      <div id="tr-preview" style="margin-top:12px;font-size:13px;color:#22703d;font-weight:700;min-height:18px"></div>
+      <div id="tr-msg" style="font-size:13px;min-height:18px;margin-top:4px"></div>
+      <button id="tr-submit" onclick="submitInventoryTransfer()" style="width:100%;margin-top:8px;background:#22703d;color:white;border:none;border-radius:8px;padding:12px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit">移動を記録する</button>
+      <div style="margin-top:18px;border-top:1px solid #e5e7eb;padding-top:12px">
+        <div style="font-size:14px;font-weight:700;color:#333;margin-bottom:6px">今月の移動（担当店舗）</div>
+        <div id="tr-history"></div>
+      </div>
+    </div>`;
+  ov.style.display = 'flex';
+  _updateTransferPreview();
+  loadInventoryTransfers();
+}
+function closeInventoryTransfer() {
+  const ov = document.getElementById('transfer-overlay');
+  if (ov) ov.style.display = 'none';
+}
+function _readTransferForm() {
+  const dir = document.querySelector('input[name="tr-dir"]:checked')?.value || 'out';
+  const other = document.getElementById('tr-other')?.value || '';
+  const from = dir === 'out' ? storeTab : other, to = dir === 'out' ? other : storeTab;
+  const product = document.getElementById('tr-product')?.value || '';
+  const qty = Number(document.getElementById('tr-qty')?.value || '');
+  const note = (document.getElementById('tr-note')?.value || '').trim();
+  return { from, to, product, qty, note };
+}
+function _transferProductLabel(name) {
+  const p = PRODUCTS.find(x => x.name === name);
+  return (p && (p.label || p.name)) || name;
+}
+function _updateTransferPreview() {
+  const el = document.getElementById('tr-preview');
+  if (!el) return;
+  const f = _readTransferForm();
+  el.textContent = (f.from && f.to && f.product && f.qty > 0)
+    ? `${STORES[f.from]} → ${STORES[f.to]}　${_transferProductLabel(f.product)} ${f.qty}個`
+    : '';
+}
+async function submitInventoryTransfer() {
+  const m = currentMultiStoreManager();
+  const msg = document.getElementById('tr-msg');
+  const btn = document.getElementById('tr-submit');
+  const showErr = t => { if (msg) { msg.style.color = '#ef4444'; msg.textContent = t; } };
+  if (!m) { showErr('担当者としてログインし直してください'); return; }
+  const f = _readTransferForm();
+  if (!f.to || !f.from || f.from === f.to) { showErr('相手の店舗を選んでください'); return; }
+  if (!f.product) { showErr('商品を選んでください'); return; }
+  if (!(f.qty > 0) || Math.floor(f.qty) !== f.qty) { showErr('数量は1以上の整数で入力してください'); return; }
+  if (!confirm(`次の移動を記録します。\n\n${STORES[f.from]} → ${STORES[f.to]}\n${_transferProductLabel(f.product)}　${f.qty}個`)) return;
+  if (btn) { btn.disabled = true; btn.textContent = '記録中…'; }
+  if (msg) msg.textContent = '';
+  try {
+    const r = await gasPost('recordInventoryTransfer', { managerId: m.id, fromStore: f.from, toStore: f.to, product: f.product, qty: f.qty, note: f.note });
+    if (!r || r.error) { showErr(r && r.error ? r.error : '記録できませんでした'); return; }
+    if (msg) { msg.style.color = '#22703d'; msg.textContent = '✓ 記録しました'; setTimeout(() => { if (msg) msg.textContent = ''; }, 3000); }
+    document.getElementById('tr-qty').value = '';
+    document.getElementById('tr-note').value = '';
+    _updateTransferPreview();
+    _afterTransferChanged(f.from, f.to);
+  } catch (e) {
+    console.error('recordInventoryTransfer:', e);
+    showErr('通信できませんでした。記録されたか「今月の移動」で確かめてから、もう一度お試しください');
+    loadInventoryTransfers();
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '移動を記録する'; }
+  }
+}
+// 当月納品の表示を取り直す(棚卸表タブを開いていればすぐ描き直す)
+function _afterTransferChanged(from, to) {
+  const label = getInventoryPeriod().label;
+  [from, to].forEach(sid => { if (_inventoryDeliveryCache[sid]) delete _inventoryDeliveryCache[sid][label]; });
+  if (partnerTabCurrent === 'inventory' && (storeTab === from || storeTab === to)) loadInventoryTabData(storeTab, label);
+  loadInventoryTransfers();
+}
+async function loadInventoryTransfers() {
+  const m = currentMultiStoreManager();
+  const wrap = document.getElementById('tr-history');
+  if (!m || !wrap) return;
+  wrap.innerHTML = '<div style="color:#aaa;font-size:13px;padding:6px 0">読み込み中…</div>';
+  try {
+    const rows = await gasGet('getInventoryTransfers', { storeIds: m.stores.join(','), periodLabel: getInventoryPeriod().label });
+    _transferRows = Array.isArray(rows) ? rows : null;
+  } catch (e) { console.error('getInventoryTransfers:', e); _transferRows = null; }
+  renderInventoryTransfers();
+}
+function renderInventoryTransfers() {
+  const wrap = document.getElementById('tr-history');
+  if (!wrap) return;
+  if (_transferRows === null) { wrap.innerHTML = '<div style="color:#ef4444;font-size:13px;padding:6px 0">読み込めませんでした</div>'; return; }
+  if (!_transferRows.length) { wrap.innerHTML = '<div style="color:#aaa;font-size:13px;padding:6px 0">今月の移動はまだありません</div>'; return; }
+  wrap.innerHTML = _transferRows.map(r => {
+    const d = r.created_at ? new Date(r.created_at) : null;
+    const when = d && !isNaN(d) ? `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : '';
+    const cancelled = !!r.cancelled_at;
+    return `<div style="display:flex;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid #f0f0f0;${cancelled ? 'opacity:.5' : ''}">
+      <div style="flex:1;min-width:0;font-size:13px;line-height:1.5">
+        <div style="font-weight:700;${cancelled ? 'text-decoration:line-through' : ''}">${esc(STORES[r.from_store] || r.from_store)} → ${esc(STORES[r.to_store] || r.to_store)}　${esc(_transferProductLabel(r.product))} ${esc(r.qty)}個</div>
+        <div style="font-size:11px;color:#888">${esc(when)}　${esc(r.manager_name || '')}${r.note ? '　' + esc(r.note) : ''}${cancelled ? '　（取り消し済み）' : ''}</div>
+      </div>
+      ${cancelled ? '' : `<button onclick="cancelInventoryTransferUI('${esc(r.transfer_id)}')" style="background:white;color:#b91c1c;border:1px solid #fca5a5;border-radius:6px;padding:6px 10px;font-size:12px;cursor:pointer;font-family:inherit;white-space:nowrap">取り消し</button>`}
+    </div>`;
+  }).join('');
+}
+async function cancelInventoryTransferUI(transferId) {
+  const m = currentMultiStoreManager();
+  const r = (_transferRows || []).find(x => x.transfer_id === transferId);
+  if (!m || !r) return;
+  if (!confirm(`この移動を取り消しますか？\n\n${STORES[r.from_store] || r.from_store} → ${STORES[r.to_store] || r.to_store}\n${_transferProductLabel(r.product)}　${r.qty}個`)) return;
+  try {
+    const res = await gasPost('cancelInventoryTransfer', { managerId: m.id, transferId });
+    if (!res || res.error) { alert(res && res.error ? res.error : '取り消せませんでした'); loadInventoryTransfers(); return; }
+    _afterTransferChanged(r.from_store, r.to_store);
+  } catch (e) {
+    console.error('cancelInventoryTransfer:', e);
+    alert('通信できませんでした。もう一度お試しください');
+    loadInventoryTransfers();
+  }
+}
+
+/* --- 管理画面: 複数店舗の担当者の登録 --- */
+let _mgrEditId = null;
+function _saveMultiStoreManagers(list) {
+  localStorage.setItem(MULTI_MGR_KEY, JSON.stringify(list));
+  return _gasSaveSetting('multi_store_managers', JSON.stringify(list));
+}
+function _spMultiStoreManagers() {
+  return `<div id="mgr-page">${_mgrPageInner()}</div>`;
+}
+function _mgrPageInner() {
+  const list = getMultiStoreManagers();
+  const edit = list.find(m => m.id === _mgrEditId) || null;
+  const checked = new Set(edit ? edit.stores || [] : []);
+  const btn = 'padding:6px 12px;font-size:12px;border-radius:6px;border:none;cursor:pointer;font-family:inherit;color:white';
+  const rows = list.length ? list.map(m => `
+    <div style="display:flex;gap:8px;align-items:flex-start;padding:8px 0;border-bottom:1px solid #eee;flex-wrap:wrap">
+      <div style="flex:1;min-width:180px">
+        <div style="font-size:14px;font-weight:700">${esc(m.name || '')}</div>
+        <div style="font-size:12px;color:#555;margin-top:2px">パスワード: <span style="background:#fef9c3;border-radius:4px;padding:1px 8px;font-family:monospace">${esc(m.password || '')}</span></div>
+        <div style="font-size:12px;color:#555;margin-top:2px">担当店舗: ${(m.stores || []).map(sid => esc(STORES[sid] || sid + '（削除済み）')).join('、') || 'なし'}</div>
+      </div>
+      <div style="display:flex;gap:4px">
+        <button onclick="editMultiStoreManager('${esc(m.id)}')" style="${btn};background:#22703d">編集</button>
+        <button onclick="deleteMultiStoreManager('${esc(m.id)}')" style="${btn};background:#ef4444">削除</button>
+      </div>
+    </div>`).join('') : '<div style="color:#aaa;font-size:13px;padding:6px 0">まだ登録がありません</div>';
+  const groups = Object.keys(REGIONS).map(rId => [REGIONS[rId].label, REGIONS[rId].stores.filter(sid => STORES[sid])]).filter(g => g[1].length);
+  const storeChecks = groups.map(([label, sids]) => {
+    const n = sids.filter(sid => checked.has(sid)).length;
+    return `<details class="region-fold" ${n ? 'open' : ''}><summary>${esc(label)}（${sids.length}店舗${n ? '・' + n + '店舗を選択中' : ''}）</summary>
+      <div style="display:flex;flex-wrap:wrap;gap:4px 14px;padding:6px 0">${sids.map(sid =>
+        `<label style="font-size:13px;display:flex;align-items:center;gap:4px"><input type="checkbox" class="mgr-store-cb" value="${esc(sid)}" ${checked.has(sid) ? 'checked' : ''}>${esc(STORES[sid])}</label>`).join('')}</div></details>`;
+  }).join('');
+  const inp = 'border:1px solid #ddd;border-radius:6px;padding:7px 10px;font-size:13px;font-family:inherit';
+  return `
+    <div style="font-size:12px;color:#888;margin-bottom:12px;line-height:1.7">
+      複数の店舗を担当する人を登録します。担当者のパスワードでログインすると、画面上部のボタンで担当店舗を切り替えられ、担当店舗の間の「在庫移動」を入力できます。
+      在庫移動は、移動先の当月納品に＋、移動元に−として棚卸に入ります（記録は棚卸集計スプレッドシートの inventory_transfer タブ）。
+    </div>
+    ${rows}
+    <div style="margin-top:16px;padding-top:12px;border-top:1px solid #e0ede5">
+      <div style="font-size:14px;font-weight:700;color:#22703d;margin-bottom:8px">${edit ? '「' + esc(edit.name) + '」を編集' : '担当者を追加'}</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:8px">
+        <input id="mgr-name" type="text" placeholder="名前（例：山田）" value="${esc(edit ? edit.name : '')}" style="${inp};width:160px">
+        <input id="mgr-pw" type="text" placeholder="ログインパスワード" value="${esc(edit ? edit.password : '')}" style="${inp};width:180px">
+      </div>
+      <div style="font-size:12px;font-weight:700;color:#555;margin:6px 0">担当店舗（2店舗以上）</div>
+      ${storeChecks}
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button onclick="saveMultiStoreManager()" style="background:#22703d;color:white;padding:9px 18px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">${edit ? '保存' : '追加'}</button>
+        ${edit ? `<button onclick="editMultiStoreManager(null)" style="background:#f3f4f6;color:#333;padding:9px 18px;font-size:13px;border-radius:6px;border:none;cursor:pointer;font-family:inherit">やめる</button>` : ''}
+      </div>
+      <div id="mgr-msg" style="font-size:12px;min-height:18px;margin-top:6px"></div>
+    </div>`;
+}
+function _rerenderMgrPage() {
+  const page = document.getElementById('mgr-page');
+  if (page) page.innerHTML = _mgrPageInner();
+}
+function editMultiStoreManager(id) { _mgrEditId = id; _rerenderMgrPage(); }
+function _mgrMsg(text, ok) {
+  const msg = document.getElementById('mgr-msg');
+  if (!msg) return;
+  msg.style.color = ok ? '#22703d' : '#ef4444';
+  msg.textContent = text;
+  setTimeout(() => { if (msg.textContent === text) msg.textContent = ''; }, ok ? 2500 : 4000);
+}
+// ログインはパスワードだけで相手を決めるので、店舗・管理者・練習用・他の担当者と同じものは使えない
+function _passwordInUse(pw, exceptMgrId) {
+  const storePws = JSON.parse(localStorage.getItem(STORE_PW_KEY) || '{}');
+  if (pw === SITE_PW || storePws['__admin__'] === pw) return '管理者パスワードと同じパスワードは使用できません';
+  const sid = Object.keys(storePws).find(s => s !== '__admin__' && storePws[s] === pw);
+  if (sid) return `「${STORES[sid] || sid}」で使用中のパスワードです`;
+  if ((localStorage.getItem('onboarding_password') || '') === pw) return '練習用パスワードと同じパスワードは使用できません';
+  const other = getMultiStoreManagers().find(m => m.id !== exceptMgrId && m.password === pw);
+  if (other) return `担当者「${other.name}」で使用中のパスワードです`;
+  return '';
+}
+async function saveMultiStoreManager() {
+  const name = (document.getElementById('mgr-name')?.value || '').trim();
+  const pw = (document.getElementById('mgr-pw')?.value || '').trim();
+  const stores = [...document.querySelectorAll('.mgr-store-cb:checked')].map(cb => cb.value);
+  if (!name) return _mgrMsg('名前を入力してください');
+  if (!pw) return _mgrMsg('パスワードを入力してください');
+  if (stores.length < 2) return _mgrMsg('担当店舗を2店舗以上選んでください');
+  const conflict = _passwordInUse(pw, _mgrEditId);
+  if (conflict) return _mgrMsg(conflict);
+  const list = getMultiStoreManagers();
+  const i = list.findIndex(m => m.id === _mgrEditId);
+  const rec = { id: i >= 0 ? list[i].id : 'mgr_' + Date.now(), name, password: pw, stores };
+  if (i >= 0) list[i] = rec; else list.push(rec);
+  const ok = await _saveMultiStoreManagers(list);
+  _mgrEditId = null;
+  _rerenderMgrPage();
+  _mgrMsg(ok ? `✓ 「${name}」を保存しました` : 'サーバーへの保存に失敗しました。もう一度お試しください', ok);
+}
+async function deleteMultiStoreManager(id) {
+  const list = getMultiStoreManagers();
+  const m = list.find(x => x.id === id);
+  if (!m || !confirm(`担当者「${m.name}」を削除しますか？\n（これまでの在庫移動の記録は残ります）`)) return;
+  const ok = await _saveMultiStoreManagers(list.filter(x => x.id !== id));
+  if (_mgrEditId === id) _mgrEditId = null;
+  _rerenderMgrPage();
+  _mgrMsg(ok ? '✓ 削除しました' : 'サーバーへの保存に失敗しました。もう一度お試しください', ok);
 }
 
 /* ===== 管理者認証 ===== */
@@ -5936,6 +6303,7 @@ async function showPage(p) {
     }
     const navSearch = document.getElementById('store-nav-search');
     if (navSearch) navSearch.style.display = 'none';
+    renderMultiStoreBar();
   }
   document.getElementById('page-store').classList.toggle('active', p==='store');
   document.getElementById('page-admin').classList.toggle('active', p==='admin');
@@ -8741,6 +9109,7 @@ const SETTINGS_MENU = [
     { key:'add',    label:'店舗の追加',   build:_spStoreAdd },
     { key:'region', label:'エリア',       build:_spStoreRegion },
     { key:'pw',     label:'パスワード',   build:_spStorePw },
+    { key:'managers', label:'複数店舗の担当者', build:_spMultiStoreManagers },
   ]},
   { key:'product', label:'商品・棚卸', pages:[
     { key:'list',   label:'商品一覧',     build:_spProductList },
@@ -9888,6 +10257,11 @@ function saveStorePw(storeId) {
   }
   if (allPws['__admin__'] === pw) {
     if(msg){msg.style.color='#ef4444';msg.textContent='管理者パスワードと同じパスワードは使用できません';setTimeout(()=>{msg.textContent='';},3000);}
+    return;
+  }
+  const mgrConflict = getMultiStoreManagers().find(m => m.password === pw);
+  if (mgrConflict) {
+    if(msg){msg.style.color='#ef4444';msg.textContent=`担当者「${esc(mgrConflict.name)}」で使用中のパスワードです`;setTimeout(()=>{msg.textContent='';},3000);}
     return;
   }
   setStorePassword(storeId, pw);
