@@ -10,23 +10,34 @@
   python scripts/bugreport.py status 4 完了   # ステータス変更(未対応/対応中/完了)
 """
 import json
+import os
 import sys
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 # index.htmlのGAS_URLと同じ本番Web App(公開リポジトリに既に載っている値)
 GAS_URL = 'https://script.google.com/macros/s/AKfycbzoqu607sj-rpYulIiDwnuyGSCTzoblzSqaq37cb5k5KiGsK7sisZew9sSRSBoYBSwo_A/exec'
 STATUSES = ['未対応', '対応中', '完了']
 
 
+# 2026-10-17〜 管理者だけの操作にはスクリプト用の鍵が要る(GASのScript Properties PORTAL_SCRIPT_KEYと同じ文字列)。
+# 環境変数 PORTAL_SCRIPT_KEY か %USERPROFILE%/.config/selfcafe/portal_script_key.txt から読む(無ければ付けない)
+def _script_key():
+    if os.environ.get('PORTAL_SCRIPT_KEY'):
+        return os.environ['PORTAL_SCRIPT_KEY']
+    f = Path(os.environ.get('USERPROFILE', str(Path.home()))) / '.config' / 'selfcafe' / 'portal_script_key.txt'
+    return f.read_text(encoding='utf-8').strip() if f.exists() else ''
+
+
 def _get(action, **params):
-    q = urllib.parse.urlencode({'action': action, **params})
+    q = urllib.parse.urlencode({'action': action, **params, **({'scriptKey': _script_key()} if _script_key() else {})})
     with urllib.request.urlopen(GAS_URL + '?' + q, timeout=60) as r:
         return json.loads(r.read().decode('utf-8'))
 
 
 def _post(action, **body):
-    data = json.dumps({'action': action, **body}).encode('utf-8')
+    data = json.dumps({'action': action, **body, **({'scriptKey': _script_key()} if _script_key() else {})}).encode('utf-8')
     req = urllib.request.Request(GAS_URL, data=data, headers={'Content-Type': 'text/plain'})
     with urllib.request.urlopen(req, timeout=60) as r:
         return json.loads(r.read().decode('utf-8'))

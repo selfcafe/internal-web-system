@@ -76,7 +76,7 @@
   };
   // 練習を終える(ログアウト)。練習モードを外して開き直すと、いつものログイン画面に戻る
   window.onbExit = function () {
-    ['onboarding', 'onb_name', 'site_authed', 'site_authed_store', 'last_active'].forEach(k => sessionStorage.removeItem(k));
+    ['onboarding', 'onb_name', 'site_authed', 'site_authed_store', 'last_active', 'auth_t'].forEach(k => sessionStorage.removeItem(k));
     location.reload();
   };
 

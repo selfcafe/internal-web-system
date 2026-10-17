@@ -404,6 +404,232 @@ function _isFcStore_(storeId) {
 }
 
 // ----------------------------------------------------------------
+// ログインの確認（通行証、2026-10-17）
+// ----------------------------------------------------------------
+// 以前はパスワードの照合を端末側だけで行い、GASは送られてきたstoreIdをそのまま信じていた。
+// いまは authLogin がパスワードを照合して通行証(トークン)を返し、各リクエストの t(GETの引数/POSTの本文)を
+// _authCheck_ で確かめる。通行証の中身は {r:種類, s:使える店舗, m:担当者ID, n:名前, fp:パスワードの指紋, exp:期限}。
+// 種類: admin=管理者(全部) / store=店舗(その店舗だけ) / mgr=複数店舗の担当者(担当店舗だけ) / onb=練習モード(読むだけの数種類)。
+// パスワードを変えると指紋が合わなくなり、古い通行証は使えなくなる。担当店舗は毎回いまの設定から取り直す。
+// スクリプト(selfcafe-automation の PC スクリプト・GitHub Actions)は、Script Properties の PORTAL_SCRIPT_KEY と
+// 同じ文字列を scriptKey に付けて呼ぶ(管理者と同じ扱い)。LINE WORKS Bot の apiKey 付きの action は従来どおり各関数が確かめる。
+// 切り替えは2段階: Script Properties の AUTH_ENFORCE が '1' でない間は「確かめるが拒否しない」(違反は auth_log シートに記録)、
+// '1' にすると拒否し、設定の読み込み結果からパスワード類を外す。setAuthEnforce(管理者/スクリプト)で切り替えられる。
+const AUTH_TOKEN_MS = 12 * 60 * 60 * 1000;
+const SHEET_AUTH_LOG = 'auth_log';
+const AUTH_SECRET_SETTING_KEYS = ['store_passwords', 'admin_pin', 'onboarding_password'];
+// 認証なしで呼べるもの(Bot用のapiKey付きは各関数の中で鍵を確かめる)
+const AUTH_PUBLIC_ACTIONS = ['login', 'authStatus', 'getSettings', 'getStoreSettings',
+  'markAmazonOrdered', 'markAmazonDenied', 'previewOrderText', 'createOrderRequest', 'getProductAlternatives'];
+// 練習モードの通行証で呼べるもの(onboarding-sandbox.js が本物へ送るものと揃える)
+const AUTH_ONB_ACTIONS = ['getSteraStockEstimate', 'getSteraProductGroups', 'getOnboardingProgress', 'saveOnboardingProgress'];
+// 店舗の通行証で呼べるもの: 店舗IDが自分の範囲(店舗・担当店舗)に入っていること。店舗IDが空(=全店舗)は管理者だけ
+const AUTH_STORE_ACTIONS = [
+  'getLostItems', 'getChecksheetData', 'getSteraStockEstimate', 'getInventoryHistory', 'getLatestConsumptionByCode',
+  'getInventoryDeliveryAuto', 'getInventoryDeliveryManual', 'getInventoryTabData', 'getInventoryTransfers',
+  'getAttendance', 'getLeaveRequests', 'getAttendanceTabData', 'getDeliveryHistory', 'getMachinePhotoHistory',
+  'getBugReports', 'getAnnouncements', 'buildStoreInventorySheet', 'buildStockCheckMonthly', 'processMonthlyReorder',
+  'saveOrders', 'upsertOrders', 'saveChecksheetData', 'saveInventorySnapshot', 'recordInventoryDelivery',
+  'checkWaterStockMismatch', 'saveAttendance', 'saveLeaveRequest', 'saveDeliveryHistory', 'clearDeliveryHistory',
+  'saveMachinePhotoSet', 'submitBugReport', 'addBugReportComment', 'saveLostItem',
+  'recordInventoryTransfer', 'cancelInventoryTransfer',
+];
+// 店舗の通行証なら店舗を問わず呼べるもの(IDで指す削除・画像保存など。getOrdersは自分の範囲の行だけ返す)
+const AUTH_ANY_ACTIONS = ['getOrders', 'getSteraProductGroups', 'getBugReportThread', 'saveOrderImage',
+  'deleteOrders', 'deleteLostItem', 'deleteLeaveRequest'];
+// これ以外の action はすべて管理者かスクリプトの鍵が要る(保守用・設定の書き込みなど)
+
+function _authProps_() { return PropertiesService.getScriptProperties(); }
+function _authEnforced_() { return _authProps_().getProperty('AUTH_ENFORCE') === '1'; }
+function _authSecret_() {
+  const props = _authProps_();
+  let s = props.getProperty('AUTH_SECRET');
+  if (!s) { s = Utilities.getUuid() + Utilities.getUuid(); props.setProperty('AUTH_SECRET', s); }
+  return s;
+}
+function _b64url_(bytesOrStr) {
+  return Utilities.base64EncodeWebSafe(bytesOrStr).replace(/=+$/, '');
+}
+function _authSign_(str) {
+  return _b64url_(Utilities.computeHmacSha256Signature(str, _authSecret_()));
+}
+function _pwFingerprint_(pw) { return _authSign_('pw:' + pw).slice(0, 16); }
+// 照合に要る設定だけを小さく持つ(全設定は100KBを超えてキャッシュに載らず、毎回シートを読むことになるため)。
+// 設定の保存時に_invalidateSettingsCache_が版番号を変えるので、パスワード変更は次のリクエストから効く
+const AUTH_SETTING_KEYS_ = ['store_passwords', 'onboarding_password', 'multi_store_managers'];
+function _settingsMap_() {
+  const cache = CacheService.getScriptCache();
+  const ck = 'auth_settings_' + (cache.get(SETTINGS_VERSION_KEY) || '0');
+  const cached = cache.get(ck);
+  if (cached) { try { return JSON.parse(cached); } catch (e) {} }
+  const m = {};
+  getSettings().forEach(r => { if (AUTH_SETTING_KEYS_.indexOf(r.key) >= 0) m[r.key] = r.value; });
+  try { cache.put(ck, JSON.stringify(m), 300); } catch (e) {}
+  return m;
+}
+function _jsonOr_(v, def) {
+  try { const x = JSON.parse(v); return (x === null || x === undefined) ? def : x; } catch (e) { return def; }
+}
+// 練習用パスワードは端末がJSON.stringifyして保存している(例: "\"abc\"")ので、外してから比べる
+function _onbPassword_(m) {
+  let v = m.onboarding_password;
+  try { v = JSON.parse(v); } catch (e) {}
+  return String(v === undefined || v === null ? '' : v).trim();
+}
+function _managersFromSettings_(m) {
+  const list = _jsonOr_(m.multi_store_managers || '[]', []);
+  return Array.isArray(list) ? list.filter(x => x && x.id) : [];
+}
+
+// 失敗が続いたら少し止める(総当たり対策。誰の失敗かは区別できないので全体で数える)
+const AUTH_FAIL_LIMIT = 40, AUTH_FAIL_WINDOW_SEC = 600;
+function authLogin(password) {
+  const pw = String(password === undefined || password === null ? '' : password).trim();
+  if (!pw) return { error: 'パスワードを入力してください' };
+  const cache = CacheService.getScriptCache();
+  const fails = Number(cache.get('auth_fail_count') || 0);
+  if (fails >= AUTH_FAIL_LIMIT) return { error: 'ログインの失敗が続いたため、10分ほど待ってからお試しください' };
+  const m = _settingsMap_();
+  const pws = _jsonOr_(m.store_passwords || '{}', {});
+  let payload = null;
+  if (pws.__admin__ && pw === String(pws.__admin__)) {
+    payload = { r: 'admin', s: [], n: '管理者' };
+  } else {
+    const sid = Object.keys(pws).find(k => k !== '__admin__' && String(pws[k]) === pw);
+    if (sid) payload = { r: 'store', s: [_normalizeStoreId_(sid)], n: '' };
+  }
+  if (!payload) {
+    const mgr = _managersFromSettings_(m).find(x => x.password && String(x.password) === pw);
+    if (mgr) payload = { r: 'mgr', s: (mgr.stores || []).map(s => _normalizeStoreId_(String(s))), m: String(mgr.id), n: String(mgr.name || '') };
+  }
+  if (!payload && _onbPassword_(m) && pw === _onbPassword_(m)) payload = { r: 'onb', s: [], n: '' };
+  if (!payload) {
+    try { cache.put('auth_fail_count', String(fails + 1), AUTH_FAIL_WINDOW_SEC); } catch (e) {}
+    return { error: 'パスワードが違います' };
+  }
+  payload.fp = _pwFingerprint_(pw);
+  payload.exp = Date.now() + AUTH_TOKEN_MS;
+  const body = _b64url_(JSON.stringify(payload));
+  return { ok: true, role: payload.r, stores: payload.s, managerId: payload.m || '', name: payload.n, token: body + '.' + _authSign_(body), expiresAt: payload.exp };
+}
+
+// 通行証を確かめて中身を返す(だめならnull)。パスワードが変わっていればnull、担当店舗はいまの設定で上書き
+function _authVerify_(token) {
+  const t = String(token || '');
+  const dot = t.indexOf('.');
+  if (dot < 1) return null;
+  const body = t.slice(0, dot), sig = t.slice(dot + 1);
+  if (_authSign_(body) !== sig) return null;
+  let p;
+  try { p = JSON.parse(Utilities.newBlob(Utilities.base64DecodeWebSafe(body)).getDataAsString()); } catch (e) { return null; }
+  if (!p || !p.exp || p.exp < Date.now()) return null;
+  const m = _settingsMap_();
+  const pws = _jsonOr_(m.store_passwords || '{}', {});
+  let current = null;
+  if (p.r === 'admin') current = pws.__admin__;
+  else if (p.r === 'store') current = pws[p.s && p.s[0]];
+  else if (p.r === 'onb') current = _onbPassword_(m);
+  else if (p.r === 'mgr') {
+    const mgr = _managersFromSettings_(m).find(x => String(x.id) === String(p.m));
+    if (!mgr) return null;
+    current = mgr.password;
+    p.s = (mgr.stores || []).map(s => _normalizeStoreId_(String(s)));
+    p.n = String(mgr.name || '');
+  }
+  if (!current || _pwFingerprint_(String(current)) !== p.fp) return null;
+  return p;
+}
+function _authScriptKeyOk_(key) {
+  const k = _authProps_().getProperty('PORTAL_SCRIPT_KEY');
+  return !!(k && key && String(key) === k);
+}
+
+// action ごとの店舗IDの取り出し方(GETは e.parameter、POSTは本文)
+function _authStoreIdsFor_(action, p) {
+  if (action === 'getInventoryTransfers') return String(p.storeIds || '').split(',').map(s => _normalizeStoreId_(s.trim())).filter(Boolean);
+  if (action === 'recordInventoryTransfer') return [p.fromStore, p.toStore].map(s => _normalizeStoreId_(String(s || ''))).filter(Boolean);
+  if (action === 'saveLostItem') return p.item && p.item.store_id ? [_normalizeStoreId_(String(p.item.store_id))] : [];
+  return p.storeId ? [_normalizeStoreId_(String(p.storeId))] : [];
+}
+
+// 呼んでよいかを判定する。戻り値 {ok, auth(通行証の中身 or {r:'script'}), reason}
+function _authCheck_(action, p) {
+  if (AUTH_PUBLIC_ACTIONS.indexOf(action) >= 0) return { ok: true, auth: p.t ? _authVerify_(p.t) : null };
+  if (_authScriptKeyOk_(p.scriptKey)) return { ok: true, auth: { r: 'script', s: [] } };
+  const a = p.t ? _authVerify_(p.t) : null;
+  if (!a) return { ok: false, reason: p.t ? '通行証が無効(期限切れ・パスワード変更)' : '通行証なし' };
+  if (a.r === 'admin') return { ok: true, auth: a };
+  if (a.r === 'onb') return AUTH_ONB_ACTIONS.indexOf(action) >= 0 ? { ok: true, auth: a } : { ok: false, auth: a, reason: '練習モードでは使えない' };
+  if (AUTH_ANY_ACTIONS.indexOf(action) >= 0) return { ok: true, auth: a };
+  if (AUTH_STORE_ACTIONS.indexOf(action) >= 0) {
+    if ((action === 'recordInventoryTransfer' || action === 'cancelInventoryTransfer') && (a.r !== 'mgr' || String(p.managerId) !== String(a.m))) {
+      return { ok: false, auth: a, reason: '担当者本人ではない' };
+    }
+    const ids = _authStoreIdsFor_(action, p);
+    if (action !== 'cancelInventoryTransfer') {
+      if (!ids.length) return { ok: false, auth: a, reason: '店舗の指定なし(全店舗は管理者だけ)' };
+      const out = ids.filter(id => (a.s || []).indexOf(id) < 0);
+      if (out.length) return { ok: false, auth: a, reason: '範囲外の店舗: ' + out.join(',') };
+    }
+    return { ok: true, auth: a };
+  }
+  return { ok: false, auth: a, reason: '管理者だけの操作' };
+}
+
+// 違反の記録(同じ action・理由は10分に1回だけ)。拒否する前の「記録だけ」の期間に、困る通信が残っていないか見るため
+function _authLog_(action, reason, p, auth) {
+  try {
+    const cache = CacheService.getScriptCache();
+    const ck = 'authlog_' + Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, action + '|' + reason)).slice(0, 16);
+    if (cache.get(ck)) return;
+    cache.put(ck, '1', 600);
+    const sheet = getSheet(SHEET_AUTH_LOG);
+    ensureHeaders(sheet, ['at', 'action', 'reason', 'role', 'store_ids', 'enforced']);
+    sheet.appendRow([new Date().toISOString(), action, reason, auth ? auth.r : '', _authStoreIdsFor_(action, p).join(','), _authEnforced_() ? 'yes' : 'no']);
+  } catch (e) { console.error('authLog failed: ' + e.message); }
+}
+
+// doGet/doPostの入口で呼ぶ。拒否するときだけ応答(オブジェクト)を返し、通してよければnull
+function _authGate_(action, p) {
+  const c = _authCheck_(action, p);
+  p.__auth = c.auth || null;
+  if (c.ok) return null;
+  _authLog_(action, c.reason, p, c.auth);
+  if (!_authEnforced_()) return null;
+  return { error: 'ログインし直してください（' + c.reason + '）', authError: true };
+}
+
+// 設定の読み込み結果からパスワード類を外す(拒否を有効にした後、管理者・スクリプト以外)
+function _sanitizeSettingsRows_(rows, auth) {
+  if (!_authEnforced_() || (auth && (auth.r === 'admin' || auth.r === 'script'))) return rows;
+  return rows.filter(r => AUTH_SECRET_SETTING_KEYS.indexOf(r.key) < 0).map(r => {
+    if (r.key !== 'multi_store_managers') return r;
+    const list = _jsonOr_(r.value || '[]', []);
+    return { key: r.key, value: JSON.stringify((Array.isArray(list) ? list : []).map(x => ({ id: x.id, name: x.name, stores: x.stores }))) };
+  });
+}
+// 管理画面のパスワード表示・編集用(管理者だけ)
+function getSecretSettings() {
+  const m = {};
+  getSettings().forEach(r => { m[r.key] = r.value; });
+  const out = {};
+  AUTH_SECRET_SETTING_KEYS.concat(['multi_store_managers']).forEach(k => { if (m[k] !== undefined) out[k] = m[k]; });
+  return out;
+}
+function setAuthEnforce(on) {
+  _authProps_().setProperty('AUTH_ENFORCE', (on === true || on === '1' || on === 'true') ? '1' : '0');
+  return { ok: true, enforced: _authEnforced_() };
+}
+function getAuthLog(limit) {
+  const sheet = getSheet(SHEET_AUTH_LOG);
+  if (sheet.getLastRow() <= 1) return { enforced: _authEnforced_(), rows: [] };
+  const n = Math.min(Number(limit) || 100, sheet.getLastRow() - 1);
+  const rows = sheet.getRange(sheet.getLastRow() - n + 1, 1, n, 6).getValues()
+    .map(r => ({ at: String(r[0]), action: r[1], reason: r[2], role: r[3], store_ids: r[4], enforced: r[5] })).reverse();
+  return { enforced: _authEnforced_(), scriptKeySet: !!_authProps_().getProperty('PORTAL_SCRIPT_KEY'), rows: rows };
+}
+
+// ----------------------------------------------------------------
 // エントリーポイント
 // ----------------------------------------------------------------
 
@@ -412,15 +638,22 @@ function doGet(e) {
     const a = e.parameter.action;
     // doPost側と同じ理由で、GET経由のstoreIdも旧ID→新IDへ正規化する(STORE_ID_ALIASES参照)
     if (e.parameter.storeId) e.parameter.storeId = _normalizeStoreId_(e.parameter.storeId);
+    // ログインの確認(_authGate_)。拒否するときはここで返す
+    const _denied = _authGate_(a, e.parameter);
+    if (_denied) return json(_denied);
+    const _auth = e.parameter.__auth;
     let result;
     if      (a === '_peekMainSheetTabByGid') result = _peekMainSheetTabByGid_(Number(e.parameter.gid), Number(e.parameter.rows) || 5);
     else if (a === '_listTriggers') result = _listTriggers_();
     else if (a === '_provisionDeliveryHistorySheet') result = _provisionDeliveryHistorySheet_();
     else if (a === '_debugSteraSalesHistory') result = _debugSteraSalesHistory_(e.parameter.storeId, e.parameter.product, e.parameter.days);
     else if (a === '_debugWaterStockMismatch') result = _debugWaterStockMismatch_(e.parameter.storeId, e.parameter.product);
-    else if (a === 'getOrders')         result = getOrders();
-    else if (a === 'getSettings')       result = getSettings();
-    else if (a === 'getStoreSettings')  result = getStoreSettings(e.parameter.storeId);
+    else if (a === 'getOrders')         result = _filterOrdersForAuth_(getOrders(), _auth);
+    else if (a === 'getSettings')       result = _sanitizeSettingsRows_(getSettings(), _auth);
+    else if (a === 'getStoreSettings')  result = _sanitizeSettingsRows_(getStoreSettings(e.parameter.storeId), _auth);
+    else if (a === 'getSecretSettings') result = getSecretSettings();
+    else if (a === 'getAuthLog')        result = getAuthLog(e.parameter.limit);
+    else if (a === 'setAuthEnforce')    result = setAuthEnforce(e.parameter.on);
     else if (a === 'getLostItems')      result = getLostItems(e.parameter.month, e.parameter.storeId);
     else if (a === 'getChecksheetData') result = getChecksheetData(e.parameter.storeId);
     else if (a === 'getSteraStockEstimate') result = getSteraStockEstimate(e.parameter.storeId);
@@ -533,6 +766,10 @@ function doGet(e) {
 }
 
 function doPost(e) {
+  // ログインはシートを書かないので、ロックを待たずに答える
+  let _pre = null;
+  try { _pre = JSON.parse(e.postData.contents); } catch (_) {}
+  if (_pre && _pre.action === 'login') return json(authLogin(_pre.password));
   const lock = LockService.getScriptLock();
   // ロック待ち時間を計測してログに残す（2026-08-12、doPostが同時に何件も来た時に
   // 「ロック待ちで詰まっている」のか「処理自体が遅い」のかを次回切り分けられるようにするため）
@@ -551,7 +788,10 @@ function doPost(e) {
     if (b && b.storeId) b.storeId = _normalizeStoreId_(b.storeId);
     actionForErrorNotify_ = b && b.action;
     console.log('doPost action=' + (actionForErrorNotify_ || '(lineworks callback)') + ' storeId=' + (b.storeId || '') + ' lockWaitMs=' + _lockWaitMs);
-    if      (isLineWorksCallback_(b))           result = _routeLineWorksCallback_(b, e.parameter.bot);
+    const _isLwCallback = isLineWorksCallback_(b);
+    const _denied = _isLwCallback ? null : _authGate_(b.action, b);
+    if      (_denied)                           result = _denied;
+    else if (_isLwCallback)                     result = _routeLineWorksCallback_(b, e.parameter.bot);
     else if (b.action === 'saveOrders')         result = saveOrders(b.storeId, b.rows);
     else if (b.action === 'upsertOrders')       result = upsertOrderRows(b.storeId, b.rows);
     else if (b.action === 'deleteOrders')       result = deleteOrderRows(b.ids);
@@ -593,6 +833,7 @@ function doPost(e) {
     else if (b.action === 'createOrderRequest') result = createOrderRequest(b.apiKey, b.storeId, b.items);
     else if (b.action === 'getProductAlternatives') result = getProductAlternatives(b.apiKey, b.text);
     else if (b.action === 'registerApexOrder')  result = registerApexOrder(b.storeId, b.items, b.source, b.document);
+    else if (b.action === 'setAuthEnforce')     result = setAuthEnforce(b.on);
     else result = { error: 'Unknown action: ' + b.action };
   } catch(err) {
     result = { error: err.message };
@@ -1030,6 +1271,12 @@ function sheetRows(sheet, cols) {
 // orders
 // ----------------------------------------------------------------
 
+// 店舗・担当者の通行証なら自分の範囲の行だけ返す(管理者・スクリプト・通行証なしの移行期間は全部)
+function _filterOrdersForAuth_(rows, auth) {
+  if (!auth || (auth.r !== 'store' && auth.r !== 'mgr')) return rows;
+  const s = auth.s || [];
+  return rows.filter(r => s.indexOf(String(r.store_id)) >= 0);
+}
 function getOrders() {
   return sheetRows(getSheet(SHEET_ORDERS), ORDER_COLS).map(r => ({
     id:            r.id,

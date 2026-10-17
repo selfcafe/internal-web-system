@@ -43,7 +43,7 @@ jobs:
         id: create
         run: |
           set -eu
-          resp=$(curl -s -L "https://script.google.com/macros/s/${{ secrets.CLASP_DEPLOYMENT_ID }}/exec?action=provisionNewInventorySheet&label=${{ steps.yr.outputs.year }}")
+          resp=$(curl -s -L "https://script.google.com/macros/s/${{ secrets.CLASP_DEPLOYMENT_ID }}/exec?action=provisionNewInventorySheet&label=${{ steps.yr.outputs.year }}&scriptKey=${{ secrets.PORTAL_SCRIPT_KEY }}")
           echo "response: $resp"
           ok=$(echo "$resp" | node -e "let d='';process.stdin.on('data',c=>d+=c);process.stdin.on('end',()=>{try{console.log(JSON.parse(d).ok===true?'true':'false')}catch(e){console.log('false')}})")
           if [ "$ok" != "true" ]; then

@@ -180,7 +180,7 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 - 端末のlocalStorageに今どの範囲が入っているかは`settings_scope`(`'all'`/`'store:<id>'`、無ければ従来の全店舗分扱い)。
 - 安全策: 全店舗分が無い端末では①管理画面を開かない(`showPage`・`submitSiteLogin`)②上の2キーを`_gasSaveSetting`で丸ごと保存しない(他店舗分が消えるため。店舗ごとの変更は`_gasMergeSetting`)③読み込み失敗時に端末の前回分が別店舗の分ならチェックシートを出さない。
 - 応答速度(GAS側の処理時間)は全店舗分と大差なく約2.4秒。減ったのは転送量で、通信の弱い端末ほど効く。
-- 全店舗のパスワード・管理者PINが全端末に届き開発者ツールで見られる点は、ユーザー判断で対策不要(そういう相手を想定した作りではない)。
+- ~~全店舗のパスワード・管理者PINが全端末に届き開発者ツールで見られる点は、ユーザー判断で対策不要~~ → 2026-10-17にユーザー判断で取り消し、ログインの確認を作り直した(8章「ログインの確認(通行証)」)。
 
 ### 7.2 【対応済み・参考】設定の読み込み失敗時のチェック項目欠落(バグ報告No.4、commit `b9cbfcb`)
 
@@ -354,7 +354,7 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 - **設定の監査と復旧**:
   - 変更履歴は`?action=getSettingHistory&key=...`で見られる。
   - 「汚染だ」と思っても、戻す前に履歴を読む。オーナー本人の正規の操作を巻き戻しかけた前例がある。
-  - `getSettings`の応答には全店舗のパスワードと管理者PINが平文で入っているので、ファイルに保存しない。
+  - `getSettings`の応答には(拒否を有効にするまでは)全店舗のパスワードが平文で入っているので、ファイルに保存しない。拒否を有効にした後は管理者の通行証・スクリプトの鍵のときだけ入る(`getSecretSettings`も同じ)。
 
 ### 管理者ガイド・テスト(Playwright)
 - **本番への書き込み防止(必須)**: ローカルの`index.html`も本番`GAS_URL`へ実際に通信する。保存系の関数に届く操作の前に、`script.google.com` / `script.googleusercontent.com` / `firebaseio.com` / `googleapis.com`をroute遮断する。
@@ -390,6 +390,14 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 - **ログイン・切り替え**: 担当者のパスワードなら、前回見ていた担当店舗(`multi_mgr_last_store_<id>`、無ければ先頭)でパートナー画面を開き、`sessionStorage.multi_mgr`に担当者IDを置く。ヘッダーの下の`#multi-store-bar`(`renderMultiStoreBar`)のボタンで切り替える。切り替え(`switchManagedStore`)は別店舗でログインし直すのと同じ手順(未保存のチェックシートを送る→`ensureSettingsScope('store:<id>')`→`showPage('store')`)で、見ていたタブのまま開き直す。
 - **在庫移動**: バーの「在庫移動」から。今いる店舗から出す/今いる店舗へ受け取る×相手の担当店舗×商品(今いる店舗の取扱商品)×数量(バラの数)。GASの`recordInventoryTransfer`が①棚卸集計の`inventory_transfer`タブに1行②`inventory_delivery_auto`に「移動先 +数量」「移動元 −数量」の2行を書く。当月納品として合計されるので、棚卸の消費量・店舗タブ・月初発注・在庫推定は計算を変えずに移動を反映する。取り消し(`cancelInventoryTransfer`)は今月の分だけで、①に`cancelled_at`、②に逆の2行を追記する(行は消さない)。
 - **注意**: GAS側にはログイン確認が無く、担当者IDと担当店舗の照合は入力ミス防止にすぎない(セキュリティの作り直しは別作業)。棚卸を送った後に移動を入れると、`inventory_log`の消費量は古いまま(納品済みボタンと同じ扱い)。練習モード(onboarding)には担当者の機能を入れていない。
+
+### ログインの確認(通行証、2026-10-17〜)
+- **しくみ**: ログイン画面のパスワードを`login`(doPost、ロックを取らない)でGASが照合し、通行証(`token`)を返す。端末はsessionStorage `auth_t`に置き、`gasGet`/`gasPost`がすべての通信に`t`として付ける。中身は種類(admin/store/mgr/onb)・使える店舗・パスワードの指紋・期限12時間で、Script Properties `AUTH_SECRET`(初回に自動作成)で署名する。パスワードを変えると古い通行証は使えない。30分操作が無いと自動ログアウトする端末側の動きはそのまま。
+- **判定**: `_authCheck_`(gas_backend.gs)。action ごとの区分は`AUTH_PUBLIC_ACTIONS`(認証なし: login・設定の読み込み・Bot用apiKey付き)/`AUTH_ONB_ACTIONS`(練習)/`AUTH_STORE_ACTIONS`(店舗IDが自分の範囲)/`AUTH_ANY_ACTIONS`(店舗の通行証なら可)で、どれにも無いactionは管理者かスクリプトの鍵だけ。**actionを足したら、どの区分かを必ず決めて一覧に足す**(足し忘れると管理者専用になり、パートナー画面から呼ぶと拒否される)。getOrdersは店舗・担当者なら自分の範囲の行だけ返す。
+- **スクリプト**: Script Properties `PORTAL_SCRIPT_KEY`と同じ文字列を`scriptKey`に付ける(設定名の`key`とぶつからない名前)。selfcafe-automation の`scripts/portal_key.py`(%USERPROFILE%\.config\selfcafe\portal_script_key.txt)、このリポジトリの`scripts/bugreport.py`(環境変数`PORTAL_SCRIPT_KEY`か同じファイル)、`rollover-inventory-year.yml`(Secret `PORTAL_SCRIPT_KEY`)。止めているステラ取込みのスクリプトには付けていない(再開するなら`scriptKey`を足す)。
+- **2段階の切り替え**: Script Properties `AUTH_ENFORCE`が`'1'`でない間は「確かめるが拒否しない」。違反はメインDBの`auth_log`シートに記録(同じaction・理由は10分に1回)、`?action=getAuthLog&scriptKey=...`で読める。`'1'`にすると拒否し、`getSettings`/`getStoreSettings`からパスワード類(store_passwords・admin_pin・onboarding_password、担当者のpassword)を外す。切り替えは`setAuthEnforce`(on=1/0、管理者かスクリプトの鍵)。デプロイ不要で戻せる。
+- **管理者**: 予備の管理者パスワード(index.html の`SITE_PW`)とPINだけで管理画面に入る道は廃止(2026-10-17ユーザー決定)。管理者パスワードは`store_passwords.__admin__`で、管理画面「設定 › 店舗 › パスワード」の一番上で変える(変えると管理者の通行証はすべて無効になりログアウト)。管理者はログイン後`getSecretSettings`でパスワード一覧を読み、管理画面で確認・変更できる(担当者が忘れたときもここで確認する)。店舗パスワードの保存は1店舗分のマージ(`saveSettingMerge`)、丸ごと保存(`_syncStorePw`)は管理者として一覧を読んだ後だけ。
+- **端末に残さない**: 前回のパスワードの自動入力(`last_login_pw`)はやめた(ブラウザのパスワード保存に任せる)。店舗の端末からはパスワード一覧・練習用パスワードを消す。発注データ(getOrders)はログイン後に通行証付きで読む(`_loadOrders`)。読み込みに失敗しても手元の発注データは消さない。
 
 ### 外部PC・Bot・clasp
 - **80000785 PC**(前任者PC):

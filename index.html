@@ -992,18 +992,30 @@ const _fbApp = firebase.initializeApp({
 });
 const _fbDb = firebase.database();
 
+// ログインでGASから受け取った通行証(sessionStorage auth_t)を、すべての通信に t として付ける(2026-10-17)。
+// 期限切れ・パスワード変更でGASが authError を返したらログイン画面へ戻す
+function _authToken() { return sessionStorage.getItem('auth_t') || ''; }
+function _checkAuthError(data) {
+  if (data && data.authError && (sessionStorage.getItem('site_authed') === '1' || sessionStorage.getItem('admin_authed') === '1')) {
+    setTimeout(() => autoLogout('ログインの期限が切れました。もう一度ログインしてください。'), 0);
+  }
+  return data;
+}
 async function gasGet(action, params) {
   const q = new URLSearchParams({ action, ...(params||{}) });
+  const t = _authToken();
+  if (t) q.set('t', t);
   const res = await fetch(GAS_URL + '?' + q);
-  return res.json();
+  return _checkAuthError(await res.json());
 }
 async function gasPost(action, body) {
+  const t = _authToken();
   const res = await fetch(GAS_URL, {
     method: 'POST',
     headers: { 'Content-Type': 'text/plain' },
-    body: JSON.stringify({ action, ...body }),
+    body: JSON.stringify({ action, ...body, ...(t ? { t } : {}) }),
   });
-  return res.json();
+  return _checkAuthError(await res.json());
 }
 let _adminPin = '0000';
 
@@ -1117,7 +1129,9 @@ async function _gasMergeSetting(key, patchObj) {
   _settingSyncChain[key] = run;
   return run;
 }
+// 店舗パスワードは丸ごと保存なので、管理者として全店舗分を読み込んだ後だけ送る(一部だけの端末で他店舗分を消さないため)
 function _syncStorePw() {
+  if (!_adminSecretsLoaded) { console.error('store_passwords: 管理者のパスワード一覧を読み込んでいないため保存しません'); return; }
   _gasSaveSetting('store_passwords', localStorage.getItem(STORE_PW_KEY) || '{}');
 }
 function _syncCustomStores() {
@@ -1142,7 +1156,7 @@ async function syncAllStoreDataToGas() {
   const msg = document.getElementById('store-sync-msg');
   if (msg) { msg.style.color='#888'; msg.textContent='同期中...'; }
   const results = await Promise.all([
-    _gasSaveSetting('store_passwords',  localStorage.getItem(STORE_PW_KEY) || '{}'),
+    ...(_adminSecretsLoaded ? [_gasSaveSetting('store_passwords', localStorage.getItem(STORE_PW_KEY) || '{}')] : []),
     _gasSaveSetting('custom_stores',    localStorage.getItem(CUSTOM_STORES_KEY) || '{}'),
     _gasSaveSetting('deleted_stores',   localStorage.getItem(DELETED_STORES_KEY) || '[]'),
     _gasSaveSetting('store_regions',    localStorage.getItem(STORE_REGION_KEY) || '{}'),
@@ -1207,14 +1221,23 @@ function _fetchSettings(scope) {
     .catch(() => null);
 }
 
-async function initGas() {
+// 発注データの読み込み。通行証が要るので、ログイン前(通行証なし)は読まず、ログインした時に読む(2026-10-17)。
+// 取得に失敗したら(配列以外が返ったら)手元の分は消さずに失敗フラグだけ立てる
+function _loadOrders() {
   _ordersLoadFailed = false;
   _ordersReady = gasGet('getOrders').then(orders => {
-    (orders || []).forEach(r => {
+    if (!Array.isArray(orders)) throw new Error((orders && orders.error) || 'getOrdersの応答が不正です');
+    Object.keys(ORDERS_CACHE).forEach(k => delete ORDERS_CACHE[k]);
+    orders.forEach(r => {
       if (!ORDERS_CACHE[r.store_id]) ORDERS_CACHE[r.store_id] = [];
       ORDERS_CACHE[r.store_id].push(_dbToRow(r));
     });
   }).catch(e => { console.error('getOrders error:', e); _ordersLoadFailed = true; });
+  return _ordersReady;
+}
+async function initGas() {
+  if (_authToken()) _loadOrders();
+  else { _ordersLoadFailed = false; _ordersReady = Promise.resolve(); }
   // ページ最上部で先行発火済みの読み込みがあればそれを使う（早く始まっている分だけ速い）
   return _loadSettings(window.__earlySettingsScope || 'all', window.__earlySettings);
 }
@@ -1268,8 +1291,8 @@ async function _loadSettings(scope, prefetched) {
     const gasKeys = new Set(settings.map(r => r.key));
     settings.forEach(r => {
       const clean = v => String(v).replace(/[\x00-\x1f]/g, '');
-      if (r.key === 'admin_pin')         _adminPin = r.value;
-      if (r.key === 'store_passwords')   localStorage.setItem(STORE_PW_KEY,        clean(r.value));
+      // パスワード類は管理画面でだけ使う。管理者以外の端末には残さない(管理者はgetSecretSettingsで読み直す)
+      if (r.key === 'store_passwords' && isAuthed()) localStorage.setItem(STORE_PW_KEY, clean(r.value));
       if (r.key === 'custom_stores')     localStorage.setItem(CUSTOM_STORES_KEY,   clean(r.value));
       if (r.key === 'deleted_stores')    localStorage.setItem(DELETED_STORES_KEY,  clean(r.value));
       if (r.key === 'store_regions')     localStorage.setItem(STORE_REGION_KEY,    clean(r.value));
@@ -1292,7 +1315,7 @@ async function _loadSettings(scope, prefetched) {
       if (r.key === 'attendance_store_default_schedule') localStorage.setItem(ATTENDANCE_STORE_DEFAULT_SCHEDULE_KEY, clean(r.value));
       if (r.key === 'machine_photo_disabled_stores') localStorage.setItem(MACHINE_PHOTO_DISABLED_KEY, clean(r.value));
       if (r.key === 'machine_photo_machine_counts') localStorage.setItem(MACHINE_PHOTO_COUNT_KEY, clean(r.value));
-      if (r.key === 'onboarding_password') localStorage.setItem('onboarding_password', clean(r.value));
+      if (r.key === 'onboarding_password' && isAuthed()) localStorage.setItem('onboarding_password', clean(r.value));
       if (r.key === 'multi_store_managers') localStorage.setItem(MULTI_MGR_KEY, clean(r.value));
     });
     localStorage.setItem(SETTINGS_SCOPE_KEY, scope);
@@ -1302,7 +1325,6 @@ async function _loadSettings(scope, prefetched) {
     }
     if (gasKeys.has('checksheet_categories')) loadChecksheetCategories();
     if (gasKeys.has('all_checksheet_items')) loadChecksheetItemSettings();
-    if (!gasKeys.has('store_passwords')   && localStorage.getItem(STORE_PW_KEY))        _syncStorePw();
     if (!gasKeys.has('custom_stores')     && localStorage.getItem(CUSTOM_STORES_KEY))   _syncCustomStores();
     if (!gasKeys.has('deleted_stores')    && localStorage.getItem(DELETED_STORES_KEY))  _syncDeletedStores();
     if (!gasKeys.has('store_regions')     && localStorage.getItem(STORE_REGION_KEY))    _syncStoreRegions();
@@ -1363,8 +1385,9 @@ function _initRealtime() {
     await new Promise(r => setTimeout(r, Math.random() * 4000));
     try {
       const orders = await gasGet('getOrders');
+      if (!Array.isArray(orders)) return; // 失敗時(通行証切れ等)に手元の発注データを空にしない
       Object.keys(ORDERS_CACHE).forEach(k => delete ORDERS_CACHE[k]);
-      (orders || []).forEach(r => {
+      orders.forEach(r => {
         if (!ORDERS_CACHE[r.store_id]) ORDERS_CACHE[r.store_id] = [];
         ORDERS_CACHE[r.store_id].push(_dbToRow(r));
       });
@@ -5696,19 +5719,18 @@ function _syncReorderTargets() {
   _gasSaveSetting('reorder_targets', localStorage.getItem(REORDER_TARGETS_KEY) || '{}');
 }
 
-const SITE_PW        = 'selfcafe001';
 const SESSION_MS     = 30 * 60 * 1000; // 30分
 const STORE_PW_KEY   = 'store_passwords';
 
 function getStorePassword(storeId) {
   const pws = JSON.parse(localStorage.getItem(STORE_PW_KEY) || '{}');
-  return pws[storeId] || SITE_PW;
+  return pws[storeId] || '';
 }
 function setStorePassword(storeId, pw) {
   const pws = JSON.parse(localStorage.getItem(STORE_PW_KEY) || '{}');
   pws[storeId] = pw;
   localStorage.setItem(STORE_PW_KEY, JSON.stringify(pws));
-  _syncStorePw();
+  _gasMergeSetting('store_passwords', { [storeId]: pw });
 }
 function clearStorePassword(storeId) {
   const pws = JSON.parse(localStorage.getItem(STORE_PW_KEY) || '{}');
@@ -5790,14 +5812,16 @@ function touchActivity() {
   }
 }
 
+// 前回のパスワードを端末に平文で残して自動入力していたのは2026-10-17にやめた(ブラウザのパスワード保存に任せる)。
+// 呼び出し元はそのままにして、端末に残っている分を消すだけにする
 function prefillLastPassword() {
-  const pw = localStorage.getItem('last_login_pw');
-  const inp = document.getElementById('site-pw-input');
-  if (pw && inp) inp.value = pw;
+  try { localStorage.removeItem('last_login_pw'); } catch (_) {}
 }
 
 function adminLogout() {
   sessionStorage.removeItem('admin_authed');
+  sessionStorage.removeItem('auth_t');
+  _adminSecretsLoaded = false;
   document.getElementById('page-admin').classList.remove('active');
   const lock = document.getElementById('site-lock');
   lock.classList.remove('hidden');
@@ -5813,6 +5837,8 @@ function siteLogout() {
   sessionStorage.removeItem('site_authed_store');
   sessionStorage.removeItem('admin_authed');
   sessionStorage.removeItem('multi_mgr');
+  sessionStorage.removeItem('auth_t');
+  _adminSecretsLoaded = false;
   document.getElementById('page-store').classList.remove('active');
   document.getElementById('page-admin').classList.remove('active');
   const lock = document.getElementById('site-lock');
@@ -5824,11 +5850,13 @@ function siteLogout() {
   setTimeout(() => inp.focus(), 100);
 }
 
-function autoLogout() {
+function autoLogout(message) {
   sessionStorage.removeItem('site_authed');
   sessionStorage.removeItem('site_authed_store');
   sessionStorage.removeItem('admin_authed');
   sessionStorage.removeItem('multi_mgr');
+  sessionStorage.removeItem('auth_t');
+  _adminSecretsLoaded = false;
   document.getElementById('page-store').classList.remove('active');
   document.getElementById('page-admin').classList.remove('active');
   const lock = document.getElementById('site-lock');
@@ -5837,8 +5865,9 @@ function autoLogout() {
   inp.value = '';
   prefillLastPassword();
   populateLoginStoreSelect();
-  document.getElementById('site-pw-error').textContent = 'セッションが切れました。再度ログインしてください。';
-  setTimeout(() => { document.getElementById('site-pw-error').textContent = ''; inp.focus(); }, 100);
+  document.getElementById('site-pw-error').textContent = message || 'セッションが切れました。再度ログインしてください。';
+  setTimeout(() => inp.focus(), 100);
+  setTimeout(() => { document.getElementById('site-pw-error').textContent = ''; }, 8000);
 }
 
 /* 1分ごとにセッション期限を確認 */
@@ -5851,50 +5880,53 @@ async function submitSiteLogin() {
   const val = document.getElementById('site-pw-input').value.trim();
   const err = document.getElementById('site-pw-error');
   if (!val) { err.textContent = 'パスワードを入力してください'; setTimeout(() => { err.textContent=''; }, 2000); return; }
-  // ガイダンス(練習)用のパスワードなら、名前と配属店を選ぶ開始画面へ(onboarding-tour.js)
-  if (window.onbIsTrainingPassword && onbIsTrainingPassword(val)) { onbShowStartScreen(); return; }
+  const loginBtn = document.querySelector('button.btn-pin-submit');
+  const setBusy = busy => { if (loginBtn) { loginBtn.disabled = busy; loginBtn.textContent = busy ? '確認中…' : 'ログイン'; } };
   try {
-    // store_passwordsから照合（{storeId: password}形式）
-    let customPws = {};
-    try { customPws = JSON.parse(localStorage.getItem(STORE_PW_KEY) || '{}'); } catch(_) { localStorage.removeItem(STORE_PW_KEY); }
-    let storeId = Object.entries(customPws).find(([, pw]) => pw === val)?.[0] || null;
-    // 複数店舗の担当者のパスワードなら、前回見ていた担当店舗(無ければ先頭)で開く
-    const mgr = !storeId ? _findMultiStoreManagerByPw(val) : null;
-    if (mgr) {
-      storeId = _multiMgrStartStore(mgr);
-      if (!storeId) {
-        err.textContent = '担当店舗が登録されていません。管理者に確認してください';
-        setTimeout(() => { err.textContent = ''; }, 3000);
-        return;
-      }
-    }
-
-    // GAS未ロード時のフォールバック：SITE_PWで管理者ログイン
-    if (!storeId && val === SITE_PW) storeId = '__admin__';
-
-    if (!storeId) {
-      err.textContent = 'パスワードが違います';
+    // パスワードの照合はGASで行い、合えば通行証(token)と種類・使える店舗が返る(2026-10-17〜。以前は端末側で照合していた)
+    setBusy(true);
+    let res;
+    try { res = await gasPost('login', { password: val }); }
+    catch (e) { setBusy(false); err.textContent = '通信できませんでした。通信環境の良い場所でもう一度お試しください'; setTimeout(() => { err.textContent = ''; }, 4000); return; }
+    setBusy(false);
+    if (!res || !res.ok) {
+      err.textContent = (res && res.error) || 'パスワードが違います';
       document.getElementById('site-pw-input').value = '';
       document.getElementById('site-pw-input').focus();
-      setTimeout(() => { err.textContent = ''; }, 2000);
+      setTimeout(() => { err.textContent = ''; }, 3000);
       return;
     }
-    localStorage.setItem('last_login_pw', val);
+    sessionStorage.setItem('auth_t', res.token);
+    if (res.role !== 'onb') _loadOrders(); // 通行証の範囲(店舗・担当店舗・全店舗)で読み直す。showPageが読み終わりを待つ
+    // ガイダンス(練習)用のパスワードなら、名前と配属店を選ぶ開始画面へ(onboarding-tour.js)
+    if (res.role === 'onb') { if (window.onbShowStartScreen) onbShowStartScreen(); return; }
+    let storeId = null, mgr = null;
+    if (res.role === 'admin') storeId = '__admin__';
+    else if (res.role === 'mgr') {
+      mgr = { id: res.managerId, name: res.name, stores: res.stores || [] };
+      storeId = _multiMgrStartStore(mgr);
+    } else storeId = (res.stores || []).find(sid => STORES[sid]) || null;
+    if (!storeId) {
+      sessionStorage.removeItem('auth_t');
+      err.textContent = res.role === 'mgr' ? '担当店舗が登録されていません。管理者に確認してください' : 'この店舗は現在使えません。管理者に確認してください';
+      setTimeout(() => { err.textContent = ''; }, 4000);
+      return;
+    }
     // ログイン画面は前回ログインした店舗の分しか読んでいないので、管理者なら全店舗分、
     // 別店舗ならその店舗の分を読み込んでから画面を開く(CLAUDE.md 7.1)
     const needScope = storeId === '__admin__' ? 'all' : 'store:' + storeId;
-    const loginBtn = document.querySelector('button.btn-pin-submit');
     if (loginBtn) { loginBtn.disabled = true; loginBtn.textContent = '読み込み中…'; }
+    if (storeId === '__admin__') sessionStorage.setItem('admin_authed', '1'); // 設定の読み込みでパスワード類を端末に置くため先に立てる
     const scopeOk = await ensureSettingsScope(needScope);
     if (loginBtn) { loginBtn.disabled = false; loginBtn.textContent = 'ログイン'; }
     if (storeId === '__admin__' && !scopeOk && _cachedSettingsScope() !== 'all') {
       // 店舗分だけの設定のまま管理画面を開くと、他店舗の設定が空に見え、保存で消してしまう恐れがある
+      sessionStorage.removeItem('admin_authed');
       err.textContent = '管理画面の設定を読み込めませんでした。通信環境の良い場所で再読み込みしてください';
       setTimeout(() => { err.textContent = ''; }, 5000);
       return;
     }
     if (storeId === '__admin__') {
-      sessionStorage.setItem('admin_authed', '1');
       sessionStorage.setItem('last_active', String(Date.now()));
       document.getElementById('site-lock').classList.add('hidden');
       _saveCredential('admin', val);
@@ -5905,6 +5937,9 @@ async function submitSiteLogin() {
       sessionStorage.setItem('last_active', String(Date.now()));
       if (mgr) sessionStorage.setItem('multi_mgr', String(mgr.id)); else sessionStorage.removeItem('multi_mgr');
       localStorage.setItem('last_login_store', storeId);
+      // 店舗の端末にパスワード類を残さない(以前の版が置いていた分も消す)
+      localStorage.removeItem(STORE_PW_KEY);
+      localStorage.removeItem('onboarding_password');
       document.getElementById('site-lock').classList.add('hidden');
       _saveCredential(mgr ? (mgr.name || '担当者') : (STORES[storeId] || storeId), val);
       if (storeTab !== storeId) saveChecksheetNow(storeTab); // 別店舗でログインし直す前に、元の店舗の未保存分を送る
@@ -5912,6 +5947,7 @@ async function submitSiteLogin() {
       showPage('store');
     }
   } catch(e) {
+    setBusy(false);
     err.textContent = 'エラー: ' + e.message;
     console.error('submitSiteLogin:', e);
   }
@@ -5939,9 +5975,6 @@ function getMultiStoreManagers() {
     const list = JSON.parse(localStorage.getItem(MULTI_MGR_KEY) || '[]');
     return Array.isArray(list) ? list.filter(m => m && m.id) : [];
   } catch (_) { return []; }
-}
-function _findMultiStoreManagerByPw(pw) {
-  return getMultiStoreManagers().find(m => m.password && m.password === pw) || null;
 }
 // ログイン中の担当者(担当店舗は今ある店舗だけ)。担当者でなければnull
 function currentMultiStoreManager() {
@@ -6241,7 +6274,7 @@ function _mgrMsg(text, ok) {
 // ログインはパスワードだけで相手を決めるので、店舗・管理者・練習用・他の担当者と同じものは使えない
 function _passwordInUse(pw, exceptMgrId) {
   const storePws = JSON.parse(localStorage.getItem(STORE_PW_KEY) || '{}');
-  if (pw === SITE_PW || storePws['__admin__'] === pw) return '管理者パスワードと同じパスワードは使用できません';
+  if (storePws['__admin__'] === pw) return '管理者パスワードと同じパスワードは使用できません';
   const sid = Object.keys(storePws).find(s => s !== '__admin__' && storePws[s] === pw);
   if (sid) return `「${STORES[sid] || sid}」で使用中のパスワードです`;
   if ((localStorage.getItem('onboarding_password') || '') === pw) return '練習用パスワードと同じパスワードは使用できません';
@@ -6281,8 +6314,27 @@ async function deleteMultiStoreManager(id) {
 const getPin   = () => _adminPin;
 const isAuthed = () => sessionStorage.getItem('admin_authed') === '1';
 
+// 管理画面のパスワード表示・編集に使う一覧(店舗・管理者・練習用・担当者)。拒否を有効にした後は
+// 通常の設定の読み込みには入らないので、管理者の通行証で getSecretSettings から読む
+let _adminSecretsLoaded = false;
+async function ensureAdminSecrets() {
+  if (_adminSecretsLoaded) return true;
+  try {
+    const sec = await gasGet('getSecretSettings');
+    if (!sec || sec.error) return false;
+    const clean = v => String(v).replace(/[\x00-\x1f]/g, '');
+    if (sec.store_passwords !== undefined) localStorage.setItem(STORE_PW_KEY, clean(sec.store_passwords));
+    if (sec.onboarding_password !== undefined) localStorage.setItem('onboarding_password', clean(sec.onboarding_password));
+    if (sec.multi_store_managers !== undefined) localStorage.setItem(MULTI_MGR_KEY, clean(sec.multi_store_managers));
+    if (sec.admin_pin !== undefined) _adminPin = sec.admin_pin;
+    _adminSecretsLoaded = true;
+    return true;
+  } catch (e) { console.error('getSecretSettings error:', e); return false; }
+}
+
 async function showPage(p) {
   if (p === 'admin' && !isAuthed()) { showLock(); return; }
+  if (p === 'admin') await ensureAdminSecrets();
   // 管理画面は全店舗分の設定が前提(店舗分だけのまま開くと他店舗の設定が空に見え、保存で消える恐れ)
   if (p === 'admin' && _cachedSettingsScope() !== 'all') {
     alert('管理画面の設定を読み込めませんでした。通信環境の良い場所で再読み込みしてください。');
@@ -6313,18 +6365,17 @@ async function showPage(p) {
 }
 window.addEventListener('hashchange', () => showPage(location.hash==='#admin' ? 'admin' : 'store'));
 
+// 以前はここでPIN入力欄を出し、PINだけで管理画面に入れた。2026-10-17にやめ、管理者パスワードでのログインだけにした
 function showLock() {
-  location.hash = '#admin';
-  document.getElementById('lock-overlay').classList.add('show');
-  const inp = document.getElementById('pin-input');
-  inp.value = '';
-  document.getElementById('pin-error').textContent = '';
-  setTimeout(() => inp.focus(), 100);
+  if (location.hash === '#admin') history.replaceState(null, '', location.pathname + location.search);
+  if (isSiteAuthed()) { showPage('store'); return; }
+  document.getElementById('site-lock').classList.remove('hidden');
+  setTimeout(() => document.getElementById('site-pw-input')?.focus(), 100);
 }
 
 function submitPin() {
   const entered = document.getElementById('pin-input').value;
-  if (entered === getPin()) {
+  if (false && entered === getPin()) {
     sessionStorage.setItem('admin_authed', '1');
     document.getElementById('lock-overlay').classList.remove('show');
     document.getElementById('page-store').classList.remove('active');
@@ -9147,7 +9198,8 @@ async function saveOnboardingPw() {
   const msg = document.getElementById('onb-pw-msg');
   let storePws = {};
   try { storePws = JSON.parse(localStorage.getItem(STORE_PW_KEY) || '{}'); } catch (e) {}
-  if (val && (Object.values(storePws).includes(val) || val === SITE_PW)) { if (msg) msg.textContent = '店舗・管理者のパスワードと同じものは使えません'; return; }
+  if (val && Object.values(storePws).includes(val)) { if (msg) msg.textContent = '店舗・管理者のパスワードと同じものは使えません'; return; }
+  if (val && getMultiStoreManagers().some(m => m.password === val)) { if (msg) msg.textContent = '複数店舗の担当者のパスワードと同じものは使えません'; return; }
   localStorage.setItem('onboarding_password', JSON.stringify(val));
   const ok = await _gasSaveSetting('onboarding_password', JSON.stringify(val));
   if (msg) msg.textContent = ok ? (val ? '保存しました' : 'ガイダンスを使えなくしました') : '保存に失敗しました';
@@ -9374,6 +9426,16 @@ function _spStorePw() {
     <div style="font-size:12px;color:#b45309;background:#fef9c3;border:1px solid #fde68a;border-radius:6px;padding:8px 12px;margin-bottom:12px;line-height:1.6">
       ※パスワードを変更した直後は、ログイン画面の高速化のため各端末が古いパスワードのキャッシュを使うことがあり、
       変更前のパスワードでも数十秒〜数分ほどログインできてしまう場合があります。変更後は少し時間をおいてからご利用ください。
+    </div>
+    <div style="border:1px solid #e0ede5;border-radius:8px;padding:10px 12px;margin-bottom:14px;background:#fafdf7">
+      <div style="font-size:13px;font-weight:700;color:#22703d;margin-bottom:6px">管理者パスワード</div>
+      <div style="font-size:12px;color:#888;margin-bottom:8px;line-height:1.6">管理画面に入るパスワードです。変更すると、この端末を含め管理者としてログイン中の端末はすべてログアウトされます。</div>
+      <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center">
+        <input type="password" id="admin-pw-new" placeholder="新しい管理者パスワード（8文字以上）" autocomplete="new-password" style="border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:13px;font-family:inherit;width:220px">
+        <input type="password" id="admin-pw-confirm" placeholder="もう一度" autocomplete="new-password" style="border:1px solid #ddd;border-radius:6px;padding:6px 8px;font-size:13px;font-family:inherit;width:140px">
+        <button onclick="saveAdminPassword()" style="background:#22703d;color:white;padding:6px 12px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit;white-space:nowrap">変更</button>
+      </div>
+      <div id="admin-pw-msg" style="font-size:12px;margin-top:6px;min-height:16px"></div>
     </div>
     <div id="store-pw-list">${buildStorePwList()}</div>
     <div id="store-pw-msg" style="font-size:12px;margin-top:8px;min-height:18px;color:#22703d"></div>
@@ -10210,7 +10272,7 @@ async function renderLeaveRequestAdmin() {
 
 function getActiveStorePw(sid) {
   const pws = JSON.parse(localStorage.getItem(STORE_PW_KEY) || '{}');
-  return pws[sid] || SITE_PW;
+  return pws[sid] || '';
 }
 
 function buildStorePwList() {
@@ -10227,7 +10289,7 @@ const _pwRegionOpen = new Set();
 function _togglePwRegionOpen(rId, open) { if (open) _pwRegionOpen.add(rId); else _pwRegionOpen.delete(rId); }
 function _storePwRow(sid, sname, pws) {
   {
-    const activePw = pws[sid] || SITE_PW;
+    const activePw = pws[sid] || '（未設定）';
     return `<div style="display:flex;gap:8px;align-items:center;padding:7px 0;border-bottom:1px solid #eee;flex-wrap:wrap">
       <span style="flex:1;min-width:100px;font-size:13px">${esc(sname)}</span>
       <span style="font-size:11px;color:#888;white-space:nowrap">現在:</span><span style="font-size:12px;color:#333;background:#fef9c3;border-radius:5px;padding:4px 10px;font-family:monospace;white-space:nowrap">${esc(activePw)}</span>
@@ -10268,6 +10330,30 @@ function saveStorePw(storeId) {
   inp.value = '';
   document.getElementById('store-pw-list').innerHTML = buildStorePwList();
   if (msg) { msg.style.color='#22703d'; msg.textContent=`✓ 「${esc(STORES[storeId]||storeId)}」のパスワードを保存しました`; setTimeout(()=>{msg.textContent='';},2500); }
+}
+
+async function saveAdminPassword() {
+  const np = (document.getElementById('admin-pw-new')?.value || '').trim();
+  const nc = (document.getElementById('admin-pw-confirm')?.value || '').trim();
+  const msg = document.getElementById('admin-pw-msg');
+  const show = (t, ok) => { if (msg) { msg.style.color = ok ? '#22703d' : '#ef4444'; msg.textContent = t; } };
+  if (!_adminSecretsLoaded) return show('パスワード一覧を読み込めていません。再読み込みしてからお試しください');
+  if (np.length < 8) return show('8文字以上にしてください');
+  if (np !== nc) return show('2回の入力が一致しません');
+  const pws = JSON.parse(localStorage.getItem(STORE_PW_KEY) || '{}');
+  const used = Object.entries(pws).find(([k, v]) => k !== '__admin__' && v === np);
+  if (used) return show(`「${STORES[used[0]] || used[0]}」で使用中のパスワードです`);
+  if (getMultiStoreManagers().some(m => m.password === np)) return show('複数店舗の担当者のパスワードと同じものは使えません');
+  let onb = localStorage.getItem('onboarding_password') || '';
+  try { onb = JSON.parse(onb); } catch (_) {}
+  if (onb && onb === np) return show('練習用パスワードと同じものは使えません');
+  if (!confirm('管理者パスワードを変更します。変更後はログインし直してください。よろしいですか？')) return;
+  const ok = await _gasMergeSetting('store_passwords', { '__admin__': np });
+  if (!ok) return show('保存に失敗しました。もう一度お試しください');
+  pws['__admin__'] = np;
+  localStorage.setItem(STORE_PW_KEY, JSON.stringify(pws));
+  alert('管理者パスワードを変更しました。新しいパスワードでログインし直してください。');
+  siteLogout();
 }
 
 function clearStorePw(storeId) {
