@@ -5928,7 +5928,12 @@ function _adhocResolveStore_(key, stores, names) {
 
 // 現場向けの呼び名 → ポータルの商品名（部分一致で決まらないものだけ）
 const ADHOC_PRODUCT_ALIASES = { 'ココア': 'プレミアムココア', '紅茶': '紅茶(粉末)', 'クリーム': 'クリーミー', 'ウーロン茶': '烏龍茶',
-  'コーラシロップ': 'コカ・コーラ', 'ぶどうシロップ': 'まろやかブドウ', 'リンゴパウダー': 'リンゴ（粉末）', 'フィルター': 'ペーパーフィルター' };
+  'コーラシロップ': 'コカ・コーラ', 'ぶどうシロップ': 'まろやかブドウ', 'リンゴパウダー': 'リンゴ（粉末）', 'フィルター': 'ペーパーフィルター',
+  'Wロースト': 'ロースト', 'ダブルロースト': 'ロースト' };
+
+// 発注をやめた商品（発注書のコード → 理由）。都度発注で頼まれたら warnings に出す（止めない）。
+// 月初発注は reorder_targets の基準値を 0 にして止めている（基準値が無いと消費量×1.2 で出るため 0 を入れる）
+const DISCONTINUED_PRODUCTS = { '490111137634': 'Wローストは発注停止（ブレンドへ移行。在庫は一部店舗で使い切る）' };
 
 // 商品の呼び名 → ポータルの商品コード。アペックス発注書に載る仕入先（apex → cs3 の順）だけを見る（トーヨーの同名品を拾わない）。
 // 完全一致 → 別名表 → 部分一致（候補が1つに絞れたとき）
@@ -5999,6 +6004,7 @@ function buildAdhocApexOrder(branchKey, spec, dryRun, opts) {
     if (ci < 0) { warnings.push(`発注書に店舗の列が無い: ${col}`); return; }
     let hasCase = false;
     detail[names[sid] || sid] = regs[sid] = parsed.items[sid].map(it => {
+      if (DISCONTINUED_PRODUCTS[it.code]) warnings.push(`${names[sid] || sid} ${it.name}: ${DISCONTINUED_PRODUCTS[it.code]}`);
       const info = rowInfo[it.code];
       if (!info) { warnings.push(`発注書に商品が無い: ${names[sid] || sid} ${it.name}（${it.code}）`); return { name: it.name, code: it.code, qty: it.qty, missing: true }; }
       if (it.cases) {   // 「1ケース」はアペックスの発注書のケース入数で換算（ポータルの商品マスタのケース数とは違うことがある）
