@@ -35,10 +35,12 @@
     // (loadAttendanceHistoryが使う。ログイン処理完了を待ってから発火する従来の流れだと、その分
     // だけ表示が遅れていた)。
     try {
+      // 通行証(auth_t)が要る(2026-10-17〜)。通行証の無い古いログイン状態はログインし直しになるので先読みしない
       const _earlyStore = sessionStorage.getItem('site_authed_store');
-      if (_earlyStore) {
+      const _earlyToken = sessionStorage.getItem('auth_t');
+      if (_earlyStore && _earlyToken) {
         window.__earlyAttendanceStore = _earlyStore;
-        window.__earlyAttendance = fetch('https://script.google.com/macros/s/AKfycbzoqu607sj-rpYulIiDwnuyGSCTzoblzSqaq37cb5k5KiGsK7sisZew9sSRSBoYBSwo_A/exec?action=getAttendance&storeId=' + encodeURIComponent(_earlyStore))
+        window.__earlyAttendance = fetch('https://script.google.com/macros/s/AKfycbzoqu607sj-rpYulIiDwnuyGSCTzoblzSqaq37cb5k5KiGsK7sisZew9sSRSBoYBSwo_A/exec?action=getAttendance&storeId=' + encodeURIComponent(_earlyStore) + '&t=' + encodeURIComponent(_earlyToken))
           .then(r => r.json()).catch(() => null);
       }
     } catch(_) {}
@@ -995,8 +997,14 @@ const _fbDb = firebase.database();
 // ログインでGASから受け取った通行証(sessionStorage auth_t)を、すべての通信に t として付ける(2026-10-17)。
 // 期限切れ・パスワード変更でGASが authError を返したらログイン画面へ戻す
 function _authToken() { return sessionStorage.getItem('auth_t') || ''; }
+// 一覧を返すはずのactionで、エラー(通行証切れ・範囲外など)のオブジェクトが返ったときは空の一覧として扱う
+function _asList(x) {
+  if (Array.isArray(x)) return x;
+  if (x && x.error) console.error('GAS error:', x.error);
+  return [];
+}
 function _checkAuthError(data) {
-  if (data && data.authError && (sessionStorage.getItem('site_authed') === '1' || sessionStorage.getItem('admin_authed') === '1')) {
+  if (data && data.authError && data.authCode === 'token' && (sessionStorage.getItem('site_authed') === '1' || sessionStorage.getItem('admin_authed') === '1')) {
     setTimeout(() => autoLogout('ログインの期限が切れました。もう一度ログインしてください。'), 0);
   }
   return data;
@@ -1379,6 +1387,7 @@ function _initRealtime() {
     // ORDERS_CACHEを古いスナップショットで上書きし、直後の保存で
     // 未送信の変更が消えてしまうのを防ぐ）
     if (val && typeof val === 'object' && val.by === _CLIENT_ID) return;
+    if (!_authToken()) return; // ログイン前(通行証なし)は発注データを読まない
     // 誰か1人が保存すると、開いている全端末が一斉に同じ瞬間にgetOrdersを叩いてしまい、
     // Apps Script側の同時実行数に不要な負荷が集中する（2026-08-12、この一斉アクセスが
     // 発注データ読み込み失敗の一因と判明）。0〜4秒のランダムな遅延で各端末の再取得タイミングを
@@ -1425,8 +1434,12 @@ function _initChecksheetRealtime() {
     const val = snap.val();
     if (val && typeof val === 'object' && val.by === _CLIENT_ID) return;
     if (!val || !val.storeId) return;
+    // 今見ている店舗の分だけ読み直す。以前は全店舗の保存通知のたびにその店舗の分を読んでいて、
+    // ログイン画面の端末や他店舗の端末からも読みにいっていた(通行証の範囲外になる、2026-10-18)
+    if (!isSiteAuthed() || !_authToken() || val.storeId !== storeTab) return;
     // 発注と同じ理由（2026-08-12対応）で、一斉再取得を避けるためランダムに遅延させる
     await new Promise(r => setTimeout(r, Math.random() * 4000));
+    if (val.storeId !== storeTab) return; // 待っている間に店舗を切り替えた
     try {
       await loadChecksheetDataFromDb(val.storeId);
       if (val.storeId === storeTab && partnerTabCurrent === 'checklist') renderChecksheet();
@@ -3725,7 +3738,7 @@ let _steraProductGroups = [];
 async function loadSteraStockEstimate(storeId) {
   try { _steraStockEstimate = await gasGet('getSteraStockEstimate', { storeId }) || {}; }
   catch (e) { console.error('getSteraStockEstimate error:', e); _steraStockEstimate = {}; }
-  try { _steraProductGroups = await gasGet('getSteraProductGroups', {}) || []; }
+  try { _steraProductGroups = _asList(await gasGet('getSteraProductGroups', {})); }
   catch (e) { console.error('getSteraProductGroups error:', e); _steraProductGroups = []; }
 }
 
@@ -3736,7 +3749,7 @@ async function loadSteraStockEstimate(storeId) {
 async function loadChecksheetOpeningStock(storeId) {
   const prevLabel = _prevPeriodLabel(getInventoryPeriod().label);
   try {
-    const rows = await gasGet('getInventoryHistory', { storeId, periodLabel: prevLabel }) || [];
+    const rows = _asList(await gasGet('getInventoryHistory', { storeId, periodLabel: prevLabel }));
     if (!_inventoryPrevRowCache[storeId]) _inventoryPrevRowCache[storeId] = {};
     const map = {};
     rows.forEach(r => { map[r.product] = r; });
@@ -5053,7 +5066,7 @@ async function toggleBugReportThread(issueId) {
   if (_bugReportOpenThreadId === issueId) _markBugReportSeen(issueId);
   renderBugReports();
   if (_bugReportOpenThreadId === issueId && (!_bugReportThreadCache[issueId] || wasUnread)) {
-    try { _bugReportThreadCache[issueId] = await gasGet('getBugReportThread', { issueId }) || []; }
+    try { _bugReportThreadCache[issueId] = _asList(await gasGet('getBugReportThread', { issueId })); }
     catch(e) { console.error('getBugReportThread error:', e); _bugReportThreadCache[issueId] = []; }
     if (_bugReportOpenThreadId === issueId) renderBugReports();
   }
@@ -5067,7 +5080,7 @@ async function submitBugReportReply(issueId) {
   try {
     const r = await gasPost('addBugReportComment', { issueId, posterType: 'partner', posterName: '', storeId: storeTab, text });
     if (r.error) throw new Error(r.error);
-    _bugReportThreadCache[issueId] = await gasGet('getBugReportThread', { issueId }) || [];
+    _bugReportThreadCache[issueId] = _asList(await gasGet('getBugReportThread', { issueId }));
     await loadBugReportsFromDb(storeTab); // updated_atの更新を一覧側にも反映
     _markBugReportSeen(issueId); // 自分の返信で「返信あり」が付かないように
     renderBugReports();
@@ -5141,7 +5154,7 @@ async function renderBugReportAdmin() {
   if (_bugReportAdminForceRefresh) {
     _bugReportAdminForceRefresh = false;
     container.innerHTML = '<div style="color:#aaa;font-size:13px;padding:20px 0">読み込み中…</div>';
-    try { adminBugReports = await gasGet('getBugReports', {}) || []; }
+    try { adminBugReports = _asList(await gasGet('getBugReports', {})); }
     catch(e) { console.error('getBugReports error:', e); adminBugReports = []; }
   }
   renderBugReportAdminBody();
@@ -5232,7 +5245,7 @@ const _bugReportAdminThreadCache = {};
 async function loadBugReportAdminThread(issueId, force) {
   _bugReportAdminDetailThreadId = issueId;
   if (force || !_bugReportAdminThreadCache[issueId]) {
-    try { _bugReportAdminThreadCache[issueId] = await gasGet('getBugReportThread', { issueId }) || []; }
+    try { _bugReportAdminThreadCache[issueId] = _asList(await gasGet('getBugReportThread', { issueId })); }
     catch(e) { console.error('getBugReportThread error:', e); _bugReportAdminThreadCache[issueId] = []; }
   }
   const el = document.getElementById('bugreport-admin-thread');
@@ -5832,8 +5845,12 @@ function adminLogout() {
   setTimeout(() => inp.focus(), 100);
 }
 
-function siteLogout() {
+async function siteLogout() {
   if (window.__ONB) { onbExit(); return; } // 練習モードを終えていつものログイン画面へ
+  // チェックシートの未保存分は、通行証を消す前(この店舗の通行証のうち)に送る。最大8秒待つ
+  if (isSiteAuthed() && _authToken() && storeTab && _checksheetUnsavedCount(storeTab) > 0) {
+    try { await Promise.race([saveChecksheetNow(storeTab), new Promise(r => setTimeout(r, 8000))]); } catch (_) {}
+  }
   sessionStorage.removeItem('site_authed');
   sessionStorage.removeItem('site_authed_store');
   sessionStorage.removeItem('admin_authed');
@@ -5943,7 +5960,9 @@ async function submitSiteLogin() {
       localStorage.removeItem('onboarding_password');
       document.getElementById('site-lock').classList.add('hidden');
       _saveCredential(mgr ? (mgr.name || '担当者') : (STORES[storeId] || storeId), val);
-      if (storeTab !== storeId) saveChecksheetNow(storeTab); // 別店舗でログインし直す前に、元の店舗の未保存分を送る
+      // 前の店舗の未保存分は、新しい通行証の範囲に入っているときだけ送る(範囲外は断られるので端末に残し、
+      // その店舗で次にログインしたときに送る。ログアウト時はsiteLogoutが前の通行証のうちに送っている)
+      if (storeTab && storeTab !== storeId && (res.stores || []).includes(storeTab)) saveChecksheetNow(storeTab);
       storeTab = storeId;
       showPage('store');
     }
@@ -7083,7 +7102,7 @@ async function ensureAnnounceWidgetLoaded(storeId) {
   if (announceLoadedForStore !== storeId) {
     announceLoadedForStore = storeId;
     renderAnnounceWidget(true);
-    try { announceItems = await gasGet('getAnnouncements', { storeId }) || []; }
+    try { announceItems = _asList(await gasGet('getAnnouncements', { storeId })); }
     catch (e) { console.error('getAnnouncements error:', e); announceItems = []; }
   }
   if (!document.getElementById('announce-drill-wrap') || document.getElementById('announce-drill-wrap').style.display === 'none') {
@@ -7196,7 +7215,7 @@ async function ensureAdminAnnounceWidgetLoaded() {
   if (!adminAnnounceLoaded) {
     adminAnnounceLoaded = true;
     renderAdminAnnounceWidget(true);
-    try { adminAnnounceItems = await gasGet('getAnnouncements', {}) || []; }
+    try { adminAnnounceItems = _asList(await gasGet('getAnnouncements', {})); }
     catch (e) { console.error('getAnnouncements error:', e); adminAnnounceItems = []; }
   }
   if (!adminAnnounceDrillView) renderAdminAnnounceWidget();
@@ -9215,7 +9234,7 @@ async function loadOnboardingProgressTable() {
   const wrap = document.getElementById('onb-progress-wrap');
   if (!wrap) return;
   let rows = [];
-  try { rows = await gasGet('getOnboardingProgress') || []; } catch (e) { wrap.innerHTML = '<div style="color:#c0392b;font-size:13px">読み込めませんでした</div>'; return; }
+  try { rows = _asList(await gasGet('getOnboardingProgress')); } catch (e) { wrap.innerHTML = '<div style="color:#c0392b;font-size:13px">読み込めませんでした</div>'; return; }
   const chapters = window.ONB_CHAPTER_LIST || [];
   const people = {};
   rows.forEach(r => {

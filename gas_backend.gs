@@ -596,7 +596,11 @@ function _authGate_(action, p) {
   if (c.ok) return null;
   _authLog_(action, c.reason, p, c.auth);
   if (!_authEnforced_()) return null;
-  return { error: 'ログインし直してください（' + c.reason + '）', authError: true };
+  // authCode: token=通行証が無い・無効(端末はログイン画面へ) / forbidden=範囲外の操作(その操作だけ断る)
+  const tokenProblem = !c.auth || c.auth.r === undefined;
+  return tokenProblem
+    ? { error: 'ログインし直してください（' + c.reason + '）', authError: true, authCode: 'token' }
+    : { error: 'この操作はできません（' + c.reason + '）', authError: true, authCode: 'forbidden' };
 }
 
 // 設定の読み込み結果からパスワード類を外す(拒否を有効にした後、管理者・スクリプト以外)
