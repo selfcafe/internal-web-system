@@ -154,7 +154,7 @@ const ANNOUNCEMENT_COLS = ['id','title','body','publish_date','scope','status','
 // 参照)の方が優先される——このデフォルト自体は基本的に変わらないため、_areaForStore_を通さない
 // 単純な用途(通知グループ振り分け以外)ではこのまま直接参照してよい）
 const AREA_STORES = {
-  '東海': ['sasashima','chikusa','gokiso','tsurumai','kamisawa','nakamura_nisseki','midori_kofubutsu','sakurayama','akatsuka','shin_moriyama','tokoname','hamamatsu','sakae','rokubanchou','nonami','seto_iwayadou','nagakute','meieki_nishi','nadia_sakae','aratamabashi','sako','hotei','kamejima','nakamura_torii','taikodori','kouta','hibino','hoshigaoka','ikeshita','toyota','hara','fujigaoka','gifu_kitagata','narumiyamashita','kisomisaki'],
+  '東海': ['sasashima','chikusa','gokiso','tsurumai','kamisawa','nakamura_nisseki','midori_kofubutsu','sakurayama','akatsuka','shin_moriyama','tokoname','hamamatsu','sakae','rokubanchou','nonami','seto_iwayadou','nagakute','meieki_nishi','nadia_sakae','aratamabashi','sako','hotei','kamejima','nakamura_torii','taikodori','kouta','hibino','hoshigaoka','ikeshita','toyota','hara','fujigaoka','gifu_kitagata','narumiyamashita','kisomisaki','kariya'],
   '関西': ['tenma','higashiosaka','aikawa','minami_morimachi','abeno','tanimachi9','moriguchi','taishibashi','kyobashi_kita','shinsaibashi','kishi','umeda','kami_shinjyo','osaka_hirano','hikone','aeon_higashiosaka','gamo4','tenmabashi_kita','tsurumi_yokozutsumi'],
   '関東': ['inzai','otsuka','sugamo','umejima','shibuya','kamisato'],
   // 2026-08-24追加。関東ニッカ・FC・業務委託は、既存の東海/関西/関東とは別の新規カテゴリ
@@ -163,7 +163,7 @@ const AREA_STORES = {
   // 千歳烏山はメニュー表記が「ニッカ関東ニッカカフェデフォルト」のため関東ニッカへ、天満橋北(大阪)は
   // 関西へ、盛岡駅前・盛岡大通(岩手、地理的にはどのエリアにも属さない)はFCとして追加
   '関東ニッカ': ['chitose_karasuyama', 'waseda'],
-  'FC': ['shinjuku_fc', 'morioka_ekimae', 'morioka_odori', 'gamagori', 'kariya', 'tottori_ekimae'],
+  'FC': ['shinjuku_fc', 'morioka_ekimae', 'morioka_odori', 'gamagori', 'tottori_ekimae'],
   '業務委託': []
 };
 // フロントのREGIONS定数のid('tokai'/'kansai'/'kanto'/'kanto_self'/'fc'/'gyomu_itaku')→日本語ラベルの対応
@@ -603,10 +603,20 @@ function _authGate_(action, p) {
     : { error: 'この操作はできません（' + c.reason + '）', authError: true, authCode: 'forbidden' };
 }
 
-// 設定の読み込み結果からパスワード類を外す(拒否を有効にした後、管理者・スクリプト以外)
+// 店舗の端末に渡さない設定(パスワード類以外)。invoice_partners は旧請求書アプリの口座・住所で、
+// ポータルの画面はどこからも読まない(2026-10-18)
+const AUTH_ADMIN_ONLY_SETTING_KEYS = ['invoice_partners'];
+// 設定の読み込み結果からパスワード類・口座情報・商品の単価を外す(拒否を有効にした後、管理者・スクリプト以外)。
+// 単価(all_products の price)は本部の仕入値で、FC店に見せると卸値との差が分かってしまうため外す。
+// 棚卸の金額は saveInventorySnapshot が all_products の単価で計算し直すので、店舗の端末に単価は要らない
 function _sanitizeSettingsRows_(rows, auth) {
   if (!_authEnforced_() || (auth && (auth.r === 'admin' || auth.r === 'script'))) return rows;
-  return rows.filter(r => AUTH_SECRET_SETTING_KEYS.indexOf(r.key) < 0).map(r => {
+  return rows.filter(r => AUTH_SECRET_SETTING_KEYS.indexOf(r.key) < 0 && AUTH_ADMIN_ONLY_SETTING_KEYS.indexOf(r.key) < 0).map(r => {
+    if (r.key === 'all_products') {
+      const list = _jsonOr_(r.value || '[]', []);
+      if (!Array.isArray(list)) return r;
+      return { key: r.key, value: JSON.stringify(list.map(p => { const q = Object.assign({}, p); delete q.price; return q; })) };
+    }
     if (r.key !== 'multi_store_managers') return r;
     const list = _jsonOr_(r.value || '[]', []);
     return { key: r.key, value: JSON.stringify((Array.isArray(list) ? list : []).map(x => ({ id: x.id, name: x.name, stores: x.stores }))) };
@@ -3111,6 +3121,16 @@ function saveInventorySnapshot(storeId, periodLabel, rows, remarks) {
     // 既存行のうちどれか1つに残っている値を引き継ぐ(remarksを消した端末の送信で他端末の備考を消さない)
     const anyExisting = Object.values(existingByProduct)[0];
     const effectiveRemarks = remarks || (anyExisting ? anyExisting[remarksIdx] : '');
+    // 単価・金額は商品設定(all_products)の単価で計算し直す。店舗の端末には単価を渡さないので(_sanitizeSettingsRows_)、
+    // 端末が送る price は 0 になる。商品設定に無い品だけ端末の値をそのまま使う(2026-10-18)
+    const priceByName = {};
+    _settingJson_('all_products', []).forEach(p => { if (p && p.name && p.price !== undefined && p.price !== '') priceByName[p.name] = Number(p.price) || 0; });
+    rows = rows.map(r => {
+      if (!r || priceByName[r.product] === undefined) return r;
+      const price = priceByName[r.product];
+      const end = (r.end_stock === null || r.end_stock === undefined || r.end_stock === '') ? null : Number(r.end_stock);
+      return Object.assign({}, r, { price: price, amount: end === null ? null : price * end });
+    });
     const newRows = rows.map(r => {
       const existing = existingByProduct[r.product];
       return INVENTORY_COLS.map((c, i) => {
