@@ -4656,7 +4656,7 @@ function ensureReorderRulesSheet_() {
     ['1. 目標在庫数を決める: 基準値(Q列)が設定されていればその値。未設定なら 消費量×1.2(安全在庫のバッファ)。'],
     ['2. 発注数 = max(0, 目標在庫数 − 期末在庫)。在庫が目標を上回っていれば発注数は0。'],
     ['3. ケースサイズ(D列)が登録されている商品は、結果をケースサイズの倍数に四捨五入(0.5ケース以上は切り上げ)。ただしアペックス・CS3の原料はケースに丸めず袋・個単位(2026-10-10〜)。'],
-    ['3-2. アペックスの発注書(支店ごと1通)では、さらに店舗ごとに「どれか1品は1ケース以上」にする(足りなければ、発注する品のうちコーヒー豆を1ケースに。発注する豆が無い店は発注する品のうちケースにいちばん近い品。在庫が基準値以上の品は上げない)。この調整はR列には出ません。トーヨーはBカートの記載単位(ケース)が最低ロット。'],
+    ['3-2. アペックスの発注書(支店ごと1通)では、さらに店舗ごとに「どれか1品は1ケース以上」にする(足りなければ、発注する品のうち消費の多い品＝基準値が1ケース以上の品を1ケースに。豆を優先。在庫が基準値以上の品・ココアなど消費の少ない品は上げない。上げられる品が無い店はその月は見送り、翌月にまとめる。月末在庫が基準値の半分未満の品があれば selfcafe001 にメールで知らせる)。この調整はR列には出ません。トーヨーはBカートの記載単位(ケース)が最低ロット。'],
     ['4. 例外: ケース丸め対象の商品で、丸めた結果が0ケースでも、丸める前の発注数が0より大きく、かつ期末在庫が実際に0(売り切れ)なら、最低1ケースは発注する(売り切れなのに発注数0と表示される事故を防ぐため)。'],
     ['5. 保管上限(ケース数)が商品マスタに設定されている商品は、期末在庫+発注数がその上限を超えないよう発注数をさらに抑える(冷凍庫スペース対策等)。保管上限は数式内に値として埋め込まれ、シート上には列として表示されません。'],
     ['6. ケースサイズが無い商品は、四捨五入(0.5未満切り捨て・0.5以上切り上げ)で整数にする(例: 渋谷神南の抹茶ラテ)。'],
@@ -4821,7 +4821,7 @@ const APEX_REORDER_RECIPIENTS = {
 //
 // 数量のルール（2026-10-09 塩川さん）:
 //   ・アペックス・CS3: 袋・個単位（ケースに丸めない）。ただし店舗ごとに、どれか1品は1ケース以上にする
-//     （アペックスの最低発注条件。全部の合計ではなく1品で1ケース）。満たさないときは発注する品のうちコーヒー豆を1ケースにする（発注する豆が無い店は発注する品のうちケースにいちばん近い品。在庫が足りている品は上げない、2026-10-18）
+//     （アペックスの最低発注条件。全部の合計ではなく1品で1ケース）。満たさないときは発注する品のうち消費の多い品（基準値が1ケース以上）を1ケースにする（豆を優先。在庫が足りている品・消費の少ない品は上げない。上げられる品が無い店はその月は見送り、2026-10-18）
 //   ・トーヨー（JCC）: 従来どおりケース単位（Bカートの記載単位が最低発注ロット）
 function _settingJson_(key, fallback) {
   const e = getSettings().find(s => s.key === key);
@@ -4842,15 +4842,25 @@ function _applyReorderRounding_(raw) {
     // どの品も1ケースに届かないときは、コーヒー豆を1ケースにする(2026-10-10 塩川さん: いちばん消費が早く、場所もとらないため)。
     // 豆が複数あれば、発注数が多い方(同じなら基準値が大きい方)。豆が無い店だけ、ケースにいちばん近い品を1ケースにする
     // 2026-10-18 塩川さん: 在庫が基準値以上で発注数0の品(Wロースト=基準値0 も含む)はケースに上げない(十分にある品は発注しない)。
-    // 候補は発注数が1以上の品だけ(apexOrdered)。発注する豆が無ければ、発注する品のうちケースにいちばん近い品
-    const beans = apexOrdered.filter(it => /ロースト|ブレンド|豆/.test(String(it.product)))
-      .sort((a, b) => (b.qty - a.qty) || (b.target - a.target));
-    const top = beans[0] || apexOrdered.reduce((a, b) => (b.qty / b.casePieces > a.qty / a.casePieces ? b : a));
-    top.qtyBefore = top.qty;
-    top.qty = Math.max(top.qty, top.casePieces);
-    top.bumped = true;
+    // さらに、ケースに上げてよいのは「消費の多い品」= 基準値(約35日分)が1ケース以上の品だけ(ココア・紅茶など
+    // 1ケースを使い切るのに1か月以上かかる品は上げない)。候補は発注数が1以上の品だけ(apexOrdered)
+    const big = apexOrdered.filter(it => Number(it.target) >= it.casePieces);
+    if (big.length) {
+      const beans = big.filter(it => /ロースト|ブレンド|豆/.test(String(it.product)))
+        .sort((a, b) => (b.qty - a.qty) || (b.target - a.target));
+      const top = beans[0] || big.reduce((a, b) => (b.qty / b.casePieces > a.qty / a.casePieces ? b : a));
+      top.qtyBefore = top.qty;
+      top.qty = Math.max(top.qty, top.casePieces);
+      top.bumped = true;
+    } else {
+      // 上げられる品が無い店は、その月はアペックスの品を発注しない(翌月、消費の多い品が1ケースになるときに合わせて頼む。
+      // 2026-10-18 塩川さん「A」)。月末在庫が基準値の半分未満の品は「次の発注まで持たないかも」として知らせる(risk)
+      apexOrdered.forEach(it => { it.held = true; it.risk = Number(it.endStock) < Number(it.target) / 2; });
+    }
   }
-  return all.filter(it => it.qty > 0);
+  const out = all.filter(it => it.qty > 0 && !it.held);
+  out.held = all.filter(it => it.held);
+  return out;
 }
 
 // ===== トーヨー（JCC）店舗の月初発注（2026-10-10） =====
@@ -5035,7 +5045,8 @@ function _storeReorderItems_(storeId, periodLabel) {
     raw.push({ code, product: r[idx.product], target: Number(targets[code]), endStock: Number(endStock),
       vendor: info.vendor || '', casePieces: info.casePieces || null, stockCapCases: info.stockCapCases || null });
   }
-  return { submitted, items: _applyReorderRounding_(raw) };
+  const items = _applyReorderRounding_(raw);
+  return { submitted, items, held: items.held || [] };
 }
 
 // 発注数は単位を必ず明記する(数字だけだとケース注文の商品で先方がケース数と読み、何十倍も
@@ -5651,14 +5662,17 @@ function buildBranchReorder(branchKey, periodLabel, dryRun) {
   const names = _storeNames_();
   const perStore = {};
   const missing = [];
+  const held = {};   // 1ケースにできる品が無く、今月は見送った店 {店名: [品…]}（2026-10-18〜）
   Object.keys(b.stores || {}).forEach(sid => {
     const r = _storeReorderItems_(sid, periodLabel);
     if (!r.submitted) { missing.push(names[sid] || sid); return; }
     if (r.items.length) perStore[sid] = r.items;
+    if (r.held && r.held.length) held[names[sid] || sid] = r.held.map(it => ({ product: it.product, qty: it.qty, endStock: it.endStock, target: it.target, risk: !!it.risk }));
   });
   const periodJa = _periodLabelJa_(periodLabel);
   const subject = `${mail.subject || '発注依頼'}（${b.label}支店 ${periodJa}分）`;
-  const summary = { branch: b.label, subject, ordered: Object.keys(perStore).map(s => names[s] || s), notSubmitted: missing };
+  const summary = { branch: b.label, subject, ordered: Object.keys(perStore).map(s => names[s] || s), notSubmitted: missing, held };
+  if (!dryRun) { try { _notifyHeldReorder_(b.label, periodJa, held); } catch (e) { console.error('_notifyHeldReorder_ error:', e.message); } }
   if (dryRun) {
     const detail = {};
     Object.keys(perStore).forEach(s => {
@@ -5746,6 +5760,29 @@ function buildBranchReorder(branchKey, periodLabel, dryRun) {
   } finally {
     lock.releaseLock();
   }
+}
+
+// 月初発注で見送った店のうち、月末在庫が基準値の半分未満の品（次の発注まで持たないかもしれない品）がある店を、
+// selfcafe001 自身あてのメールで知らせる（2026-10-18 塩川さん「A」: 見送り、在庫切れが心配なときだけ知らせて手で判断）。
+// 棚卸が出るたびに支店の発注書を作り直すので、同じ内容は1回だけ送る（スクリプト プロパティに控え）
+function _notifyHeldReorder_(branchLabel, periodJa, held) {
+  const risky = Object.keys(held).filter(st => held[st].some(it => it.risk));
+  if (!risky.length) return;
+  const lines = [`${branchLabel}支店の月初発注（${periodJa}分）で、1ケースにできる品が無いため今月は見送った店のうち、`,
+    '月末在庫が基準値の半分を切っている品がある店です。次の発注まで持つか確認し、必要なら都度発注してください。', ''];
+  risky.forEach(st => {
+    lines.push('■ ' + st);
+    held[st].forEach(it => lines.push(`  ${it.risk ? '⚠ ' : '・'}${it.product}  月末在庫 ${it.endStock} / 基準値 ${it.target}（不足 ${it.qty}）`));
+    lines.push('');
+  });
+  lines.push('（ほかの見送った店は在庫に余裕があるため、翌月にまとめて発注します）');
+  const body = lines.join('\n');
+  const props = PropertiesService.getScriptProperties();
+  const key = 'HELD_NOTIFIED_' + Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, branchLabel + periodJa)).slice(0, 16);
+  const digest = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, body));
+  if (props.getProperty(key) === digest) return;
+  GmailApp.sendEmail(APEX_SENDER, `【確認】月初発注で見送った店（${branchLabel}支店 ${periodJa}分）`, body, { name: 'セルフカフェ社内ポータル' });
+  props.setProperty(key, digest);
 }
 
 // ===== アペックス宛ての下書きは selfcafe001@gmail.com から（2026-10-15 塩川さん） =====
