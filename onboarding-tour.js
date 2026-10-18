@@ -612,7 +612,7 @@
     },
     {
       key: 'order', title: '発注依頼', desc: '商品を選んで依頼する／届いたら納品済み', minutes: 15,
-      available: () => getStoreRegion(STORE) === 'fc' ? 'FC店は使いません' : true,
+      available: () => true,
       prepare: async () => {
         goPartnerHome(); await sleep(200);
         switchPartnerTab('order'); switchOrderSubTab('request');

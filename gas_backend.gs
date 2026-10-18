@@ -5214,7 +5214,7 @@ function sendAmazonOrderToBot_(storeId, items, toyo) {
   if (!url || !apiKey) { console.warn('Amazon通知: GBP_PHOTO_BOT_URL / GBP_PHOTO_BOT_API_KEY が未設定のため送りません'); return; }
   items = items.map(it => Object.assign({}, it, { url: it.url ? _amazonUrl_(it.url) : '' }));   // 短縮URLの展開は通信があるのでロックの外で
   const res = UrlFetchApp.fetch(url, { method: 'post', contentType: 'application/json', muteHttpExceptions: true,
-    payload: JSON.stringify({ action: 'amazonOrder', apiKey, storeId, store: _storeNames_()[storeId] || storeId, items, toyo: toyo || null }) });
+    payload: JSON.stringify({ action: 'amazonOrder', apiKey, storeId, store: (_storeNames_()[storeId] || storeId) + (_isFcStore_(storeId) ? '（FC）' : ''), items, toyo: toyo || null }) });
   let out = {};
   try { out = JSON.parse(res.getContentText()); } catch (e) {}
   if (!out.ok) throw new Error('Amazon通知の送信失敗 ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 200));

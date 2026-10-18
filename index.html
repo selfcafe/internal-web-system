@@ -4327,15 +4327,12 @@ function updatePartnerMachinePhotoTabVisibility() {
   if (!enabled && checksheetActiveCategory === 'album') checksheetActiveCategory = 'daily_count';
 }
 
-// FC店舗は自社で仕入れを行うため、セルフカフェ側の発注依頼・履歴機能は不要という運用判断により
-// 「発注」タブ自体を非表示にする(2026-08-24、ユーザー要望)。個別店舗ごとのON/OFFではなく
-// FC区分そのものに対する一律の挙動のため、machine_photo_disabled_stores等のような
-// 設定リストは使わずgetStoreRegion()で直接判定する
+// 2026-08-24〜10-17はFC店の「発注」タブを隠していた(FCは自社で仕入れる前提)。2026-10-18から
+// FC店も直営と同じく発注依頼を出し、本部がアペックスへ発注する(FC店への請求はアペックスの請求書と
+// 卸値で本部が作る。卸値はポータルに持たせない)ので、全店で出す
 function updatePartnerOrderTabVisibility() {
-  const isFc = getStoreRegion(storeTab) === 'fc';
   const btn = document.getElementById('ptab-order');
-  if (btn) btn.style.display = isFc ? 'none' : '';
-  if (isFc && partnerTabCurrent === 'order') switchPartnerTab('checklist');
+  if (btn) btn.style.display = '';
 }
 
 // 押し忘れ対策（非ブロック版）: ログイン（セッション復元含む、showPage('store')が呼ばれた時点）で
@@ -7063,10 +7060,9 @@ function switchRegion(r) {
   renderAdmin();
 }
 
-// FC店舗は発注機能自体を使わないため、発注依頼一覧・履歴ではFCの地域タブを表示しない
-// (2026-08-24、ユーザー要望。機械内写真・忘れ物一覧では引き続き表示する)
+// 2026-08-24〜10-17は発注依頼一覧・履歴でFCの地域タブを隠していた。FC店も発注依頼を出すようになったので出す(2026-10-18)
 function _fcTabHiddenForView_(v) {
-  return v === 'overview' || v === 'history';
+  return false;
 }
 
 function switchAdminView(v) {
@@ -7213,12 +7209,12 @@ function showAnnounceDetail(id) {
 }
 
 // パートナー画面のホーム(2026-10-13、ロゴ・ホームボタン): ログイン直後と同じ状態に戻す。
-// 業務連絡の一覧/詳細を閉じ、最初のタブ(FC店舗は発注タブが無いのでチェックシート)を開いて先頭へ。
+// 業務連絡の一覧/詳細を閉じ、最初のタブ(発注)を開いて先頭へ。
 // チェックシートから離れる時の未保存分の自動保存はswitchPartnerTab側で行われる
 function goPartnerHome() {
   document.querySelectorAll('.doc-menu-dd').forEach(dd => dd.classList.remove('open'));
   announceGoHome();
-  switchPartnerTab(getStoreRegion(storeTab) === 'fc' ? 'checklist' : 'order');
+  switchPartnerTab('order');
   window.scrollTo(0, 0);
 }
 function announceGoHome() {

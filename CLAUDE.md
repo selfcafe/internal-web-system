@@ -299,6 +299,7 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 - **表示店舗の設定**: 除外リスト方式(`store_checksheet_cfg`/`store_product_cfg`)。複数店舗の変更は1回の読み込み・1回の同期にまとめる。
 
 ### 発注・納品
+- **FC店の発注依頼(2026-10-18〜)**: FC店も直営と同じく発注依頼を出し(ポータルかLINE)、本部がアペックスへ発注する。発注タブ・管理画面の発注依頼一覧/履歴のFCタブを出す(以前は隠していた)。選べる品は直営と同じ(店舗別取扱商品)。FC店への請求書・支払通知書はアペックスの請求書を見て本部が作るので、**卸値はポータルに持たせない**(卸値は4.塩川「FC卸値表」、selfcafe-automation の`scripts/fc_prices.py`)。Botへの通知はFC店の店名に「(FC)」を付ける(`sendAmazonOrderToBot_`)。
 - **ケース換算**:
   - 実際数量の単位の既定値は`effectiveActualUnitMode`に一本化している。独自の判定を書くと、ケース単位の商品がバラで確定する事故が再発する。
   - 「納品済み」ボタンは`_markDeliveredInProgress`で二重送信を防いでいる。
