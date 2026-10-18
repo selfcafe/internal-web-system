@@ -5602,9 +5602,17 @@ function buildAmazonList(periodLabel) {
 // 棚卸完了(index.htmlの_submitInventoryInner)からbuildStoreInventorySheetと同じタイミングで呼ばれる(2026-08-23〜)。
 // 基準値(reorder_targets)が無い店舗、送付先(支店・APEX_REORDER_RECIPIENTS)が無い店舗では何もしない。
 // トーヨー(JCC)の店舗は buildToyoReorder（Bカート用の発注メモ下書き、2026-10-10〜）
+// 管理画面「店舗別設定 › 運用方式」がフルオペ(メーカー管理＝ドリンクはフル委託)の店は、月初発注で原料・カップを頼まない
+// (2026-10-18 塩川さん: 運用方式を選び直すだけで発注の対象が切り替わるように)。水・お菓子(Amazon)はこれまでどおり
+function _storeIsFullOp_(storeId) {
+  const t = _settingJson_('store_operation_type', {});
+  return !!t && t[storeId] === 'full';
+}
+
 function processMonthlyReorder(storeId, periodLabel) {
   // 水・お菓子の Amazon の買い物リストも同じタイミングで作り直す(失敗しても発注書づくりは止めない)
   try { buildAmazonList(periodLabel); } catch (e) { console.error('buildAmazonList error:', e.message); }
+  if (_storeIsFullOp_(storeId)) return { ok: true, skipped: 'full_operation' };
   const branches = _settingJson_('reorder_branches', {});
   const branchKey = Object.keys(branches).find(k => branches[k].stores && Object.prototype.hasOwnProperty.call(branches[k].stores, storeId));
   if (branchKey) return buildBranchReorder(branchKey, periodLabel, false);
@@ -5664,6 +5672,7 @@ function buildBranchReorder(branchKey, periodLabel, dryRun) {
   const missing = [];
   const held = {};   // 1ケースにできる品が無く、今月は見送った店 {店名: [品…]}（2026-10-18〜）
   Object.keys(b.stores || {}).forEach(sid => {
+    if (_storeIsFullOp_(sid)) return;   // フルオペ(メーカー管理)の店は発注書に入れない
     const r = _storeReorderItems_(sid, periodLabel);
     if (!r.submitted) { missing.push(names[sid] || sid); return; }
     if (r.items.length) perStore[sid] = r.items;
