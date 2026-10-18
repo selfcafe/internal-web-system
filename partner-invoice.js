@@ -1,7 +1,8 @@
 // パートナー請求書の画面（2026-10-17〜）。index.html の「業務管理」タブにある「請求書」ボタンから開く。
 // サーバー側は gas_backend.gs の「パートナー請求書」ブロック（action: invoiceLogin / invoiceSaveProfile /
 // invoiceGetMonth / invoiceSubmit）。金額はサーバーで計算し直すので、ここでの計算は表示用。
-// 口座・住所は画面に持たない（サーバーは伏せ字で返す。直すときは入れ直してもらう）。
+// 住所・電話は画面に持たない（サーバーは伏せ字で返す。直すときは入れ直してもらう）。
+// 口座は登録しない運用（2026-10-18）なので、入力欄を出さずサーバーにも送らない。
 (function () {
   'use strict';
 
@@ -70,7 +71,7 @@
   }
   function showProfile(first) {
     var p = S.payee;
-    var keepNote = first ? '' : '<div style="font-size:12px;color:#b45309;margin-top:4px">住所・電話・口座番号は伏せて表示しています。<b>空欄のままなら変わりません。</b></div>';
+    var keepNote = first ? '' : '<div style="font-size:12px;color:#b45309;margin-top:4px">住所・電話は伏せて表示しています。<b>空欄のままなら変わりません。</b></div>';
     body('<div style="background:white;border-radius:10px;padding:16px">'
       + '<div style="font-weight:700;margin-bottom:4px">' + (first ? '最初に、請求書に載せる情報を登録してください' : '請求先の情報を直す') + '</div>'
       + '<div style="font-size:12px;color:#555;line-height:1.6">業者コード ' + esc(p.biz_code || '（本部で設定）') + '。ここで登録した内容は毎月の請求書に自動で入ります。本部とご本人だけが使います。</div>' + keepNote
@@ -79,12 +80,9 @@
       + '<div id="pinv-reg-wrap">' + field('registration_no', '登録番号（T と13桁の数字）', { ph: 'T1234567890123' }) + '</div>'
       + field('address', '住所（マンション名・部屋番号まで）', { keep: !first, ph: first ? '' : p.address })
       + field('tel', '電話番号（日中つながる番号）', { keep: !first, ph: first ? '090-0000-0000' : p.tel, mode: 'tel' })
-      + field('bank_name', '金融機関名', { ph: '◯◯銀行' }) + field('bank_code', '銀行コード（4桁）', { mode: 'numeric', ph: '0005' })
-      + field('branch_name', '支店名', { ph: '◯◯支店' }) + field('branch_code', '支店コード（3桁）', { mode: 'numeric', ph: '123' })
-      + '<label style="display:block;font-size:12px;color:#555;margin:10px 0 4px">口座種別</label>'
-      + '<select id="pinv-f-account_type" style="' + INPUT + '"><option value="普"' + (p.account_type !== '当' ? ' selected' : '') + '>普通</option><option value="当"' + (p.account_type === '当' ? ' selected' : '') + '>当座</option></select>'
-      + field('account_no', '口座番号', { keep: !first, ph: first ? '' : p.account_no, mode: 'numeric' })
-      + field('account_kana', '口座名義（カタカナ）', { ph: 'ヤマダ タロウ' })
+      // 口座は欄だけ設けて、実際の番号は登録しない運用（2026-10-18。ハッキング等の対策）。入力欄は出さない
+      + '<label style="display:block;font-size:12px;color:#555;margin:10px 0 4px">振込先の口座</label>'
+      + '<div style="font-size:12px;color:#555;background:#f3f4f6;border-radius:6px;padding:8px 10px;line-height:1.6">口座番号などはこの画面では登録しません（安全のため）。振込先は本部で管理しています。変わったときは本部に直接お知らせください。</div>'
       + '<div id="pinv-prof-msg" style="font-size:13px;min-height:18px;margin-top:10px"></div>'
       + '<button id="pinv-prof-btn" onclick="pinvSaveProfile(' + (first ? 'true' : 'false') + ')" style="' + BTN + 'width:100%;background:#22703d;color:white;padding:12px;font-size:15px;margin-top:6px">登録する</button>'
       + (first ? '' : '<button onclick="pinvBackToMonth()" style="' + BTN + 'width:100%;background:#e5e7eb;color:#333;padding:10px;font-size:14px;margin-top:8px">戻る</button>')
@@ -93,7 +91,7 @@
   }
   window.pinvTax = function () { var c = $('pinv-f-tax_exempt'), w = $('pinv-reg-wrap'); if (c && w) w.style.display = c.checked ? 'none' : ''; };
   window.pinvSaveProfile = async function (first) {
-    var keys = ['name', 'registration_no', 'address', 'tel', 'bank_name', 'bank_code', 'branch_name', 'branch_code', 'account_type', 'account_no', 'account_kana'];
+    var keys = ['name', 'registration_no', 'address', 'tel'];
     var prof = {};
     keys.forEach(function (k) { var el = $('pinv-f-' + k); var v = el ? el.value.trim() : ''; if (v !== '' || first) prof[k] = v; });
     prof.tax_exempt = $('pinv-f-tax_exempt').checked;
@@ -127,8 +125,7 @@
     S.period = period; S.files = {};
     var p = S.payee;
     body('<div style="background:white;border-radius:10px;padding:12px 14px;margin-bottom:12px;font-size:13px;line-height:1.7">'
-      + '<b>' + esc(p.name) + '</b>（業者コード ' + esc(p.biz_code) + '）<br>'
-      + esc(p.bank_name) + ' ' + esc(p.branch_name) + ' ' + (p.account_type === '当' ? '当座' : '普通') + ' ' + esc(p.account_no)
+      + '<b>' + esc(p.name) + '</b>（業者コード ' + esc(p.biz_code) + '）'
       + ' <a href="#" onclick="pinvEditProfile();return false" style="color:#22703d;margin-left:6px">登録内容を直す</a></div>'
       + '<select id="pinv-period" onchange="pinvChangePeriod(this.value)" style="' + INPUT + 'margin-bottom:12px;font-weight:700">'
       + S.periods.map(function (x) { return '<option value="' + x + '"' + (x === period ? ' selected' : '') + '>' + monthLabel(x) + '</option>'; }).join('') + '</select>'

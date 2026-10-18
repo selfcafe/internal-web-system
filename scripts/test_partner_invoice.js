@@ -152,10 +152,11 @@ function runPartnerInvoiceTests() {
   check('提出できる月: 1月なら前年12・11・10月', invoiceAllowedPeriods_(new Date(2027, 0, 5)), ['2026-12', '2026-11', '2026-10']);
   check('初回登録: 正しい内容は誤りなし', invoiceValidateProfile_(payee), []);
   check('初回登録: 免税なら登録番号は空', invoiceValidateProfile_(Object.assign({}, payee, { tax_exempt: true, registration_no: '' })), []);
-  check('初回登録: 誤りを全部返す', invoiceValidateProfile_({ name: '', address: 'x', tel: '12', registration_no: 'T123', bank_name: 'b', bank_code: '12', branch_name: 'c', branch_code: '1234', account_type: '', account_no: 'abc', account_kana: 'yamada' }), [
-    '社名（お名前）を入れてください', '電話番号を正しく入れてください', '登録番号は T と13桁の数字で入れてください（無い場合は「課税事業者ではない」にチェック）',
-    '銀行コードは4桁の数字で入れてください', '支店コードは3桁の数字で入れてください', '口座種別（普通・当座）を選んでください',
-    '口座番号は8桁までの数字で入れてください', '口座名義はカタカナで入れてください']);
+  check('初回登録: 誤りを全部返す（口座は登録しない運用なので確かめない）', invoiceValidateProfile_({ name: '', address: 'x', tel: '12', registration_no: 'T123', bank_name: '', account_no: 'abc' }), [
+    '社名（お名前）を入れてください', '電話番号を正しく入れてください', '登録番号は T と13桁の数字で入れてください（無い場合は「課税事業者ではない」にチェック）']);
+  check('初回登録: 口座が空でも登録できる', invoiceValidateProfile_(Object.assign({}, payee, { bank_name: '', bank_code: '', branch_name: '', branch_code: '', account_type: '', account_no: '', account_kana: '' })), []);
+  var cb = {}; invoiceSheetCells_(Object.assign({}, payee, { account_no: '', account_type: '' }), '2026-09', [], 1, 1, 0, []).forEach(function (c) { cb[c[0]] = c[1]; });
+  check('PDF: 口座が空なら口座欄（普・番号）も空', [cb.L17, cb.M17, cb.N13], ['', '', 'テスト銀行']);
   var m = invoiceMaskPayee_(Object.assign({}, payee, { address: '名古屋市テスト区1-2-3', account_no: '1234567', tel: '090-1234-5678' }));
   check('伏せ字: 口座・電話・住所は一部だけ', [m.account_no, m.tel, m.address, m.profile_complete], ['＊＊＊＊567', '＊＊＊＊5678', '名古屋市テス…', true]);
 

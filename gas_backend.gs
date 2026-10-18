@@ -8383,8 +8383,11 @@ const INVOICE_ROWS_PER_PAGE = 20;   // 明細は 21〜40 行目の 20 行。超�
 const INVOICE_FIRST_ITEM_ROW = 21;
 const INVOICE_LAST_ROW = 41;        // 合計の行。これより下と U 列より右は消して 1 ページに収める
 const INVOICE_LAST_COL = 21;        // U 列
-// 請求先（個人・会社）。口座・住所はここだけに置く（getSettings では返さない）。
-// pin_hash は請求書の画面を開くときの暗証番号（SHA-256、後続で使う）。
+// 請求先（個人・会社）。住所・電話はここだけに置く（getSettings では返さない）。
+// pin_hash は請求書の画面を開くときの暗証番号（SHA-256）。
+// 口座の列（bank_name〜account_kana）は欄だけ設けて、実際の値は登録しない（2026-10-18 ユーザー方針。ハッキング等の対策）。
+// 画面からは受け付けず、保存のたびに空にする。請求書 PDF の口座欄も空になる（振込先は本部が別に管理）。
+const INVOICE_BANK_COLS = ['bank_name','bank_code','branch_name','branch_code','account_type','account_no','account_kana'];
 const SHEET_INVOICE_PAYEES = 'invoice_payees';
 const INVOICE_PAYEE_COLS = ['id','type','biz_code','name','pin_hash','registration_no','tax_exempt','address','tel',
   'bank_name','bank_code','branch_name','branch_code','account_type','account_no','account_kana','updated_at'];
@@ -8429,7 +8432,7 @@ function invoiceSheetCells_(payee, period, pageLines, pageNo, pageCount, total, 
     ['L9', String(payee.address || '')], ['L10', String(payee.tel || '')],
     ['N13', String(payee.bank_name || '')], ['L14', payee.bank_code ? '（' + payee.bank_code + '）' : ''],
     ['N15', String(payee.branch_name || '')], ['L16', payee.branch_code ? '（' + payee.branch_code + '）' : ''],
-    ['L17', String(payee.account_type || '普')], ['M17', String(payee.account_no || '')], ['M18', String(payee.account_kana || '')],
+    ['L17', payee.account_no ? String(payee.account_type || '普') : ''], ['M17', String(payee.account_no || '')], ['M18', String(payee.account_kana || '')],
     ['C11', total],
   ];
   // 店舗名の欄：1 店なら「セルフカフェ◯◯店」、2 店以上なら「セルフカフェ　N店舗」
@@ -8608,7 +8611,7 @@ function invoiceAllowedPeriods_(now) {
 
 function _invoiceTruthy_(v) { return v === true || String(v).toLowerCase() === 'true'; }
 
-// 画面に返す請求先の情報。口座番号・住所・電話は伏せる（全部は PDF を作るときにサーバーの中でだけ使う）
+// 画面に返す請求先の情報。住所・電話は伏せる（全部は PDF を作るときにサーバーの中でだけ使う）。口座は登録しない運用なので空
 function invoiceMaskPayee_(p) {
   const tail = (s, n) => { s = String(s || ''); return s ? '＊＊＊＊' + s.slice(-n) : ''; };
   const head = (s, n) => { s = String(s || ''); return s ? s.slice(0, n) + (s.length > n ? '…' : '') : ''; };
@@ -8631,13 +8634,7 @@ function invoiceValidateProfile_(p) {
   if (!/^[0-9０-９\-－ー]{10,13}$/.test(s('tel'))) e.push('電話番号を正しく入れてください');
   if (_invoiceTruthy_(p.tax_exempt)) { if (s('registration_no')) e.push('「課税事業者ではない」のときは登録番号を空にしてください'); }
   else if (!/^T\d{13}$/.test(s('registration_no'))) e.push('登録番号は T と13桁の数字で入れてください（無い場合は「課税事業者ではない」にチェック）');
-  if (!s('bank_name')) e.push('金融機関名を入れてください');
-  if (!/^\d{4}$/.test(s('bank_code'))) e.push('銀行コードは4桁の数字で入れてください');
-  if (!s('branch_name')) e.push('支店名を入れてください');
-  if (!/^\d{3}$/.test(s('branch_code'))) e.push('支店コードは3桁の数字で入れてください');
-  if (['普', '当'].indexOf(s('account_type')) < 0) e.push('口座種別（普通・当座）を選んでください');
-  if (!/^\d{1,8}$/.test(s('account_no'))) e.push('口座番号は8桁までの数字で入れてください');
-  if (!/^[ァ-ヶー゛゜（）()．.・\s　]+$/.test(s('account_kana'))) e.push('口座名義はカタカナで入れてください');
+  // 口座は登録しない運用（INVOICE_BANK_COLS 参照）なので確かめない
   return e;
 }
 
@@ -8664,9 +8661,10 @@ function invoiceLogin_(pin) {
 
 function invoiceSaveProfile_(token, prof) {
   const p = _invoicePayeeByToken_(token);
-  const keys = ['name', 'registration_no', 'tax_exempt', 'address', 'tel', 'bank_name', 'bank_code', 'branch_name', 'branch_code', 'account_type', 'account_no', 'account_kana'];
+  const keys = ['name', 'registration_no', 'tax_exempt', 'address', 'tel']; // 口座は受け付けない
   const next = Object.assign({}, p);
   keys.forEach(k => { if (prof && prof[k] != null) next[k] = typeof prof[k] === 'string' ? prof[k].trim() : prof[k]; });
+  INVOICE_BANK_COLS.forEach(k => { next[k] = ''; }); // 登録されていたら消す
   next.tax_exempt = _invoiceTruthy_(next.tax_exempt);
   next.tel = String(next.tel || '').replace(/[０-９]/g, c => String.fromCharCode(c.charCodeAt(0) - 0xFEE0)).replace(/[－ー]/g, '-');
   const errors = invoiceValidateProfile_(next);

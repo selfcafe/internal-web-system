@@ -1,7 +1,7 @@
 // パートナー請求書の管理画面（2026-10-17〜）。管理者ポータルの「業務管理」にある「パートナー請求書」カードから開く。
 // サーバー側は gas_backend.gs の「パートナー請求書: 管理者の窓口」（action: invoiceAdmin*）。
 // 管理者ポータルのログインとは別に、請求書管理のパスワード（サーバーで照合）が要る。
-// 口座・住所は画面に出さない（見るときは請求書のスプレッドシートを直接開く）。
+// 住所・電話は画面に出さない（見るときは請求書のスプレッドシートを直接開く）。口座は登録しない運用（2026-10-18）。
 (function () {
   'use strict';
 
@@ -184,7 +184,7 @@
       + '<select id="ainv-p-type" style="' + INPUT + '"><option value="individual"' + (p.type !== 'company' ? ' selected' : '') + '>個人</option><option value="company"' + (p.type === 'company' ? ' selected' : '') + '>会社</option></select>'
       + '<input id="ainv-p-name" placeholder="名前（社名）" value="' + esc(p.name) + '" style="' + INPUT + 'flex:1;min-width:180px">'
       + '<input id="ainv-p-biz" placeholder="業者コード（8桁）" inputmode="numeric" value="' + esc(p.biz_code) + '" style="' + INPUT + 'width:160px"></div>'
-      + '<div style="font-size:11px;color:#666;margin-top:6px">住所・口座などは本人が最初に開いたときに登録します。</div>'
+      + '<div style="font-size:11px;color:#666;margin-top:6px">住所・電話・登録番号は本人が最初に開いたときに登録します（口座は登録しない運用です）。</div>'
       + '<div id="ainv-p-msg" style="font-size:13px;min-height:18px;margin-top:6px"></div>'
       + '<button onclick="ainvSavePayee(\'' + esc(id || '') + '\')" style="' + BTN + 'background:#22703d;color:white;padding:7px 14px;font-size:13px">保存</button> '
       + '<button onclick="ainvCloseForm()" style="' + BTN + 'background:#e5e7eb;color:#333;padding:7px 14px;font-size:13px">やめる</button></div>';
