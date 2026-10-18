@@ -2813,6 +2813,17 @@ async function _submitInventoryInner() {
     alert(`${unexplainedAnomalies.join('／')} の消費量に異常があります。確認画面で理由を入力してから送信してください。`);
     return false;
   }
+  // 月末在庫が空欄の品が残っていたら送らない(2026-10-18 塩川さん)。空欄は月初発注の計算から外れ、本当は0の品が
+  // 発注されなくなるため。在庫が無い品は 0 を入れてもらう
+  const blankProducts = allProducts
+    .filter(p => computeInventoryConfirmInfo(p, period, periodData).endStock === '')
+    .map(p => p.label || p.name);
+  if (blankProducts.length) {
+    const shown = blankProducts.slice(0, 10).join('、') + (blankProducts.length > 10 ? ` ほか${blankProducts.length - 10}品` : '');
+    alert(`入力していない品があります（${shown}）。
+在庫が無い品は 0 を入れてください。`);
+    return false;
+  }
   const rows = allProducts.map(p => {
     const { openStock, delivery, endStock, consumption, disposedQty, tracked, dailyCount, mismatch } = computeInventoryConfirmInfo(p, period, periodData);
     const anomaly = computeInventoryAnomaly(p, period, periodData);
