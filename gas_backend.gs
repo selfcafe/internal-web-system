@@ -1587,7 +1587,10 @@ function getSettingHistory(key, limit) {
   const n = Number(limit) > 0 ? Number(limit) : 20;
   return data.slice(1)
     .filter(r => String(r[ki]) === String(key))
-    .map(r => ({ timestamp: _dateTimeStr(r[ti]), key: r[ki], old_value: r[vi] }))
+    // 長い値は_logSettingHistoryがold_valueの右の列(見出しなし)へ45,000文字ずつ分けて書いている。
+    // old_value列だけを返していたため、2026-10-10以降の長い設定(store_product_cfg等)の履歴が
+    // 途中で切れてJSONとして読めなかった。右の列までつないで返す
+    .map(r => ({ timestamp: _dateTimeStr(r[ti]), key: r[ki], old_value: r.slice(vi).map(v => (v === null || v === undefined) ? '' : String(v)).join('') }))
     .reverse()
     .slice(0, n);
 }
