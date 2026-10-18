@@ -5092,6 +5092,7 @@ function _withAmazonOrderNotify_(result, storeId, rows) {
       (r.is_new === true || String(r.is_new) === 'TRUE') && !(r.denied === true || String(r.denied) === 'TRUE'))
       .map(r => ({ id: String(r.id), label: String(r.label || r.product), qty: r.qty,
         unit: r.unit_mode === 'case' || (meta[r.product] || {}).caseOnly ? 'ケース' : String(r.unit || ''), url: urls[r.product] || '',
+        vendor: (meta[r.product] || {}).vendor || '',
         // 「その他」は中身が備考欄に書かれるので、通知にも備考を載せる（2026-10-17 塩川さん。例: その他 ×1（パイプユニッシュ））
         note: r.product === 'その他' ? String(r.note || '').trim() : '' }));
     // 「その他」の備考から Amazon のボタンを作る（2026-10-17）: 商品一覧の品に当たればその商品ページ、当たらなければ Amazon の検索画面
@@ -5501,10 +5502,10 @@ function _apexDraftForOrderRows_(storeId, rows) {
     const bk = Object.keys(branches).find(k => branches[k].stores && Object.prototype.hasOwnProperty.call(branches[k].stores, storeId));
     if (!bk) return '【アペックス】この店は支店の発注書に登録されていないため、発注メールは作っていません';
     const spec = storeId + ':' + apexRows.map(r => (meta[r.product].code || r.product) + '=' + r.qty + (r.unit_mode === 'case' ? 'ケース' : '')).join(',');
-    const out = buildAdhocApexOrder(bk, spec, false, { source: 'アペックス 追加発注（Bot）', rowsBySid: { [storeId]: apexRows } });
+    const out = buildAdhocApexOrder(bk, spec, false, { source: 'アペックス 追加発注（Bot）', rowsBySid: { [storeId]: apexRows }, pending: true });
     if (!out || !out.ok) return '【アペックス】発注メールの下書きを作れませんでした（' + ((out && (out.error + ' ' + (out.details || []).join(' '))) || '不明') + '）。PC から作り直してください';
     return '【アペックス】' + out.branch + '支店の発注メールの下書きを作りました（' + out.lines.map(l => l.split('　').slice(1, 3).join(' ')).join('・') +
-      '、税抜' + Number(out.total).toLocaleString() + '円）。Gmail の下書きを確認して送ってください' + (out.warnings.length ? '。注意: ' + out.warnings.join(' / ') : '');
+      '、税抜' + Number(out.total).toLocaleString() + '円）。Gmail の下書きを確認して送り、通知の［アペックス 発注した］を押してください' + (out.warnings.length ? '。注意: ' + out.warnings.join(' / ') : '');
   } catch (e) {
     console.error('_apexDraftForOrderRows_ error:', e.message);
     return '【アペックス】発注メールの下書きを作れませんでした（' + e.message + '）。PC から作り直してください';
@@ -5858,6 +5859,8 @@ function _pingOrdersUpdated_(by) {
 // items: [{product, label, qty（袋・本・個）, unit, unitPrice, portalCode, sheetCode, vendor, id?}]
 // opts.groupId: まとめる単位（月初の支店まとめは支店×月で固定にして、作り直しで行が増えないようにする）
 // opts.rows: すでにある依頼の行（Bot から登録した行）。渡したときは新しい行を作らず、その行を発注済みにする
+// opts.pending: 発注済みにしない（新着・発注日なしのまま。Bot の［発注した］で markAmazonOrdered が発注済みにする。
+//   2026-10-18 塩川さん: 下書きのメールを送り忘れると発注漏れになるため、Amazon と同じく押して完了にする）
 function _registerOrderedRows_(storeId, items, source, documentName, opts) {
   opts = opts || {};
   const today = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd');
@@ -5872,8 +5875,8 @@ function _registerOrderedRows_(storeId, items, source, documentName, opts) {
     const row = Object.assign({}, base || {}, {
       id: (base && base.id) || it.id || Utilities.getUuid(), store_id: storeId, group_id: (base && base.group_id) || groupId,
       product: it.product, label: it.label || it.product, qty: Number(it.qty), actual_qty: '', unit: it.unit || '',
-      case_unit: '', unit_mode: 'piece', note: base && base.note ? base.note + '／' + tag : tag, locked: true, is_new: false,
-      request_date: (base && base.request_date) || today, order_date: today, delivery_date: '', created_at: (base && base.created_at) || now,
+      case_unit: '', unit_mode: 'piece', note: base && base.note ? base.note + '／' + tag : tag, locked: true, is_new: !!opts.pending,
+      request_date: (base && base.request_date) || today, order_date: opts.pending ? '' : today, delivery_date: '', created_at: (base && base.created_at) || now,
       denied: false, image_url: (base && base.image_url) || '', actual_unit_mode: '' });
     rows.push(row);
     lines.push({ id: row.id, order_date: today, vendor: it.vendor || '', source: source, product: it.product, portal_code: it.portalCode || '',
@@ -6053,7 +6056,7 @@ function buildAdhocApexOrder(branchKey, spec, dryRun, opts) {
   Object.keys(regs).forEach(sid => {
     try {
       registered[names[sid] || sid] = _registerApexSheetItems_(sid, regs[sid], (opts && opts.source) || 'アペックス 追加発注', pdf.name,
-        { rows: opts && opts.rowsBySid ? opts.rowsBySid[sid] : null });
+        { rows: opts && opts.rowsBySid ? opts.rowsBySid[sid] : null, pending: !!(opts && opts.pending) });
     } catch (e) { registered[names[sid] || sid] = { error: e.message }; }
   });
   return Object.assign(result, { draft: 'created', sheetUrl: ss.getUrl(), title, pdf: pdf.name, pdfUrl: pdf.url, registered });
