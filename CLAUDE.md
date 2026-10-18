@@ -165,6 +165,13 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 - 管理者判定を「文章の内容」で行う方式もユーザーと検討したが、誰でも`完了 No.3`等でステータスを変えられてしまう(特にグループトーク化後)ため、**管理者方式(ユーザーID)のまま維持と確定**
 - テスト用投稿(No.2「(No.1)返信テスト」、No.3「テスト送信」)が残っている。テスト完了後に管理者ポータルから削除してよい
 
+### 6.1 バグ報告の自動調査(2026-10-18〜)
+- **流れ**: 新しい報告(ポータル・LINE WORKSとも`submitBugReport`)→ `_dispatchNotifies_`の`bugReportNew`(`isNew`付きのときだけ)→ `dispatchBugTriage_`が GitHub に`repository_dispatch`(`bug-report`、`client_payload.no`)を送る → `.github/workflows/bug-report-triage.yml` が①未対応なら「受け付けました。内容を確認して調査しています」と返信して対応中にする(ユーザー了承済み)②Claude(claude-code-action、指示は`.github/bug-triage-prompt.md`)が調査して`triage-report.md`を書く③コードを直していれば`bugfix/report-N`ブランチに置く(本番には出さない)④結果を`notifyOwnerBugTriage`で**塩川さん(塩川用Bot)だけ**に送る。
+- **承認後の作業は人が行う**: 本番の設定の書き換え・デプロイ・最終返信・完了への変更は、塩川さんの承認を受けてから Claude Code のセッション(または管理画面)で行う。自動ではしない。
+- **本番データは読むだけ**: Claude は`scripts/portal_read.py`(読み取り用の GET action だけを呼ぶ。パスワード類・口座情報・単価・担当者のパスワードを出力から消す)しか使えない(`--allowedTools`で Bash をこれだけに絞っている)。リポジトリが公開で Actions のログも公開なので、報告の中身や本番データをログに出さない。
+- **必要な設定**: GitHub Secrets `ANTHROPIC_API_KEY`(調査に使う。1件ごとに利用料がかかる)・`PORTAL_SCRIPT_KEY`(既存)。GAS のスクリプト プロパティ `GITHUB_DISPATCH_TOKEN`(selfcafe/internal-web-system の Contents: Read and write を持つ fine-grained トークン)。どちらかが無いと自動調査は動かないが、報告の受け付け・通知は今まで通り。
+- **手で再実行**: `gh workflow run bug-report-triage.yml --repo selfcafe/internal-web-system -f no=8`(すでに対応中・完了なら受け付けの返信は送らない)。
+
 **将来構想(未実装)**: 完成後、Botを「バグ報告」グループトーク(報告者と管理者が同じグループ)へ移す予定。その場合も管理者判定はユーザーID方式(`_isBugReportAdmin_`)のまま使える。未確認事項: グループ内の全メッセージがBotに届くか、コールバックにchannelIdがどう入るか、グループ宛ての送信API。グループでは全発言が報告として登録される点(お礼等)の扱いも要検討。
 
 **過去の事故**: 2026-09-15、このBotのコードだけgit未コミットのままclaspで直接本番投入していたため、翌々日のGitHub Actions経由デプロイ(gas_backend.gsの内容でclasp push)で本番から消えた。以後、この種のBotコードは必ず`gas_backend.gs`にコミットしてからデプロイすること(`createBugReportBotJWT_`直上のコメント参照)。

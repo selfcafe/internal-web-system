@@ -1,0 +1,114 @@
+name: bug report triage
+
+# バグ報告・修正依頼が届いたら、Claude に原因を調べさせて結果を塩川さん(塩川用Bot)へ送る(2026-10-18)。
+# 起動: GAS の submitBugReport → _dispatchNotifies_ → dispatchBugTriage_ が repository_dispatch(bug-report)を送る。
+#       手で再実行するときは workflow_dispatch で報告No.を入れる。
+# 自動でするのは「受け付けました」の返信・対応中への変更・調査・修正コードを bugfix/report-N に置くことまで。
+# 本番の設定の書き換え・デプロイ・最終返信・完了への変更は、塩川さんの承認後に人(または Claude Code のセッション)が行う。
+# リポジトリは公開で Actions のログも誰でも見られるため、報告の中身や本番データをログに出さないこと
+# (Claude の出力は claude-code-action の既定どおりログに出さず、本番データは scripts/portal_read.py でパスワード類を消して読む)。
+on:
+  repository_dispatch:
+    types: [bug-report]
+  workflow_dispatch:
+    inputs:
+      no:
+        description: "バグ報告のNo."
+        required: true
+
+permissions:
+  contents: write
+
+concurrency:
+  group: bug-triage-${{ github.event.client_payload.no || inputs.no }}
+  cancel-in-progress: false
+
+jobs:
+  triage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      NO: ${{ github.event.client_payload.no || inputs.no }}
+      PORTAL_SCRIPT_KEY: ${{ secrets.PORTAL_SCRIPT_KEY }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check report number
+        run: |
+          case "$NO" in ''|*[!0-9]*) echo "::error::報告No.が数字ではありません"; exit 1;; esac
+
+      # LINE WORKS からの報告は文字と画像が別々に届き、3分以内なら同じ報告にまとめられる。画像が付くのを少し待つ
+      - name: Wait for attachments
+        if: github.event_name == 'repository_dispatch'
+        run: sleep 60
+
+      - name: Acknowledge (受け付けました・対応中)
+        run: |
+          status=$(python3 scripts/portal_read.py get getBugReports | python3 -c "import json,sys; no=sys.argv[1]; print(next((r.get('status','') for r in json.load(sys.stdin) if str(r.get('no'))==no), ''))" "$NO")
+          if [ "$status" = "未対応" ]; then
+            python3 scripts/bugreport.py reply "$NO" "ご報告ありがとうございます。受け付けました。内容を確認して調査しています。対応が済みましたら、こちらでお知らせします。" > /dev/null
+            python3 scripts/bugreport.py status "$NO" 対応中 > /dev/null
+            echo "受け付けの返信を送り、対応中にしました"
+          else
+            echo "ステータスが「${status:-不明}」のため、受け付けの返信は送りません"
+          fi
+
+      - name: Build prompt
+        id: prompt
+        run: |
+          {
+            echo 'text<<PROMPT_EOF'
+            sed "s/{{NO}}/$NO/g" .github/bug-triage-prompt.md
+            echo 'PROMPT_EOF'
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Investigate with Claude
+        uses: anthropics/claude-code-action@v1
+        continue-on-error: true
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          prompt: ${{ steps.prompt.outputs.text }}
+          claude_args: >-
+            --model claude-opus-5-5
+            --max-turns 80
+            --allowedTools "Read,Grep,Glob,Edit,Write,Bash(python3 scripts/portal_read.py:*)"
+
+      - name: Put code fixes on a branch
+        id: branch
+        run: |
+          if [ -n "$(git status --porcelain -- . ':!triage-report.md')" ]; then
+            b="bugfix/report-$NO"
+            git config user.name "bug-triage-bot"
+            git config user.email "bug-triage-bot@users.noreply.github.com"
+            git checkout -b "$b"
+            git add -A -- . ':!triage-report.md'
+            git commit -q -m "バグ報告No.$NO の修正案(自動調査、未デプロイ)"
+            git push -q -f origin "$b"
+            echo "url=${{ github.server_url }}/${{ github.repository }}/compare/main...$b" >> "$GITHUB_OUTPUT"
+            echo "修正案を $b に置きました"
+          fi
+
+      - name: Send result to 塩川
+        if: always()
+        env:
+          BRANCH_URL: ${{ steps.branch.outputs.url }}
+        run: |
+          python3 - <<'PY'
+          import json, os, urllib.request
+          no = os.environ['NO']
+          try:
+              text = open('triage-report.md', encoding='utf-8').read().strip()
+          except FileNotFoundError:
+              text = f'【バグ報告No.{no} 調査結果】\n自動調査が最後まで終わりませんでした。手で確認してください。'
+          if os.environ.get('BRANCH_URL'):
+              text += '\n\n修正案の差分: ' + os.environ['BRANCH_URL']
+          text += '\n調査の記録: ' + os.environ['RUN_URL']
+          body = json.dumps({'action': 'notifyOwnerBugTriage', 'text': text[:1900],
+                             'scriptKey': os.environ.get('PORTAL_SCRIPT_KEY', '')}).encode('utf-8')
+          req = urllib.request.Request('https://script.google.com/macros/s/AKfycbzoqu607sj-rpYulIiDwnuyGSCTzoblzSqaq37cb5k5KiGsK7sisZew9sSRSBoYBSwo_A/exec',
+                                       data=body, headers={'Content-Type': 'text/plain'})
+          with urllib.request.urlopen(req, timeout=60) as r:
+              out = json.loads(r.read().decode('utf-8'))
+          print('送信結果:', 'ok' if out.get('ok') else out.get('error'))
+          PY

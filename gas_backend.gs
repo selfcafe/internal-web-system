@@ -847,6 +847,8 @@ function doPost(e) {
     else if (b.action === 'submitBugReport')      result = submitBugReport(b.storeId, b.kind, b.content, b.posterType, b.posterName, b.imagesBase64, b.imageMime);
     else if (b.action === 'addBugReportComment')  result = addBugReportComment(b.issueId, b.posterType, b.posterName, b.storeId, b.text);
     else if (b.action === 'updateBugReportStatus') result = updateBugReportStatus(b.issueId, b.newStatus, b.adminName);
+    // 拒否を有効にする前(AUTH_ENFORCE≠1)でも、塩川さんへの通知を誰でも送れないよう、ここで鍵・管理者を確かめる
+    else if (b.action === 'notifyOwnerBugTriage') result = (b.__auth && (b.__auth.r === 'script' || b.__auth.r === 'admin')) ? notifyOwnerBugTriage(b.text) : { error: 'スクリプトの鍵が必要です' };
     else if (b.action === 'deleteBugReport')      result = deleteBugReport(b.issueId);
     else if (b.action === 'saveAnnouncement')   result = saveAnnouncement(b.id, b.title, b.body, b.publishDate, b.scope, b.status, b.adminName);
     else if (b.action === 'deleteAnnouncement') result = deleteAnnouncement(b.id);
@@ -902,6 +904,7 @@ function _dispatchNotifies_(result) {
       else if (n.type === 'bugReportNew') {
         _bugReportAdminUserIds_().forEach(uid => sendBugReportBotNotification_(n.message, uid));
         sendBugReportToOwnerBot_(n.message);
+        if (n.isNew && n.no) dispatchBugTriage_(n.no);
       }
       else if (n.type === 'bugReportLineWorksAck') sendBugReportBotNotification_(n.message, n.userId);
       else if (n.type === 'amazonOrderNew')        sendAmazonOrderToBot_(n.storeId, n.items, n.toyo);
@@ -1823,7 +1826,8 @@ function submitBugReport(storeId, kind, content, posterType, posterName, imagesB
     ok: true, id, no,
     // (No.n)を含めるのは、管理者がLINE WORKSから返信する際に「n 返信本文」の形で
     // 報告番号を指定できるようにするため(2026-09-24追加、handleLineWorksBugReportAdminReply_参照)
-    _notify: { type: 'bugReportNew', message: '【新規' + kindLabel + '】(No.' + no + ')' + storeLabel + '\n' + content }
+    // isNew/no は自動調査(dispatchBugTriage_)を起動するため。追記(addBugReportComment)の通知には付けない
+    _notify: { type: 'bugReportNew', isNew: true, no, message: '【新規' + kindLabel + '】(No.' + no + ')' + storeLabel + '\n' + content }
   };
 }
 
@@ -5206,6 +5210,27 @@ function sendBugReportToOwnerBot_(message) {
   let out = {};
   try { out = JSON.parse(res.getContentText()); } catch (e) {}
   if (!out.ok) console.warn('バグ報告の塩川用Bot通知が受け取られませんでした(Bot側が未対応の可能性) ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 120));
+}
+
+// バグ報告の自動調査(2026-10-18): 新しい報告が届いたら GitHub Actions(.github/workflows/bug-report-triage.yml)を
+// repository_dispatch で起動する。Actions が「受け付けました」の返信・対応中への変更・Claude による調査を行い、
+// 結果を notifyOwnerBugTriage で塩川用Botへ送る。スクリプト プロパティ GITHUB_DISPATCH_TOKEN(このリポジトリの
+// Contents に書き込める fine-grained トークン)が無ければ起動しない(報告の受け付け・通知は今まで通り)
+function dispatchBugTriage_(no) {
+  const token = PropertiesService.getScriptProperties().getProperty('GITHUB_DISPATCH_TOKEN');
+  if (!token) { console.warn('バグ報告の自動調査: GITHUB_DISPATCH_TOKEN が未設定のため起動しません'); return; }
+  const res = UrlFetchApp.fetch('https://api.github.com/repos/selfcafe/internal-web-system/dispatches', {
+    method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+    headers: { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json' },
+    payload: JSON.stringify({ event_type: 'bug-report', client_payload: { no: String(no) } })
+  });
+  if (res.getResponseCode() !== 204) console.warn('バグ報告の自動調査の起動に失敗 ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 200));
+}
+// 自動調査の結果を塩川用Botへ送る(Actions からスクリプトの鍵付きで呼ぶ。管理者・スクリプト以外は doPost で断る)
+function notifyOwnerBugTriage(text) {
+  if (!text) return { error: '本文がありません' };
+  sendBugReportToOwnerBot_(String(text).slice(0, 2000));
+  return { ok: true };
 }
 
 function sendAmazonOrderToBot_(storeId, items, toyo) {
