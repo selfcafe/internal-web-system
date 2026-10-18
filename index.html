@@ -5383,7 +5383,23 @@ async function submitBugReportFromAdmin() {
   }
 }
 
+// 管理画面の「バグ報告」タブにも、エリアのタブと同じ赤丸の件数(未対応の数)を出す。
+// 枠(badge-bugreport)だけあって数を入れる処理が無く、新着があっても気づけなかった(2026-10-18)
+function _updateBugReportBadge() {
+  const n = adminBugReports.filter(i => (i.status || '未対応') === '未対応').length;
+  const b = document.getElementById('badge-bugreport');
+  if (b) { b.textContent = n; b.style.display = n > 0 ? '' : 'none'; }
+}
+// 管理画面を開いたときに一覧を読んで件数だけ出す(タブを開いたときは従来どおり読み直す)
+async function refreshBugReportBadge() {
+  try { adminBugReports = _asList(await gasGet('getBugReports', {})); }
+  catch (e) { console.error('getBugReports error:', e); return; }
+  _updateBugReportBadge();
+  if (adminView === 'bugreport') renderBugReportAdminBody();
+}
+
 function renderBugReportAdminBody() {
+  _updateBugReportBadge();
   const container = document.getElementById('settings-container');
   if (!container || adminView !== 'bugreport') return;
   const f = adminBugReportFilters;
@@ -6406,7 +6422,7 @@ async function showPage(p) {
   document.getElementById('page-store').classList.toggle('active', p==='store');
   document.getElementById('page-admin').classList.toggle('active', p==='admin');
   if (p==='store') { renderStore(); maybeShowAttendanceReminder(); }
-  if (p==='admin') renderAdmin();
+  if (p==='admin') { renderAdmin(); refreshBugReportBadge(); }
   updateBadges();
 }
 window.addEventListener('hashchange', () => showPage(location.hash==='#admin' ? 'admin' : 'store'));
