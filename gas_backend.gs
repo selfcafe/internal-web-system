@@ -771,7 +771,7 @@ function doGet(e) {
     return json(result);
   } catch(err) {
     try {
-      sendStockBotNotification_('【システムエラー】doGet action=' + (e.parameter && e.parameter.action || '不明') + '\n' + err.message);
+      sendSystemErrorToOwner_('【システムエラー】doGet action=' + (e.parameter && e.parameter.action || '不明') + '\n' + err.message);
     } catch (notifyErr) {
       console.error('システムエラー通知失敗:', notifyErr.message);
     }
@@ -866,14 +866,14 @@ function doPost(e) {
   } finally {
     lock.releaseLock();
   }
-  // 実行時例外はここで既にresult.errorに入っている。開発者が気付けるよう佐藤テストBotへ
-  // 1:1で即時通知する（2026-08-09、忘れ物画像保存がDrive API未有効化で失敗した際に誰も
+  // 実行時例外はここで既にresult.errorに入っている。開発者が気付けるよう即時通知する
+  // (2026-10-19から送り先は塩川用Bot、sendSystemErrorToOwner_参照)。2026-08-09、忘れ物画像保存がDrive API未有効化で失敗した際に誰も
   // 気付けなかったことを受けて追加。ロック解放後に送るので保存処理自体の速度には影響しない）。
   // 「Unknown action」（クライアント側のtypo等、例外ではない通常のエラー応答）はノイズになる
   // だけなので対象外——exceptionCaught_で実際にcatchされた場合のみに絞る
   if (result && result.error && exceptionCaught_) {
     try {
-      sendStockBotNotification_('【システムエラー】doPost action=' + (actionForErrorNotify_ || '不明') + '\n' + result.error);
+      sendSystemErrorToOwner_('【システムエラー】doPost action=' + (actionForErrorNotify_ || '不明') + '\n' + result.error);
     } catch (notifyErr) {
       console.error('システムエラー通知失敗:', notifyErr.message);
     }
@@ -902,7 +902,10 @@ function _dispatchNotifies_(result) {
       else if (n.type === 'stockInquiryReply')     sendStockBotNotification_(n.message, n.userId);
       // 管理者向け(新規報告・追記)は登録済みの管理者全員へ送る(2026-09-25、管理者の複数人化に合わせて変更)
       else if (n.type === 'bugReportNew') {
-        _bugReportAdminUserIds_().forEach(uid => sendBugReportBotNotification_(n.message, uid));
+        // 2026-10-19: 佐藤さん(LW_USER_ID_BUGREPORT)には送らない。塩川さんが塩川用Botで受けて管理するため。
+        // 管理者の判定(_isBugReportAdmin_)からは外していないので、佐藤さんのLINE WORKSからの返信・ステータス変更は今まで通りできる
+        const _satoId = PropertiesService.getScriptProperties().getProperty('LW_USER_ID_BUGREPORT');
+        _bugReportAdminUserIds_().filter(uid => uid !== _satoId).forEach(uid => sendBugReportBotNotification_(n.message, uid));
         sendBugReportToOwnerBot_(n.message);
         if (n.isNew && n.no) dispatchBugTriage_(n.no);
       }
@@ -5225,6 +5228,17 @@ function dispatchBugTriage_(no) {
     payload: JSON.stringify({ event_type: 'bug-report', client_payload: { no: String(no) } })
   });
   if (res.getResponseCode() !== 204) console.warn('バグ報告の自動調査の起動に失敗 ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 200));
+}
+// doGet/doPost の【システムエラー】通知(2026-10-19〜): 佐藤テストBotではなく塩川用Botへ送る(管理を塩川さんに移したため)。
+// Bot側の窓口はバグ報告と同じ action 'bugReport'(文字だけ送れる窓口がこれしか無いため)。
+// 同じ文面は10分に1回だけ送る(2026-10-18 17:14、同時呼び出し上限で同じエラーが1秒に10件出て、10件とも送ろうとした)。
+function sendSystemErrorToOwner_(message) {
+  const cache = CacheService.getScriptCache();
+  const dedupKey = 'syserr_' + Utilities.base64EncodeWebSafe(
+    Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, message, Utilities.Charset.UTF_8));
+  if (cache.get(dedupKey)) return;
+  cache.put(dedupKey, '1', 600);
+  sendBugReportToOwnerBot_(message);
 }
 // 自動調査の結果を塩川用Botへ送る(Actions からスクリプトの鍵付きで呼ぶ。管理者・スクリプト以外は doPost で断る)
 function notifyOwnerBugTriage(text) {
