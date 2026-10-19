@@ -68,6 +68,9 @@ jobs:
         continue-on-error: true
         with:
           anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          # 渡さないと Claude の GitHub アプリ用の OIDC トークンを取りに行って失敗する(id-token 権限が無いため)。
+          # Claude は git の push もしない(ブランチは後の手順で作る)ので、ワークフロー標準のトークンで足りる
+          github_token: ${{ github.token }}
           prompt: ${{ steps.prompt.outputs.text }}
           claude_args: >-
             --model claude-opus-5-5
