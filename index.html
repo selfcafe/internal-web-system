@@ -5446,10 +5446,12 @@ async function submitBugReportFromAdmin() {
   }
 }
 
-// 管理画面の「バグ報告」タブにも、エリアのタブと同じ赤丸の件数(未対応の数)を出す。
-// 枠(badge-bugreport)だけあって数を入れる処理が無く、新着があっても気づけなかった(2026-10-18)
+// 管理画面の「バグ報告」タブにも、エリアのタブと同じ赤丸の件数(完了していない数)を出す。
+// 枠(badge-bugreport)だけあって数を入れる処理が無く、新着があっても気づけなかった(2026-10-18)。
+// 自動調査(bug-report-triage.yml)が届いた直後に「対応中」へ変えるので、未対応だけを数えると
+// いつも0件になる。未対応・対応中の両方(=完了以外)を数える(2026-10-19)
 function _updateBugReportBadge() {
-  const n = adminBugReports.filter(i => (i.status || '未対応') === '未対応').length;
+  const n = adminBugReports.filter(i => (i.status || '未対応') !== '完了').length;
   const b = document.getElementById('badge-bugreport');
   if (b) { b.textContent = n; b.style.display = n > 0 ? '' : 'none'; }
 }
