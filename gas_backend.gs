@@ -119,6 +119,10 @@ const INVENTORY_COLS = ['period_label','store_id','code','product','open_stock',
 const INVENTORY_HEADERS_JA = ['期間','店舗ID','商品コード','商品名','期首在庫','当月納品','期末在庫','消費量','処分数量','単価','期末在庫額','備考','更新日時','異常メモ','デイリーカウント','一致','店舗区分'];
 // 出勤打刻ログ。1回の打刻で1行追加（append-onlyのログシート、ordersのような全件削除→再送信はしない）
 const ATTENDANCE_COLS = ['id','store_id','name','clocked_at','lat','lng','within_range'];
+// 店から300mより離れた打刻のLINE WORKS通知(【GPS要確認】)。2026-10-19、全店で業務開始をONにし店の位置を
+// 住所から入れ直したのに合わせて、11月中旬にまとめて見直すまで止めている(打刻自体は今まで通り記録され、
+// 管理画面「業務管理 › 業務開始履歴」の「店から離れた打刻だけ」で一覧できる)。再開はtrueに戻してデプロイ
+const ATTENDANCE_GPS_NOTIFY_ENABLED = false;
 // 基準座標からこの距離(m)以内なら出勤OKと判定する（全店舗共通の固定値、2026-07-15確定）
 const ATTENDANCE_THRESHOLD_M = 300;
 // 休み申請ログ。1回の申請で1行追加（append-only、承認ステップなしで即時確定）
@@ -2625,7 +2629,7 @@ function saveAttendance(storeId, name, lat, lng) {
   // 通知の送信はここでは行わず、_notifyに要否だけ載せてdoPostへ返す（doPostがLockService解放後に送信する。
   // 通知はシートの読み書きと競合しない独立した処理なので、他店舗の書き込みをブロックする理由が無い）
   const result = { ok: true, withinRange, updated: updatedExisting };
-  if (withinRange === false) result._notify = { type: 'attendanceGpsIssue', storeId, name };
+  if (withinRange === false && ATTENDANCE_GPS_NOTIFY_ENABLED) result._notify = { type: 'attendanceGpsIssue', storeId, name };
   return result;
 }
 

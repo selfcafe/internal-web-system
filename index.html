@@ -9170,6 +9170,7 @@ function renderAttendanceAdmin() {
               ${Object.entries(STORES).map(([sid,sname]) => `<option value="${esc(sid)}">${esc(storeLabel(sid))}</option>`).join('')}
             </select>
             <button onclick="renderAttendanceAdminHistory(true)" style="background:#22703d;color:white;padding:7px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">更新</button>
+            <label style="font-size:12.5px;display:flex;align-items:center;gap:4px;cursor:pointer"><input type="checkbox" id="attendance-admin-offsite-only" onchange="renderAttendanceAdminHistory()">店から離れた打刻（要確認）だけ</label>
           </div>
           <div id="attendance-admin-history-wrap"><div style="color:#aaa;font-size:13px;padding:10px 0">「更新」を押して読み込んでください</div></div>
         </div>
@@ -10271,11 +10272,23 @@ async function renderAttendanceAdminHistory() {
   let rows = [];
   try { rows = await gasGet('getAttendance', sel.value ? { storeId: sel.value } : {}); }
   catch(e) { console.error('getAttendance error:', e); }
+  // 店から離れた打刻(要確認)だけを見る(2026-10-19、11月中旬に店の位置を見直すため。距離は今の店の位置から計算)
+  const offsiteOnly = !!document.getElementById('attendance-admin-offsite-only')?.checked;
+  if (offsiteOnly) rows = rows.filter(r => r.within_range === false);
   if (!rows.length) {
-    wrap.innerHTML = '<div style="color:#aaa;font-size:13px;padding:10px 0">記録がありません</div>';
+    wrap.innerHTML = `<div style="color:#aaa;font-size:13px;padding:10px 0">${offsiteOnly ? '店から離れた打刻はありません' : '記録がありません'}</div>`;
     return;
   }
-  wrap.innerHTML = `<div class="table-wrap"><table style="width:100%;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
+  const distLabel = r => {
+    const c = getAttendanceStoreCoords(r.store_id);
+    if (!c || r.lat == null || r.lat === '' || r.lng == null || r.lng === '') return '';
+    const rad = x => x * Math.PI / 180, R = 6371000;
+    const dLat = rad(r.lat - c.lat), dLng = rad(r.lng - c.lng);
+    const h = Math.sin(dLat / 2) ** 2 + Math.cos(rad(c.lat)) * Math.cos(rad(r.lat)) * Math.sin(dLng / 2) ** 2;
+    const m = 2 * R * Math.asin(Math.sqrt(h));
+    return `<div style="font-size:11px;color:#888">店から${m >= 1000 ? (m / 1000).toFixed(1) + 'km' : Math.round(m) + 'm'}</div>`;
+  };
+  wrap.innerHTML = `${offsiteOnly ? `<div style="font-size:12.5px;color:#b45309;margin-bottom:6px">店から離れた打刻：${rows.length}件</div>` : ''}<div class="table-wrap"><table style="width:100%;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
     <thead><tr style="background:#22703d;color:white">
       <th style="padding:6px 10px;font-size:12px">日時</th><th style="padding:6px 10px;font-size:12px">店舗</th>
       <th style="padding:6px 10px;font-size:12px">名前</th><th style="padding:6px 10px;font-size:12px">判定</th>
@@ -10286,7 +10299,7 @@ async function renderAttendanceAdminHistory() {
         <td style="padding:6px 10px;font-size:13px;color:#22703d;font-weight:600">${esc(storeLabel(r.store_id))}</td>
         <td style="padding:6px 10px;font-size:13px">${esc(r.name || '')}</td>
         <td style="padding:6px 10px;font-size:13px;text-align:center">${r.within_range === false
-          ? `<span style="color:#dc2626">要確認</span>${r.lat != null && r.lng != null ? ` <a href="https://www.google.com/maps?q=${esc(r.lat)},${esc(r.lng)}" target="_blank" rel="noopener" style="font-size:11px">📍地図</a>` : ''}`
+          ? `<span style="color:#dc2626">要確認</span>${r.lat != null && r.lng != null ? ` <a href="https://www.google.com/maps?q=${esc(r.lat)},${esc(r.lng)}" target="_blank" rel="noopener" style="font-size:11px">📍地図</a>` : ''}${distLabel(r)}`
           : (r.within_range === true ? '<span style="color:#22703d">✓</span>' : '<span style="color:#aaa">未判定</span>')}</td>
       </tr>`).join('')}
     </tbody></table></div>`;
