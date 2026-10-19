@@ -767,6 +767,9 @@ function doGet(e) {
     else if (a === 'getLeaveRequests')          result = getLeaveRequests(e.parameter.storeId);
     else if (a === 'getAttendanceTabData')      result = getAttendanceTabData(e.parameter.storeId);
     else if (a === 'getOnboardingProgress')     result = getOnboardingProgress(e.parameter.name);
+    else if (a === 'syncOnboardingTrackSheet')  result = syncOnboardingTrackSheet();
+    else if (a === 'setOnboardingTrackSheet')   result = setOnboardingTrackSheet(e.parameter.id);
+    else if (a === 'deleteOnboardingProgress')  result = deleteOnboardingProgress(e.parameter.name);
     else if (a === 'getDeliveryHistory')        result = getDeliveryHistory(e.parameter.storeId, e.parameter.month);
     else if (a === 'getMachinePhotoStatus')     result = getMachinePhotoStatus();
     else if (a === 'getMachinePhotoHistory')    result = getMachinePhotoHistory(e.parameter.storeId);
@@ -2745,6 +2748,84 @@ function getOnboardingProgress(name) {
   let rows = sheetRows(sheet, ONBOARDING_COLS).map(r => Object.assign(r, { completed_at: _dateTimeStr(r.completed_at) }));
   if (name) rows = rows.filter(r => String(r.name).trim() === String(name).trim());
   return rows;
+}
+
+// 受講記録を人ごとに消す(試しに入れた名前の片付け用、管理者/スクリプト)。nameが空なら何もしない
+function deleteOnboardingProgress(name) {
+  name = String(name || '').trim();
+  if (!name) return { error: 'nameは必須です' };
+  const sheet = getSheet(SHEET_ONBOARDING);
+  if (sheet.getLastRow() <= 1) return { ok: true, deleted: 0 };
+  const data = sheet.getDataRange().getValues();
+  const ni = data[0].map(String).indexOf('name');
+  let deleted = 0;
+  for (let i = data.length - 1; i >= 1; i--) {
+    if (String(data[i][ni]).trim() === name) { sheet.deleteRow(i + 1); deleted++; }
+  }
+  return { ok: true, deleted };
+}
+
+// 試験運用の管理表(Googleスプレッドシート、2026-10-19)の「ガイダンス」の列を受講記録から書き直す。
+// 表のIDは Script Properties ONBOARDING_TRACK_SHEET_ID(setOnboardingTrackSheet で設定。公開リポジトリなのでコードに書かない)。
+// 見出しの行(「店舗」「ガイダンスを受けた人」がある行)から下の店舗名で店を探し、
+// 「ガイダンスを受けた人」「全章を終えた人」「進み具合（いちばん進んだ人）」「最後に受けた日」だけを書く(他の列は人が入力する)。
+// 毎朝 sendDailyAttendanceCheck の最初に呼ぶ。?action=syncOnboardingTrackSheet でいつでも実行できる
+const ONB_CHAPTER_COUNT = 9;
+function setOnboardingTrackSheet(id) {
+  PropertiesService.getScriptProperties().setProperty('ONBOARDING_TRACK_SHEET_ID', String(id || '').trim());
+  return { ok: true };
+}
+function syncOnboardingTrackSheet() {
+  const id = PropertiesService.getScriptProperties().getProperty('ONBOARDING_TRACK_SHEET_ID');
+  if (!id) return { ok: false, skipped: 'ONBOARDING_TRACK_SHEET_ID が未設定' };
+  const sh = SpreadsheetApp.openById(id).getSheets()[0];
+  const data = sh.getDataRange().getValues();
+  const hdrRow = data.findIndex(r => r.map(String).indexOf('店舗') >= 0 && r.map(String).indexOf('ガイダンスを受けた人') >= 0);
+  if (hdrRow < 0) return { ok: false, error: '見出しの行が見つかりません' };
+  const h = data[hdrRow].map(String);
+  const col = { store: h.indexOf('店舗'), people: h.indexOf('ガイダンスを受けた人'), done: h.indexOf('全章を終えた人'),
+                prog: h.indexOf('進み具合（いちばん進んだ人）'), last: h.indexOf('最後に受けた日') };
+  // 店名 → 店舗ID(stores.js と、管理画面で足した店 custom_stores)
+  const nameToId = {};
+  const strip = n => String(n || '').trim().replace(/店$/, '');
+  Object.entries(_storeNames_()).forEach(([sid, nm]) => { nameToId[strip(nm)] = sid; });
+  const customRow = getSettings().find(r => r.key === 'custom_stores');
+  Object.entries(_jsonOr_(customRow ? customRow.value : '{}', {})).forEach(([sid, v]) => { if (v && v.name) nameToId[strip(v.name)] = sid; });
+  // 受講記録を店×人の章にまとめる
+  const byStore = {}, lastAt = {};
+  getOnboardingProgress().forEach(r => {
+    const sid = String(r.store_id || '');
+    ((byStore[sid] = byStore[sid] || {})[r.name] = byStore[sid][r.name] || {})[r.chapter] = true;
+    if (String(r.completed_at || '') > (lastAt[sid] || '')) lastAt[sid] = String(r.completed_at || '');
+  });
+  let updated = 0, unknown = [];
+  for (let i = hdrRow + 1; i < data.length; i++) {
+    const nm = strip(data[i][col.store]);
+    if (!nm) break;
+    const sid = nameToId[nm];
+    if (!sid) { unknown.push(nm); continue; }
+    const people = byStore[sid] || {};
+    const counts = Object.entries(people).map(([n, ch]) => [n, Object.keys(ch).length]);
+    const vals = {
+      people: counts.map(([n, c]) => n + '（' + c + '/' + ONB_CHAPTER_COUNT + '章）').join('、'),
+      done: counts.filter(([, c]) => c >= ONB_CHAPTER_COUNT).map(([n]) => n).join('、'),
+      prog: counts.length ? Math.max.apply(null, counts.map(([, c]) => c)) + ' / ' + ONB_CHAPTER_COUNT + '章' : '',
+      last: lastAt[sid] ? lastAt[sid].slice(0, 10).replace(/-/g, '/') : '',
+    };
+    Object.keys(vals).forEach(k => { if (col[k] >= 0) sh.getRange(i + 1, col[k] + 1).setNumberFormat('@').setValue(vals[k]); });
+    updated++;
+  }
+  // 説明の行の「○○時点」を最終更新の日時に書き換える
+  const note = 'ガイダンス」の列は社内ポータルの受講状況';
+  for (let i = 0; i < hdrRow; i++) {
+    const j = data[i].map(String).findIndex(v => v.indexOf(note) >= 0);
+    if (j >= 0) {
+      sh.getRange(i + 1, j + 1).setValue('「案内文」「送った日」「メモ」は手で入力。「ガイダンス」の列は社内ポータルの受講状況から毎朝自動で書き込みます（最終更新 '
+        + Utilities.formatDate(new Date(), _sheetTz(), 'yyyy/MM/dd HH:mm') + '）。');
+      break;
+    }
+  }
+  return { ok: true, updated, unknown };
 }
 
 function getAttendanceTabData(storeId) {
@@ -8455,6 +8536,8 @@ function computeAttendanceTargetDays_(schedule, now, leaveDatesSet) {
 }
 
 function sendDailyAttendanceCheck() {
+  // 試験運用の管理表(ガイダンスの受講状況)の毎朝の更新。失敗しても業務開始の確認は止めない
+  try { syncOnboardingTrackSheet(); } catch (e) { console.error('syncOnboardingTrackSheet error:', e.message); }
   const settings = getSettings();
   const settingVal = key => { const s = settings.find(x => x.key === key); return s ? s.value : null; };
   const enabledStores = JSON.parse(settingVal('attendance_enabled_stores') || '[]');
