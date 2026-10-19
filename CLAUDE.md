@@ -286,6 +286,7 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
   - アペックス/トーヨーはステラを通らないので、商品単位の売上原価率は出せない。
 
 ### チェックシート
+- **集計表(ドリンクマシンのメーター、2026-10-18〜)**: いまは単独ページ`meter.html`(ポータルからはリンクしない)。あとでポータルのタブとして移す前提で先に作った(ユーザー方針)。ログインはポータルと同じ`login`の通行証(sessionStorage `meter_auth`)。機械の表示は金種(売価)ごとの累計杯数で、その日に読んだ累計を入れると前回の記録との差で杯数、杯数×売価でメーター上の金額を出す(サブスク分も含むので実売上ではない。実売上の出し方は要検討)。使う店と機械・金種は設定`meter_config`({店舗ID:{machines:[{label,prices}]}}、外した店は null)で、管理者がこのページの「使う店の設定」でチェックを入れて紐づける。記録はメインDBの`meter_readings`(店舗×日付×機械×slot、`getMeterReadings`/`saveMeterReading`は店舗、`saveMeterReadingsBulk`は管理者/スクリプト)。スプレッドシートの台帳「集計表YY.M月」からの取り込みは selfcafe-automation の`scripts/portal_meter.py`。メーターの杯数＝売上シートの杯数＋サブスク(オフィス決済)杯数で合う(2026-10-18確認)。
 - **期間**: 暦月で、猶予期間は無い。`updateChecksheetField`は「今日」ではなく編集した`dayKey`から期間を決める。
 - **デイリーカウント対象**: 全店共通の1ルール(`_checksheetProductColumns`)。
   - apex/toyo/cs3は全商品、otherはペーパータオル・ストロー・トイレットペーパー、salesは水だけ。

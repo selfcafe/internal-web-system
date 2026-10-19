@@ -86,6 +86,11 @@ const LOST_COLS = ['id','store_id','found_date','note','image_url','added_at'];
 // 店舗によってマシン台数が異なり(1台〜複数台)、カテゴリごとに台数分の写真が必要なため、
 // 固定列ではなくphotos_json列に{カテゴリキー:[url,...]}のJSONで可変枚数を保持する
 const SHEET_MACHINE_PHOTOS = 'machine_photos';
+// 集計表(ドリンクマシンのメーター。2026-10-18〜)。機械の表示は「金種(売価)ごとの累計杯数」なので、
+// 店舗はその日に読んだ累計をそのまま入れ、杯数・金額は前回の記録との差で出す(画面側 _meterDaily)。
+// 1行 = 店舗×日付×機械×ボタン(slot)。どの機械にどの売価のボタンがあるかは設定 meter_config。
+const SHEET_METER = 'meter_readings';
+const METER_COLS = ['store_id', 'date', 'machine', 'slot', 'price', 'count', 'saved_at', 'note'];
 const MACHINE_PHOTO_COLS = ['id','store_id','machine_index','uploaded_at','photos_json'];
 // 発注を「納品済み」にした際のログ。1回の操作で1行追加（append-onlyのログシート、
 // ordersのような全件削除→再送信はしない。自動削除もしない——消えては困る記録のため）
@@ -432,7 +437,7 @@ const AUTH_STORE_ACTIONS = [
   'saveOrders', 'upsertOrders', 'saveChecksheetData', 'saveInventorySnapshot', 'recordInventoryDelivery',
   'checkWaterStockMismatch', 'saveAttendance', 'saveLeaveRequest', 'saveDeliveryHistory', 'clearDeliveryHistory',
   'saveMachinePhotoSet', 'submitBugReport', 'addBugReportComment', 'saveLostItem',
-  'recordInventoryTransfer', 'cancelInventoryTransfer',
+  'recordInventoryTransfer', 'cancelInventoryTransfer', 'getMeterReadings', 'saveMeterReading',
 ];
 // 店舗の通行証なら店舗を問わず呼べるもの(IDで指す削除・画像保存など。getOrdersは自分の範囲の行だけ返す)
 const AUTH_ANY_ACTIONS = ['getOrders', 'getSteraProductGroups', 'getBugReportThread', 'saveOrderImage',
@@ -761,6 +766,7 @@ function doGet(e) {
     else if (a === 'getDeliveryHistory')        result = getDeliveryHistory(e.parameter.storeId, e.parameter.month);
     else if (a === 'getMachinePhotoStatus')     result = getMachinePhotoStatus();
     else if (a === 'getMachinePhotoHistory')    result = getMachinePhotoHistory(e.parameter.storeId);
+    else if (a === 'getMeterReadings')          result = getMeterReadings(e.parameter.storeId);
     else if (a === 'migrateMachinePhotoColumns') result = migrateMachinePhotoColumns();
     else if (a === 'checkNewStoresFromMasterSheet') result = checkNewStoresFromMasterSheet();
     else if (a === 'setNewStoreCheckTrigger')   { setNewStoreCheckTrigger(); result = { ok: true }; }
@@ -844,6 +850,8 @@ function doPost(e) {
     else if (b.action === 'saveDeliveryHistory') result = saveDeliveryHistory(b.storeId, b.row);
     else if (b.action === 'clearDeliveryHistory') result = clearDeliveryHistory(b.storeId);
     else if (b.action === 'saveMachinePhotoSet') result = saveMachinePhotoSet(b.storeId, b.machineIndex, b.imagesByCategory, b.imageMime);
+    else if (b.action === 'saveMeterReading')   result = saveMeterReading(b.storeId, b.date, b.values, b.note);
+    else if (b.action === 'saveMeterReadingsBulk') result = saveMeterReadingsBulk(b.storeId, b.days);
     else if (b.action === 'submitBugReport')      result = submitBugReport(b.storeId, b.kind, b.content, b.posterType, b.posterName, b.imagesBase64, b.imageMime);
     else if (b.action === 'addBugReportComment')  result = addBugReportComment(b.issueId, b.posterType, b.posterName, b.storeId, b.text);
     else if (b.action === 'updateBugReportStatus') result = updateBugReportStatus(b.issueId, b.newStatus, b.adminName);
@@ -2306,6 +2314,58 @@ function getMachinePhotoStatus() {
 }
 
 // パートナー側「前回提出日」表示用：自店舗の過去アップロード履歴（マシンごとに新しい順で使う）
+// ===== 集計表(ドリンクマシンのメーター) =====
+// 店舗の全記録を日付順で返す(1年で 365日×ボタン数 行ほど。前月末の値が無いと月初の杯数が出せないので期間で絞らない)
+function getMeterReadings(storeId) {
+  return sheetRows(getSheet(SHEET_METER), METER_COLS)
+    .filter(r => String(r.store_id) === String(storeId))
+    .map(r => ({ date: _dateStr(r.date), machine: Number(r.machine), slot: Number(r.slot), price: Number(r.price),
+      count: (r.count === '' || r.count === null) ? null : Number(r.count), saved_at: r.saved_at ? String(r.saved_at) : '', note: r.note || '' }))
+    .sort((a, b) => String(a.date).localeCompare(String(b.date)) || a.machine - b.machine || a.slot - b.slot);
+}
+
+function _meterValidRows_(storeId, date, values, note, now) {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) throw new Error('日付の形が違います: ' + date);
+  return (values || []).filter(v => v && v.count !== '' && v.count !== null && v.count !== undefined).map(v => {
+    const n = Number(v.count);
+    if (!isFinite(n) || n < 0) throw new Error('数字が読めません: ' + v.count);
+    return [String(storeId), String(date), Number(v.machine) || 0, Number(v.slot) || 0, Number(v.price) || 0, n, now, String(note || '')];
+  });
+}
+
+// 店舗×日付の記録を置き換える(同じ日を入れ直したときは最後の値)。空欄のボタンは記録しない
+function _meterReplaceDays_(storeId, days) {
+  const sheet = getSheet(SHEET_METER);
+  ensureHeaders(sheet, METER_COLS);
+  const now = new Date().toISOString();
+  const newRows = [];
+  days.forEach(d => _meterValidRows_(storeId, d.date, d.values, d.note, now).forEach(r => newRows.push(r)));
+  const dates = days.map(d => String(d.date));
+  if (sheet.getLastRow() > 1) {
+    const data = sheet.getDataRange().getValues();
+    const h = data[0].map(String), si = h.indexOf('store_id'), di = h.indexOf('date');
+    for (let i = data.length - 1; i >= 1; i--) {
+      if (String(data[i][si]) === String(storeId) && dates.indexOf(String(_dateStr(data[i][di]))) >= 0) sheet.deleteRow(i + 1);
+    }
+  }
+  if (newRows.length) {
+    const start = sheet.getLastRow() + 1;
+    sheet.getRange(start, METER_COLS.indexOf('date') + 1, newRows.length, 1).setNumberFormat('@');
+    sheet.getRange(start, 1, newRows.length, METER_COLS.length).setValues(newRows);
+  }
+  return { ok: true, rows: newRows.length };
+}
+
+// 店舗の画面から1日分を保存する
+function saveMeterReading(storeId, date, values, note) {
+  return _meterReplaceDays_(storeId, [{ date, values, note }]);
+}
+
+// これまでのスプレッドシートの集計表から取り込む(管理者・スクリプトだけ。selfcafe-automation の scripts/portal_meter.py)
+function saveMeterReadingsBulk(storeId, days) {
+  return _meterReplaceDays_(storeId, days || []);
+}
+
 function getMachinePhotoHistory(storeId) {
   return _machinePhotosRowsCached_()
     .filter(r => String(r.store_id) === String(storeId))
