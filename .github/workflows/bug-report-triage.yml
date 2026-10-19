@@ -12,7 +12,7 @@ on:
     types: [bug-report]
   workflow_dispatch:
     inputs:
-      no:
+      report_no:
         description: "バグ報告のNo."
         required: true
 
@@ -20,7 +20,7 @@ permissions:
   contents: write
 
 concurrency:
-  group: bug-triage-${{ github.event.client_payload.no || inputs.no }}
+  group: bug-triage-${{ github.event.client_payload.no || inputs.report_no }}
   cancel-in-progress: false
 
 jobs:
@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      NO: ${{ github.event.client_payload.no || inputs.no }}
+      NO: ${{ github.event.client_payload.no || inputs.report_no }}
       PORTAL_SCRIPT_KEY: ${{ secrets.PORTAL_SCRIPT_KEY }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
     steps:

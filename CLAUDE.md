@@ -170,7 +170,7 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 - **承認後の作業は人が行う**: 本番の設定の書き換え・デプロイ・最終返信・完了への変更は、塩川さんの承認を受けてから Claude Code のセッション(または管理画面)で行う。自動ではしない。
 - **本番データは読むだけ**: Claude は`scripts/portal_read.py`(読み取り用の GET action だけを呼ぶ。パスワード類・口座情報・単価・担当者のパスワードを出力から消す)しか使えない(`--allowedTools`で Bash をこれだけに絞っている)。リポジトリが公開で Actions のログも公開なので、報告の中身や本番データをログに出さない。
 - **必要な設定**: GitHub Secrets `ANTHROPIC_API_KEY`(調査に使う。1件ごとに利用料がかかる)・`PORTAL_SCRIPT_KEY`(既存)。GAS のスクリプト プロパティ `GITHUB_DISPATCH_TOKEN`(selfcafe/internal-web-system の Contents: Read and write を持つ fine-grained トークン)。どちらかが無いと自動調査は動かないが、報告の受け付け・通知は今まで通り。
-- **手で再実行**: `gh workflow run bug-report-triage.yml --repo selfcafe/internal-web-system -f no=8`(すでに対応中・完了なら受け付けの返信は送らない)。
+- **手で再実行**: `gh workflow run bug-report-triage.yml --repo selfcafe/internal-web-system -f report_no=8`(すでに対応中・完了なら受け付けの返信は送らない)。
 
 **将来構想(未実装)**: 完成後、Botを「バグ報告」グループトーク(報告者と管理者が同じグループ)へ移す予定。その場合も管理者判定はユーザーID方式(`_isBugReportAdmin_`)のまま使える。未確認事項: グループ内の全メッセージがBotに届くか、コールバックにchannelIdがどう入るか、グループ宛ての送信API。グループでは全発言が報告として登録される点(お礼等)の扱いも要検討。
 
