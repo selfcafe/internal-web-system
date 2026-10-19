@@ -770,6 +770,7 @@ function doGet(e) {
     else if (a === 'syncOnboardingTrackSheet')  result = syncOnboardingTrackSheet();
     else if (a === 'setOnboardingTrackSheet')   result = setOnboardingTrackSheet(e.parameter.id);
     else if (a === 'deleteOnboardingProgress')  result = deleteOnboardingProgress(e.parameter.name);
+    else if (a === 'setOnboardingTrackOwners')  result = setOnboardingTrackOwners(e.parameter.owners);
     else if (a === 'getDeliveryHistory')        result = getDeliveryHistory(e.parameter.storeId, e.parameter.month);
     else if (a === 'getMachinePhotoStatus')     result = getMachinePhotoStatus();
     else if (a === 'getMachinePhotoHistory')    result = getMachinePhotoHistory(e.parameter.storeId);
@@ -2826,6 +2827,36 @@ function syncOnboardingTrackSheet() {
     }
   }
   return { ok: true, updated, unknown };
+}
+
+// 管理表の「担当者」の列に名前を書く(人が決める情報なので毎朝の自動更新では触らない)。列が無ければ「店舗」の右に足す。
+// owners は {店舗名(末尾の「店」は有っても無くても可): 担当者名} のJSON。空文字を渡すとその店の欄を空にする
+function setOnboardingTrackOwners(ownersJson) {
+  const id = PropertiesService.getScriptProperties().getProperty('ONBOARDING_TRACK_SHEET_ID');
+  if (!id) return { ok: false, error: 'ONBOARDING_TRACK_SHEET_ID が未設定' };
+  const owners = _jsonOr_(ownersJson || '{}', {});
+  const strip = n => String(n || '').trim().replace(/店$/, '');
+  const want = {}; Object.keys(owners).forEach(k => { want[strip(k)] = String(owners[k] || ''); });
+  const sh = SpreadsheetApp.openById(id).getSheets()[0];
+  let data = sh.getDataRange().getValues();
+  const hdrRow = data.findIndex(r => r.map(String).indexOf('店舗') >= 0 && r.map(String).indexOf('ガイダンスを受けた人') >= 0);
+  if (hdrRow < 0) return { ok: false, error: '見出しの行が見つかりません' };
+  let h = data[hdrRow].map(String);
+  if (h.indexOf('担当者') < 0) {
+    sh.insertColumnAfter(h.indexOf('店舗') + 1);
+    sh.getRange(hdrRow + 1, h.indexOf('店舗') + 2).setValue('担当者')
+      .setBackground('#22703d').setFontColor('#ffffff').setFontWeight('bold').setHorizontalAlignment('center');
+    sh.setColumnWidth(h.indexOf('店舗') + 2, 110);
+    data = sh.getDataRange().getValues(); h = data[hdrRow].map(String);
+  }
+  const sc = h.indexOf('店舗'), oc = h.indexOf('担当者');
+  const done = [];
+  for (let i = hdrRow + 1; i < data.length; i++) {
+    const nm = strip(data[i][sc]);
+    if (!nm) break;
+    if (want[nm] !== undefined) { sh.getRange(i + 1, oc + 1).setValue(want[nm]); done.push(nm); }
+  }
+  return { ok: true, updated: done, notFound: Object.keys(want).filter(k => done.indexOf(k) < 0) };
 }
 
 function getAttendanceTabData(storeId) {
