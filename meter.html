@@ -7,7 +7,7 @@
 <title>集計表 | セルフカフェ</title>
 <link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
 <!--
-  集計表（ドリンクマシンのメーター）の単独ページ。2026-10-18〜。
+  集計表（ドリンクマシンのメーター）の単独ページ。2026-10-18〜。中身は meter-core.js(ポータルと共通、2026-10-19〜ポータルにも組み込み済み)。
   あとで社内ポータル(index.html)のタブとして移す前提で、ポータルとは別に先に作っている(ユーザー方針)。
   - ログイン・通信はポータルと同じGAS・同じパスワード(login で通行証を受け取り、以降の通信に t を付ける)。
   - ドリンクマシンの表示は「金種(売価)ごとの累計杯数」。その日に読んだ累計を入れ、前回の記録との差で杯数、杯数×売価でメーター上の金額を出す。
@@ -17,40 +17,13 @@
   - 記録はGASの meter_readings(getMeterReadings / saveMeterReading。同じ日は置き換え)。
 -->
 <style>
-  :root { --green:#22703d; --green-bg:#f0f7e8; --cream:#f8f3e6; --line:#e5e7eb; --muted:#64748b; --red:#dc2626; }
   * { box-sizing:border-box; }
-  body { margin:0; background:var(--cream); color:#1f2937; font-family:"Hiragino Sans","Noto Sans JP","Yu Gothic UI",Meiryo,sans-serif; }
+  body { margin:0; background:#f8f3e6; color:#1f2937; font-family:"Hiragino Sans","Noto Sans JP","Yu Gothic UI",Meiryo,sans-serif; }
   header { display:flex; align-items:center; gap:12px; padding:12px 16px; flex-wrap:wrap; }
   header img { height:34px; }
-  header h1 { margin:0; font-size:22px; color:var(--green); }
-  header .who { margin-left:auto; font-size:13px; color:var(--muted); display:flex; gap:8px; align-items:center; }
+  header h1 { margin:0; font-size:22px; color:#22703d; }
+  header .who { margin-left:auto; font-size:13px; color:#64748b; display:flex; gap:8px; align-items:center; }
   main { padding:0 16px 40px; max-width:1100px; margin:0 auto; }
-  .card { background:white; border-radius:10px; box-shadow:0 1px 4px rgba(0,0,0,.08); padding:14px 16px; margin-bottom:14px; }
-  .btn { padding:8px 18px; border:none; border-radius:6px; font-weight:700; cursor:pointer; font-family:inherit; font-size:14px; }
-  .btn-main { background:var(--green); color:white; }
-  .btn-sub { background:white; color:#334155; border:1px solid #cbd5e1; }
-  .btn:disabled { opacity:.6; cursor:default; }
-  input[type=text], input[type=password], input[type=number], input[type=date], select { padding:7px 8px; border:1px solid #cbd5e1; border-radius:6px; font-size:15px; font-family:inherit; }
-  .tabs { display:flex; gap:4px; margin-bottom:12px; background:var(--green-bg); padding:4px; border-radius:8px; }
-  .tabs button { flex:1; padding:8px; border:none; background:transparent; border-radius:6px; font-weight:700; color:var(--green); cursor:pointer; font-family:inherit; }
-  .tabs button.active { background:var(--green); color:white; }
-  .note { font-size:12px; color:#92400e; background:#fef9c3; border:1px solid #fde68a; border-radius:6px; padding:8px 12px; line-height:1.7; margin-bottom:12px; }
-  table.grid { border-collapse:collapse; width:100%; }
-  table.grid th { font-size:11px; color:var(--muted); text-align:left; padding:4px 8px; border-bottom:1px solid var(--line); white-space:nowrap; }
-  table.grid td { padding:6px 8px; border-bottom:1px solid #f1f5f9; }
-  .num { text-align:right; white-space:nowrap; }
-  .month { overflow-x:auto; }
-  .month table { border-collapse:collapse; min-width:100%; background:white; }
-  .month th { padding:4px 6px; border-bottom:1px solid var(--line); font-size:11px; white-space:nowrap; background:var(--green-bg); }
-  .month td { padding:4px 6px; border-bottom:1px solid #f1f5f9; text-align:right; white-space:nowrap; font-size:12px; }
-  .month td:first-child { text-align:left; }
-  .msg { font-size:13px; min-height:18px; }
-  .ok { color:#16a34a; } .ng { color:var(--red); }
-  .store-row { display:flex; align-items:flex-start; gap:10px; padding:8px 0; border-bottom:1px solid #f1f5f9; flex-wrap:wrap; }
-  .store-row label { min-width:200px; font-weight:600; display:flex; gap:6px; align-items:center; cursor:pointer; }
-  .machines { flex:1; min-width:280px; }
-  .machine-line { display:flex; gap:6px; margin-bottom:6px; flex-wrap:wrap; }
-  @media (max-width:600px) { .store-row label { min-width:100%; } }
 </style>
 </head>
 <body>
@@ -62,16 +35,15 @@
 <main id="app"></main>
 
 <script src="stores.js"></script>
+<script src="meter-core.js"></script>
 <script>
+// 集計表の中身(計算・入力画面・月の表・使う店の設定)は meter-core.js。ポータル(index.html)と共通
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbzoqu607sj-rpYulIiDwnuyGSCTzoblzSqaq37cb5k5KiGsK7sisZew9sSRSBoYBSwo_A/exec';
 const AUTH_KEY = 'meter_auth';   // {token, role, stores, expiresAt}。このタブの中だけ(sessionStorage)
 const esc = s => (s == null ? '' : String(s)).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
-const today = () => new Date().toLocaleDateString('sv');
-const yen = n => Number(n || 0).toLocaleString('ja-JP');
-const md = d => { const [, m, dd] = String(d).split('-'); return `${Number(m)}/${Number(dd)}`; };
 
 function auth() { try { const a = JSON.parse(sessionStorage.getItem(AUTH_KEY) || 'null'); return a && a.expiresAt > Date.now() ? a : null; } catch (_) { return null; } }
-function logout() { sessionStorage.removeItem(AUTH_KEY); state = freshState(); render(); }
+function logout() { sessionStorage.removeItem(AUTH_KEY); settings = null; render(); }
 function _authFail(res) {
   if (res && res.authError && res.authCode === 'token') { logout(); throw new Error('ログインし直してください'); }
   return res;
@@ -87,118 +59,46 @@ async function gasPost(action, body) {
   return _authFail(await res.json());
 }
 
-/* ===== 計算（ポータルへ移すときもこのまま使う） ===== */
-function buttonsOf(cfg) {
-  const out = [];
-  cfg.machines.forEach((m, mi) => (m.prices || []).forEach((p, si) => out.push({ key: mi + '_' + si, machine: mi, slot: si, price: Number(p) || 0, label: m.label || ('機械' + (mi + 1)) })));
-  return out;
-}
-// 記録を日付ごとにまとめ、前回の記録との差で杯数・金額を出す(古い順)
-function daily(cfg, readings) {
-  const buttons = buttonsOf(cfg), byDate = {}, last = {};
-  (readings || []).forEach(r => { if (r && r.date && r.count !== null && r.count !== undefined) (byDate[r.date] = byDate[r.date] || {})[r.machine + '_' + r.slot] = Number(r.count); });
-  return Object.keys(byDate).sort().map(date => {
-    const counts = byDate[date], cups = {}, warn = [];
-    let cupsTotal = 0, yenTotal = 0;
-    buttons.forEach(b => {
-      const c = counts[b.key];
-      if (c === undefined) return;
-      if (last[b.key] !== undefined) {
-        const d = c - last[b.key].count;
-        cups[b.key] = d;
-        if (d < 0) warn.push(`${b.label} ${b.price}円 が前回(${md(last[b.key].date)})より小さい`);
-        else { cupsTotal += d; yenTotal += d * b.price; }
-      }
-      last[b.key] = { count: c, date };
-    });
-    return { date, counts, cups, cupsTotal, yenTotal, warn };
-  });
-}
-// 指定日より前の、ボタンごとの最後の記録
-function previousOf(readings, beforeDate) {
-  const prev = {};
-  (readings || []).filter(r => r && r.date < beforeDate && r.count !== null && r.count !== undefined)
-    .sort((a, b) => String(a.date).localeCompare(String(b.date)))
-    .forEach(r => { prev[r.machine + '_' + r.slot] = { count: Number(r.count), date: r.date }; });
-  return prev;
-}
-function monthTableHtml(cfg, readings, month) {
-  const buttons = buttonsOf(cfg);
-  const days = daily(cfg, readings).filter(d => d.date.startsWith(month));
-  if (!days.length) return '<div style="color:#aaa;padding:12px 0;font-size:13px">この月の記録はまだありません</div>';
-  let sc = 0, sy = 0;
-  const rows = days.map(d => {
-    sc += d.cupsTotal; sy += d.yenTotal;
-    const cells = buttons.map(b => {
-      const c = d.counts[b.key], cup = d.cups[b.key];
-      if (c === undefined) return '<td></td>';
-      const t = cup === undefined ? '' : (cup < 0 ? '<span class="ng">要確認</span>' : `${cup}杯`);
-      return `<td><div style="font-weight:600">${t}</div><div style="color:#94a3b8;font-size:10px">${c}</div></td>`;
-    }).join('');
-    const w = d.warn.length ? ` class="ng" title="${esc(d.warn.join('／'))}"` : '';
-    return `<tr><td><span${w}>${md(d.date)}</span></td>${cells}<td><b>${d.cupsTotal}</b></td><td><b>${yen(d.yenTotal)}</b></td></tr>`;
-  }).join('');
-  return `<div class="month"><table>
-    <thead><tr><th rowspan="2">日付</th>${cfg.machines.map(m => `<th colspan="${(m.prices || []).length}">${esc(m.label || '')}</th>`).join('')}<th rowspan="2">杯数</th><th rowspan="2">金額(円)</th></tr>
-    <tr>${buttons.map(b => `<th>${b.price}円</th>`).join('')}</tr></thead>
-    <tbody>${rows}<tr><td><b>合計</b></td>${buttons.map(() => '<td></td>').join('')}<td><b>${sc}</b></td><td><b>${yen(sy)}</b></td></tr></tbody>
-  </table></div>
-  <div style="font-size:11px;color:var(--muted);margin-top:6px;line-height:1.6">太字は前回の記録からの杯数、小さい数字は機械の累計です。金額は杯数×売価（メーター上の金額。サブスク分も含むので実売上ではありません）。前回より小さい数字は「要確認」と出ます。</div>`;
-}
-
-/* ===== 画面の状態 ===== */
-const freshState = () => ({ settings: null, storeId: null, readings: null, date: today(), month: today().slice(0, 7), draft: {}, adminTab: 'sheet' });
-let state = freshState();
-
+let settings = null;   // {key: value}
 function allStores() {
   const names = Object.assign({}, typeof STORES === 'object' ? STORES : {});
-  try { Object.entries(JSON.parse(state.settings.custom_stores || '{}')).forEach(([k, v]) => { names[k] = v && v.name ? v.name : k; }); } catch (_) {}
-  try { JSON.parse(state.settings.deleted_stores || '[]').forEach(k => delete names[k]); } catch (_) {}
+  try { Object.entries(JSON.parse(settings.custom_stores || '{}')).forEach(([k, v]) => { names[k] = v && v.name ? v.name : k; }); } catch (_) {}
+  try { JSON.parse(settings.deleted_stores || '[]').forEach(k => delete names[k]); } catch (_) {}
   return names;
 }
-function meterConfigAll() { try { return JSON.parse(state.settings.meter_config || '{}') || {}; } catch (_) { return {}; } }
-function meterConfig(sid) { const c = meterConfigAll()[sid]; return c && Array.isArray(c.machines) && c.machines.length ? c : null; }
+MeterCore.init({
+  get: gasGet, post: gasPost, names: allStores,
+  configAll: () => { try { return JSON.parse(settings.meter_config || '{}') || {}; } catch (_) { return {}; } },
+  onConfigSaved: all => { settings.meter_config = JSON.stringify(all); },
+});
 
-async function loadSettings() {
-  const a = auth();
-  const rows = a.role === 'admin' ? await gasGet('getSettings') : await gasGet('getStoreSettings', { storeId: a.stores[0] });
-  if (!Array.isArray(rows)) throw new Error((rows && rows.error) || '設定を読み込めませんでした');
-  state.settings = Object.fromEntries(rows.map(r => [r.key, r.value]));
-}
-async function loadReadings(sid, force) {
-  if (!force && state.storeId === sid && state.readings) return;
-  const res = await gasGet('getMeterReadings', { storeId: sid });
-  if (!Array.isArray(res)) throw new Error((res && res.error) || '記録を読み込めませんでした');
-  state.storeId = sid; state.readings = res;
-}
-
-/* ===== 描画 ===== */
 const app = () => document.getElementById('app');
 async function render() {
-  const a = auth();
-  const who = document.getElementById('who');
+  const a = auth(), who = document.getElementById('who');
   if (!a) { who.innerHTML = ''; renderLogin(); return; }
-  if (!state.settings) {
-    app().innerHTML = '<div class="card" style="color:#aaa">読み込み中…</div>';
-    try { await loadSettings(); } catch (e) { app().innerHTML = `<div class="card ng">${esc(e.message)}</div>`; return; }
+  if (!settings) {
+    app().innerHTML = '<div style="color:#aaa;padding:20px">読み込み中…</div>';
+    try {
+      const rows = a.role === 'admin' ? await gasGet('getSettings') : await gasGet('getStoreSettings', { storeId: a.stores[0] });
+      if (!Array.isArray(rows)) throw new Error((rows && rows.error) || '設定を読み込めませんでした');
+      settings = Object.fromEntries(rows.map(r => [r.key, r.value]));
+    } catch (e) { app().innerHTML = `<div style="color:#dc2626;padding:20px">${esc(e.message)}</div>`; return; }
   }
   const names = allStores();
-  who.innerHTML = `${a.role === 'admin' ? '管理者' : esc(names[a.stores[0]] || a.stores[0]) + '店'}<button class="btn btn-sub" onclick="logout()">ログアウト</button>`;
-  if (a.role === 'admin') return renderAdmin();
-  const sid = a.stores[0];
-  if (!meterConfig(sid)) { app().innerHTML = '<div class="card">この店舗は集計表の対象ではありません。必要なときは本部にご連絡ください。</div>'; return; }
-  return renderSheet(sid, app());
+  who.innerHTML = `${a.role === 'admin' ? '管理者' : esc(names[a.stores[0]] || a.stores[0]) + '店'}<button onclick="logout()" style="padding:6px 12px;border:1px solid #cbd5e1;border-radius:6px;background:white;cursor:pointer">ログアウト</button>`;
+  if (a.role === 'admin') MeterCore.mountAdmin(app());
+  else MeterCore.mountSheet(app(), a.stores[0]);
 }
 
 function renderLogin() {
-  app().innerHTML = `<div class="card" style="max-width:420px;margin:40px auto">
+  app().innerHTML = `<div style="background:white;border-radius:10px;box-shadow:0 1px 4px rgba(0,0,0,.08);padding:16px;max-width:420px;margin:40px auto">
     <div style="font-weight:700;margin-bottom:10px">ログイン</div>
-    <div style="font-size:12px;color:var(--muted);margin-bottom:10px">社内ポータルと同じパスワードです。</div>
+    <div style="font-size:12px;color:#64748b;margin-bottom:10px">社内ポータルと同じパスワードです。</div>
     <form onsubmit="event.preventDefault();doLogin()">
-      <input type="password" id="pw" autocomplete="current-password" placeholder="パスワード" style="width:100%;margin-bottom:10px">
-      <button class="btn btn-main" id="login-btn" style="width:100%">ログイン</button>
+      <input type="password" id="pw" autocomplete="current-password" placeholder="パスワード" style="width:100%;margin-bottom:10px;padding:8px;border:1px solid #cbd5e1;border-radius:6px;font-size:15px">
+      <button id="login-btn" style="width:100%;padding:9px;border:none;border-radius:6px;background:#22703d;color:white;font-weight:700;font-size:15px;cursor:pointer">ログイン</button>
     </form>
-    <div class="msg ng" id="login-msg" style="margin-top:8px"></div></div>`;
+    <div id="login-msg" style="margin-top:8px;color:#dc2626;font-size:13px"></div></div>`;
   document.getElementById('pw').focus();
 }
 async function doLogin() {
@@ -211,181 +111,9 @@ async function doLogin() {
     if (!res || !res.ok) throw new Error((res && res.error) || 'ログインできませんでした');
     if (res.role !== 'admin' && res.role !== 'store') throw new Error('このページは店舗か管理者のパスワードでログインしてください');
     sessionStorage.setItem(AUTH_KEY, JSON.stringify({ token: res.token, role: res.role, stores: res.stores || [], expiresAt: res.expiresAt }));
-    state = freshState();
+    settings = null;
     render();
   } catch (e) { msg.textContent = e.message; btn.disabled = false; btn.textContent = 'ログイン'; }
-}
-
-// 入力画面＋月の表(店舗・管理者で共通)
-async function renderSheet(sid, wrap) {
-  const cfg = meterConfig(sid);
-  if (!cfg) { wrap.innerHTML = '<div class="card">この店舗は集計表の設定がありません</div>'; return; }
-  if (state.storeId !== sid || !state.readings) {
-    wrap.innerHTML = '<div class="card" style="color:#aaa">読み込み中…</div>';
-    try { await loadReadings(sid); } catch (e) { wrap.innerHTML = `<div class="card ng">${esc(e.message)}</div>`; return; }
-  }
-  const date = state.date, readings = state.readings;
-  const prev = previousOf(readings, date);
-  const todays = {};
-  readings.filter(r => r.date === date).forEach(r => { todays[r.machine + '_' + r.slot] = r.count; });
-  const noteToday = (readings.find(r => r.date === date && r.note) || {}).note || '';
-  const machines = cfg.machines.map((m, mi) => `<div class="card">
-    <div style="font-weight:700;color:var(--green);margin-bottom:6px">${esc(m.label || ('機械' + (mi + 1)))}</div>
-    <table class="grid"><thead><tr><th>金種（売価）</th><th>前回の数字</th><th>今日の数字</th><th class="num">杯数</th><th class="num">金額</th></tr></thead><tbody>
-    ${(m.prices || []).map((p, si) => {
-      const key = mi + '_' + si, pv = prev[key], dr = (state.draft[date] || {})[key];
-      const val = dr !== undefined ? dr : (todays[key] !== undefined && todays[key] !== null ? todays[key] : '');
-      return `<tr><td style="font-weight:600">${Number(p)}円</td>
-        <td style="color:var(--muted);font-size:13px">${pv ? `${pv.count}<span style="font-size:10px">（${md(pv.date)}）</span>` : '—'}</td>
-        <td><input type="number" inputmode="numeric" min="0" class="meter-input" data-key="${key}" data-machine="${mi}" data-slot="${si}" data-price="${Number(p)}" value="${esc(val)}" oninput="draftInput(this)" style="width:120px"></td>
-        <td class="num" id="cups-${key}"></td><td class="num" id="yen-${key}" style="color:#475569"></td></tr>`;
-    }).join('')}</tbody></table></div>`).join('');
-  const lastMonth = (() => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1); return d.toLocaleDateString('sv').slice(0, 7); })();
-  const thisMonth = today().slice(0, 7);
-  wrap.innerHTML = `
-    <div class="note">ドリンクマシンに出ている<b>金種（売価）ごとの累計の数字</b>を、そのまま入れてください。前回の数字との差が「杯数」、杯数×売価が「金額」として自動で出ます。毎日だいたい同じ時刻に読んでください。</div>
-    <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
-      <b style="font-size:13px">読んだ日</b>
-      <input type="date" value="${esc(date)}" max="${today()}" onchange="state.date=this.value||today();rerender()">
-      ${readings.some(r => r.date === date) ? '<span style="font-size:12px" class="ok">この日は記録済みです（直して保存すると上書きします）</span>' : ''}
-    </div>
-    ${machines}
-    <div class="card" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
-      <div style="font-size:16px">合計 <b id="total-cups">0</b> 杯 ／ <b id="total-yen">0</b> 円</div>
-      <input type="text" id="meter-note" placeholder="メモ（機械の不具合・補償など）" value="${esc(noteToday)}" style="flex:1;min-width:180px">
-      <button class="btn btn-main" id="save-btn" onclick="saveNow('${esc(sid)}')">保存する</button>
-      <div class="msg" id="save-msg" style="width:100%"></div>
-    </div>
-    <div class="card">
-      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px">
-        <b style="color:var(--green)">月の集計表</b>
-        <select onchange="state.month=this.value;rerender()">
-          <option value="${thisMonth}" ${state.month === thisMonth ? 'selected' : ''}>今月（${Number(thisMonth.slice(5))}月）</option>
-          <option value="${lastMonth}" ${state.month === lastMonth ? 'selected' : ''}>先月（${Number(lastMonth.slice(5))}月）</option>
-        </select>
-      </div>
-      ${monthTableHtml(cfg, readings, state.month)}
-    </div>`;
-  recalc();
-}
-function rerender() { const a = auth(); if (a && a.role === 'admin') renderAdmin(); else render(); }
-function draftInput(inp) { (state.draft[state.date] = state.draft[state.date] || {})[inp.dataset.key] = inp.value; recalc(); }
-function recalc() {
-  const prev = previousOf(state.readings, state.date);
-  let cups = 0, sum = 0;
-  document.querySelectorAll('.meter-input').forEach(inp => {
-    const key = inp.dataset.key, price = Number(inp.dataset.price), pv = prev[key];
-    const c = document.getElementById('cups-' + key), y = document.getElementById('yen-' + key);
-    if (inp.value === '' || !pv) { c.textContent = ''; y.textContent = ''; return; }
-    const d = Number(inp.value) - pv.count;
-    if (d < 0) { c.innerHTML = '<span class="ng" style="font-weight:700">前回より小さい</span>'; y.textContent = ''; return; }
-    c.innerHTML = `<b>${d}</b> 杯`; y.textContent = yen(d * price) + ' 円';
-    cups += d; sum += d * price;
-  });
-  const tc = document.getElementById('total-cups'), ty = document.getElementById('total-yen');
-  if (tc) tc.textContent = cups;
-  if (ty) ty.textContent = yen(sum);
-}
-let saving = false;
-async function saveNow(sid) {
-  if (saving) return;
-  const msg = document.getElementById('save-msg');
-  const date = state.date, prev = previousOf(state.readings, date);
-  const inputs = [...document.querySelectorAll('.meter-input')];
-  const values = inputs.filter(i => i.value !== '').map(i => ({ machine: Number(i.dataset.machine), slot: Number(i.dataset.slot), price: Number(i.dataset.price), count: Number(i.value) }));
-  if (!values.length) { msg.innerHTML = '<span class="ng">数字が入っていません</span>'; return; }
-  if (values.length < inputs.length && !confirm('空欄の金種があります。入っている分だけ保存しますか？')) return;
-  const k = v => v.machine + '_' + v.slot;
-  const smaller = values.filter(v => prev[k(v)] && v.count < prev[k(v)].count);
-  if (smaller.length && !confirm(`前回より小さい数字があります（${smaller.map(v => v.price + '円').join('・')}）。\n読み間違いでないか確かめてください。このまま保存しますか？`)) return;
-  const big = values.filter(v => prev[k(v)] && v.count - prev[k(v)].count > 500);
-  if (big.length && !confirm(`前回から500杯より多く増えている金種があります（${big.map(v => v.price + '円').join('・')}）。\n読み間違いでないか確かめてください。このまま保存しますか？`)) return;
-  saving = true;
-  const btn = document.getElementById('save-btn');
-  btn.disabled = true; btn.textContent = '保存中…';
-  try {
-    const res = await gasPost('saveMeterReading', { storeId: sid, date, values, note: (document.getElementById('meter-note').value || '').trim() });
-    if (!res || res.error) throw new Error((res && res.error) || '保存できませんでした');
-    await loadReadings(sid, true);
-    delete state.draft[date];
-    rerender();
-    setTimeout(() => { const m = document.getElementById('save-msg'); if (m) m.innerHTML = '<span class="ok">保存しました</span>'; }, 0);
-  } catch (e) {
-    msg.innerHTML = `<span class="ng">保存できませんでした（${esc(e.message)}）。もう一度お試しください</span>`;
-    btn.disabled = false; btn.textContent = '保存する';
-  } finally { saving = false; }
-}
-
-/* ===== 管理者 ===== */
-function renderAdmin() {
-  const tabs = `<div class="tabs">
-    <button class="${state.adminTab === 'sheet' ? 'active' : ''}" onclick="state.adminTab='sheet';renderAdmin()">店ごとの集計表</button>
-    <button class="${state.adminTab === 'config' ? 'active' : ''}" onclick="state.adminTab='config';renderAdmin()">使う店の設定</button></div>`;
-  if (state.adminTab === 'config') { app().innerHTML = tabs + '<div id="cfg"></div>'; return renderConfig(document.getElementById('cfg')); }
-  const names = allStores();
-  const linked = Object.keys(meterConfigAll()).filter(meterConfig).sort((a, b) => String(names[a] || a).localeCompare(String(names[b] || b), 'ja'));
-  if (!linked.length) { app().innerHTML = tabs + '<div class="card">集計表を使う店がまだありません。「使う店の設定」でチェックを入れてください。</div>'; return; }
-  const sid = linked.includes(state.storeId) ? state.storeId : linked[0];
-  app().innerHTML = tabs + `<div style="display:flex;gap:8px;align-items:center;margin-bottom:10px;flex-wrap:wrap">
-      <select onchange="state.storeId=this.value;state.readings=null;state.draft={};renderAdmin()">${linked.map(s => `<option value="${esc(s)}" ${s === sid ? 'selected' : ''}>${esc(names[s] || s)}</option>`).join('')}</select>
-      <button class="btn btn-sub" onclick="state.readings=null;renderAdmin()">再読み込み</button>
-    </div><div id="sheet"></div>`;
-  if (state.storeId !== sid) { state.storeId = sid; state.readings = null; }
-  renderSheet(sid, document.getElementById('sheet'));
-}
-
-// 使う店にチェック → 機械名と金種を入れて保存(meter_config を店舗ごとにマージ。チェックを外すと null)
-function renderConfig(wrap) {
-  const names = allStores(), all = meterConfigAll();
-  const q = (state.cfgFilter || '').trim();
-  const ids = Object.keys(names).filter(s => !q || String(names[s]).includes(q) || s.includes(q))
-    .sort((a, b) => (meterConfig(b) ? 1 : 0) - (meterConfig(a) ? 1 : 0) || String(names[a]).localeCompare(String(names[b]), 'ja'));
-  wrap.innerHTML = `<div class="card">
-    <div class="note">集計表を使う店にチェックを入れ、ドリンクマシンごとに「機械の名前」と「金種（売価）」を入れて保存してください。金種はマシンの表示と同じ並びで、カンマ区切りです（例: 520,500,470,440,420,390）。チェックを外して保存すると、その店では集計表が出なくなります（これまでの記録は消えません）。</div>
-    <input type="text" placeholder="店名で絞り込む" value="${esc(q)}" oninput="state.cfgFilter=this.value;renderConfig(document.getElementById('cfg'))" style="width:100%;max-width:320px;margin-bottom:8px">
-    <div>${ids.map(s => {
-      const c = meterConfig(s), on = !!c;
-      const ms = (c ? c.machines : [{ label: 'ドリンクマシン', prices: [] }]);
-      return `<div class="store-row" data-sid="${esc(s)}">
-        <label><input type="checkbox" ${on ? 'checked' : ''} onchange="this.closest('.store-row').querySelector('.machines').style.display=this.checked?'':'none'">${esc(names[s] || s)}</label>
-        <div class="machines" style="${on ? '' : 'display:none'}">
-          <div class="mlist">${ms.map(m => machineLine(m)).join('')}</div>
-          <button class="btn btn-sub" style="padding:4px 10px;font-size:12px" onclick="this.previousElementSibling.insertAdjacentHTML('beforeend', machineLine({label:'', prices:[]}))">＋ 機械を足す</button>
-        </div>
-        <div style="display:flex;gap:6px;align-items:center"><button class="btn btn-main" style="padding:6px 14px" onclick="saveConfig('${esc(s)}', this)">保存</button><span class="msg"></span></div>
-      </div>`;
-    }).join('')}</div></div>`;
-}
-function machineLine(m) {
-  return `<div class="machine-line"><input type="text" class="m-label" placeholder="機械の名前（例: 左・CS3）" value="${esc(m.label || '')}" style="width:170px">
-    <input type="text" class="m-prices" placeholder="金種（例: 520,500,470）" value="${esc((m.prices || []).join(','))}" style="flex:1;min-width:180px">
-    <button class="btn btn-sub" style="padding:4px 10px;font-size:12px" onclick="this.parentElement.remove()">削除</button></div>`;
-}
-async function saveConfig(sid, btn) {
-  const row = btn.closest('.store-row'), msg = row.querySelector('.msg');
-  const on = row.querySelector('input[type=checkbox]').checked;
-  let value = null;
-  if (on) {
-    const machines = [...row.querySelectorAll('.machine-line')].map(l => ({
-      label: l.querySelector('.m-label').value.trim(),
-      prices: l.querySelector('.m-prices').value.split(/[,、\s]+/).map(x => x.trim()).filter(Boolean).map(Number),
-    })).filter(m => m.label || m.prices.length);
-    const bad = machines.find(m => !m.prices.length || m.prices.some(p => !(p > 0)));
-    if (!machines.length || bad) { msg.innerHTML = '<span class="ng">機械ごとに金種（数字・カンマ区切り）を入れてください</span>'; return; }
-    machines.forEach((m, i) => { if (!m.label) m.label = machines.length === 1 ? 'ドリンクマシン' : '機械' + (i + 1); });
-    const old = meterConfig(sid);
-    if (old && JSON.stringify(old.machines.map(m => m.prices)) !== JSON.stringify(machines.map(m => m.prices))
-        && !confirm('金種の並びを変えると、これまでの記録とボタンの対応がずれることがあります（記録は「何台目の何番目のボタン」で持っています）。このまま保存しますか？')) return;
-    value = { machines };
-  }
-  btn.disabled = true; msg.textContent = '保存中…';
-  try {
-    const res = await gasPost('saveSettingMerge', { key: 'meter_config', value: JSON.stringify({ [sid]: value }) });
-    if (!res || res.error) throw new Error((res && res.error) || '保存できませんでした');
-    const all = meterConfigAll(); all[sid] = value; state.settings.meter_config = JSON.stringify(all);
-    msg.innerHTML = '<span class="ok">保存しました</span>';
-  } catch (e) { msg.innerHTML = `<span class="ng">${esc(e.message)}</span>`; }
-  finally { btn.disabled = false; }
 }
 
 render();
