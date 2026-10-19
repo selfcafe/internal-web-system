@@ -286,7 +286,7 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
   - アペックス/トーヨーはステラを通らないので、商品単位の売上原価率は出せない。
 
 ### チェックシート
-- **集計表(ドリンクマシンのメーター、2026-10-18〜)**: 中身(計算・入力画面・月の表・使う店の設定)は`meter-core.js`(`MeterCore`)で、ポータルと単独ページ`meter.html`の両方が使う。ポータルでは、紐づいた店だけチェックシートに「集計表」タブ(`updatePartnerMeterTabVisibility`)、管理画面は業務タブ「集計表」(`renderMeterAdmin`→`MeterCore.mountAdmin`、「店ごとの集計表」「使う店の設定」)。機械の表示は金種(売価)ごとの累計杯数で、その日に読んだ累計を入れると前回の記録との差で杯数、杯数×売価でメーター上の金額を出す(サブスク分も含むので実売上ではない。実売上の出し方は要検討)。入力中の数字は`MeterCore.s.draft`に持つ(チェックシートは裏で描き直されるため)。使う店と機械・金種は設定`meter_config`({店舗ID:{machines:[{label,prices}]}}、外した店は null)で、管理者が「使う店の設定」でチェックを入れて紐づける。記録はメインDBの`meter_readings`(店舗×日付×機械×slot、`getMeterReadings`/`saveMeterReading`は店舗、`saveMeterReadingsBulk`は管理者/スクリプト)。スプレッドシートの台帳「集計表YY.M月」からの取り込みは selfcafe-automation の`scripts/portal_meter.py`。ポータルの表は`thead tr`に緑の背景があるので、`meter-core.js`の中で`.mc-root thead tr`を透明にしている。メーターの杯数＝売上シートの杯数＋サブスク(オフィス決済)杯数で合う(2026-10-18確認)。
+- **集計表(ドリンクマシンのメーター、2026-10-18〜)**: 中身(計算・入力画面・月の表・使う店の設定)は`meter-core.js`(`MeterCore`)で、ポータルと単独ページ`meter.html`の両方が使う。ポータルでは、紐づいた店だけチェックシートに「集計表」タブ(`updatePartnerMeterTabVisibility`)、管理画面は業務タブ「集計表」(`renderMeterAdmin`→`MeterCore.mountAdmin`、「店ごとの集計表」「使う店の設定」)。機械の表示は金種(売価)ごとの累計杯数で、その日に読んだ累計を入れると前回の記録との差で杯数、杯数×売価でメーター上の金額を出す(サブスク分も含むので実売上ではない。実売上の出し方は要検討)。入力中の数字は`MeterCore.s.draft`に持つ(チェックシートは裏で描き直されるため)。使う店と機械・金種は設定`meter_config`({店舗ID:{machines:[{label,prices}]}}、外した店は null)で、管理者が「使う店の設定」でチェックを入れて紐づける。記録はメインDBの`meter_readings`(店舗×日付×機械×slot、`getMeterReadings`/`saveMeterReading`は店舗、`saveMeterReadingsBulk`は管理者/スクリプト)。スプレッドシートの台帳「集計表YY.M月」からの取り込みは selfcafe-automation の`scripts/portal_meter.py`。ポータルの表は`thead tr`に緑の背景があるので、`meter-core.js`の中で`.mc-root thead tr`を透明にしている。メーターの杯数＝売上シートの杯数＋サブスク(オフィス決済)杯数で合う(2026-10-18確認)。実売上は売上シートで管理しているので、集計表では考えない(FCへの支払通知書を自動化するときにユーザーが説明する)。紐づいた店には、店舗画面の上に「集計表はポータルで入力」のお知らせを閉じるまで出す(`meter-notice`、10/20から切り替え)。
 - **期間**: 暦月で、猶予期間は無い。`updateChecksheetField`は「今日」ではなく編集した`dayKey`から期間を決める。
 - **デイリーカウント対象**: 全店共通の1ルール(`_checksheetProductColumns`)。
   - apex/toyo/cs3は全商品、otherはペーパータオル・ストロー・トイレットペーパー、salesは水だけ。
@@ -307,7 +307,7 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 - **表示店舗の設定**: 除外リスト方式(`store_checksheet_cfg`/`store_product_cfg`)。複数店舗の変更は1回の読み込み・1回の同期にまとめる。
 
 ### 発注・納品
-- **FC店の発注依頼(2026-10-18〜)**: FC店も直営と同じく発注依頼を出し(ポータルかLINE)、本部がアペックスへ発注する。発注タブ・管理画面の発注依頼一覧/履歴のFCタブを出す(以前は隠していた)。選べる品は直営と同じ(店舗別取扱商品)。FC店への請求書・支払通知書はアペックスの請求書を見て本部が作るので、**卸値はポータルに持たせない**(卸値は4.塩川「FC卸値表」、selfcafe-automation の`scripts/fc_prices.py`)。Botへの通知はFC店の店名に「(FC)」を付ける(`sendAmazonOrderToBot_`)。
+- **FC店の発注依頼(2026-10-18〜)**: FC店も直営と同じく発注依頼を出し(ポータルかLINE)、本部がアペックスへ発注する。発注タブ・管理画面の発注依頼一覧/履歴のFCタブを出す(以前は隠していた)。選べる品は直営と同じ(店舗別取扱商品)。**FC店は原料に値段を付けない**(2026-10-19 ユーザー決定。卸値表は使わない)。棚卸でもFC店の行は単価・金額を空にする(`saveInventorySnapshot`)。Botへの通知はFC店の店名に「(FC)」を付ける(`sendAmazonOrderToBot_`)。
 - **ケース換算**:
   - 実際数量の単位の既定値は`effectiveActualUnitMode`に一本化している。独自の判定を書くと、ケース単位の商品がバラで確定する事故が再発する。
   - 「納品済み」ボタンは`_markDeliveredInProgress`で二重送信を防いでいる。

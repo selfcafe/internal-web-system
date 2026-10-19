@@ -3253,6 +3253,8 @@ function saveInventorySnapshot(storeId, periodLabel, rows, remarks) {
         if (c === 'remarks')      return effectiveRemarks;
         if (c === 'updated_at')   return now;
         if (c === 'store_type')   return _isFcStore_(storeId) ? 'FC' : '直営';
+        // FC店は原料に値段を付けない(2026-10-19 ユーザー決定)。前の値を残さず空にする
+        if ((c === 'price' || c === 'amount') && _isFcStore_(storeId)) return '';
         const v = r[c];
         if (v === undefined || v === null || v === '') {
           // 今回未入力(空欄)の項目は、既存のシート上の値をそのまま残す(他端末の入力を消さない)
