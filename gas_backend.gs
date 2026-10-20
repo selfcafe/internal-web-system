@@ -5992,7 +5992,7 @@ function buildBranchReorder(branchKey, periodLabel, dryRun) {
     const ss = SpreadsheetApp.openById(copy.getId());
     const sh = ss.getSheets()[0];
     const values = sh.getDataRange().getDisplayValues();
-    const HEADER_ROW = 5; // 発注書の見出し行（店舗名が並ぶ行）
+    const HEADER_ROW = Number(b.headerRow) || 5; // 発注書の見出し行（店舗名が並ぶ行）。支店の設定 headerRow で変えられる（鳥取は8。2026-10-21）
     const header = values[HEADER_ROW - 1].map(h => String(h).replace(/\n/g, ''));
     const codeRow = {};
     for (let r = HEADER_ROW; r < values.length; r++) {
@@ -6024,7 +6024,7 @@ function buildBranchReorder(branchKey, periodLabel, dryRun) {
       sh.getRange('I2').setValue(`'${now.getMonth() + 1}/${now.getDate()}`);
     }
     SpreadsheetApp.flush();
-    const pdf = _apexOrderPdf_(ss, sh, b.label, folder);   // PDF にして 4.塩川/アペックス発注書 に保存（2026-10-15〜）
+    const pdf = _apexOrderPdf_(ss, sh, b.label, folder, b.headerRow);   // PDF にして 4.塩川/アペックス発注書 に保存（2026-10-15〜）
     const draftBody = mail.body || `${b.label}支店 ご担当者様\n\n発注書を添付いたします。ご確認のほどよろしくお願いいたします。`;
     existingDrafts.forEach(d => d.deleteDraft());   // 作り直すときは古い下書きを消してから（差出人を selfcafe001@gmail.com にするため更新ではなく作り直す）
     _createApexDraft_(to, b.cc || mail.cc, subject, draftBody, [pdf.blob]);
@@ -6117,8 +6117,8 @@ function _apexPdfFolder_(parent) {
   return it.hasNext() ? it.next() : parent.createFolder('アペックス発注書');
 }
 
-function _apexOrderPdf_(ss, sh, label, parentFolder) {
-  const HR = 5;
+function _apexOrderPdf_(ss, sh, label, parentFolder, headerRow) {
+  const HR = Number(headerRow) || 5;
   const values = sh.getDataRange().getDisplayValues();
   const header = values[HR - 1].map(h => String(h).replace(/\n/g, ''));
   const storeCols = header.map((h, i) => i).filter(i => i >= 5 && header[i] && header[i] !== '合計');
@@ -6324,7 +6324,7 @@ function buildAdhocApexOrder(branchKey, spec, dryRun, opts) {
   // 発注書の行（商品コード→行、ケース入数、単価、商品名）を元の発注書から読む（写しを作る前に確認できるように）
   const src = SpreadsheetApp.openById(b.sheet).getSheets()[0];
   const values = src.getDataRange().getDisplayValues();
-  const HEADER_ROW = 5;
+  const HEADER_ROW = Number(b.headerRow) || 5;   // 支店の設定 headerRow（鳥取駅前の FC 注文表は8行目。2026-10-21）
   const header = values[HEADER_ROW - 1].map(h => String(h).replace(/\n/g, ''));
   const rowInfo = {};
   for (let r = HEADER_ROW; r < values.length; r++) {
@@ -6380,7 +6380,7 @@ function buildAdhocApexOrder(branchKey, spec, dryRun, opts) {
     sh.getRange('I2').setValue(`'${md}`);
   }
   SpreadsheetApp.flush();
-  const pdf = _apexOrderPdf_(ss, sh, b.label, folder);   // PDF にして 4.塩川/アペックス発注書 に保存（2026-10-15〜）
+  const pdf = _apexOrderPdf_(ss, sh, b.label, folder, b.headerRow);   // PDF にして 4.塩川/アペックス発注書 に保存（2026-10-15〜）
   const draftBody = mail.body || `${b.label}支店 ご担当者様\n\n発注書を添付いたします。ご確認のほどよろしくお願いいたします。`;
   _createApexDraft_(to, b.cc || mail.cc, subject, draftBody, [pdf.blob]);   // 差出人は selfcafe001@gmail.com
   // 発注タブに「発注済み」（現場から見て検品待ち）で入れる。Bot からのとき（opts.rowsBySid）は依頼の行を発注済みにする
