@@ -5561,7 +5561,11 @@ const ORDER_TEXT_ALIASES = {
   // 2026-10-16 「岐阜北方 ブレンドA 8袋」が「ブレンド」で A・B を決められなかった
   '㋣ミル挽き珈琲　ブレンドA': ['ブレンドA', 'Aブレンド', 'A豆', '豆A'],
   '㋣ミル挽き珈琲　ブレンドB': ['ブレンドB', 'Bブレンド', 'B豆', '豆B'],
+  // 2026-10-22 新守山「コーヒー豆1ケース」がミルク（コーヒーフレッシュ）になった
+  'ブレンド': ['コーヒー豆', '珈琲豆', 'コーヒーの豆', 'ブレンド豆', '豆'],
 };
+// 商品名の一部としては照合しない、ありふれた言葉（「コーヒー」→ コーヒーフレッシュ になった。2026-10-22）。言い方とぴったり同じときは当たる
+const ORDER_TEXT_GENERIC = ['コーヒー', '珈琲', 'ケース', 'ドリンク', 'セルフカフェ'];
 
 function _normJa_(s) { return String(s || '').normalize('NFKC').replace(/[\s　]/g, '').toLowerCase(); }
 
@@ -5650,11 +5654,15 @@ function _matchProductsText_(storeId, body) {
     else ambiguous.push({ word: k, candidates: names.slice(0, 5).map(n => (products.find(p => p.name === n) || {}).label || n) });
   });
   // 2) 残りは、カタカナ・漢字・英数字のかたまりごとに照合する（1 で決めた言葉の一部は飛ばす）
-  const runs = Array.from(new Set(text.match(/[ァ-ヶー]+|[一-龠々]+|[a-z0-9]+/g) || [])).filter(run => !used.some(u => u.indexOf(run) >= 0));
+  //    数と単位（「1ケース」「20袋」）は先に外す（2026-10-22: 「1ケース\nココア」が「ケースココア」になってココアが消え、
+  //    「20袋」の 20 が品番 SVT-420-2 に当たった）
+  const runText = text.replace(/\d+(?:ケース|cs|kg|キロ|箱|袋|個|本|枚|ロール|パック|つ)?/gi, ' ');
+  const runs = Array.from(new Set(runText.match(/[ァ-ヶー]+|[一-龠々]+|[a-z0-9]+/g) || [])).filter(run => !used.some(u => u.indexOf(run) >= 0));
   runs.forEach(run => {
+    const generic = ORDER_TEXT_GENERIC.indexOf(run) >= 0;
     const hits = products.filter(p => {
       const keys = [p.name, p.label].concat(ORDER_TEXT_ALIASES[p.name] || []).map(_normJa_).filter(Boolean);
-      return keys.some(k => k === run || (run.length >= 2 && (k.includes(run) || (k.length >= 2 && run.includes(k)))));
+      return keys.some(k => k === run || (!generic && run.length >= 2 && (k.includes(run) || (k.length >= 2 && run.includes(k)))));
     });
     const exact = hits.filter(p => [p.name, p.label].concat(ORDER_TEXT_ALIASES[p.name] || []).map(_normJa_).indexOf(run) >= 0);
     const pick = hits.length === 1 ? hits : exact.length === 1 ? exact : [];
@@ -5702,7 +5710,20 @@ function previewOrderText(apiKey, storeText, body) {
   }
   const m = _matchProductsText_(store.id, body);
   return { ok: true, store: { id: store.id, name: store.name }, ambiguous: m.ambiguous,
-    items: m.items.map(p => _orderItemFromText_(p, m.qtys[p.name])) };
+    items: m.items.map(p => _orderItemFromText_(p, m.qtys[p.name])), unread: _unreadLines_(store.id, body, store.name) };
+}
+
+// 連絡文の行のうち、どの商品にも当たらなかった行（店名だけの行は除く。2026-10-22 新守山の「コーヒー豆1ケース」が黙って消えた対策）
+function _unreadLines_(storeId, body, storeName) {
+  const sn = _normJa_(storeName).replace(/^セルフカフェ/, '').replace(/店$/, '');
+  const lines = String(body || '').split(/\n/).map(l => l.trim().replace(/^[・\-*●○◯]+\s*/, '')).filter(Boolean);
+  if (lines.length < 2) return [];   // 1行の文は行ごとに分けられないので出さない
+  return lines.filter(l => {
+    const n = _normJa_(l).replace(/^セルフカフェ/, '').replace(/店$/, '');
+    if (!n || /^[\d\s]+$/.test(n) || (sn && (n === sn || sn.indexOf(n) >= 0 || n.indexOf(sn) >= 0 && n.length <= sn.length + 2))) return false;
+    const m = _matchProductsText_(storeId, l);
+    return !m.items.length && !m.ambiguous.length;
+  }).slice(0, 10);
 }
 
 // 確認用（読むだけ、2026-10-15）: Bot と同じ読み取りの結果を返す。?action=debugOrderText&storeText=&body=...
