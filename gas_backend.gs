@@ -5732,7 +5732,7 @@ function debugOrderText(storeText, body) {
   if (!store.id) return { ok: true, store: null, storeCandidates: store.candidates || [] };
   const m = _matchProductsText_(store.id, body);
   return { ok: true, store: store, items: m.items.map(p => { const o = _orderItemFromText_(p, m.qtys[p.name]); return p.name + ' ×' + o.qty + o.unitText; }),
-    ambiguous: m.ambiguous, orderable: _orderableProducts_(store.id).length };
+    ambiguous: m.ambiguous, unread: _unreadLines_(store.id, body, store.name), orderable: _orderableProducts_(store.id).length };
 }
 
 // ===== 品切れのときの代替品（2026-10-15） =====
