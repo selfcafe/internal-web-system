@@ -5807,13 +5807,17 @@ function createOrderRequest(apiKey, storeId, items) {
   } catch (e) { console.error('orders_updated の合図に失敗:', e.message); }
   // アペックス（apex・cs3）の品は、その店の支店の都度発注書と Gmail 下書きも作る（2026-10-15。それまでは登録だけで止まっていた）。
   // 結果は Bot の返事に出るよう created の最後に1行足す（Bot 側は created をそのまま並べて表示している）
-  const apex = _apexDraftForOrderRows_(storeId, rows);
+  const apex = _apexDraftForOrderRows_(storeId, rows, carried => carried.forEach(r => resend.push(r)));
   if (apex) created.push(apex);
   return addResend(Object.assign(res, { created, skipped, apexDraft: apex || '' }));
 }
 
 // 依頼の行（product・qty・unit_mode）のうちアペックスの品で buildAdhocApexOrder を呼び、Bot に出す1行を返す（無ければ null）
-function _apexDraftForOrderRows_(storeId, rows) {
+// 同じ支店あてで、今日 Bot が作ってまだ送っていない下書き（Gmail に下書きが残っていて、品が［発注した］前）があれば、
+// その品と今回の品をまとめて1枚の発注書・1通の下書きに作り直し、前の下書き・PDF・写しは消す（2026-10-23 塩川さん）。
+// 覚えておく場所はスクリプト プロパティ APEX_BOT_DRAFT_<支店キー>（{date, draftId, pdfId, sheetId, rowIds}）。
+// onCarried(rows): まとめた前の依頼の行のうち同じ店のもの（呼び出し元が通知の［アペックス 発注した］に入れる）
+function _apexDraftForOrderRows_(storeId, rows, onCarried) {
   try {
     const meta = _productMeta_();
     const apexRows = rows.filter(r => APEX_ORDER_VENDORS.indexOf((meta[r.product] || {}).vendor || '') >= 0);
@@ -5821,11 +5825,54 @@ function _apexDraftForOrderRows_(storeId, rows) {
     const branches = _settingJson_('reorder_branches', {});
     const bk = Object.keys(branches).find(k => branches[k].stores && Object.prototype.hasOwnProperty.call(branches[k].stores, storeId));
     if (!bk) return '【アペックス】この店は支店の発注書に登録されていないため、発注メールは作っていません';
-    const spec = storeId + ':' + apexRows.map(r => (meta[r.product].code || r.product) + '=' + r.qty + (r.unit_mode === 'case' ? 'ケース' : '')).join(',');
-    const out = buildAdhocApexOrder(bk, spec, false, { source: 'アペックス 追加発注（Bot）', rowsBySid: { [storeId]: apexRows }, pending: true });
+    const props = PropertiesService.getScriptProperties();
+    const pk = 'APEX_BOT_DRAFT_' + bk;
+    const today = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd');
+    let prev = null;
+    try { prev = JSON.parse(props.getProperty(pk) || 'null'); } catch (e) { prev = null; }
+    const bySid = { [storeId]: apexRows.slice() };
+    let carried = [];
+    if (prev && prev.date === today && prev.draftId) {
+      let alive = false;
+      try { Gmail.Users.Drafts.get('me', prev.draftId); alive = true; } catch (e) { alive = false; }   // 送った・消した下書きはまとめない
+      if (alive) {
+        const ids = (prev.rowIds || []).map(String);
+        const newIds = apexRows.map(r => String(r.id));
+        carried = getOrders().filter(r => ids.indexOf(String(r.id)) >= 0 && newIds.indexOf(String(r.id)) < 0 &&
+          (r.is_new === true || String(r.is_new) === 'TRUE') && !(r.denied === true || String(r.denied) === 'TRUE') && !_dateStr(r.order_date));
+        carried.forEach(r => { (bySid[r.store_id] = bySid[r.store_id] || []).push(r); });
+      }
+    }
+    // 店ごとに、同じ品はまとめる（単位がそろっていれば足す。ケースとバラが混ざるときはバラに直して足す）
+    const specOf = (sid, list) => {
+      const byP = {};
+      list.forEach(r => { (byP[r.product] = byP[r.product] || []).push(r); });
+      return sid + ':' + Object.keys(byP).map(pn => {
+        const rs = byP[pn], m = meta[pn] || {};
+        const allCase = rs.every(r => r.unit_mode === 'case'), cp = Number(m.casePieces) || 1;
+        const qty = allCase ? rs.reduce((t, r) => t + Number(r.qty), 0)
+          : rs.reduce((t, r) => t + Number(r.qty) * (r.unit_mode === 'case' ? cp : 1), 0);
+        return (m.code || pn) + '=' + qty + (allCase ? 'ケース' : '');
+      }).join(',');
+    };
+    const spec = Object.keys(bySid).map(sid => specOf(sid, bySid[sid])).join(';');
+    const out = buildAdhocApexOrder(bk, spec, false, { source: 'アペックス 追加発注（Bot）', rowsBySid: bySid, pending: true });
     if (!out || !out.ok) return '【アペックス】発注メールの下書きを作れませんでした（' + ((out && (out.error + ' ' + (out.details || []).join(' '))) || '不明') + '）。PC から作り直してください';
+    // 作り直せたら、前の下書き・PDF・写しを消す（作り直しに失敗したときは前のものを残す）
+    if (carried.length) {
+      try { Gmail.Users.Drafts.remove('me', prev.draftId); } catch (e) { console.error('前の下書きを消せませんでした:', e.message); }
+      [prev.pdfId, prev.sheetId].filter(Boolean).forEach(id => { try { DriveApp.getFileById(id).setTrashed(true); } catch (e) {} });
+    }
+    const allIds = [].concat.apply([], Object.keys(bySid).map(sid => bySid[sid].map(r => String(r.id))));
+    props.setProperty(pk, JSON.stringify({ date: today, draftId: out.draftId, pdfId: out.pdfId, sheetId: out.sheetId, rowIds: allIds }));
+    const same = carried.filter(r => r.store_id === storeId);
+    if (same.length && onCarried) onCarried(same);
+    const names = _storeNames_();
+    const mergedNote = carried.length ? '（今日まだ送っていない前の下書きの品（' +
+      carried.map(r => (r.store_id !== storeId ? (names[r.store_id] || r.store_id) + ' ' : '') + (r.label || r.product)).join('、') +
+      '）とまとめて1通にしました。前の下書きは消しました）' : '';
     return '【アペックス】' + out.branch + '支店の発注メールの下書きを作りました（' + out.lines.map(l => l.split('　').slice(1, 3).join(' ')).join('・') +
-      '、税抜' + Number(out.total).toLocaleString() + '円）。Gmail の下書きを確認して送り、通知の［アペックス 発注した］を押してください' + (out.warnings.length ? '。注意: ' + out.warnings.join(' / ') : '');
+      '、税抜' + Number(out.total).toLocaleString() + '円）' + mergedNote + '。Gmail の下書きを確認して送り、通知の［アペックス 発注した］を押してください' + (out.warnings.length ? '。注意: ' + out.warnings.join(' / ') : '');
   } catch (e) {
     console.error('_apexDraftForOrderRows_ error:', e.message);
     return '【アペックス】発注メールの下書きを作れませんでした（' + e.message + '）。PC から作り直してください';
@@ -6172,7 +6219,7 @@ function _apexOrderPdf_(ss, sh, label, parentFolder, headerRow) {
   for (let k = 2; folder.getFilesByName(name).hasNext(); k++) name = `${base}(${k}).pdf`;
   blob.setName(name).setContentType('application/pdf');
   const file = folder.createFile(blob);
-  return { blob: file.getBlob().setName(name), name, url: file.getUrl() };
+  return { blob: file.getBlob().setName(name), name, url: file.getUrl(), id: file.getId() };
 }
 
 // ===== 発注を発注タブ（orders）に「発注済み」で入れ、明細を order_lines に残す（2026-10-15） =====
@@ -6405,7 +6452,7 @@ function buildAdhocApexOrder(branchKey, spec, dryRun, opts) {
   SpreadsheetApp.flush();
   const pdf = _apexOrderPdf_(ss, sh, b.label, folder, b.headerRow);   // PDF にして 4.塩川/アペックス発注書 に保存（2026-10-15〜）
   const draftBody = mail.body || `${b.label}支店 ご担当者様\n\n発注書を添付いたします。ご確認のほどよろしくお願いいたします。`;
-  _createApexDraft_(to, b.cc || mail.cc, subject, draftBody, [pdf.blob]);   // 差出人は selfcafe001@gmail.com
+  const draftId = _createApexDraft_(to, b.cc || mail.cc, subject, draftBody, [pdf.blob]);   // 差出人は selfcafe001@gmail.com
   // 発注タブに「発注済み」（現場から見て検品待ち）で入れる。Bot からのとき（opts.rowsBySid）は依頼の行を発注済みにする
   const registered = {};
   Object.keys(regs).forEach(sid => {
@@ -6414,7 +6461,7 @@ function buildAdhocApexOrder(branchKey, spec, dryRun, opts) {
         { rows: opts && opts.rowsBySid ? opts.rowsBySid[sid] : null, pending: !!(opts && opts.pending) });
     } catch (e) { registered[names[sid] || sid] = { error: e.message }; }
   });
-  return Object.assign(result, { draft: 'created', sheetUrl: ss.getUrl(), title, pdf: pdf.name, pdfUrl: pdf.url, registered });
+  return Object.assign(result, { draft: 'created', draftId, sheetUrl: ss.getUrl(), sheetId: ss.getId(), title, pdf: pdf.name, pdfUrl: pdf.url, pdfId: pdf.id, registered });
 }
 
 // ----------------------------------------------------------------
