@@ -5720,7 +5720,9 @@ function _unreadLines_(storeId, body, storeName) {
   if (lines.length < 2) return [];   // 1行の文は行ごとに分けられないので出さない
   return lines.filter(l => {
     const n = _normJa_(l).replace(/^セルフカフェ/, '').replace(/店$/, '');
-    if (!n || /^[\d\s]+$/.test(n) || (sn && (n === sn || sn.indexOf(n) >= 0 || n.indexOf(sn) >= 0 && n.length <= sn.length + 2))) return false;
+    if (!n || /^[\d\s]+$/.test(n)) return false;
+    if (sn && (sn.indexOf(n) >= 0 || (n.indexOf(sn) >= 0 && !/\d/.test(n)))) return false;   // 店名の行（「天満店です」）
+    if (/(お疲れ|おつかれ|お願い|よろしく|宜しく|ありがと|失礼|発注|以上|です|ます)$/.test(n) && !/\d/.test(n)) return false;   // あいさつ・締めの行
     const m = _matchProductsText_(storeId, l);
     return !m.items.length && !m.ambiguous.length;
   }).slice(0, 10);
