@@ -5430,8 +5430,19 @@ function sendAmazonOrderToBot_(storeId, items, toyo) {
   const url = props.getProperty('GBP_PHOTO_BOT_URL'), apiKey = props.getProperty('GBP_PHOTO_BOT_API_KEY');
   if (!url || !apiKey) { console.warn('Amazon通知: GBP_PHOTO_BOT_URL / GBP_PHOTO_BOT_API_KEY が未設定のため送りません'); return; }
   items = items.map(it => Object.assign({}, it, { url: it.url ? _amazonUrl_(it.url) : '' }));   // 短縮URLの展開は通信があるのでロックの外で
+  // ポータル（パートナーの画面）から来たアペックスの品は、ここで発注書と Gmail 下書きを作る（2026-10-24 塩川さん「そのまま発注できるように」）。
+  // Bot から登録した品（備考「LINE WORKS の連絡から本部が登録」）は createOrderRequest で作り済みなので除く。結果の1行は Bot が通知のアペックス欄に出す
+  let apexNote = '';
+  try {
+    const apexIds = items.filter(it => APEX_ORDER_VENDORS.indexOf(it.vendor || '') >= 0).map(it => String(it.id));
+    if (apexIds.length) {
+      const apexRows = getOrders().filter(r => apexIds.indexOf(String(r.id)) >= 0 && !_dateStr(r.order_date) &&
+        !/LINE WORKS の連絡から本部が登録/.test(String(r.note || '')));
+      if (apexRows.length) apexNote = _apexDraftForOrderRows_(storeId, apexRows) || '';
+    }
+  } catch (e) { apexNote = '【アペックス】発注メールの下書きを作れませんでした（' + e.message + '）。PC から作ってください'; }
   const res = UrlFetchApp.fetch(url, { method: 'post', contentType: 'application/json', muteHttpExceptions: true,
-    payload: JSON.stringify({ action: 'amazonOrder', apiKey, storeId, store: (_storeNames_()[storeId] || storeId) + (_isFcStore_(storeId) ? '（FC）' : ''), items, toyo: toyo || null }) });
+    payload: JSON.stringify({ action: 'amazonOrder', apiKey, storeId, store: (_storeNames_()[storeId] || storeId) + (_isFcStore_(storeId) ? '（FC）' : ''), items, toyo: toyo || null, apexNote }) });
   let out = {};
   try { out = JSON.parse(res.getContentText()); } catch (e) {}
   if (!out.ok) throw new Error('Amazon通知の送信失敗 ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 200));
