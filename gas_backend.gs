@@ -873,6 +873,7 @@ function doPost(e) {
     else if (b.action === 'previewOrderText')   result = previewOrderText(b.apiKey, b.storeText, b.body);
     else if (b.action === 'createOrderRequest') result = createOrderRequest(b.apiKey, b.storeId, b.items);
     else if (b.action === 'getProductAlternatives') result = getProductAlternatives(b.apiKey, b.text);
+    else if (b.action === 'resendOrderNotify')  result = resendOrderNotify(b.storeId);   // 管理者・スクリプトだけ（2026-10-24）
     else if (b.action === 'registerApexOrder')  result = registerApexOrder(b.storeId, b.items, b.source, b.document);
     else if (b.action === 'setAuthEnforce')     result = setAuthEnforce(b.on);
     else result = { error: 'Unknown action: ' + b.action };
@@ -5918,6 +5919,18 @@ function testAmazonOrderToBot() {
     if (n) sendAmazonOrderToBot_(n.storeId, n.items);
   });
   return { ok: true, stores: Object.keys(byStore).length };
+}
+
+// 店の未発注の依頼（新着・否認なし・発注日なし）の通知を、塩川用 Bot へもう一度送る（2026-10-24。通知が届かなかった依頼の送り直し）。
+// 管理者・スクリプト（scriptKey）から呼ぶ。アペックスの品はポータルからの依頼なら、このとき発注書と下書きも作る（sendAmazonOrderToBot_）
+function resendOrderNotify(storeId) {
+  storeId = _normalizeStoreId_(storeId);
+  const rows = getOrders().filter(r => r.store_id === storeId && (r.is_new === true || String(r.is_new) === 'TRUE') &&
+    !(r.denied === true || String(r.denied) === 'TRUE') && !_dateStr(r.order_date));
+  const n = _withAmazonOrderNotify_({}, storeId, rows)._notify;
+  if (!n) return { ok: true, sent: 0 };
+  sendAmazonOrderToBot_(n.storeId, n.items, n.toyo);
+  return { ok: true, sent: 1, items: n.items.map(i => i.label + ' ×' + i.qty + (i.unit || '')) };
 }
 
 function buildAmazonList(periodLabel) {
