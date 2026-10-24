@@ -63,6 +63,23 @@
       <div class="note">初めての時に Safari が「Userscripts にこのサイトへのアクセスを許可しますか」と聞いたら「許可」。</div></li>
   </ol>
 
+  <h2>PC の場合（LINE WORKS の PC 版から開くとき）</h2>
+  <p class="lead">PC の LINE WORKS はリンクを PC のブラウザで開くので、そのブラウザにも同じスクリプトを入れます。</p>
+  <ol>
+    <li><b>Tampermonkey を入れる</b>
+      Chrome ウェブストアで「Tampermonkey」を検索して［Chrome に追加］。</li>
+    <li><b>ユーザースクリプトを許可する</b>
+      アドレスバーに <span class="path">chrome://extensions</span> → 右上の「デベロッパーモード」をオン → Tampermonkey の［詳細］→「ユーザースクリプトを許可する」があればオン。</li>
+    <li><b>スクリプトを入れる</b>
+      下のボタンを Chrome で開く → Tampermonkey の画面で［インストール］。
+      <a class="btn" href="https://selfcafe.github.io/internal-web-system/tools/selfcafe-bcart.user.js">スクリプトを開く</a></li>
+    <li><b>Bカートにログインしておく</b>
+      Chrome で Bカートにログイン（使う地域のアカウント）。</li>
+    <li><b>試す</b>
+      上の［試しにカートに入れる］を Chrome で開く。
+      <div class="note">LINE WORKS のリンクが Edge で開くときは、Edge にも Tampermonkey を入れるか、Windows の既定のブラウザを Chrome にする。</div></li>
+  </ol>
+
   <h2>うまくいかないとき</h2>
   <p>・何も出ない → 2 の「許可」と、3 の一覧に入っているかを確認。</p>
   <p>・「ログインしていません」→ 4 でログインしてから、もう一度リンクを開く。</p>
