@@ -5356,7 +5356,7 @@ function _withAmazonOrderNotify_(result, storeId, rows) {
     const meta = _productMeta_();   // ケースのみの品は unit_mode がバラのままでもケース（ポータルの画面と同じ扱い）
     const items = (rows || []).filter(r => r && r.product &&
       (r.is_new === true || String(r.is_new) === 'TRUE') && !(r.denied === true || String(r.denied) === 'TRUE'))
-      .map(r => ({ id: String(r.id), label: String(r.label || r.product), qty: r.qty,
+      .map(r => ({ id: String(r.id), label: String(r.label || r.product), qty: (r.qty === '' || r.qty == null) ? '?' : r.qty,   // 数が空の依頼は ? と出す（2026-10-24）
         unit: r.unit_mode === 'case' || (meta[r.product] || {}).caseOnly ? 'ケース' : String(r.unit || ''), url: urls[r.product] || '',
         vendor: (meta[r.product] || {}).vendor || '',
         // 「その他」は中身が備考欄に書かれるので、通知にも備考を載せる（2026-10-17 塩川さん。例: その他 ×1（パイプユニッシュ））
