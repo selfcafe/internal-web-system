@@ -5683,17 +5683,25 @@ function _matchProductsText_(storeId, body) {
   // 品名のすぐ後ろの数（「ブレンドA 8袋」「ココア×3」「カップM 2ケース」）。「残り5本」のように間に言葉があるものは読まない（残りの数）
   const qtys = {};
   Object.keys(ends).forEach(n => {
-    const q = text.slice(ends[n]).match(/^[×x*:=＝・\-]*(?:ダンボール|段ボール)?(\d+)(ケース|cs|kg|キロ|箱|袋|個|本|枚|ロール|パック|つ)?/i);
-    if (q && Number(q[1]) > 0) qtys[n] = { n: Number(q[1]), unit: (q[2] || '').toLowerCase() };
+    const q = text.slice(ends[n]).match(/^[×x*:=＝・\-]*(ダンボール|段ボール)?(\d+)(ケース|cs|kg|キロ|箱|袋|個|本|枚|ロール|パック|つ)?/i);
+    if (q && Number(q[2]) > 0) qtys[n] = { n: Number(q[2]), unit: (q[3] || '').toLowerCase(), danbo: !!q[1] };
   });
   return { items: Object.keys(found).map(n => found[n]), ambiguous, qtys };
 }
 
 // 連絡文の数を、ポータルの依頼の数と単位（バラ／ケース）にする（2026-10-16）。数が書いていなければ今までどおり 1（ケースのみの品は1ケース）
+// トーヨーの品の「ダンボール1ケース」は12袋（2026-10-24 塩川さん決定。Bカートには入り数の表示が無い。
+// 例: ブライト・ココア ダンボール1ケース＝12袋、ブレンドA ダンボール2ケース＝24袋＝6kg）。「ダンボール」の付かない「ケース」は今までどおり
+const TOYO_DANBO_BAGS = 12;
+
 function _orderItemFromText_(p, q) {
   const cu = Number((String(p.caseUnit || '').match(/\d+/) || [0])[0]) || 0;
   if (!q) return p.caseOnly && cu ? _orderItemOut_(p, 1, 'case') : _orderItemOut_(p, 1, 'piece');
   const n = q.n, u = q.unit;
+  if (q.danbo && p.vendor === 'toyo' && !/本|個|箱/.test(String(p.unit || ''))) {   // 袋の品だけ（カップ・なっちゃんは今までどおりケース）
+    const bags = n * TOYO_DANBO_BAGS;
+    return p.caseOnly && cu ? _orderItemOut_(p, Math.ceil(bags / cu), 'case') : _orderItemOut_(p, bags, 'piece');
+  }
   if ((u === 'ケース' || u === 'cs') && cu) return _orderItemOut_(p, n, 'case');
   if ((u === 'kg' || u === 'キロ') && cu === 4) return p.caseOnly ? _orderItemOut_(p, n, 'case') : _orderItemOut_(p, n * 4, 'piece');   // 豆 1kg＝4袋＝1ケース
   if (p.caseOnly && cu) return _orderItemOut_(p, u ? Math.max(1, Math.ceil(n / cu)) : n, 'case');   // ケースのみ: 単位なしはケース、袋・本などはケースに切り上げ
