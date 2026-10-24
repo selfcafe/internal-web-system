@@ -5559,8 +5559,9 @@ const ORDER_TEXT_ALIASES = {
   '㋣断熱発泡カップ（9オンス）': ['Mカップ', 'カップM', 'Mサイズカップ', '9オンスカップ'],
   '㋣カップ（12オンス）': ['Lカップ', 'カップL', 'Lサイズカップ', '12オンスカップ'],
   // 2026-10-16 「岐阜北方 ブレンドA 8袋」が「ブレンド」で A・B を決められなかった
-  '㋣ミル挽き珈琲　ブレンドA': ['ブレンドA', 'Aブレンド', 'A豆', '豆A'],
-  '㋣ミル挽き珈琲　ブレンドB': ['ブレンドB', 'Bブレンド', 'B豆', '豆B'],
+  '㋣ミル挽き珈琲　ブレンドA': ['ブレンドA', 'Aブレンド', 'A豆', '豆A', 'コーヒーA', '珈琲A', 'コーヒー豆A'],   // コーヒーA は 2026-10-24 岐阜北方
+  '㋣ミル挽き珈琲　ブレンドB': ['ブレンドB', 'Bブレンド', 'B豆', '豆B', 'コーヒーB', '珈琲B', 'コーヒー豆B'],
+  '㋣なっちゃんオレンジBIB(2.5ガロン）': ['なっちゃん', 'なっちゃんオレンジ', 'オレンジジュース', 'オレンジ'],
   // 2026-10-22 新守山「コーヒー豆1ケース」がミルク（コーヒーフレッシュ）になった
   'ブレンド': ['コーヒー豆', '珈琲豆', 'コーヒーの豆', 'ブレンド豆', '豆'],
   // 2026-10-23 「サニタリー」「トイレの黒いごみ袋」が読めなかった
@@ -5659,8 +5660,11 @@ function _matchProductsText_(storeId, body) {
   // 2) 残りは、カタカナ・漢字・英数字のかたまりごとに照合する（1 で決めた言葉の一部は飛ばす）
   //    数と単位（「1ケース」「20袋」）は先に外す（2026-10-22: 「1ケース\nココア」が「ケースココア」になってココアが消え、
   //    「20袋」の 20 が品番 SVT-420-2 に当たった）
-  const runText = text.replace(/\d+(?:ケース|cs|kg|キロ|箱|袋|個|本|枚|ロール|パック|つ)?/gi, ' ');
-  const runs = Array.from(new Set(runText.match(/[ァ-ヶー]+|[一-龠々]+|[a-z0-9]+/g) || [])).filter(run => !used.some(u => u.indexOf(run) >= 0));
+  // 空白を残した文から作る（2026-10-24 岐阜北方「ブライト　ダンボール1ケース」が「ブライトダンボール」になった）。ダンボール・段ボールも外す
+  const runText = String(body || '').normalize('NFKC').toLowerCase()
+    .replace(/(?:ダンボール|段ボール|だんぼーる)/g, ' ').replace(/\d+(?:ケース|cs|kg|キロ|箱|袋|個|本|枚|ロール|パック|つ)?/gi, ' ');
+  // ひらがなは3文字以上のかたまりだけ（「なっちゃん」。2026-10-24）
+  const runs = Array.from(new Set(runText.match(/[ァ-ヶー]+|[一-龠々]+|[a-z0-9]+|[ぁ-ゖー]{3,}/g) || [])).filter(run => !used.some(u => u.indexOf(run) >= 0));
   runs.forEach(run => {
     const generic = ORDER_TEXT_GENERIC.indexOf(run) >= 0;
     const hits = products.filter(p => {
@@ -5679,7 +5683,7 @@ function _matchProductsText_(storeId, body) {
   // 品名のすぐ後ろの数（「ブレンドA 8袋」「ココア×3」「カップM 2ケース」）。「残り5本」のように間に言葉があるものは読まない（残りの数）
   const qtys = {};
   Object.keys(ends).forEach(n => {
-    const q = text.slice(ends[n]).match(/^[×x*:=＝・\-]*(\d+)(ケース|cs|kg|キロ|箱|袋|個|本|枚|ロール|パック|つ)?/i);
+    const q = text.slice(ends[n]).match(/^[×x*:=＝・\-]*(?:ダンボール|段ボール)?(\d+)(ケース|cs|kg|キロ|箱|袋|個|本|枚|ロール|パック|つ)?/i);
     if (q && Number(q[1]) > 0) qtys[n] = { n: Number(q[1]), unit: (q[2] || '').toLowerCase() };
   });
   return { items: Object.keys(found).map(n => found[n]), ambiguous, qtys };
