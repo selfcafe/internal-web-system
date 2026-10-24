@@ -1,0 +1,161 @@
+name: deploy gas backend
+
+# clasp push/deployはGoogle自身のAPI(script.googleapis.com)への認証付きAPI呼び出しのみで、
+# ブラウザ操作を伴わない(stera-daily-import.yml/kaihipay_pipeline.ymlとは違い、IPブロックや
+# セッション状態保持の心配が無い)。そのため自己ホストランナーは不要、ubuntu-latestで完結させる。
+# 手動実行(workflow_dispatch)のみ。本番Apps Scriptへの書き込みを伴うため自動トリガーは付けない。
+on:
+  workflow_dispatch:
+    inputs:
+      allow_scope_change:
+        description: "権限(oauthScopes)を増やすデプロイを許可する。デプロイ直後に手で再認可するまでポータル全体が止まる(CLAUDE.md 1章)"
+        type: boolean
+        default: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # このPCのローカルclaspがv3.3.0で、.clasprc.jsonの認証情報形式(tokens.<profile>)を
+      # そこから抽出しているため、CI側もv2系ではなく同じv3系を使う(2026-09-12、実際にv2で
+      # "Error retrieving access token"が発生し原因判明——バージョン間で認証情報の形式が異なる)
+      - name: Install clasp
+        run: npm install -g @google/clasp@3.3.0
+
+      - name: Configure clasp credentials
+        env:
+          CLASP_CREDENTIALS: ${{ secrets.CLASP_CREDENTIALS }}
+        run: |
+          printf '{"tokens":{"default":%s}}' "$CLASP_CREDENTIALS" > "$HOME/.clasprc.json"
+
+      - name: Prepare deploy workspace with real IDs
+        env:
+          SHEET_ID: ${{ secrets.SHEET_ID }}
+          INVENTORY_SHEET_ID: ${{ secrets.INVENTORY_SHEET_ID }}
+          DELIVERY_HISTORY_SHEET_ID: ${{ secrets.DELIVERY_HISTORY_SHEET_ID }}
+          BUGREPORT_SHEET_ID: ${{ secrets.BUGREPORT_SHEET_ID }}
+          CLASP_SCRIPT_ID: ${{ secrets.CLASP_SCRIPT_ID }}
+          INVENTORY_SHEET_ID_ARCHIVE_JSON: ${{ vars.INVENTORY_SHEET_ID_ARCHIVE_JSON }}
+        run: |
+          set -eu
+          mkdir -p gas-deploy
+          cp gas_backend.gs gas-deploy/gas_backend.js
+          cp appsscript.json gas-deploy/appsscript.json
+
+          # リポジトリ側は伏せ字(空文字)のまま維持するルール([[project_clasp_gas_deploy]])。
+          # ここでだけ実IDに置換する。置換前に置換対象の行が存在することを確認し、
+          # 置換後は空文字のままになっていないか(=置換に失敗していないか)を検証してから進める。
+          grep -qF "const SHEET_ID        = '';" gas-deploy/gas_backend.js
+          grep -qF "const INVENTORY_SHEET_ID = '';" gas-deploy/gas_backend.js
+          grep -qF "const DELIVERY_HISTORY_SHEET_ID = '';" gas-deploy/gas_backend.js
+          grep -qF "const BUGREPORT_SHEET_ID = '';" gas-deploy/gas_backend.js
+
+          sed -i "s|const SHEET_ID        = '';|const SHEET_ID        = '${SHEET_ID}';|" gas-deploy/gas_backend.js
+          sed -i "s|const INVENTORY_SHEET_ID = '';|const INVENTORY_SHEET_ID = '${INVENTORY_SHEET_ID}';|" gas-deploy/gas_backend.js
+          sed -i "s|const DELIVERY_HISTORY_SHEET_ID = '';|const DELIVERY_HISTORY_SHEET_ID = '${DELIVERY_HISTORY_SHEET_ID}';|" gas-deploy/gas_backend.js
+          sed -i "s|const BUGREPORT_SHEET_ID = '';|const BUGREPORT_SHEET_ID = '${BUGREPORT_SHEET_ID}';|" gas-deploy/gas_backend.js
+
+          grep -qF "const SHEET_ID        = '';" gas-deploy/gas_backend.js && { echo "::error::SHEET_ID置換に失敗しました"; exit 1; }
+          grep -qF "const INVENTORY_SHEET_ID = '';" gas-deploy/gas_backend.js && { echo "::error::INVENTORY_SHEET_ID置換に失敗しました"; exit 1; }
+          grep -qF "const DELIVERY_HISTORY_SHEET_ID = '';" gas-deploy/gas_backend.js && { echo "::error::DELIVERY_HISTORY_SHEET_ID置換に失敗しました"; exit 1; }
+          grep -qF "const BUGREPORT_SHEET_ID = '';" gas-deploy/gas_backend.js && { echo "::error::BUGREPORT_SHEET_ID置換に失敗しました"; exit 1; }
+
+          # INVENTORY_SHEET_ID_ARCHIVE(年→旧ファイルIDのマップ)はGitHub Actions Variable
+          # (vars.INVENTORY_SHEET_ID_ARCHIVE_JSON、rollover-inventory-year.ymlが更新する)から
+          # 差し込む。複数行ブロックのためsedではなくnodeで置換する([[feature_inventory_year_rollover]]参照)。
+          node -e "
+            const fs = require('fs');
+            const path = 'gas-deploy/gas_backend.js';
+            let src = fs.readFileSync(path, 'utf8');
+            const archive = JSON.parse(process.env.INVENTORY_SHEET_ID_ARCHIVE_JSON || '{}');
+            const re = /const INVENTORY_SHEET_ID_ARCHIVE = \{[\s\S]*?\n\};/;
+            if (!re.test(src)) { console.error('::error::INVENTORY_SHEET_ID_ARCHIVEの置換対象ブロックが見つかりません'); process.exit(1); }
+            src = src.replace(re, 'const INVENTORY_SHEET_ID_ARCHIVE = ' + JSON.stringify(archive) + ';');
+            fs.writeFileSync(path, src);
+          "
+
+          printf '{"scriptId":"%s","rootDir":"."}' "$CLASP_SCRIPT_ID" > gas-deploy/.clasp.json
+
+      # 権限が増えるデプロイを止める(2026-10-12)。Web AppはselfcafeアカウントとしてGASを動かすので、
+      # 本番の権限が1つでも増えると、selfcafeが同意画面で再認可するまでポータル全体が
+      # 「承認が必要です」で止まる。再認可はブラウザ操作が要り、クラウドから自動ではできない。
+      # appsscript.jsonのoauthScopesを固定し(自動検出に任せない)、本番より増える場合は
+      # allow_scope_change=trueを明示しない限りpush前に失敗させる。
+      - name: Guard OAuth scopes (権限が増えるデプロイを止める)
+        env:
+          CLASP_SCRIPT_ID: ${{ secrets.CLASP_SCRIPT_ID }}
+          ALLOW_SCOPE_CHANGE: ${{ inputs.allow_scope_change }}
+        run: |
+          set -eu
+          mkdir -p current-prod
+          printf '{"scriptId":"%s","rootDir":"."}' "$CLASP_SCRIPT_ID" > current-prod/.clasp.json
+          (cd current-prod && clasp pull >/dev/null)
+          node -e "
+            const fs = require('fs');
+            const next = JSON.parse(fs.readFileSync('appsscript.json', 'utf8')).oauthScopes;
+            const cur = JSON.parse(fs.readFileSync('current-prod/appsscript.json', 'utf8')).oauthScopes;
+            if (!Array.isArray(next) || next.length === 0) {
+              console.error('::error::appsscript.jsonにoauthScopesがありません。自動検出に任せると、コード変更だけで権限が増えてポータルが止まります');
+              process.exit(1);
+            }
+            if (!Array.isArray(cur)) {
+              console.log('本番にoauthScopesの指定がまだ無いため、比較を省略します(初回のみ)');
+              process.exit(0);
+            }
+            const added = next.filter(s => !cur.includes(s));
+            if (added.length === 0) { console.log('権限の追加なし'); process.exit(0); }
+            console.log('追加される権限: ' + added.join(', '));
+            if (process.env.ALLOW_SCOPE_CHANGE === 'true') {
+              console.log('::warning::権限が増えます。デプロイ直後にselfcafeでApps Scriptエディタを開き、関数を1つ実行して再認可してください');
+              process.exit(0);
+            }
+            console.error('::error::権限が増えるデプロイです。必要な変更なら、再認可の準備をしたうえでallow_scope_change=trueで再実行してください');
+            process.exit(1);
+          "
+
+      - name: clasp push
+        working-directory: gas-deploy
+        run: clasp push -f
+
+      - name: clasp deploy
+        working-directory: gas-deploy
+        env:
+          CLASP_DEPLOYMENT_ID: ${{ secrets.CLASP_DEPLOYMENT_ID }}
+        run: clasp deploy -i "$CLASP_DEPLOYMENT_ID" -d "GitHub Actions deploy $(date -u +%FT%TZ)"
+
+      - name: Smoke test (getSettings疎通確認)
+        env:
+          CLASP_DEPLOYMENT_ID: ${{ secrets.CLASP_DEPLOYMENT_ID }}
+        run: |
+          sleep 5
+          code=$(curl -s -o body.txt -w "%{http_code}" -L "https://script.google.com/macros/s/${CLASP_DEPLOYMENT_ID}/exec?action=getSettings")
+          echo "HTTP status: $code"
+          if [ "$code" != "200" ]; then
+            echo "::error::デプロイ後の疎通確認に失敗しました(HTTP $code)"
+            exit 1
+          fi
+          # 承認切れのときもHTTP 200のHTMLが返るので、本文がJSONかも確かめる
+          if ! node -e "JSON.parse(require('fs').readFileSync('body.txt','utf8'))" 2>/dev/null; then
+            echo "::error::デプロイ後の応答がJSONではありません(承認切れの可能性)。先頭: $(head -c 200 body.txt)"
+            exit 1
+          fi
+
+      # 権限の承認の確認(2026-10-15)。Googleの承認画面は項目ごとにチェックを外せるため、Gmailだけ未承認になり
+      # 下書き作成だけが失敗することがある(getSettingsの疎通確認では分からない)。selfcafeの承認の状態を見る
+      - name: Auth check (Gmailなどの権限が承認されているか)
+        env:
+          CLASP_DEPLOYMENT_ID: ${{ secrets.CLASP_DEPLOYMENT_ID }}
+        run: |
+          curl -s -L "https://script.google.com/macros/s/${CLASP_DEPLOYMENT_ID}/exec?action=authStatus" -o auth.json
+          node -e "
+            const a = JSON.parse(require('fs').readFileSync('auth.json','utf8'));
+            console.log('承認の状態: ' + a.status + ' / Gmail: ' + a.gmail);
+            if (!a.ok) { console.log('::error::権限の承認が足りません。' + (a.fix || '')); process.exit(1); }
+          "

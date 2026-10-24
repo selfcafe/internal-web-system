@@ -1,0 +1,93 @@
+# internal-web-system
+
+## 引き継ぎを受けた方へ
+
+引き継ぎに必要な資料は、次の4つにまとめてあります。**まず[HANDOVER.md](HANDOVER.md)の「0. 引き継いだら最初にやること」から読んでください。**
+
+| 資料 | 中身 | 場所 |
+|---|---|---|
+| **[HANDOVER.md](HANDOVER.md)**(引継ぎ書) | 全体像、引き継ぐアカウント・権限、いま動いている自動処理、残っている課題、ステラ取り込みを別のPCへ移す手順 | このリポジトリ |
+| **[CLAUDE.md](CLAUDE.md)**(運用ガイド) | デプロイ手順、仕組みの詳細、過去の事故と注意点(前任者の作業メモから移したもの) | このリポジトリ |
+| **[社内ポータル　運用各種](https://docs.google.com/document/d/14P5jF1IsI7KjiGrYHwCdAGxEYXHI_UadEg8X7Z1BQCg/edit)**(URL一覧) | ポータルが使っているスプレッドシート・スクリプトなどのURL | Googleドキュメント(`selfcafe001@gmail.com`でのみ開ける) |
+| **[社内ポータル（システム一式）](https://drive.google.com/drive/folders/1clucdJh7gXCgML8HoC2Ol5xrvLuXx-98)**(ファイル一式) | 使っているスプレッドシート・Apps Script・画像保存用フォルダ・上のドキュメント | Googleドライブ(`selfcafe001@gmail.com`でのみ開ける) |
+
+- このリポジトリは公開(Public)なので、スプレッドシートのURLやパスワードは書かず、上のGoogleドキュメントにだけ置いています。
+- ポータルを変更したら、HANDOVER.mdとCLAUDE.mdも一緒に更新してください。
+- Claude Codeで作業する場合、このリポジトリを開くとCLAUDE.mdが自動で読み込まれます。
+
+---
+
+セルフカフェの社内ポータル（パートナー用ポータル／管理者用ポータル）。GitHub Pages上で動く単一の静的サイトで、Google Apps Script（GAS）をバックエンドAPIとして使い、一部データはFirebase Realtime Databaseでリアルタイム同期しています。
+
+- 公開URL: https://selfcafe.github.io/internal-web-system/
+- パートナー側・管理者側どちらも `index.html` 1ファイルの中で、ログイン方式（店舗パスワード or 管理者パスワード）によって表示を切り替えています。
+
+## できること
+
+- **発注管理**: パートナーが商品を発注依頼→管理者が確認・確定
+- **棚卸表**: 月次の棚卸入力・締め処理、原価把握用の外部シート連携
+- **チェックシート**: 日次のデイリーカウント・清掃点検項目の入力（店舗ごとにカスタマイズ可能）
+- **忘れ物管理**: 忘れ物の登録・一覧
+- **納品履歴**: 発注に対する納品記録
+- **業務開始（出勤）**: 位置情報付きの出勤打刻、休み申請、業務日数/休んだ日数の集計
+- **在庫差異検知（盗難/ロス検知）**: チェックシートの補充量とステラ(決済端末)実売上を突き合わせて差異を検知・通知（詳細は下記）
+- **管理者向け設定画面**: 商品設定・チェック項目設定・店舗管理・エリア設定など、ほぼ全ての運用ルールを管理画面から変更可能
+
+## 構成
+
+| ファイル | 役割 |
+|---|---|
+| `index.html` | アプリ本体（パートナー/管理者ポータル、全ロジック込み） |
+| `gas_backend.gs` | バックエンドAPI（Google Apps Script）。Google スプレッドシートを実データベースとして読み書きする |
+| `ARCHITECTURE.md` | 設計図（部品のつながり・画面の地図・設定データの持ち方・主な流れ）。引き継ぎ時に HANDOVER.md の次に読む |
+| `stores.js` | 店舗マスタ（店舗ID・店舗名など）。フロント用だが `gas_backend.gs` からも動的に取得して参照している |
+| `admin-guide.html` / `guide.html` | 管理者向け・パートナー向けの操作マニュアル |
+| `theft-detection-notes.md` | 在庫差異検知(盗難/ロス検知)機能の設計経緯・検討メモ。ルール自体の要約はこのREADMEの該当セクション参照 |
+| `manifest.json` / `icon-*.png` / `splash-*.png` / `apple-touch-icon.png` | PWA（ホーム画面追加）用の設定・アイコン |
+
+## デプロイ
+
+- **Apps Scriptプロジェクト**: https://script.google.com/u/1/home/projects/1J5qtNKPyXt3L7wmX6MMmAD33t1LQF5hBaDfjG2mghCinlc4h4xwagxP2/edit （selfcafe001@gmail.comアカウントでログインすると閲覧可能。実行数ログもここから確認する）
+- **`index.html`など静的ファイル**: `main`ブランチへのpushでGitHub Pagesが自動反映（数分以内）。
+- **`gas_backend.gs`**: pushだけでは反映されない。`gh workflow run deploy-gas.yml --repo selfcafe/internal-web-system --ref main`(GitHub Actions、実IDはSecretsから自動で入る)で本番へ反映する。手順・緊急時の手動claspは[CLAUDE.md](CLAUDE.md) 1章。
+  - リポジトリ内の`SHEET_ID`等が空欄なのは公開リポジトリのため(意図的)。実値をコミットしないこと。
+- データの実体はFirebase Realtime Database（ライブ同期用ping）とGoogle スプレッドシート（実データ）。Firebaseのセキュリティルールはこのリポジトリには含まれておらず、Firebaseコンソール側でのみ管理されている。
+
+## ローカルでの動作確認
+
+```bash
+python -m http.server <高めのランダムポート>
+```
+
+- 低い番号のポート（8000〜9000番台）は過去のセッションが残した`http.server`の残骸プロセスと衝突することがあるため、19000番台などの高いポートを使うこと。
+- ログイン画面をバイパスしたい場合は、ブラウザの`sessionStorage`に以下を設定してリロードする。
+  ```js
+  sessionStorage.setItem('site_authed', '1');
+  sessionStorage.setItem('site_authed_store', '<店舗ID>'); // パートナー側
+  // または
+  sessionStorage.setItem('admin_authed', '1'); // 管理者側
+  ```
+- `initGas()`は実際に本番のGAS APIへ生きた通信を行うため、ローカル検証中でも本番の実データを読み込む点に注意（読み取り専用の確認なら問題ないが、保存系関数は不用意に呼ばないこと）。
+
+## 在庫差異検知（盗難/ロス検知）・ステラ取り扱い商品の理論在庫
+
+> 🔄 **2026-09-08、ステラ取り扱い商品まわりを再設計・実装済み**。デイリーカウント入力に依存していた仕組み(旧①)を廃止し、ステラの営業日(AM4:30締め)ベースの自動計算に置き換えた。詳細・決定に至った経緯は`theft-detection-notes.md`の「🔄 再設計メモ」参照。
+
+パートナー自己申告(棚卸)の消費量と、stera smart one(決済端末)の実売上数量を突き合わせ、「支払いを伴わない減少」＝盗難・ロス疑いを検知する仕組み。設計の経緯・検討過程は`theft-detection-notes.md`参照。
+
+- **対象商品**: 「販売品類」(スナック・アイス等、都度課金の単品購入商品)のみ。
+  - ドリンク類は対象外(会員がQRで飲む分は会費でカバーされe-MOSS側管理のため、ステラの決済取引としては記録されない)。
+  - 東海限定商品・天満店限定アイス・取扱終了品も対象外(ステラ管理外の別運用のため)。
+- **営業日(AM4:30締め)**(`_steraBusinessDateFromDateTime_`、`gas_backend.gs`): 全店舗共通の固定値。深夜0:00〜4:29の売上は前営業日扱いにすることで、暦日境界で分断されない日次集計にする(多くの店舗が「早くて5時開店・遅くて4時閉店」であることを踏まえて選定)。`stera_daily_sales`の`date`列はこの営業日を表す。
+- **パートナー向け「理論在庫」表示**(`getSteraStockEstimate`、`gas_backend.gs`): チェックシート画面にステラ取り扱い商品(水など)の理論在庫を読み取り専用で表示する。パートナーの入力には一切依存せず、`直近確定棚卸の期末在庫 + その後の当月納品累計 − その後のステラ実売上累計`で自動計算する(デイリーカウントの入力欄自体が無い)。「理論在庫」という名称にしているのは、盗難等で実物が減ってもこの数字自体はそれを検知できず、実物とは独立に乖離していく値でしかないため(2026-09-09、「残り在庫」から改称)。
+- **月次バックストップ**(`buildStockCheckMonthly`): 棚卸完了時に、消費量とステラ月間売上数量を店舗タブ上で全対象商品分突き合わせる。通知はなし(店舗タブに書き込むだけ、管理者が手動で確認・記入する運用)。パートナーがステラ取り扱い商品に一切触れなくても月1回は必ずカバーする安全網。
+- **売上データの取得タイミング**:
+  - 確定分: **2026-10-12停止**(`SteraDailySalesImport`タスクを無効化、CLAUDE.md 7.4)。以前は毎朝、Windowsタスクスケジューラ`SteraDailySalesImport`がプリセット「過去3日」で直近数日分のステラ注文詳細CSVをまとめて取得し、各行の実タイムスタンプから営業日を判定して`stera_daily_sales`シートへ反映(`importSteraDailySalesBulk`)。暦日1日分だけでなく複数日分を取得するのは、営業日の境界(AM4:30)が暦日をまたぐため。
+  - 当日速報値: **2026-10-06停止**(ステラへのアクセスを毎朝1回にするため`SteraRealtimeSalesPoll`タスクを無効化)。以前は10分おきにステラ管理画面の内部集計API(非公式)をポーリングしていた(`stera_realtime_today`シート)。戻すときは`Enable-ScheduledTask -TaskName SteraRealtimeSalesPoll`。
+  - (停止中は無効)日付が変わる瞬間、削除される直前の前日最終ポーリング値を確定分シートへ速報値として書き込む(`_seedSteraDailyFromRealtimeRollover_`)。
+- ポーリング・CSV取込みスクリプト本体(`scripts/poll_stera_realtime_sales.py`・`scripts/import_stera_daily_sales.py`・`scripts/backfill_stera_daily_sales_amount.py`)はこのPC上のタスクスケジューラでのみ動作する(GitHub Actionsではない。e-MOSS/ステラ管理画面がクラウドIPをブロックするkaihipayパイプラインと同様の理由)。
+
+## 開発フロー
+
+- リポジトリを直接clone→編集→commit→`main`へ直接push（PRは使っていない）。
+- リアルタイム同期・全件置き換え保存に関わる箇所（`_initRealtime`、`_syncStoreToDb`、`saveOrders`等）を触る変更は、pushの前に差分を確認してもらうこと。
