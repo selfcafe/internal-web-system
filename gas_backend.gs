@@ -5892,9 +5892,12 @@ function _apexDraftForOrderRows_(storeId, rows, onCarried) {
       list.forEach(r => { (byP[r.product] = byP[r.product] || []).push(r); });
       return sid + ':' + Object.keys(byP).map(pn => {
         const rs = byP[pn], m = meta[pn] || {};
-        const allCase = rs.every(r => r.unit_mode === 'case'), cp = Number(m.casePieces) || 1;
+        // ケースのみの品（カップ・蓋・豆など）は、行の unit_mode がバラのままでもポータルの画面ではケース。
+        // 2026-10-25 新瑞橋のカップM「2」（店の画面では2ケース）を2本で発注書に書いていた
+        const isCase = r => r.unit_mode === 'case' || !!m.caseOnly;
+        const allCase = rs.every(isCase), cp = Number(m.casePieces) || 1;
         const qty = allCase ? rs.reduce((t, r) => t + Number(r.qty), 0)
-          : rs.reduce((t, r) => t + Number(r.qty) * (r.unit_mode === 'case' ? cp : 1), 0);
+          : rs.reduce((t, r) => t + Number(r.qty) * (isCase(r) ? cp : 1), 0);
         return (m.code || pn) + '=' + qty + (allCase ? 'ケース' : '');
       }).join(',');
     };
@@ -6329,10 +6332,15 @@ function _registerOrderedRows_(storeId, items, source, documentName, opts) {
   items.forEach(it => {
     if (!it.product || !(Number(it.qty) > 0)) return;
     const base = (opts.rows || []).find(r => r.product === it.product);
+    // ケースのみの品は、ポータルの画面が数をケースとして読む（unit_mode がバラでも）。本・袋の数のまま入れると
+    // 50本が「50ケース」に見え、検品済みで 50×入り数 になるので、発注書のケース入数でケースに直して入れる（2026-10-26）
+    const cp = Number(it.casePieces) || 0;
+    const asCase = !!it.caseOnly && cp > 0;
+    const rowQty = asCase ? Math.round(Number(it.qty) / cp * 100) / 100 : Number(it.qty);
     const row = Object.assign({}, base || {}, {
       id: (base && base.id) || it.id || Utilities.getUuid(), store_id: storeId, group_id: (base && base.group_id) || groupId,
-      product: it.product, label: it.label || it.product, qty: Number(it.qty), actual_qty: '', unit: it.unit || '',
-      case_unit: '', unit_mode: 'piece', note: base && base.note ? base.note + '／' + tag : tag, locked: true, is_new: !!opts.pending,
+      product: it.product, label: it.label || it.product, qty: rowQty, actual_qty: '', unit: it.unit || '',
+      case_unit: asCase ? String(cp) : '', unit_mode: asCase ? 'case' : 'piece', note: base && base.note ? base.note + '／' + tag : tag, locked: true, is_new: !!opts.pending,
       request_date: (base && base.request_date) || today, order_date: opts.pending ? '' : today, delivery_date: '', created_at: (base && base.created_at) || now,
       denied: false, image_url: (base && base.image_url) || '', actual_unit_mode: '' });
     rows.push(row);
@@ -6355,7 +6363,7 @@ function _registerApexSheetItems_(storeId, sheetItems, source, documentName, opt
     const p = _portalProductForSheetCode_(x.code);
     if (!p) { unknown.push((x.name || '') + '（' + x.code + '）'); return; }
     items.push({ product: p.name, label: p.label || p.name, qty: x.qty, unit: p.unit || x.unit || '', unitPrice: x.price,
-      portalCode: String(p.code), sheetCode: String(x.code), vendor: p.vendor || '' });
+      portalCode: String(p.code), sheetCode: String(x.code), vendor: p.vendor || '', caseOnly: !!p.caseOnly, casePieces: x.casePieces || 0 });
   });
   const res = _registerOrderedRows_(storeId, items, source, documentName, opts);
   if (unknown.length) res.unknown = unknown;
@@ -6474,6 +6482,10 @@ function buildAdhocApexOrder(branchKey, spec, dryRun, opts) {
       const amount = it.qty * info.price;
       total += amount;
       if (info.casePieces && it.qty >= info.casePieces) hasCase = true;
+      // ケースでしか頼まない品（ポータルの商品マスタ caseOnly）がケースの倍数でない＝ケースと本・袋の取り違えの疑い（2026-10-26 新瑞橋のカップM 2ケース→2本）
+      const pp = _portalProductForSheetCode_(it.code);
+      if (pp && pp.caseOnly && info.casePieces && it.qty % info.casePieces !== 0)
+        warnings.push(`⚠${names[sid] || sid} ${info.name} が ${it.qty}${info.unit}（1ケース${info.casePieces}${info.unit}の倍数でない）。ケースでしか頼まない品なので、ケースと${info.unit}の取り違えがないか確かめてから送ってください`);
       lines.push(`${names[sid] || sid}　${info.name}　${it.qty}${info.unit}${info.casePieces ? `（1ケース${info.casePieces}${info.unit}）` : ''}　${amount.toLocaleString()}円`);
       return { name: info.name, code: it.code, qty: it.qty, unit: info.unit, casePieces: info.casePieces, price: info.price, amount, col: ci + 1, row: info.row };
     });
