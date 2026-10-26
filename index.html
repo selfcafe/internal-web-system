@@ -7025,7 +7025,12 @@ function addItemToGroup(groupId, requestDate) {
 }
 
 function lockGroup(groupId) {
-  const group = storeRows.filter(r => (r.groupId||r.id) === groupId);
+  // 商品を選んでいない行は依頼に含めず消す（最初の空の行を使わずに「＋ 商品を追加」で入れると、
+  // 空の行も一緒に依頼され、本部の画面に商品名「—」の依頼が残っていた）
+  const inGroup = r => (r.groupId||r.id) === groupId;
+  if (!storeRows.some(r => inGroup(r) && String(r.product || '').trim())) { alert('商品を選んでください。'); return; }
+  storeRows = storeRows.filter(r => !inGroup(r) || String(r.product || '').trim());
+  const group = storeRows.filter(inGroup);
   if (group.some(r => !r.requestDate)) { alert('依頼日を入力してください。'); return; }
   group.forEach(r => { r.locked = true; r.isNew = true; r.requestDate = today(); });
   saveA(storeTab, storeRows);
