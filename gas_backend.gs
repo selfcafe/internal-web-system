@@ -381,20 +381,36 @@ const STORE_NAMES_CACHE_KEY = 'store_names_v1';
 let _cachedStoreNames = null;
 function _storeNames_() {
   if (_cachedStoreNames) return _cachedStoreNames;
+  _cachedStoreNames = Object.assign({}, _customStoreNames_(), _storeNamesJs_());
+  return _cachedStoreNames;
+}
+// 管理画面の「店舗の追加」で足した店（custom_stores）の名前。stores.js に無いので、
+// 以前は Bot への発注依頼の通知が「cs_…」の ID だけになっていた（2026-10-25 丸の内）
+function _customStoreNames_() {
+  const out = {};
+  try {
+    const row = getSettings().find(s => s.key === 'custom_stores');
+    Object.entries(row && row.value ? JSON.parse(row.value) : {}).forEach(([id, v]) => { if (v && v.name) out[id] = v.name; });
+  } catch (e) {}
+  return out;
+}
+// stores.js の店（60秒キャッシュ）
+function _storeNamesJs_() {
+  let names;
   const cache = CacheService.getScriptCache();
   const cached = cache.get(STORE_NAMES_CACHE_KEY);
-  if (cached) { try { _cachedStoreNames = JSON.parse(cached); return _cachedStoreNames; } catch (e) {} }
+  if (cached) { try { names = JSON.parse(cached); return names; } catch (e) {} }
   try {
     const text = UrlFetchApp.fetch(STORES_JS_URL, { muteHttpExceptions: true }).getContentText();
     // stores.jsは "const STORES = {...};" という単純なJS定義のみのファイル（信頼できる自リポジトリ）
     // なので、Functionコンストラクタでその場限りの関数スコープとして実行しSTORESだけを取り出す
-    _cachedStoreNames = new Function(text + '; return STORES;')();
-    try { cache.put(STORE_NAMES_CACHE_KEY, JSON.stringify(_cachedStoreNames), 60); } catch (e) {}
+    names = new Function(text + '; return STORES;')();
+    try { cache.put(STORE_NAMES_CACHE_KEY, JSON.stringify(names), 60); } catch (e) {}
   } catch (e) {
     console.error('stores.js取得に失敗、店舗名なしで通知します:', e.message);
-    _cachedStoreNames = {};
+    names = {};
   }
-  return _cachedStoreNames;
+  return names;
 }
 // LINE WORKS通知メッセージ用：店舗IDに、分かっていれば店舗名を添えた表示用文字列を返す
 // （未知のID・custom_stores等でstores.jsに無い店舗、または取得失敗時はIDのみ返す）
