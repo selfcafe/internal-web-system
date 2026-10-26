@@ -1727,11 +1727,42 @@ function itemScopeShowAll() {
 function itemScopeHideAll() {
   document.querySelectorAll('[data-store-pick="item-scope"]').forEach(c => c.checked = false);
 }
-function saveItemStoreScope() {
+// 商品を「表示しない」にする前に、その店で最近使っている品(チェックシートで補充・発注依頼。GASの
+// getProductUsage、180日)なら確認を出す。10/10の一括反映で、使っている品を表示しないにしてしまい、
+// 「○○が無い」のバグ報告が続いた(No.6・8・9・12)ための歯止め(2026-10-26)。
+// changes: [{sid, name}]。続けてよければ true。使用実績が読めないときは止めずに true(保存を妨げない)
+let _productUsageCache = null;
+async function _confirmHidingUsedProducts(changes) {
+  if (!changes.length) return true;
+  try {
+    if (!_productUsageCache || Date.now() - _productUsageCache.at > 5 * 60 * 1000) {
+      const u = await gasGet('getProductUsage', { days: 180 });
+      if (!u || u.error || typeof u !== 'object') return true;
+      _productUsageCache = { at: Date.now(), data: u };
+    }
+  } catch (e) { console.error('getProductUsage error:', e); return true; }
+  const used = changes.map(c => ({ ...c, last: (_productUsageCache.data[c.sid] || {})[c.name] })).filter(c => c.last);
+  if (!used.length) return true;
+  const lines = used.slice(0, 15).map(c => `・${STORES[c.sid] || c.sid}：${c.name}（最後に使った日 ${c.last}）`);
+  if (used.length > 15) lines.push(`ほか${used.length - 15}件`);
+  return confirm('次の商品は、その店で最近使われています（チェックシートの補充・発注依頼の記録）。\n' +
+    '表示しないにすると、パートナーの発注・チェックシート・棚卸の画面から消えます。\n\n' + lines.join('\n') +
+    '\n\n機械を外したなど、本当に使わなくなった場合だけ「OK」を押してください。');
+}
+
+async function saveItemStoreScope() {
   if (!_itemScopeEditing) return;
   const { itemKey, kind } = _itemScopeEditing;
   const storageKey = kind === 'product' ? STORE_PRODUCTS_KEY : STORE_CHECKSHEET_KEY;
   const cfg = JSON.parse(localStorage.getItem(storageKey) || '{}');
+  if (kind === 'product') {
+    const newlyHidden = [...document.querySelectorAll('[data-store-pick="item-scope"]')]
+      .filter(chk => !chk.checked && !(cfg[chk.value] || []).includes(itemKey)).map(chk => ({ sid: chk.value, name: itemKey }));
+    const msg0 = document.getElementById('item-scope-msg');
+    if (newlyHidden.length && msg0) msg0.textContent = '使用状況を確認しています…';
+    if (!(await _confirmHidingUsedProducts(newlyHidden))) { if (msg0) msg0.textContent = '保存をやめました'; return; }
+    if (msg0) msg0.textContent = '';
+  }
   document.querySelectorAll('[data-store-pick="item-scope"]').forEach(chk => {
     const sid = chk.value;
     const cur = cfg[sid] || [];
@@ -9930,6 +9961,10 @@ async function saveStoreProdCfg() {
   // チェックが外れている（＝非表示にしたい）商品だけを除外リストとして保存する。
   // data-vendorを持つ実商品チェックボックスのみを対象にし、「全選択」トグル（data-vendor-all、value未設定）は含めない
   const excluded = [...container.querySelectorAll('input[data-vendor]:not(:checked)')].map(el => el.value);
+  const prevExcluded = getStoreProductConfig(sid) || [];
+  const newlyHidden = excluded.filter(n => !prevExcluded.includes(n)).map(name => ({ sid, name }));
+  if (newlyHidden.length && msg) msg.textContent = '使用状況を確認しています…';
+  if (!(await _confirmHidingUsedProducts(newlyHidden))) { if (msg) msg.textContent = '保存をやめました'; return; }
   // サーバーへの反映は数秒かかることがある。反映前に「保存しました」と表示すると、直後に
   // パートナーポータルを開いた際に変更前の内容に見えてしまう（2026-08-29、ユーザー報告）ため、
   // 実際にサーバーへの書き込みが完了するまで待ってから完了表示にする

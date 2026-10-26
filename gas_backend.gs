@@ -695,6 +695,7 @@ function doGet(e) {
     else if (a === 'setAuthEnforce')    result = setAuthEnforce(e.parameter.on);
     else if (a === 'getLostItems')      result = getLostItems(e.parameter.month, e.parameter.storeId);
     else if (a === 'getChecksheetData') result = getChecksheetData(e.parameter.storeId);
+    else if (a === 'getProductUsage')   result = getProductUsage(e.parameter.days);
     else if (a === 'getSteraStockEstimate') result = getSteraStockEstimate(e.parameter.storeId);
     else if (a === 'getSteraProductGroups') result = getSteraProductGroups();
     else if (a === 'getInventoryHistory') result = getInventoryHistory(e.parameter.storeId, e.parameter.periodLabel);
@@ -2464,6 +2465,30 @@ function getChecksheetData(storeId) {
   let rows = _checksheetDataRowsCached_();
   if (storeId) rows = rows.filter(r => String(r.store_id) === String(storeId));
   return rows;
+}
+
+// 店舗ごとに「最近使っている品」と最後に使った日 {店舗ID: {商品名: 'yyyy-MM-dd'}}(管理者だけ。2026-10-26)。
+// チェックシートで補充数を入れた日・発注依頼の日(否認は除く)を見る。管理画面で商品を「表示しない」に
+// するとき、使っている品を消してしまわないよう確認を出すのに使う(10/10の一括反映で、ココア・抹茶ラテ・
+// ペーパーフィルター等を使っている店で表示しないにしてしまい、「○○が無い」のバグ報告が続いたため)
+function getProductUsage(days) {
+  const n = Number(days) > 0 ? Number(days) : 180;
+  const since = Utilities.formatDate(new Date(Date.now() - n * 86400000), _sheetTz(), 'yyyy-MM-dd');
+  const out = {};
+  const put = (sid, name, d) => {
+    if (!sid || !name || !d || d < since) return;
+    const s = out[sid] || (out[sid] = {});
+    if (!s[name] || s[name] < d) s[name] = d;
+  };
+  _checksheetDataRowsCached_().forEach(r => {
+    Object.keys(r.data || {}).forEach(d => {
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(d)) return;
+      const day = r.data[d] || {};
+      Object.keys(day).forEach(k => { if (k.indexOf('prod:') === 0 && Number(day[k]) > 0) put(String(r.store_id), k.slice(5), d); });
+    });
+  });
+  getOrders().forEach(o => { if (!o.denied) put(String(o.store_id), o.product, String(o.request_date || o.order_date || '').slice(0, 10)); });
+  return out;
 }
 
 // "2026-07"のような年月文字列を書き込むと、Sheetsが日付型セルへ自動変換し、
