@@ -1595,6 +1595,13 @@ const DEFAULT_VENDOR_CONFIG = [
   {key:'tokai_snack', label:'東海エリア限定お菓子'},
 ];
 let VENDOR_CONFIG = [...DEFAULT_VENDOR_CONFIG];
+// パートナー画面の見出しで、どの機械の品かが分かるように添える説明(2026-10-28、現場から「どれがアペックスか
+// 分からない人がいる」と意見。連絡しなくても画面で分かるようにする)。名前(vendor_config)とは別に持つ
+const VENDOR_MACHINE_HINT = { apex: '赤と黒の機械', toyo: 'なっちゃんの機械' };
+function vendorPartnerLabel(key, label) {
+  const base = label || key;
+  return VENDOR_MACHINE_HINT[key] ? `${base}（${VENDOR_MACHINE_HINT[key]}）` : base;
+}
 const VENDOR_CONFIG_KEY = 'vendor_config';
 function saveVendorConfig() {
   const json = JSON.stringify(VENDOR_CONFIG);
@@ -2561,7 +2568,7 @@ function renderInventoryLastMonthScreen(wrap, allProducts, period) {
     const items = allProducts.filter(p => p.vendor === v.key);
     if (!items.length) return '';
     const vendorFillerCells = '<td style="background:#edf2d4;border-top:2px solid #aabf28"></td>'.repeat(5);
-    const hdr = `<tr><td style="padding:5px 8px;font-size:11px;font-weight:700;color:#22703d;background:#edf2d4;border-top:2px solid #aabf28;position:sticky;left:0;z-index:1">${esc(VENDOR_LABELS[v.key] || v.key)}</td>${vendorFillerCells}</tr>`;
+    const hdr = `<tr><td style="padding:5px 8px;font-size:11px;font-weight:700;color:#22703d;background:#edf2d4;border-top:2px solid #aabf28;position:sticky;left:0;z-index:1">${esc(vendorPartnerLabel(v.key, VENDOR_LABELS[v.key]))}</td>${vendorFillerCells}</tr>`;
     const rows = items.map(p => {
       const row = _getInventoryPrevRow(storeTab, period.label, p.name);
       if (!row) return `<tr style="border-bottom:1px solid #f0f0f0">
@@ -2625,7 +2632,7 @@ function renderInventoryInputScreen(wrap, allProducts, period, periodData) {
     // colspanセルにposition:stickyを指定すると横スクロール中に固定されない環境があったため、
     // データ行と同じく個別セル(1列目のみ固定)で構成する
     const vendorFillerCells = '<td style="background:#edf2d4;border-top:2px solid #aabf28"></td>'.repeat(6);
-    const hdr = `<tr><td style="padding:5px 8px;font-size:11px;font-weight:700;color:#22703d;background:#edf2d4;border-top:2px solid #aabf28;position:sticky;left:0;z-index:1">${esc(VENDOR_LABELS[v.key] || v.key)}</td>${vendorFillerCells}</tr>`;
+    const hdr = `<tr><td style="padding:5px 8px;font-size:11px;font-weight:700;color:#22703d;background:#edf2d4;border-top:2px solid #aabf28;position:sticky;left:0;z-index:1">${esc(vendorPartnerLabel(v.key, VENDOR_LABELS[v.key]))}</td>${vendorFillerCells}</tr>`;
     const rows = items.map(p => {
       const i = globalIdx++;
       const expQty = periodData.expQty[p.name] || {};
@@ -2738,7 +2745,7 @@ function renderInventoryConfirmScreen(wrap, allProducts, period, periodData) {
     // colspanセルにposition:stickyを指定すると横スクロール中に固定されない環境があったため、
     // データ行と同じく個別セル(1列目のみ固定)で構成する
     const vendorFillerCells = '<td style="background:#edf2d4;border-top:2px solid #aabf28"></td>'.repeat(6);
-    const hdr = `<tr><td style="padding:5px 8px;font-size:11px;font-weight:700;color:#22703d;background:#edf2d4;border-top:2px solid #aabf28;position:sticky;left:0;z-index:1">${esc(VENDOR_LABELS[v.key] || v.key)}</td>${vendorFillerCells}</tr>`;
+    const hdr = `<tr><td style="padding:5px 8px;font-size:11px;font-weight:700;color:#22703d;background:#edf2d4;border-top:2px solid #aabf28;position:sticky;left:0;z-index:1">${esc(vendorPartnerLabel(v.key, VENDOR_LABELS[v.key]))}</td>${vendorFillerCells}</tr>`;
     const rows = items.map(p => {
       const { openStock, delivery, endStock, consumption, disposedQty, tracked, dailyCount, mismatch } = computeInventoryConfirmInfo(p, period, periodData);
       if (mismatch) mismatches.push({ name: p.label || p.name, consumption, dailyCount });
@@ -4006,7 +4013,7 @@ function _checksheetProductColumns() {
   });
   const groups = VENDOR_CONFIG.map(v => ({
     key: 'vendor:' + v.key,
-    label: VENDOR_LABELS[v.key] || v.key,
+    label: vendorPartnerLabel(v.key, VENDOR_LABELS[v.key]),
     cols: products.filter(p => p.vendor === v.key).map(p => ({ id:'prod:' + p.name, type:'qty', name:p.label || p.name })),
   })).filter(g => g.cols.length);
 
@@ -6298,7 +6305,7 @@ function openInventoryTransfer() {
   const prodOpts = VENDOR_CONFIG.map(v => {
     const items = prods.filter(p => p.vendor === v.key);
     if (!items.length) return '';
-    return `<optgroup label="${esc(VENDOR_LABELS[v.key] || v.key)}">${items.map(p =>
+    return `<optgroup label="${esc(vendorPartnerLabel(v.key, VENDOR_LABELS[v.key]))}">${items.map(p =>
       `<option value="${esc(p.name)}">${esc(p.label || p.name)}${p.caseUnit ? '（' + esc(p.caseUnit) + '）' : ''}</option>`).join('')}</optgroup>`;
   }).join('');
   const field = 'width:100%;box-sizing:border-box;border:1px solid #d1d5db;border-radius:8px;padding:10px;font-size:16px;font-family:inherit;background:white';
@@ -6687,7 +6694,7 @@ function filterProd(rowId) {
   VENDOR_ORDER.forEach(vendor => {
     const items = matched.filter(p => p.vendor === vendor);
     if (!items.length) return;
-    html += `<div class="prod-group-header">${VENDOR_LABELS[vendor]}</div>`;
+    html += `<div class="prod-group-header">${esc(vendorPartnerLabel(vendor, VENDOR_LABELS[vendor]))}</div>`;
     html += items.map(optHTML).join('');
   });
   list.innerHTML = html;
