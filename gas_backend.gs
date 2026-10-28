@@ -118,7 +118,9 @@ const INVENTORY_COLS = ['period_label','store_id','code','product','open_stock',
 // 2026-07-28、見出しを日本語表示に変更（inventory_log本体もこの前提で書き換えたため対象に含めた）
 const INVENTORY_HEADERS_JA = ['期間','店舗ID','商品コード','商品名','期首在庫','当月納品','期末在庫','消費量','処分数量','単価','期末在庫額','備考','更新日時','異常メモ','デイリーカウント','一致','店舗区分'];
 // 出勤打刻ログ。1回の打刻で1行追加（append-onlyのログシート、ordersのような全件削除→再送信はしない）
-const ATTENDANCE_COLS = ['id','store_id','name','clocked_at','lat','lng','within_range'];
+const ATTENDANCE_COLS = ['id','store_id','name','clocked_at','lat','lng','within_range','reported_start'];
+// reported_start(2026-10-28追加): 店から離れた打刻のとき本人が入れる「実際に業務を始めた時刻」(HH:mm)。
+// 既存シートには見出しが無いので、setAttendanceStartTime が初回に末尾へ見出しを足す。saveAttendance は先頭7列だけ書く
 // 店から300mより離れた打刻のLINE WORKS通知(【GPS要確認】)。2026-10-19、全店で業務開始をONにし店の位置を
 // 住所から入れ直したのに合わせて、11月中旬にまとめて見直すまで止めている(打刻自体は今まで通り記録され、
 // 管理画面「業務管理 › 業務開始履歴」の「店から離れた打刻だけ」で一覧できる)。再開はtrueに戻してデプロイ
@@ -455,7 +457,7 @@ const AUTH_STORE_ACTIONS = [
   'getAttendance', 'getLeaveRequests', 'getAttendanceTabData', 'getDeliveryHistory', 'getMachinePhotoHistory',
   'getBugReports', 'getAnnouncements', 'buildStoreInventorySheet', 'buildStockCheckMonthly', 'processMonthlyReorder',
   'saveOrders', 'upsertOrders', 'saveChecksheetData', 'saveInventorySnapshot', 'recordInventoryDelivery',
-  'checkWaterStockMismatch', 'saveAttendance', 'saveLeaveRequest', 'saveDeliveryHistory', 'clearDeliveryHistory',
+  'checkWaterStockMismatch', 'saveAttendance', 'setAttendanceStartTime', 'saveLeaveRequest', 'saveDeliveryHistory', 'clearDeliveryHistory',
   'saveMachinePhotoSet', 'submitBugReport', 'addBugReportComment', 'saveLostItem',
   'recordInventoryTransfer', 'cancelInventoryTransfer', 'getMeterReadings', 'saveMeterReading',
 ];
@@ -868,6 +870,7 @@ function doPost(e) {
     else if (b.action === 'reportScriptFailure') result = reportScriptFailure(b.message, b.key);
     else if (b.action === 'reportScriptRecovery') result = reportScriptRecovery(b.message, b.key);
     else if (b.action === 'saveAttendance')      result = saveAttendance(b.storeId, b.name, b.lat, b.lng);
+    else if (b.action === 'setAttendanceStartTime') result = setAttendanceStartTime(b.storeId, b.name, b.time);
     else if (b.action === 'saveLeaveRequest')    result = saveLeaveRequest(b.storeId, b.name, b.leaveDate);
     else if (b.action === 'saveOnboardingProgress') result = saveOnboardingProgress(b.name, b.storeId, b.chapter, b.chapterTitle, b.deviceId);
     else if (b.action === 'deleteLeaveRequest')  result = deleteLeaveRequest(b.id);
@@ -2665,7 +2668,10 @@ function saveAttendance(storeId, name, lat, lng) {
       if ((data[i][nameIdx] || '') !== (name || '')) continue;
       const clocked = _dateTimeStr(data[i][dateIdx]);
       if (!clocked || _businessDateFromDateTime_(clocked) !== todayBizDate) continue;
-      sheet.getRange(i + 2, 1, 1, ATTENDANCE_COLS.length).setValues([[data[i][idIdx], storeId, name, now, lat, lng, withinRange]]);
+      sheet.getRange(i + 2, 1, 1, 7).setValues([[data[i][idIdx], storeId, name, now, lat, lng, withinRange]]);
+      // 押し直したら前回の申告時刻は消す(離れた場所でまた押したら、改めて入れてもらう)
+      const rsIdx = hdrs.indexOf('reported_start');
+      if (rsIdx >= 0) sheet.getRange(i + 2, rsIdx + 1).setValue('');
       updatedExisting = true;
       break;
     }
@@ -2677,6 +2683,35 @@ function saveAttendance(storeId, name, lat, lng) {
   const result = { ok: true, withinRange, updated: updatedExisting };
   if (withinRange === false && ATTENDANCE_GPS_NOTIFY_ENABLED) result._notify = { type: 'attendanceGpsIssue', storeId, name };
   return result;
+}
+
+// 店から離れた打刻(要確認)の本人申告「実際に業務を始めた時刻」を、その人の今日(営業日)の打刻の行に書く(2026-10-28)。
+// 管理者が映像で確かめるときの目安。打刻の判定(within_range)は変えない
+function setAttendanceStartTime(storeId, name, time) {
+  time = String(time || '').trim();
+  if (!/^\d{2}:\d{2}$/.test(time)) return { error: '時刻の形が正しくありません' };
+  const sheet = getSheet(SHEET_ATTENDANCE);
+  if (sheet.getLastRow() <= 1) return { error: '今日の打刻が見つかりません' };
+  let hdrs = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0].map(String);
+  let rsIdx = hdrs.indexOf('reported_start');
+  if (rsIdx < 0) {
+    rsIdx = hdrs.length;
+    sheet.getRange(1, rsIdx + 1).setValue('reported_start');
+    sheet.getRange(1, rsIdx + 1, sheet.getMaxRows(), 1).setNumberFormat('@'); // "09:30"が時刻型に変わらないように
+  }
+  const storeIdx = hdrs.indexOf('store_id'), nameIdx = hdrs.indexOf('name'), dateIdx = hdrs.indexOf('clocked_at');
+  const todayBizDate = _businessDateFromDateTime_(Utilities.formatDate(new Date(), _sheetTz(), 'yyyy-MM-dd HH:mm:ss'));
+  const data = sheet.getRange(2, 1, sheet.getLastRow() - 1, Math.max(storeIdx, nameIdx, dateIdx) + 1).getValues();
+  for (let i = data.length - 1; i >= 0; i--) {
+    if (String(data[i][storeIdx]) !== String(storeId)) continue;
+    if ((data[i][nameIdx] || '') !== (name || '')) continue;
+    const clocked = _dateTimeStr(data[i][dateIdx]);
+    if (!clocked || _businessDateFromDateTime_(clocked) !== todayBizDate) continue;
+    sheet.getRange(i + 2, rsIdx + 1).setNumberFormat('@').setValue(time);
+    _invalidateAttendanceCache_();
+    return { ok: true };
+  }
+  return { error: '今日の打刻が見つかりません' };
 }
 
 // 業務開始履歴の取り消し(2026-09-05追加)。パートナーが休みの日に誤って(社員が代わりに等)

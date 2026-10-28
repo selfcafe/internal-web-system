@@ -769,8 +769,19 @@
         <div id="attendance-name-sel-wrap">
           <select id="attendance-name-sel" onchange="renderAttendanceHistory();renderAttendanceTally();renderLeaveRequests();renderLeaveTally()" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:10px;font-size:15px;font-family:inherit;margin-bottom:10px"></select>
         </div>
+        <div id="attendance-name-free-wrap" style="display:none">
+          <input id="attendance-name-free" type="text" maxlength="20" autocomplete="name" placeholder="お名前（例：山田）" oninput="renderAttendanceHistory();renderAttendanceTally()" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:10px;font-size:15px;margin-bottom:10px;box-sizing:border-box">
+        </div>
         <button id="attendance-clockin-btn" onclick="doAttendanceClockIn()" style="width:100%;background:#22703d;color:white;padding:12px;font-size:16px;font-weight:700;border-radius:8px;border:none;cursor:pointer;font-family:inherit">業務開始</button>
         <div id="attendance-msg" style="font-size:13px;margin-top:8px;min-height:18px"></div>
+        <div id="attendance-start-wrap" style="display:none;margin-top:10px;background:#fef2f2;border:1px solid #fca5a5;border-radius:8px;padding:10px 12px">
+          <div style="font-size:13px;line-height:1.6;margin-bottom:8px">店舗から離れた場所での打刻と判定されました。映像で確認しますので、<b>実際に業務を始めた時刻</b>を入れて「送信」を押してください。</div>
+          <div style="display:flex;gap:8px;align-items:center">
+            <input id="attendance-start-time" type="time" style="flex:1;border:1px solid #ddd;border-radius:6px;padding:8px;font-size:15px">
+            <button id="attendance-start-btn" onclick="submitAttendanceStartTime()" style="background:#22703d;color:white;border:none;border-radius:6px;padding:9px 16px;font-size:14px;font-weight:700;cursor:pointer">送信</button>
+          </div>
+          <div id="attendance-start-msg" style="font-size:12.5px;margin-top:6px;min-height:16px"></div>
+        </div>
       </div>
 
       <div style="font-weight:700;font-size:14px;color:#22703d;margin-bottom:8px">休み申請</div>
@@ -3838,6 +3849,10 @@ async function loadChecksheetOpeningStock(storeId) {
 // 可能性があるため、ロジックは残してこのフラグで表示だけ止めている(trueに戻せば元通り表示される)。
 // 水の盗難疑い判定(checkWaterStockMismatch)は補充数入力とステラ実売上だけを使うので影響しない。
 const CHECKSHEET_SHOW_REMAINING_STOCK = false;
+// 2026-10-28: ステラ商品の「理論在庫」も表示を止める。ステラ取込みが2026-10-12から止まっていて
+// (CLAUDE.md 7.4)数字が古いまま残り、現場から「理論在庫：1個とあるが気にしなくてよいか」と質問が出たため。
+// 取込みを再開したら true に戻す(戻せばチェックシートに「ステラ商品(参考在庫・入力不要)」が再び出る)。
+const CHECKSHEET_SHOW_STERA_ESTIMATE = false;
 function checksheetRemainingStock(productName) {
   const period = getInventoryPeriod();
   const row = _getInventoryPrevRow(storeTab, period.label, productName);
@@ -3994,7 +4009,7 @@ function _checksheetProductColumns() {
   // 「なぜ全部同じ数字？」と誤解を招く。_steraProductGroups(getSteraProductGroups由来)を
   // 使ってグループごとに1行へまとめ、グループに属さない単独商品はこれまで通り個別表示する
   // (2026-09-11、渋谷店で全フレーバー同数値の表示について指摘を受けて変更)。
-  if (steraNames.length) {
+  if (steraNames.length && CHECKSHEET_SHOW_STERA_ESTIMATE) {
     const allProducts = _inventoryProductList();
     const groupedNames = new Set();
     const steraCols = [];
@@ -4481,8 +4496,19 @@ function renderAttendanceNameSelect() {
   if (!sel) return;
   const names = getAttendanceStaffList(storeTab);
   const solo = isAttendanceSolo(storeTab);
+  // スタッフが1人も登録されていない店舗は、名前を手で入れてもらう(2026-10-28、現場から「業務開始に名前が無い」と指摘。
+  // 以前は名前なしで記録していた)。管理画面でスタッフを登録すれば、これまで通り選ぶ形式・1名モードになる
+  const free = !names.length;
+  const freeWrap = document.getElementById('attendance-name-free-wrap');
+  const freeInput = document.getElementById('attendance-name-free');
+  if (freeWrap) freeWrap.style.display = free ? '' : 'none';
+  if (free && freeInput && !freeInput.value) {
+    try { freeInput.value = localStorage.getItem(ATTENDANCE_FREE_NAME_KEY + storeTab) || ''; } catch (e) {}
+  }
   if (selWrap) selWrap.style.display = solo ? 'none' : '';
-  if (note) note.textContent = solo
+  if (note) note.textContent = free
+    ? 'お名前を入れて「業務開始」を押してください。位置情報の許可が必要です。'
+    : solo
     ? '「業務開始」を押してください。位置情報の許可が必要です。'
     : '名前を選んで「業務開始」を押してください。位置情報の許可が必要です。';
   sel.innerHTML = solo
@@ -4493,7 +4519,10 @@ function renderAttendanceNameSelect() {
 }
 
 // 1名モードは登録済みの唯一の名前（未登録なら空文字）、複数名モードはドロップダウンの選択値
+const ATTENDANCE_FREE_NAME_KEY = 'attendance_free_name_'; // + 店舗ID。スタッフ未登録の店で前回入れた名前
+function _attendanceNeedsFreeName() { return !getAttendanceStaffList(storeTab).length; }
 function _attendanceActiveName() {
+  if (_attendanceNeedsFreeName()) return (document.getElementById('attendance-name-free')?.value || '').trim();
   if (isAttendanceSolo(storeTab)) return getAttendanceStaffList(storeTab)[0] || '';
   return document.getElementById('attendance-name-sel')?.value || '';
 }
@@ -4527,6 +4556,7 @@ function doAttendanceClockIn() {
   const msg = document.getElementById('attendance-msg');
   const solo = isAttendanceSolo(storeTab);
   const name = _attendanceActiveName();
+  if (_attendanceNeedsFreeName() && !name) { msg.style.color = '#dc2626'; msg.textContent = 'お名前を入れてください'; return; }
   if (!solo && !name) { msg.style.color = '#dc2626'; msg.textContent = '名前を選択してください'; return; }
   if (!navigator.geolocation) {
     msg.style.color = '#dc2626';
@@ -4537,6 +4567,8 @@ function doAttendanceClockIn() {
   _attendanceClockingIn = true;
   if (btn) btn.disabled = true;
   const done = () => { _attendanceClockingIn = false; if (btn) btn.disabled = false; };
+  const startWrap = document.getElementById('attendance-start-wrap');
+  if (startWrap) startWrap.style.display = 'none';
   msg.style.color = '#888';
   msg.textContent = '位置情報を取得しています…';
   // getCurrentPosition()はボタン押下ハンドラの中でだけ呼ぶ（バックグラウンド取得は行わない）
@@ -4545,9 +4577,11 @@ function doAttendanceClockIn() {
       const { latitude, longitude } = pos.coords;
       const r = await gasPost('saveAttendance', { storeId: storeTab, name, lat: latitude, lng: longitude });
       if (r.error) throw new Error(r.error);
+      if (_attendanceNeedsFreeName()) { try { localStorage.setItem(ATTENDANCE_FREE_NAME_KEY + storeTab, name); } catch (e) {} }
       if (r.withinRange === false) {
         msg.style.color = '#dc2626';
         msg.textContent = '打刻しましたが、店舗から離れた場所での打刻として記録されました。';
+        _showAttendanceStartTimeBox(name);
       } else {
         msg.style.color = '#22703d';
         const who = name ? `${name}さん、` : '';
@@ -4576,6 +4610,39 @@ function doAttendanceClockIn() {
     }
     done();
   }, { enableHighAccuracy: true, timeout: 8000, maximumAge: 0 }); // 2026-08-03: 15000→8000。押してから離脱するまでの危険な待ち時間を短縮する目的（タイムアウト時のエラーメッセージは既存通り再試行を促す）
+}
+
+// 店から離れた場所での打刻(要確認)のとき、実際に業務を始めた時刻を入れてもらう(2026-10-28、現場の提案。
+// 管理者が映像で確かめるときの目安にする)。打刻した人・店舗を控えておき、送信は setAttendanceStartTime
+let _attendanceStartTarget = null;
+function _showAttendanceStartTimeBox(name) {
+  const wrap = document.getElementById('attendance-start-wrap');
+  if (!wrap) return;
+  _attendanceStartTarget = { storeId: storeTab, name };
+  const now = new Date();
+  document.getElementById('attendance-start-time').value =
+    String(now.getHours()).padStart(2, '0') + ':' + String(now.getMinutes()).padStart(2, '0');
+  document.getElementById('attendance-start-msg').textContent = '';
+  wrap.style.display = '';
+}
+async function submitAttendanceStartTime() {
+  const t = _attendanceStartTarget;
+  const time = document.getElementById('attendance-start-time').value;
+  const msg = document.getElementById('attendance-start-msg');
+  const btn = document.getElementById('attendance-start-btn');
+  if (!t) return;
+  if (!/^\d{2}:\d{2}$/.test(time)) { msg.style.color = '#dc2626'; msg.textContent = '時刻を入れてください'; return; }
+  btn.disabled = true;
+  msg.style.color = '#888'; msg.textContent = '送信しています…';
+  try {
+    const r = await gasPost('setAttendanceStartTime', { storeId: t.storeId, name: t.name, time });
+    if (r.error) throw new Error(r.error);
+    msg.style.color = '#22703d'; msg.textContent = `業務開始の時刻（${time}）を送りました。ありがとうございます。`;
+    await loadAttendanceHistory(storeTab);
+    renderAttendanceHistory();
+  } catch (e) {
+    msg.style.color = '#dc2626'; msg.textContent = '送信に失敗しました: ' + e.message;
+  } finally { btn.disabled = false; }
 }
 
 let ATTENDANCE_HISTORY_CACHE = [];
@@ -4629,7 +4696,7 @@ function renderAttendanceHistory() {
     <tbody>${rows.map(r => `
       <tr style="border-bottom:1px solid #eee">
         <td style="padding:6px 10px;font-size:13px;white-space:nowrap">${_attendanceDisplayWithBizDay(r.clocked_at)}</td>
-        <td style="padding:6px 10px;font-size:13px;text-align:center">${r.within_range === false ? '<span style="color:#dc2626">要確認</span>' : (r.within_range === true ? '<span style="color:#22703d">✓</span>' : '<span style="color:#aaa">未判定</span>')}</td>
+        <td style="padding:6px 10px;font-size:13px;text-align:center">${r.within_range === false ? '<span style="color:#dc2626">要確認</span>' + (r.reported_start ? `<div style="font-size:11px;color:#888">開始 ${esc(r.reported_start)}</div>` : '') : (r.within_range === true ? '<span style="color:#22703d">✓</span>' : '<span style="color:#aaa">未判定</span>')}</td>
       </tr>`).join('')}
     </tbody></table></div>`;
 }
@@ -4780,6 +4847,7 @@ async function submitLeaveRequest() {
   if (!leaveDate) { msg.style.color = '#dc2626'; msg.textContent = '日付を選択してください'; return; }
   const solo = isAttendanceSolo(storeTab);
   const name = _attendanceActiveName();
+  if (_attendanceNeedsFreeName() && !name) { msg.style.color = '#dc2626'; msg.textContent = 'お名前を入れてください'; return; }
   if (!solo && !name) { msg.style.color = '#dc2626'; msg.textContent = '名前を選択してください'; return; }
   msg.style.color = '#888';
   msg.textContent = '送信しています…';
@@ -10409,7 +10477,7 @@ async function renderAttendanceAdminHistory() {
         <td style="padding:6px 10px;font-size:13px;color:#22703d;font-weight:600">${esc(storeLabel(r.store_id))}</td>
         <td style="padding:6px 10px;font-size:13px">${esc(r.name || '')}</td>
         <td style="padding:6px 10px;font-size:13px;text-align:center">${r.within_range === false
-          ? `<span style="color:#dc2626">要確認</span>${r.lat != null && r.lng != null ? ` <a href="https://www.google.com/maps?q=${esc(r.lat)},${esc(r.lng)}" target="_blank" rel="noopener" style="font-size:11px">📍地図</a>` : ''}${distLabel(r)}`
+          ? `<span style="color:#dc2626">要確認</span>${r.lat != null && r.lng != null ? ` <a href="https://www.google.com/maps?q=${esc(r.lat)},${esc(r.lng)}" target="_blank" rel="noopener" style="font-size:11px">📍地図</a>` : ''}${distLabel(r)}${r.reported_start ? `<div style="font-size:11px;color:#b45309">本人の申告：${esc(r.reported_start)}開始</div>` : ''}`
           : (r.within_range === true ? '<span style="color:#22703d">✓</span>' : '<span style="color:#aaa">未判定</span>')}</td>
       </tr>`).join('')}
     </tbody></table></div>`;
