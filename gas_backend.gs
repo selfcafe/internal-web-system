@@ -787,6 +787,7 @@ function doGet(e) {
     else if (a === 'getAttendanceTabData')      result = getAttendanceTabData(e.parameter.storeId);
     else if (a === 'getOnboardingProgress')     result = getOnboardingProgress(e.parameter.name);
     else if (a === 'syncOnboardingTrackSheet')  result = syncOnboardingTrackSheet();
+    else if (a === 'setOnboardingTrackValues')  result = setOnboardingTrackValues(e.parameter.column, e.parameter.values);
     else if (a === 'setOnboardingTrackSheet')   result = setOnboardingTrackSheet(e.parameter.id);
     else if (a === 'deleteOnboardingProgress')  result = deleteOnboardingProgress(e.parameter.name);
     else if (a === 'setOnboardingTrackOwners')  result = setOnboardingTrackOwners(e.parameter.owners);
@@ -2908,6 +2909,29 @@ function syncOnboardingTrackSheet() {
 
 // 管理表の「担当者」の列に名前を書く(人が決める情報なので毎朝の自動更新では触らない)。列が無ければ「店舗」の右に足す。
 // owners は {店舗名(末尾の「店」は有っても無くても可): 担当者名} のJSON。空文字を渡すとその店の欄を空にする
+// 管理表の人が入力する列(「案内文」「送った日」「メモ」など、見出しが既にある列)に、店ごとの値を書く(2026-10-28、管理者/スクリプト)。
+// valuesJson = {"店舗名": "値", ...}。日付も文字列のまま書く(Sheetsに日付型へ変えさせない)
+function setOnboardingTrackValues(column, valuesJson) {
+  const id = PropertiesService.getScriptProperties().getProperty('ONBOARDING_TRACK_SHEET_ID');
+  if (!id) return { ok: false, error: 'ONBOARDING_TRACK_SHEET_ID が未設定' };
+  const vals = _jsonOr_(valuesJson || '{}', {});
+  const strip = n => String(n || '').trim().replace(/店$/, '');
+  const want = {}; Object.keys(vals).forEach(k => { want[strip(k)] = String(vals[k] == null ? '' : vals[k]); });
+  const sh = SpreadsheetApp.openById(id).getSheets()[0];
+  const data = sh.getDataRange().getValues();
+  const hdrRow = data.findIndex(r => r.map(String).indexOf('店舗') >= 0 && r.map(String).indexOf('ガイダンスを受けた人') >= 0);
+  if (hdrRow < 0) return { ok: false, error: '見出しの行が見つかりません' };
+  const h = data[hdrRow].map(String);
+  const sc = h.indexOf('店舗'), vc = h.findIndex(x => x.trim() === String(column || '').trim());
+  if (vc < 0) return { ok: false, error: '列が見つかりません: ' + column, headers: h };
+  const done = [];
+  for (let i = hdrRow + 1; i < data.length; i++) {
+    const nm = strip(data[i][sc]);
+    if (!nm) break;
+    if (want[nm] !== undefined) { sh.getRange(i + 1, vc + 1).setNumberFormat('@').setValue(want[nm]); done.push(nm); }
+  }
+  return { ok: true, updated: done, notFound: Object.keys(want).filter(k => done.indexOf(k) < 0) };
+}
 function setOnboardingTrackOwners(ownersJson) {
   const id = PropertiesService.getScriptProperties().getProperty('ONBOARDING_TRACK_SHEET_ID');
   if (!id) return { ok: false, error: 'ONBOARDING_TRACK_SHEET_ID が未設定' };
