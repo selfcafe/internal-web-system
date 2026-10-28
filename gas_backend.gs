@@ -788,6 +788,7 @@ function doGet(e) {
     else if (a === 'getOnboardingProgress')     result = getOnboardingProgress(e.parameter.name);
     else if (a === 'syncOnboardingTrackSheet')  result = syncOnboardingTrackSheet();
     else if (a === 'setOnboardingTrackValues')  result = setOnboardingTrackValues(e.parameter.column, e.parameter.values);
+    else if (a === 'addOnboardingTrackStores')  result = addOnboardingTrackStores(e.parameter.rows);
     else if (a === 'setOnboardingTrackSheet')   result = setOnboardingTrackSheet(e.parameter.id);
     else if (a === 'deleteOnboardingProgress')  result = deleteOnboardingProgress(e.parameter.name);
     else if (a === 'setOnboardingTrackOwners')  result = setOnboardingTrackOwners(e.parameter.owners);
@@ -2931,6 +2932,42 @@ function setOnboardingTrackValues(column, valuesJson) {
     if (want[nm] !== undefined) { sh.getRange(i + 1, vc + 1).setNumberFormat('@').setValue(want[nm]); done.push(nm); }
   }
   return { ok: true, updated: done, notFound: Object.keys(want).filter(k => done.indexOf(k) < 0) };
+}
+// 管理表に店の行を足す(2026-10-28、全店へ広げるため。管理者/スクリプト)。rowsJson = [{"area":"東海","store":"栄"}, ...]。
+// 表にもう有る店は飛ばす。最後の店の行のすぐ下に行を差し込み、書式は最後の店の行からコピーする。No は続きの番号
+function addOnboardingTrackStores(rowsJson) {
+  const id = PropertiesService.getScriptProperties().getProperty('ONBOARDING_TRACK_SHEET_ID');
+  if (!id) return { ok: false, error: 'ONBOARDING_TRACK_SHEET_ID が未設定' };
+  const rows = _jsonOr_(rowsJson || '[]', []);
+  const strip = n => String(n || '').trim().replace(/店$/, '');
+  const sh = SpreadsheetApp.openById(id).getSheets()[0];
+  const data = sh.getDataRange().getValues();
+  const hdrRow = data.findIndex(r => r.map(String).indexOf('店舗') >= 0 && r.map(String).indexOf('ガイダンスを受けた人') >= 0);
+  if (hdrRow < 0) return { ok: false, error: '見出しの行が見つかりません' };
+  const h = data[hdrRow].map(String);
+  const sc = h.indexOf('店舗'), nc = h.indexOf('No'), ac = h.indexOf('エリア');
+  let last = hdrRow, maxNo = 0;
+  const have = {};
+  for (let i = hdrRow + 1; i < data.length; i++) {
+    const nm = strip(data[i][sc]);
+    if (!nm) break;
+    have[nm] = true; last = i;
+    if (nc >= 0 && Number(data[i][nc]) > maxNo) maxNo = Number(data[i][nc]);
+  }
+  const add = rows.filter(r => r && r.store && !have[strip(r.store)]);
+  if (!add.length) return { ok: true, added: [] };
+  sh.insertRowsAfter(last + 1, add.length);
+  const width = h.length;
+  sh.getRange(last + 1, 1, 1, width).copyFormatToRange(sh, 1, width, last + 2, last + 1 + add.length);
+  const vals = add.map((r, k) => {
+    const row = new Array(width).fill('');
+    if (nc >= 0) row[nc] = maxNo + k + 1;
+    if (ac >= 0) row[ac] = r.area || '';
+    row[sc] = r.store;
+    return row;
+  });
+  sh.getRange(last + 2, 1, add.length, width).setValues(vals);
+  return { ok: true, added: add.map(r => r.store) };
 }
 function setOnboardingTrackOwners(ownersJson) {
   const id = PropertiesService.getScriptProperties().getProperty('ONBOARDING_TRACK_SHEET_ID');
