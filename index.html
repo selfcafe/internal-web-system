@@ -5003,17 +5003,30 @@ async function uploadOrderImage(file) {
   } catch(e) { alert('写真アップロード失敗: ' + e.message); return null; }
 }
 
-async function handleOrderPhotoUpload(groupId, input) {
-  const file = input.files[0]; if (!file) return;
-  const url = await uploadOrderImage(file);
-  if (!url) return;
-  const grp = buildStoreGroups(storeRows).find(g => (g[0].groupId || g[0].id) === groupId);
-  if (grp) { grp[0].imageUrl = url; saveA(storeTab, storeRows); renderStore(); }
+// 発注依頼の写真は複数枚。忘れ物と同じくカンマ区切りで既存のimage_url列に入れる(列追加不要、
+// 1枚だけの既存データもそのまま読める)。以前は1枚だけで、2枚目を付けると1枚目が消えていた(バグ報告No.13)
+function orderPhotoUrls(row) {
+  return row && row.imageUrl ? String(row.imageUrl).split(',').filter(Boolean) : [];
 }
 
-function removeOrderPhoto(groupId) {
+async function handleOrderPhotoUpload(groupId, input) {
+  const files = Array.from(input.files || []); if (!files.length) return;
+  const urls = [];
+  for (const f of files) { const u = await uploadOrderImage(f); if (u) urls.push(u); }
+  input.value = '';
+  if (!urls.length) return;
+  // アップロード中に描画し直されることがあるので、グループは送った後に探し直す
   const grp = buildStoreGroups(storeRows).find(g => (g[0].groupId || g[0].id) === groupId);
-  if (grp) { grp[0].imageUrl = null; saveA(storeTab, storeRows); renderStore(); }
+  if (grp) { grp[0].imageUrl = orderPhotoUrls(grp[0]).concat(urls).join(','); saveA(storeTab, storeRows); renderStore(); }
+}
+
+function removeOrderPhoto(groupId, idx) {
+  const grp = buildStoreGroups(storeRows).find(g => (g[0].groupId || g[0].id) === groupId);
+  if (!grp) return;
+  const urls = orderPhotoUrls(grp[0]);
+  urls.splice(idx, 1);
+  grp[0].imageUrl = urls.length ? urls.join(',') : null;
+  saveA(storeTab, storeRows); renderStore();
 }
 
 let _lostImageItems = []; // [{blob, url}] 複数枚を保持
@@ -6979,21 +6992,21 @@ function renderStore() {
         </td>`;
       }
     } else {
-      const gPhoto = group[0].imageUrl;
+      const gPhotos = orderPhotoUrls(group[0]);
       addTr.innerHTML = `<td colspan="7" style="padding:4px 10px 8px;border-bottom:none">
         <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
           <button class="btn-add-item" onclick="addItemToGroup('${gid}','${esc(group[0].requestDate)}')">＋ 商品を追加</button>
           <button class="btn-request" onclick="lockGroup('${gid}')">依頼する →</button>
           <label style="cursor:pointer;font-size:12px;color:#6b7280;background:#f3f4f6;border:1px solid #d1d5db;border-radius:6px;padding:5px 10px;display:inline-flex;align-items:center;gap:4px">
             📁 写真を添付
-            <input type="file" accept="image/*" style="display:none" onchange="handleOrderPhotoUpload('${gid}',this)">
+            <input type="file" accept="image/*" multiple style="display:none" onchange="handleOrderPhotoUpload('${gid}',this)">
           </label>
           <label style="cursor:pointer;font-size:12px;color:#6b7280;background:#f3f4f6;border:1px solid #d1d5db;border-radius:6px;padding:5px 10px;display:inline-flex;align-items:center;gap:4px">
             📷 撮影
             <input type="file" accept="image/*" capture="environment" style="display:none" onchange="handleOrderPhotoUpload('${gid}',this)">
           </label>
-          ${gPhoto ? `<img src="${esc(gPhoto)}" style="height:44px;border-radius:5px;cursor:pointer;border:1px solid #e5e7eb" onclick="showLostImage(this.src)" title="写真を拡大">
-            <button onclick="removeOrderPhoto('${gid}')" style="font-size:11px;color:#9ca3af;background:none;border:none;cursor:pointer;padding:2px 4px" title="写真を削除">✕</button>` : ''}
+          ${gPhotos.map((u, pi) => `<span style="display:inline-flex;align-items:center"><img src="${esc(u)}" style="height:44px;border-radius:5px;cursor:pointer;border:1px solid #e5e7eb" onclick="showLostImage(this.src)" title="写真を拡大">
+            <button onclick="removeOrderPhoto('${gid}',${pi})" style="font-size:11px;color:#9ca3af;background:none;border:none;cursor:pointer;padding:2px 4px" title="写真を削除">✕</button></span>`).join('')}
         </div>
       </td>`;
     }
@@ -7062,10 +7075,9 @@ function renderOrderHistory() {
     const gid = group[0].groupId || group[0].id;
     const N   = group.length;
     const isDenied    = group.some(r => r.denied);
-    const gPhoto = group[0].imageUrl;
-    const photoHtml = gPhoto
-      ? `<img src="${esc(gPhoto)}" style="height:36px;border-radius:5px;cursor:pointer;border:1px solid #e5e7eb;margin-left:6px;vertical-align:middle" onclick="showLostImage(this.src)" title="写真を拡大">`
-      : '';
+    const photoHtml = orderPhotoUrls(group[0]).map(u =>
+      `<img src="${esc(u)}" style="height:36px;border-radius:5px;cursor:pointer;border:1px solid #e5e7eb;margin-left:6px;vertical-align:middle" onclick="showLostImage(this.src)" title="写真を拡大">`
+    ).join('');
 
     const isOrdered = !group[0].isNew;
 
@@ -8259,7 +8271,7 @@ function buildStoreOrderDetail(sid, groups) {
       const isDenied   = !!row.denied;
       const cls        = isPending ? 'new-req' : '';
       const topBorder  = gi > 0 && i === 0 ? 'border-top:2px solid #d1d5db;' : '';
-      const groupPhoto = first.imageUrl;
+      const groupPhotos = orderPhotoUrls(first);
       const msgId      = `omsg-${sid}-${row.id}`;
 
       const checkboxCell = isPending
@@ -8284,8 +8296,8 @@ function buildStoreOrderDetail(sid, groups) {
       // rowspanが機能しないため、2件目以降の行にも複製してdata-labelで持たせ、テーブル表示時のみ
       // CSS(.grp-repeat)で非表示にする。発注日・発注(操作)は行ごとに独立した内容のため複製は不要。
       if (i === 0) {
-        const photoCell = groupPhoto
-          ? `<br><img src="${esc(groupPhoto)}" style="height:40px;border-radius:4px;cursor:pointer;margin-top:4px;border:1px solid #e5e7eb" onclick="showLostImage(this.src)" title="写真を拡大">`
+        const photoCell = groupPhotos.length
+          ? '<br>' + groupPhotos.map(u => `<img src="${esc(u)}" style="height:40px;border-radius:4px;cursor:pointer;margin-top:4px;margin-right:4px;border:1px solid #e5e7eb" onclick="showLostImage(this.src)" title="写真を拡大">`).join('')
           : '';
         rows += `<tr class="${cls}">
           <td data-label="選択" style="vertical-align:middle;padding:8px 6px;${topBorder}">${checkboxCell}</td>
