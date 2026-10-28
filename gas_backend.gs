@@ -5620,6 +5620,13 @@ const ORDER_TEXT_ALIASES = {
   // 2026-10-23 「サニタリー」「トイレの黒いごみ袋」が読めなかった
   'トイレ　消臭ポリ袋　黒色': ['サニタリー', 'サニタリー袋', 'サニタリーボックス', 'サニタリーボックスの袋', '黒いごみ袋', '黒いゴミ袋', '黒ごみ袋', '黒ゴミ袋',
     '黒いビニール袋', 'トイレのごみ袋', 'トイレのゴミ袋', 'トイレの黒いごみ袋', 'トイレの黒いゴミ袋', 'トイレごみ袋', 'トイレゴミ袋', '汚物入れの袋', '汚物袋'],
+  // 2026-10-28 池下「カップ蓋１ケース」が「カップ」（Mカップの一部として飛ばされた）と「蓋」（1文字）に分かれて消えた、
+  // 「ブライト10袋」がアペックスのクリーミー（発注書の品名は ﾈｽﾚ ﾌﾞﾗｲﾄ ｸﾘｰﾐｰ）に当たらなかった
+  '9オンス カップ蓋（12オンスもOK）GLDH09BD': ['カップ蓋', 'カップのふた', 'カップのフタ', 'カップふた', 'カップフタ', 'Mカップ蓋', 'カップ蓋M', 'Lカップ蓋', '蓋', 'ふた', 'フタ', 'リッド'],
+  '㋣カップ蓋　リッド（9オンス/12オンスカップ対応）': ['カップ蓋', 'カップのふた', 'カップのフタ', 'カップふた', 'カップフタ', 'Mカップ蓋', 'カップ蓋M', 'Lカップ蓋', '蓋', 'ふた', 'フタ', 'リッド'],
+  '55D用カップM蓋（9オンス 飲み口付き）S-275-F': ['Mカップ蓋', 'カップ蓋M', 'Mカップのふた', 'Mカップのフタ', 'M蓋', 'Mふた'],
+  'CS3用カップL蓋（14オンス）SVT-311LF': ['Lカップ蓋', 'カップ蓋L', 'Lカップのふた', 'Lカップのフタ', 'L蓋', 'Lふた'],
+  'クリーミー': ['ブライト', 'ブライトクリーミー', 'ネスレブライト', 'ネスレクリーミー'],
 };
 // 商品名の一部としては照合しない、ありふれた言葉（「コーヒー」→ コーヒーフレッシュ になった。2026-10-22）。言い方とぴったり同じときは当たる
 const ORDER_TEXT_GENERIC = ['コーヒー', '珈琲', 'ケース', 'ドリンク', 'セルフカフェ'];
@@ -5786,13 +5793,18 @@ function _unreadLines_(storeId, body, storeName) {
   const sn = _normJa_(storeName).replace(/^セルフカフェ/, '').replace(/店$/, '');
   const lines = String(body || '').split(/\n/).map(l => l.trim().replace(/^[・\-*●○◯]+\s*/, '')).filter(Boolean);
   if (lines.length < 2) return [];   // 1行の文は行ごとに分けられないので出さない
+  // 行だけで読むと当たっても、文全体では消えることがある（2026-10-28 池下「カップ蓋１ケース」: 行だけなら「カップ」で候補が出るが、
+  // 文全体では「Mカップ」の一部として飛ばされた）。文全体の結果に残った品・候補の言葉が無い行も「読めなかった」に出す
+  const all = _matchProductsText_(storeId, body);
+  const kept = new Set(all.items.map(p => p.name));
+  const keptWords = new Set(all.ambiguous.map(a => a.word));
   return lines.filter(l => {
     const n = _normJa_(l).replace(/^セルフカフェ/, '').replace(/店$/, '');
     if (!n || /^[\d\s]+$/.test(n)) return false;
     if (sn && (sn.indexOf(n) >= 0 || (n.indexOf(sn) >= 0 && !/\d/.test(n)))) return false;   // 店名の行（「天満店です」）
     if (/(お疲れ|おつかれ|お願い|よろしく|宜しく|ありがと|失礼|発注|以上|です|ます)$/.test(n) && !/\d/.test(n)) return false;   // あいさつ・締めの行
     const m = _matchProductsText_(storeId, l);
-    return !m.items.length && !m.ambiguous.length;
+    return !m.items.some(p => kept.has(p.name)) && !m.ambiguous.some(a => keptWords.has(a.word));
   }).slice(0, 10);
 }
 
