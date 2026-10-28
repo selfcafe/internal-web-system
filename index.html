@@ -517,6 +517,13 @@
     #checksheet-save-btn { flex-shrink:0; padding:10px 18px; border:none; border-radius:8px; background:#22703d; color:white; font-size:15px; font-weight:700; cursor:pointer; }
     #checksheet-cancel-btn { padding:10px 12px; border:1px solid #bbb; border-radius:8px; background:white; color:#555; font-size:14px; font-weight:600; cursor:pointer; }
     #checksheet-save-btn:disabled { background:#b8c9bc; cursor:default; }
+    /* 保存中・保存直後が分かるように(2026-10-28、梅田で「保存中から変わらず保存できたか分からない」) */
+    #checksheet-save-btn.saving:disabled { background:#c98a1a; }
+    #checksheet-save-btn.saving::before { content:''; display:inline-block; width:12px; height:12px; margin-right:6px; vertical-align:-1px; border:2px solid rgba(255,255,255,.5); border-top-color:#fff; border-radius:50%; animation:csSpin .8s linear infinite; }
+    #checksheet-save-btn.just-saved:disabled { background:#22703d; }
+    @keyframes csSpin { to { transform:rotate(360deg); } }
+    .cs-saved-note.cs-flash { animation:csFlash 2s ease-out; }
+    @keyframes csFlash { 0%,40% { color:#fff; background:#22a04b; } 100% { color:inherit; background:transparent; } }
     .checksheet-today-row > span { flex:1 1 auto; min-width:0; }
     .checksheet-today-row input[type="number"] { width:70px; text-align:right; padding:6px 8px; border:1px solid #d1d5db; border-radius:4px; font-size:14px; }
     .checksheet-today-row input[type="checkbox"] { width:28px; height:28px; accent-color:#22703d; flex-shrink:0; }
@@ -3702,6 +3709,14 @@ const _checksheetSyncChain = {};
 let _checksheetPendingSyncCount = 0;
 let _checksheetSavingIndicatorHideTimer = null;
 let _checksheetAutosaveTimer = null;
+// 保存は数秒〜10秒ほどかかる(最新の合計の取り直し＋保存で2往復)。その間「保存中…」のまま何も
+// 変わらず、保存できたか分からないという声があった(2026-10-28 梅田)。経過秒数とくるくるマークを出し、
+// 終わったらボタンを緑の「✓ 保存しました」にして、最後に保存した時刻を残す
+let _checksheetSaveStartedAt = 0;
+let _checksheetSaveTicker = null;
+let _checksheetJustSavedUntil = 0;
+const _checksheetLastSavedAt = {}; // {storeId: Date}
+const _hhmm = d => d.toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' });
 // 保存バー(当日入力フォーム下部)の表示を更新する。okが指定された呼び出し(保存完了時)は、
 // 「保存しました/失敗しました」を数秒表示してから未保存件数の表示に戻す
 function _updateChecksheetSavingIndicator(ok) {
@@ -3710,18 +3725,29 @@ function _updateChecksheetSavingIndicator(ok) {
   const cancelBtn = document.getElementById('checksheet-cancel-btn');
   if (!el) return;
   const unsaved = _checksheetUnsavedCount(storeTab);
-  if (cancelBtn) cancelBtn.style.display = unsaved && _checksheetPendingSyncCount === 0 ? '' : 'none';
+  const pending = _checksheetPendingSyncCount > 0;
+  const elapsed = pending ? Math.floor((Date.now() - _checksheetSaveStartedAt) / 1000) : 0;
+  const justSaved = !pending && !unsaved && Date.now() < _checksheetJustSavedUntil;
+  const last = _checksheetLastSavedAt[storeTab];
+  if (cancelBtn) cancelBtn.style.display = unsaved && !pending ? '' : 'none';
   if (btn) {
-    btn.disabled = unsaved === 0 || _checksheetPendingSyncCount > 0;
-    btn.textContent = _checksheetPendingSyncCount > 0 ? '保存中…' : (unsaved ? `保存する（${unsaved}件）` : '保存済み');
+    btn.disabled = unsaved === 0 || pending;
+    btn.classList.toggle('saving', pending);
+    btn.classList.toggle('just-saved', justSaved);
+    btn.textContent = pending ? (elapsed >= 2 ? `保存中…（${elapsed}秒）` : '保存中…')
+      : justSaved ? '✓ 保存しました'
+      : unsaved ? `保存する（${unsaved}件）`
+      : (last ? `保存済み（${_hhmm(last)}）` : '保存済み');
   }
   clearTimeout(_checksheetSavingIndicatorHideTimer);
-  if (_checksheetPendingSyncCount > 0) {
+  if (pending) {
     el.style.color = '#c98a1a';
-    el.textContent = '保存中…（完了までリロードしないでください）';
+    el.textContent = elapsed >= 10
+      ? '保存に時間がかかっています。電波の良い場所で、このままお待ちください（リロードしないでください）'
+      : '保存中…（完了までリロードしないでください）';
   } else if (ok !== undefined) {
     el.style.color = ok ? '#22703d' : '#c0392b';
-    el.textContent = ok ? '✓ 保存しました' : '⚠ 保存に失敗しました。通信の良い場所で「保存する」を押してください';
+    el.textContent = ok ? `✓ 保存しました（${_hhmm(last || new Date())}）` : '⚠ 保存に失敗しました。通信の良い場所で「保存する」を押してください';
     if (ok) _checksheetSavingIndicatorHideTimer = setTimeout(() => _updateChecksheetSavingIndicator(), 2500);
   } else if (unsaved) {
     el.style.color = '#c0392b';
@@ -3752,6 +3778,14 @@ function saveChecksheetNow(storeId) {
 function _syncChecksheetToDb(storeId, periodLabel) {
   const key = storeId + '|' + periodLabel;
   const prev = _checksheetSyncChain[key] || Promise.resolve();
+  if (_checksheetPendingSyncCount === 0) {
+    _checksheetSaveStartedAt = Date.now();
+    clearInterval(_checksheetSaveTicker);
+    _checksheetSaveTicker = setInterval(() => {
+      if (_checksheetPendingSyncCount > 0) _updateChecksheetSavingIndicator();
+      else { clearInterval(_checksheetSaveTicker); _checksheetSaveTicker = null; }
+    }, 1000);
+  }
   _checksheetPendingSyncCount++;
   _updateChecksheetSavingIndicator();
   const run = prev.catch(() => {}).then(async () => {
@@ -3793,8 +3827,15 @@ function _syncChecksheetToDb(storeId, periodLabel) {
     } catch(e) { console.error('checksheet sync error:', e); ok = false; }
     finally {
       _checksheetPendingSyncCount--;
+      if (ok && data) {
+        _checksheetLastSavedAt[storeId] = new Date();
+        if (_checksheetPendingSyncCount === 0) _checksheetJustSavedUntil = Date.now() + 2400;
+      }
       _updateChecksheetSavingIndicator(ok);
-      if (storeId === storeTab) _refreshChecksheetSavedNotes();
+      if (storeId === storeTab) {
+        _refreshChecksheetSavedNotes();
+        if (ok && data) _flashChecksheetSavedNotes(data);
+      }
     }
   });
   _checksheetSyncChain[key] = run;
@@ -3969,6 +4010,16 @@ function _checksheetSavedNoteText(periodLabel, dayKey, itemKey) {
   return (pending ? `本日の合計：${base}（保存待ち）` : `本日保存済み：${base}`) + (add ? ` → 保存後 ${Math.max(0, base + add)}` : '');
 }
 // 小さい表示と、大きい「今回の数」の欄を最新の状態に合わせる(保存に回した分は欄から消える)
+// 保存できた品の「本日保存済み」を一瞬緑にして、合計が増えたことを分かるようにする。data: {日付: {項目: 値}}
+function _flashChecksheetSavedNotes(data) {
+  document.querySelectorAll('.cs-saved-note').forEach(el => {
+    const { day, item } = el.dataset;
+    if (!(data[day] && item in data[day])) return;
+    el.classList.remove('cs-flash');
+    void el.offsetWidth; // アニメーションをやり直すため
+    el.classList.add('cs-flash');
+  });
+}
 function _refreshChecksheetSavedNotes() {
   document.querySelectorAll('.cs-saved-note').forEach(el => {
     const { period, day, item } = el.dataset;
