@@ -5716,7 +5716,7 @@ function _matchProductsText_(storeId, body) {
     const names = Array.from(new Set(ps.map(p => p.name)));
     if (names.length > 1) { const ex = ps.filter(p => _normJa_(p.name) === k); if (ex.length) ps = ex; }
     if (Array.from(new Set(ps.map(p => p.name))).length === 1) { found[ps[0].name] = ps[0]; used.push(k); ends[ps[0].name] = text.indexOf(k) + k.length; }
-    else ambiguous.push({ word: k, candidates: names.slice(0, 5).map(n => (products.find(p => p.name === n) || {}).label || n) });
+    else { ambiguous.push({ word: k, candidates: names.slice(0, 5).map(n => (products.find(p => p.name === n) || {}).label || n) }); used.push(k); }   // 一部（「のふた」など）で2回聞かない
   });
   // 2) 残りは、カタカナ・漢字・英数字のかたまりごとに照合する（1 で決めた言葉の一部は飛ばす）
   //    数と単位（「1ケース」「20袋」）は先に外す（2026-10-22: 「1ケース\nココア」が「ケースココア」になってココアが消え、
