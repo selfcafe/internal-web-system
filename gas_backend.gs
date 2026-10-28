@@ -5730,7 +5730,9 @@ function _findStoreInText_(body) {
 function _orderableProducts_(storeId) {
   const all = _settingJson_('all_products', []);
   const excluded = storeId ? (_settingJson_('store_product_cfg', {}) || {})[storeId] || [] : [];
-  return (Array.isArray(all) ? all : []).filter(p => p && p.name && p.name !== 'その他' && excluded.indexOf(p.name) < 0);
+  // 全店でアイス(販売品のレディーボーデン各種)の扱いをやめた(2026-10-28)。index.html の isOrderStoppedProduct と同じ条件
+  return (Array.isArray(all) ? all : []).filter(p => p && p.name && p.name !== 'その他' && excluded.indexOf(p.name) < 0
+    && !(p.vendor === 'sales' && /^アイス/.test(p.name)));
 }
 
 // 連絡文に出てくる商品を探す。カタカナ・漢字・英数字のかたまりごとに、商品名・表示名・ORDER_TEXT_ALIASES と照合する

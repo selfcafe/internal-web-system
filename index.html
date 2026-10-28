@@ -705,8 +705,15 @@
       <button class="btn-history" id="ptab-order-history" onclick="switchOrderSubTab('history')">依頼済み履歴 <span class="history-badge" id="history-badge" style="display:none"></span></button>
     </div>
     <div class="note-box">
+      【機械の見分け方】<br>
+      ・<b>アペックス</b>：赤と黒の機械<br>
+      ・<b>トーヨーベンディング</b>：なっちゃんの機械<br>
+      <br>
       【アペックス依頼時】<br>
       ・いずれか１商品は１ケース以上でご依頼ください（１ケースも無い場合、送料が発生します）。例）コーヒー豆１ケース＋フィルター１本＋砂糖１袋<br>
+      <br>
+      【トーヨーベンディング依頼時】<br>
+      ・１ケース以上でなくても大丈夫です。<br>
       <br>
       【アペックス・トーヨーベンディング共通】<br>
       ・納品は発注日から土日祝日を除く３営業日以内となります。（商品や地域により、納品に１週間程度かかる場合があります）<br>
@@ -5847,6 +5854,10 @@ function setStoreProductConfig(storeId, productNames) {
   localStorage.setItem(STORE_PRODUCTS_KEY, JSON.stringify(cfg));
   return _gasMergeSetting('store_product_cfg', { [storeId]: productNames });
 }
+// 発注の候補から外す商品(2026-10-28、全店でアイス(販売品のレディーボーデン各種)の扱いをやめた)。
+// 棚卸・チェックシートには残す(残っている在庫を数えて処分できるように)。GAS の _orderableProducts_ も同じ条件。
+// アイスカップ(cs3)は名前が「アイス」で始まるが販売品ではないので対象外
+function isOrderStoppedProduct(p) { return !!p && p.vendor === 'sales' && /^アイス/.test(p.name || ''); }
 // cfgは「除外リスト」（その商品名に一致するものを非表示にする）。nullなら常に全商品を表示する。
 function getAvailableProducts(storeId) {
   const cfg = getStoreProductConfig(storeId);
@@ -6653,7 +6664,7 @@ function closeProdAll(except) {
 function filterProd(rowId) {
   const q    = (document.getElementById('ps-'+rowId)?.value||'').toLowerCase();
   const list = document.getElementById('pl-'+rowId);
-  const available = getAvailableProducts(storeTab);
+  const available = getAvailableProducts(storeTab).filter(p => !isOrderStoppedProduct(p));
   const matched = q ? available.filter(p => p.label.toLowerCase().includes(q)||p.name.toLowerCase().includes(q)) : available;
   if (!matched.length) { list.innerHTML = '<div class="prod-option no-result">該当なし</div>'; return; }
 

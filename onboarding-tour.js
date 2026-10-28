@@ -621,6 +621,8 @@
       steps: () => [
         { text: '発注依頼の練習です。<br>店で足りなくなりそうな商品を、本部に頼む方法を覚えましょう。<br><span style="font-size:13px;color:#6b7280">練習なので、本当に注文されることはありません。</span>' },
         { target: '#ptab-order', wait: 'click', text: '「<b>発注</b>」のタブを押してください。' },
+        { target: () => one('#partner-tab-order .note-box'),
+          text: '依頼の前に、上の注意書きを読んでおきましょう。<br>機械の見分け方：<b>赤と黒の機械＝アペックス</b>、<b>なっちゃんの機械＝トーヨーベンディング</b>です。<br>アペックスは、どれか1品を<b>1ケース以上</b>で頼みます（トーヨーは1ケース未満でも大丈夫です）。' },
         { target: () => T.prodInput(0), wait: 'click', text: '「<b>タップして選択</b>」を押すと、商品の一覧が開きます。' },
         { target: () => one('.prod-dropdown.open'), scroll: false, wait: () => T.prodChosen(0),
           text: '頼みたい商品を押して選んでください。<br>上の欄に「カップ」などと入れると、絞り込めます。' },
