@@ -5948,17 +5948,31 @@ function createOrderRequest(apiKey, storeId, items) {
   const resend = [];
   const today = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd');
   const groupId = Utilities.getUuid();
-  const rows = [], created = [], skipped = [];
+  const rows = [], created = [], skipped = [], fixedBot = [];
   (items || []).forEach(it => {
     const p = byName[it.product];
     const qty = Number(it.qty);
     if (!p || !(qty > 0)) { skipped.push((it.product || '?') + '（この店で頼めない品か、数が不正）'); return; }
+    const unitMode = it.unitMode === 'case' && p.caseUnit ? 'case' : (p.caseOnly && p.caseUnit ? 'case' : 'piece');
     if (pending.has(p.name)) {
+      // 依頼中の品で数が違うときは、連絡の数に直す（2026-10-29 心斎橋: ポータルの「ココア 1（バラ）」のあとに
+      // LINE で「ココア1ケース」と来たのに、「すでに依頼中」で飛ばして 1袋 の発注書のままだった）。まだ発注していない行が1つのときだけ
+      const same = pendingRows.filter(r => r.product === p.name);
+      const caseOf = r => r.unit_mode === 'case' || !!p.caseOnly;
+      if (same.length === 1 && !_dateStr(same[0].order_date) && (Number(same[0].qty) !== qty || caseOf(same[0]) !== (unitMode === 'case'))) {
+        const before = same[0].qty + (caseOf(same[0]) ? 'ケース' : (p.unit || ''));
+        const fixed = Object.assign({}, same[0], { qty: qty, unit_mode: unitMode, case_unit: unitMode === 'case' ? (p.caseUnit || '') : '',
+          note: (same[0].note ? same[0].note + '／' : '') + 'LINE WORKS の連絡で数を直した（' + before + '→' + qty + (unitMode === 'case' ? 'ケース' : (p.unit || '')) + '）' });
+        upsertOrderRows(storeId, [fixed]);   // 新着のままなので通知は出ない（下の resend で送る）
+        skipped.push((p.label || p.name) + '（すでに依頼中。数を ' + before + ' → ' + qty + (unitMode === 'case' ? 'ケース' : (p.unit || '')) + ' に直しました）');
+        resend.push(fixed);
+        if (/LINE WORKS の連絡から本部が登録/.test(String(same[0].note || ''))) fixedBot.push(fixed);   // ポータルからの品は通知（resend）のときに発注書を作り直す
+        return;
+      }
       skipped.push((p.label || p.name) + '（すでに依頼中）');
-      pendingRows.filter(r => r.product === p.name).forEach(r => resend.push(r));
+      same.forEach(r => resend.push(r));
       return;
     }
-    const unitMode = it.unitMode === 'case' && p.caseUnit ? 'case' : (p.caseOnly && p.caseUnit ? 'case' : 'piece');
     rows.push({ id: Utilities.getUuid(), store_id: storeId, group_id: groupId, product: p.name, label: p.label || p.name,
       qty: qty, unit: p.unit || '', case_unit: p.caseUnit || '', unit_mode: unitMode, note: 'LINE WORKS の連絡から本部が登録',
       locked: true, is_new: true, request_date: today, created_at: new Date().toISOString(), denied: false });
@@ -5977,7 +5991,12 @@ function createOrderRequest(apiKey, storeId, items) {
     created.push('依頼中の品の通知をもう一度送ります（' + again.items.map(i => i.label).join('、') + '）');
     return res;
   };
-  if (!rows.length) return addResend({ ok: true, created, skipped });
+  if (!rows.length && !fixedBot.length) return addResend({ ok: true, created, skipped });
+  if (!rows.length) {   // 数を直した Bot の品だけ: 発注書を作り直す
+    const apex0 = _apexDraftForOrderRows_(storeId, fixedBot, carried => carried.forEach(r => resend.push(r)));
+    if (apex0) created.push(apex0);
+    return addResend({ ok: true, created, skipped, apexDraft: apex0 || '' });
+  }
   const res = upsertOrderRows(storeId, rows);   // 新着になった行として _notify（Bot への通知）が付く
   try {
     UrlFetchApp.fetch('https://selfcafe-internal-web-system-default-rtdb.firebaseio.com/orders_updated.json', {
@@ -5986,7 +6005,7 @@ function createOrderRequest(apiKey, storeId, items) {
   } catch (e) { console.error('orders_updated の合図に失敗:', e.message); }
   // アペックス（apex・cs3）の品は、その店の支店の都度発注書と Gmail 下書きも作る（2026-10-15。それまでは登録だけで止まっていた）。
   // 結果は Bot の返事に出るよう created の最後に1行足す（Bot 側は created をそのまま並べて表示している）
-  const apex = _apexDraftForOrderRows_(storeId, rows, carried => carried.forEach(r => resend.push(r)));
+  const apex = _apexDraftForOrderRows_(storeId, rows.concat(fixedBot), carried => carried.forEach(r => resend.push(r)));
   if (apex) created.push(apex);
   return addResend(Object.assign(res, { created, skipped, apexDraft: apex || '' }));
 }
@@ -6010,7 +6029,7 @@ function _apexDraftForOrderRows_(storeId, rows, onCarried) {
     let prev = null;
     try { prev = JSON.parse(props.getProperty(pk) || 'null'); } catch (e) { prev = null; }
     const bySid = { [storeId]: apexRows.slice() };
-    let carried = [];
+    let carried = [], replacePrev = false;
     if (prev && prev.date === today && prev.draftId) {
       let alive = false;
       try { Gmail.Users.Drafts.get('me', prev.draftId); alive = true; } catch (e) { alive = false; }   // 送った・消した下書きはまとめない
@@ -6020,6 +6039,10 @@ function _apexDraftForOrderRows_(storeId, rows, onCarried) {
         carried = getOrders().filter(r => ids.indexOf(String(r.id)) >= 0 && newIds.indexOf(String(r.id)) < 0 &&
           (r.is_new === true || String(r.is_new) === 'TRUE') && !(r.denied === true || String(r.denied) === 'TRUE') && !_dateStr(r.order_date));
         carried.forEach(r => { (bySid[r.store_id] = bySid[r.store_id] || []).push(r); });
+        // 前の下書きの品がすべて今回の発注書に入るなら、前の下書きは消す（2026-10-29 心斎橋: 同じ依頼の通知をもう一度送ったとき、
+        // carried が空なので前の下書きが残り、同じ中身の下書きが2通になった）
+        const carriedIds = carried.map(r => String(r.id));
+        replacePrev = carried.length > 0 || ids.every(id => newIds.indexOf(id) >= 0 || carriedIds.indexOf(id) >= 0);
       }
     }
     // 店ごとに、同じ品はまとめる（単位がそろっていれば足す。ケースとバラが混ざるときはバラに直して足す）
@@ -6041,7 +6064,7 @@ function _apexDraftForOrderRows_(storeId, rows, onCarried) {
     const out = buildAdhocApexOrder(bk, spec, false, { source: 'アペックス 追加発注（Bot）', rowsBySid: bySid, pending: true });
     if (!out || !out.ok) return '【アペックス】発注メールの下書きを作れませんでした（' + ((out && (out.error + ' ' + (out.details || []).join(' '))) || '不明') + '）。PC から作り直してください';
     // 作り直せたら、前の下書き・PDF・写しを消す（作り直しに失敗したときは前のものを残す）
-    if (carried.length) {
+    if (replacePrev) {
       try { Gmail.Users.Drafts.remove('me', prev.draftId); } catch (e) { console.error('前の下書きを消せませんでした:', e.message); }
       [prev.pdfId, prev.sheetId].filter(Boolean).forEach(id => { try { DriveApp.getFileById(id).setTrashed(true); } catch (e) {} });
     }
@@ -6052,7 +6075,7 @@ function _apexDraftForOrderRows_(storeId, rows, onCarried) {
     const names = _storeNames_();
     const mergedNote = carried.length ? '（今日まだ送っていない前の下書きの品（' +
       carried.map(r => (r.store_id !== storeId ? (names[r.store_id] || r.store_id) + ' ' : '') + (r.label || r.product)).join('、') +
-      '）とまとめて1通にしました。前の下書きは消しました）' : '';
+      '）とまとめて1通にしました。前の下書きは消しました）' : (replacePrev ? '（同じ品の前の下書きは作り直して消しました）' : '');
     return '【アペックス】' + out.branch + '支店の発注メールの下書きを作りました（' + out.lines.map(l => l.split('　').slice(1, 3).join(' ')).join('・') +
       '、税抜' + Number(out.total).toLocaleString() + '円）' + mergedNote + '。Gmail の下書きを確認して送り、通知の［アペックス 発注した］を押してください' + (out.warnings.length ? '。注意: ' + out.warnings.join(' / ') : '');
   } catch (e) {
