@@ -5322,6 +5322,7 @@ function _toyoReorderItems_(storeId, periodLabel) {
   const idx = {};
   INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
   const meta = _productMeta_();
+  const onOrder = _onOrderPieces_(storeId, periodLabel);
   const items = [];
   let submitted = false;
   for (let i = 1; i < data.length; i++) {
@@ -5336,9 +5337,10 @@ function _toyoReorderItems_(storeId, periodLabel) {
     const info = meta[r[idx.product]] || {};
     if (info.vendor !== 'toyo') continue;
     const lot = info.casePieces || 1;
-    const target = Number(targets[code]), stock = Number(endStock);
+    const oo = (onOrder[r[idx.product]] || {}).pieces || 0;   // 届いていない発注(_onOrderPieces_)
+    const target = Number(targets[code]), stock = Number(endStock) + oo;
     const need = Math.max(0, target - stock);
-    items.push({ code, product: r[idx.product], target, endStock: stock, lot, qty: Math.ceil(need / lot) * lot,
+    items.push({ code, product: r[idx.product], target, endStock: stock, counted: Number(endStock), onOrder: oo, lot, qty: Math.ceil(need / lot) * lot,
       unitPrice: info.price || 0, added: 0 });
   }
   return { submitted, items: _toyoTopUp_(items) };
@@ -5376,7 +5378,10 @@ function buildToyoReorder(storeId, periodLabel, dryRun) {
   const total = _toyoAmount_(items);
   const storeName = _storeNames_()[storeId] || storeId;
   const periodJa = _periodLabelJa_(periodLabel);
-  const lines = items.map(it => `${String(it.product).replace(/^㋣/, '')}：${_toyoQtyText_(it)}${it.added ? `（送料無料に乗せるため+${it.added}）` : ''}　${(it.qty * it.unitPrice).toLocaleString()}円`);
+  const lines = items.map(it => `${String(it.product).replace(/^㋣/, '')}：${_toyoQtyText_(it)}${it.added ? `（送料無料に乗せるため+${it.added}）` : ''}${it.onOrder ? `（届いていない発注 ${it.onOrder} を差し引き）` : ''}　${(it.qty * it.unitPrice).toLocaleString()}円`);
+  // 届いていない発注があって、今回は頼まなくてよくなった品も書いておく(押し忘れで実は届いている場合に気づけるように)
+  r.items.filter(it => it.onOrder && !(it.qty > 0)).forEach(it =>
+    lines.push(`（${String(it.product).replace(/^㋣/, '')}：届いていない発注 ${it.onOrder} があるので今回は無し）`));
   lines.push(`${TOYO_MAINTENANCE_NAME}：1回（毎月。単品注文不可）`);
   // 「トーベンのカートに入れる」リンク（2026-10-16）。qty はポータルの数（lot の倍数）なので lot で割ると Bカートの単位
   const cartUrl = _toyoCartUrl_(storeId, items.map(it => ({ code: String(it.code), siteQty: Math.round(it.qty / (it.lot || 1)) })));
@@ -5403,6 +5408,37 @@ function buildToyoReorder(storeId, periodLabel, dryRun) {
   return Object.assign(result, { draftCreated: true });
 }
 
+// ===== 届いていない発注を月初発注から差し引く（2026-10-29 塩川さん） =====
+// 現場は発注依頼を出したことを忘れて棚卸を出すので、依頼中・発注済みでまだ「納品済み」になっていない品は
+// 期末在庫に足してから基準値と比べる（基準値 −（期末在庫 ＋ 届いていない分））。二重に頼まないように。
+// 対象は直近 ON_ORDER_RECENT_DAYS 日以内に依頼・発注した行だけ。それより古い行は、届いたのに納品済みを
+// 押し忘れているとみなす（期末在庫に入っているはずなので、足すと二重に数えて発注が足りなくなる）。
+// その月の月初発注そのもの（group_id = monthly_<支店>_<月>）は、作り直すたびに自分を差し引かないよう除く。否認は除く
+const ON_ORDER_RECENT_DAYS = 14;
+function _onOrderPieces_(storeId, periodLabel) {
+  const meta = _productMeta_();
+  const since = Utilities.formatDate(new Date(Date.now() - ON_ORDER_RECENT_DAYS * 86400000), 'Asia/Tokyo', 'yyyy-MM-dd');
+  const out = {};
+  getOrders().forEach(r => {
+    if (String(r.store_id) !== String(storeId) || !r.product || r.denied) return;
+    if (/^monthly_/.test(String(r.group_id || '')) && String(r.group_id).endsWith('_' + periodLabel)) return;
+    const d = r.order_date || r.request_date || '';
+    if (!d || d < since) return;
+    const info = meta[r.product] || {};
+    const useActual = r.actual_qty !== null && r.actual_qty !== undefined;
+    const n = Number(useActual ? r.actual_qty : r.qty);
+    if (!(n > 0)) return;
+    const mode = useActual ? (r.actual_unit_mode || (info.caseOnly ? 'case' : 'piece')) : (info.caseOnly ? 'case' : (r.unit_mode || 'piece'));
+    const cp = info.casePieces || Number((String(r.case_unit || '').match(/\d+/) || [])[0]) || 0;
+    if (mode === 'case' && !cp) return;   // 個数に直せない行は数えない(誤った数で減らさない)
+    const pieces = mode === 'case' ? n * cp : n;
+    const o = out[r.product] || (out[r.product] = { pieces: 0, rows: [] });
+    o.pieces += pieces;
+    o.rows.push({ date: d, pieces, status: r.order_date ? '発注済み' : '依頼中' });
+  });
+  return out;
+}
+
 // 1店舗分の発注数。submitted=false はその月の棚卸がまだ出ていない
 // アペックスへの発注書に載せる仕入先。販売品(水)・お菓子はAmazonで発注するため、基準値があっても載せない(2026-10-10)
 const APEX_ORDER_VENDORS = ['apex', 'cs3'];
@@ -5415,6 +5451,7 @@ function _storeReorderItems_(storeId, periodLabel) {
   const idx = {};
   INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
   const meta = _productMeta_();
+  const onOrder = _onOrderPieces_(storeId, periodLabel);
   const raw = [];
   let submitted = false;
   for (let i = 1; i < data.length; i++) {
@@ -5428,11 +5465,14 @@ function _storeReorderItems_(storeId, periodLabel) {
     if (endStock === '' || endStock === null) continue;
     const info = meta[r[idx.product]] || {};
     if (APEX_ORDER_VENDORS.indexOf(info.vendor || '') < 0) continue;
-    raw.push({ code, product: r[idx.product], target: Number(targets[code]), endStock: Number(endStock),
+    // endStock は「期末在庫＋届いていない分」。数えた在庫は counted、差し引いた分は onOrder
+    const oo = (onOrder[r[idx.product]] || {}).pieces || 0;
+    raw.push({ code, product: r[idx.product], target: Number(targets[code]), endStock: Number(endStock) + oo,
+      counted: Number(endStock), onOrder: oo,
       vendor: info.vendor || '', casePieces: info.casePieces || null, stockCapCases: info.stockCapCases || null });
   }
   const items = _applyReorderRounding_(raw);
-  return { submitted, items, held: items.held || [] };
+  return { submitted, items, held: items.held || [], onOrder: raw.filter(it => it.onOrder > 0) };
 }
 
 // 発注数は単位を必ず明記する(数字だけだとケース注文の商品で先方がケース数と読み、何十倍も
@@ -6116,6 +6156,8 @@ function buildAmazonList(periodLabel) {
   const meta = _productMeta_();
   const urls = _amazonUrlMap_();
   const names = _storeNames_();
+  const onOrderBy = {};   // 店舗ごとの届いていない発注(_onOrderPieces_)
+  const onOrderOf = sid => onOrderBy[sid] || (onOrderBy[sid] = _onOrderPieces_(sid, periodLabel));
   const sheetId = _inventorySheetIdForPeriod_(periodLabel);
   const data = _inventoryLogRowsCached_(sheetId);
   const idx = {};
@@ -6133,9 +6175,10 @@ function buildAmazonList(periodLabel) {
     if (!(code in targets)) continue;
     const endStock = r[idx.end_stock];
     if (endStock === '' || endStock === null) continue;
-    const qty = _reorderQtyPieces_(Number(targets[code]), Number(endStock), info.casePieces, info.stockCapCases);
+    const oo = (onOrderOf(sid)[r[idx.product]] || {}).pieces || 0;
+    const qty = _reorderQtyPieces_(Number(targets[code]), Number(endStock) + oo, info.casePieces, info.stockCapCases);
     if (qty <= 0) continue;
-    items.push({ sid, store: names[sid] || sid, product: String(r[idx.product]), qty,
+    items.push({ sid, store: names[sid] || sid, product: String(r[idx.product]), qty, onOrder: oo,
       packs: info.casePieces ? Math.round(qty / info.casePieces) : qty, url: urls[r[idx.product]] || '' });
   }
   items.sort((a, b) => (a.store > b.store ? 1 : a.store < b.store ? -1 : 0) || (a.product > b.product ? 1 : -1));
@@ -6150,11 +6193,11 @@ function buildAmazonList(periodLabel) {
   if (!sh) sh = ss.insertSheet(title);
   sh.clear();
   sh.getRange(1, 1).setValue(`${title}（棚卸が出るたびに自動で作り直します。注文したら「注文済み」にチェック）`).setFontWeight('bold');
-  const head = ['店舗', '商品', '発注数(個)', 'Amazonで注文する数', '商品ページ', '注文済み'];
+  const head = ['店舗', '商品', '発注数(個)', 'Amazonで注文する数', '商品ページ', '注文済み', '差し引いた届いていない発注(個)'];
   sh.getRange(2, 1, 1, head.length).setValues([head]).setFontWeight('bold').setBackground('#d9ead3');
   if (items.length) {
     const rows = items.map(it => [it.store, it.product, it.qty, it.packs,
-      it.url ? `=HYPERLINK("${_amazonUrl_(it.url)}","Amazonで開く")` : '（URL未登録）', !!done[it.store + '|' + it.product]]);
+      it.url ? `=HYPERLINK("${_amazonUrl_(it.url)}","Amazonで開く")` : '（URL未登録）', !!done[it.store + '|' + it.product], it.onOrder || '']);
     sh.getRange(3, 1, rows.length, head.length).setValues(rows);
     sh.getRange(3, 6, rows.length, 1).insertCheckboxes();
     rows.forEach((row, k) => { if (row[5]) sh.getRange(3 + k, 6).check(); });
@@ -6238,21 +6281,26 @@ function buildBranchReorder(branchKey, periodLabel, dryRun) {
   const perStore = {};
   const missing = [];
   const held = {};   // 1ケースにできる品が無く、今月は見送った店 {店名: [品…]}（2026-10-18〜）
+  const onOrder = {};   // 届いていない発注を差し引いた品 {店名: [品…]}（2026-10-29〜、_onOrderPieces_）
   Object.keys(b.stores || {}).forEach(sid => {
     if (_storeIsFullOp_(sid)) return;   // フルオペ(メーカー管理)の店は発注書に入れない
     const r = _storeReorderItems_(sid, periodLabel);
     if (!r.submitted) { missing.push(names[sid] || sid); return; }
     if (r.items.length) perStore[sid] = r.items;
-    if (r.held && r.held.length) held[names[sid] || sid] = r.held.map(it => ({ product: it.product, qty: it.qty, endStock: it.endStock, target: it.target, risk: !!it.risk }));
+    if (r.held && r.held.length) held[names[sid] || sid] = r.held.map(it => ({ product: it.product, qty: it.qty, endStock: it.counted, target: it.target, risk: !!it.risk }));
+    if (r.onOrder && r.onOrder.length) onOrder[names[sid] || sid] = r.onOrder.map(it => {
+      const ord = r.items.find(x => x.code === it.code);
+      return { product: it.product, counted: it.counted, onOrder: it.onOrder, target: it.target, qty: ord ? ord.qty : 0 };
+    });
   });
   const periodJa = _periodLabelJa_(periodLabel);
   const subject = `${mail.subject || '発注依頼'}（${b.label}支店 ${periodJa}分）`;
-  const summary = { branch: b.label, subject, ordered: Object.keys(perStore).map(s => names[s] || s), notSubmitted: missing, held };
-  if (!dryRun) { try { _notifyHeldReorder_(b.label, periodJa, held); } catch (e) { console.error('_notifyHeldReorder_ error:', e.message); } }
+  const summary = { branch: b.label, subject, ordered: Object.keys(perStore).map(s => names[s] || s), notSubmitted: missing, held, onOrder };
+  if (!dryRun) { try { _notifyHeldReorder_(b.label, periodJa, held, onOrder); } catch (e) { console.error('_notifyHeldReorder_ error:', e.message); } }
   if (dryRun) {
     const detail = {};
     Object.keys(perStore).forEach(s => {
-      detail[names[s] || s] = perStore[s].map(it => ({ code: codeMap[it.code] || it.code, product: it.product, qty: it.qty, bumped: !!it.bumped }));
+      detail[names[s] || s] = perStore[s].map(it => ({ code: codeMap[it.code] || it.code, product: it.product, qty: it.qty, bumped: !!it.bumped, onOrder: it.onOrder || 0 }));
     });
     return Object.assign({ ok: true, dryRun: true, detail }, summary);
   }
@@ -6341,23 +6389,38 @@ function buildBranchReorder(branchKey, periodLabel, dryRun) {
 // 月初発注で見送った店のうち、月末在庫が基準値の半分未満の品（次の発注まで持たないかもしれない品）がある店を、
 // selfcafe001 自身あてのメールで知らせる（2026-10-18 塩川さん「A」: 見送り、在庫切れが心配なときだけ知らせて手で判断）。
 // 棚卸が出るたびに支店の発注書を作り直すので、同じ内容は1回だけ送る（スクリプト プロパティに控え）
-function _notifyHeldReorder_(branchLabel, periodJa, held) {
+// 2026-10-29〜: 届いていない発注を差し引いた品(onOrder)も同じメールで知らせる(納品済みの押し忘れで、実は届いている場合に気づけるように)
+function _notifyHeldReorder_(branchLabel, periodJa, held, onOrder) {
+  onOrder = onOrder || {};
   const risky = Object.keys(held).filter(st => held[st].some(it => it.risk));
-  if (!risky.length) return;
-  const lines = [`${branchLabel}支店の月初発注（${periodJa}分）で、1ケースにできる品が無いため今月は見送った店のうち、`,
-    '月末在庫が基準値の半分を切っている品がある店です。次の発注まで持つか確認し、必要なら都度発注してください。', ''];
-  risky.forEach(st => {
-    lines.push('■ ' + st);
-    held[st].forEach(it => lines.push(`  ${it.risk ? '⚠ ' : '・'}${it.product}  月末在庫 ${it.endStock} / 基準値 ${it.target}（不足 ${it.qty}）`));
-    lines.push('');
-  });
-  lines.push('（ほかの見送った店は在庫に余裕があるため、翌月にまとめて発注します）');
+  const reduced = Object.keys(onOrder);
+  if (!risky.length && !reduced.length) return;
+  const lines = [];
+  if (risky.length) {
+    lines.push(`${branchLabel}支店の月初発注（${periodJa}分）で、1ケースにできる品が無いため今月は見送った店のうち、`,
+      '月末在庫が基準値の半分を切っている品がある店です。次の発注まで持つか確認し、必要なら都度発注してください。', '');
+    risky.forEach(st => {
+      lines.push('■ ' + st);
+      held[st].forEach(it => lines.push(`  ${it.risk ? '⚠ ' : '・'}${it.product}  月末在庫 ${it.endStock} / 基準値 ${it.target}（不足 ${it.qty}）`));
+      lines.push('');
+    });
+    lines.push('（ほかの見送った店は在庫に余裕があるため、翌月にまとめて発注します）', '');
+  }
+  if (reduced.length) {
+    lines.push(`【届いていない発注を差し引いた品】直近${ON_ORDER_RECENT_DAYS}日の依頼・発注で、まだ納品済みになっていない分を月末在庫に足して計算しました。`,
+      'もう届いているのに納品済みが押されていないだけなら、その分は発注が少なくなっています。店舗に確認してください。', '');
+    reduced.forEach(st => {
+      lines.push('■ ' + st);
+      onOrder[st].forEach(it => lines.push(`  ・${it.product}  月末在庫 ${it.counted} ＋ 届いていない ${it.onOrder} / 基準値 ${it.target} → 発注 ${it.qty}`));
+      lines.push('');
+    });
+  }
   const body = lines.join('\n');
   const props = PropertiesService.getScriptProperties();
   const key = 'HELD_NOTIFIED_' + Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, branchLabel + periodJa)).slice(0, 16);
   const digest = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, body));
   if (props.getProperty(key) === digest) return;
-  GmailApp.sendEmail(APEX_SENDER, `【確認】月初発注で見送った店（${branchLabel}支店 ${periodJa}分）`, body, { name: 'セルフカフェ社内ポータル' });
+  GmailApp.sendEmail(APEX_SENDER, `【確認】月初発注の確認（${branchLabel}支店 ${periodJa}分）`, body, { name: 'セルフカフェ社内ポータル' });
   props.setProperty(key, digest);
 }
 
