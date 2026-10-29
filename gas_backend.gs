@@ -6374,7 +6374,8 @@ function buildBranchReorder(branchKey, periodLabel, dryRun) {
         const id = groupId + '_' + sid + '_' + it.code;
         keep.add(id);
         return { id, product: it.product, label: it.product, qty: it.qty, unit: (_settingJson_('all_products', []).find(p => p.name === it.product) || {}).unit || '',
-          unitPrice: m.price || 0, portalCode: String(it.code), sheetCode: String(codeMap[it.code] || it.code), vendor: m.vendor || '' };
+          unitPrice: m.price || 0, portalCode: String(it.code), sheetCode: String(codeMap[it.code] || it.code), vendor: m.vendor || '',
+          caseOnly: !!m.caseOnly, casePieces: m.casePieces || 0 };   // ケースのみの品はケースで記録（画面がケースとして読むため。2026-10-29）
       });
       try { _registerOrderedRows_(sid, items, 'アペックス 月初発注', pdf.name, { groupId }); } catch (e) { warnings.push('発注タブへの登録に失敗: ' + (names[sid] || sid) + ' ' + e.message); }
     });
@@ -6555,16 +6556,19 @@ function _registerOrderedRows_(storeId, items, source, documentName, opts) {
     if (!it.product || !(Number(it.qty) > 0)) return;
     const base = (opts.rows || []).find(r => r.product === it.product);
     // ケースのみの品は、ポータルの画面が数をケースとして読む（unit_mode がバラでも）。本・袋の数のまま入れると
-    // 50本が「50ケース」に見え、検品済みで 50×入り数 になるので、発注書のケース入数でケースに直して入れる（2026-10-26）
+    // 50本が「50ケース」に見え、検品済みで 50×入り数 になるので、ケースに直して入れる（2026-10-26。月初発注も 2026-10-29〜。
+    // 40本のようにケースの倍数でないときは 1.6ケース のように小数で入れる＝検品で 40本 に戻る）
     const cp = Number(it.casePieces) || 0;
     const asCase = !!it.caseOnly && cp > 0;
     const rowQty = asCase ? Math.round(Number(it.qty) / cp * 100) / 100 : Number(it.qty);
+    // ケースが割り切れないとき（24袋入りを10袋＝0.42ケース）は、実際数量に本・袋の数も入れて、検品の数を正確にする
+    const exactPieces = asCase && Number(it.qty) % cp !== 0;
     const row = Object.assign({}, base || {}, {
       id: (base && base.id) || it.id || Utilities.getUuid(), store_id: storeId, group_id: (base && base.group_id) || groupId,
-      product: it.product, label: it.label || it.product, qty: rowQty, actual_qty: '', unit: it.unit || '',
+      product: it.product, label: it.label || it.product, qty: rowQty, actual_qty: exactPieces ? Number(it.qty) : '', unit: it.unit || '',
       case_unit: asCase ? String(cp) : '', unit_mode: asCase ? 'case' : 'piece', note: base && base.note ? base.note + '／' + tag : tag, locked: true, is_new: !!opts.pending,
       request_date: (base && base.request_date) || today, order_date: opts.pending ? '' : today, delivery_date: '', created_at: (base && base.created_at) || now,
-      denied: false, image_url: (base && base.image_url) || '', actual_unit_mode: '' });
+      denied: false, image_url: (base && base.image_url) || '', actual_unit_mode: exactPieces ? 'piece' : '' });
     rows.push(row);
     lines.push({ id: row.id, order_date: today, vendor: it.vendor || '', source: source, product: it.product, portal_code: it.portalCode || '',
       sheet_code: it.sheetCode || '', qty: Number(it.qty), unit: it.unit || '', unit_price: Number(it.unitPrice) || 0,
@@ -6585,7 +6589,9 @@ function _registerApexSheetItems_(storeId, sheetItems, source, documentName, opt
     const p = _portalProductForSheetCode_(x.code);
     if (!p) { unknown.push((x.name || '') + '（' + x.code + '）'); return; }
     items.push({ product: p.name, label: p.label || p.name, qty: x.qty, unit: p.unit || x.unit || '', unitPrice: x.price,
-      portalCode: String(p.code), sheetCode: String(x.code), vendor: p.vendor || '', caseOnly: !!p.caseOnly, casePieces: x.casePieces || 0 });
+      portalCode: String(p.code), sheetCode: String(x.code), vendor: p.vendor || '', caseOnly: !!p.caseOnly,
+      // 画面は商品マスタの入り数でケース→本・袋に直すので、記録もその入り数でケースにする（無ければ発注書の入り数）
+      casePieces: Number((String(p.caseUnit || '').match(/\d+/g) || []).pop()) || x.casePieces || 0 });
   });
   const res = _registerOrderedRows_(storeId, items, source, documentName, opts);
   if (unknown.length) res.unknown = unknown;
