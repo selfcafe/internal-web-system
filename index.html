@@ -7521,6 +7521,44 @@ function _announceMoreLink(onclick, total) {
 }
 const ANNOUNCE_WIDGET_EMPTY = '<div style="padding:14px 16px;color:#aaa;font-size:12.5px">ここ2週間の新しい業務連絡はありません</div>';
 
+// 既読・未読(店舗の画面だけ、2026-10-29 塩川さん「見てないものは太字、見たものは細字。未読が無いようにしたい」)。
+// 詳細を開いたら既読。端末ごと・店舗ごとに localStorage(announce_read_<店舗>)へ覚える(別の端末では未読のまま)。
+// 未読は2週間・2件の制限に関係なく、読むまで枠に出し続ける(見落とさないように)。
+// その端末でこの店を初めて開いたときは、2週間より前のものを既読として始める(古いものが全部未読で並ばないように)
+function _announceReadKey() { return 'announce_read_' + storeTab; }
+function _announceReadSet() {
+  let ids = null;
+  try { ids = JSON.parse(localStorage.getItem(_announceReadKey()) || 'null'); } catch (e) { ids = null; }
+  if (!Array.isArray(ids)) {
+    const d = new Date(); d.setDate(d.getDate() - ANNOUNCE_WIDGET_DAYS);
+    const since = d.toLocaleDateString('sv');
+    ids = announceItems.filter(it => String(it.publish_date || '').slice(0, 10) < since).map(it => String(it.id));
+    if (announceItems.length) { try { localStorage.setItem(_announceReadKey(), JSON.stringify(ids)); } catch (e) {} }
+  }
+  return new Set(ids.map(String));
+}
+function _markAnnounceRead(id) {
+  const set = _announceReadSet();
+  if (set.has(String(id))) return;
+  set.add(String(id));
+  // 一覧に無くなったものの記録は捨てる(増え続けないように)
+  const keep = [...set].filter(x => announceItems.some(it => String(it.id) === x));
+  try { localStorage.setItem(_announceReadKey(), JSON.stringify(keep)); } catch (e) {}
+}
+// 店舗の枠: 未読はすべて＋2週間以内の新しいものを合わせて2件になるまで(新しい順)
+function _announcePartnerWidgetItems() {
+  const read = _announceReadSet();
+  const unread = announceItems.filter(it => !read.has(String(it.id)));
+  const recent = _announceWidgetItems(announceItems).filter(it => read.has(String(it.id)));
+  const out = unread.concat(recent.slice(0, Math.max(0, ANNOUNCE_WIDGET_MAX - unread.length)));
+  return out.sort((a, b) => String(b.publish_date || '').localeCompare(String(a.publish_date || '')));
+}
+function _announceTitleHTML(it, read) {
+  return read
+    ? `<div style="flex:1;font-size:13px;color:#4b5563;font-weight:400;line-height:1.5">${esc(it.title)}</div>`
+    : `<div style="flex:1;font-size:13px;color:#22703d;font-weight:700;line-height:1.5"><span style="display:inline-block;background:#dc2626;color:white;font-size:10px;font-weight:700;border-radius:4px;padding:0 5px;margin-right:6px;vertical-align:1px">未読</span>${esc(it.title)}</div>`;
+}
+
 /* ----- パートナー側: ヘッダー直下ウィジェット＋一覧/詳細ドリルダウン ----- */
 
 let announceItems = [];
@@ -7543,26 +7581,28 @@ async function ensureAnnounceWidgetLoaded(storeId) {
 function renderAnnounceWidget(loading) {
   const wrap = document.getElementById('announce-widget-wrap');
   if (!wrap) return;
-  const items = _announceWidgetItems(announceItems);
+  const items = loading ? [] : _announcePartnerWidgetItems();
+  const read = loading ? new Set() : _announceReadSet();
+  const unreadN = loading ? 0 : announceItems.filter(it => !read.has(String(it.id))).length;
   wrap.innerHTML = `
     <div style="background:white;border-radius:10px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:14px;overflow:hidden">
       <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid #f1eede">
         <div style="width:36px;height:36px;border-radius:9px;background:#b5544a;display:flex;align-items:center;justify-content:center;flex-shrink:0">
           <svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M3 9v6h3l7 4V5L6 9H3z" fill="white"/><path d="M16 8a5 5 0 010 8" stroke="white" stroke-width="2" stroke-linecap="round"/><path d="M19 6a9 9 0 010 12" stroke="white" stroke-width="2" stroke-linecap="round" opacity=".55"/></svg>
         </div>
-        <div style="font-weight:700;font-size:16px;color:#333;flex:1">業務連絡</div>
+        <div style="font-weight:700;font-size:16px;color:#333;flex:1">業務連絡${unreadN ? `<span style="margin-left:8px;background:#dc2626;color:white;font-size:11px;border-radius:999px;padding:1px 8px;vertical-align:2px;white-space:nowrap;display:inline-block">未読 ${unreadN}件</span>` : ''}</div>
         ${_announceMoreLink('showAnnounceList()', announceItems.length)}
       </div>
       <div>${loading ? '<div style="padding:14px 16px;color:#aaa;font-size:12.5px">読み込み中…</div>' : (items.length ? items.map(it => `
           <div onclick="showAnnounceDetail('${it.id}')" style="display:flex;gap:10px;align-items:flex-start;padding:11px 14px;border-bottom:1px solid #f5f3e8;cursor:pointer;box-sizing:border-box">
             <div style="font-size:11px;color:#999;padding-top:2px;flex-shrink:0;width:58px">${esc(_announceDateLabel(it.publish_date))}</div>
-            <div style="flex:1;font-size:13px;color:#22703d;font-weight:600;line-height:1.5">${esc(it.title)}</div>
+            ${_announceTitleHTML(it, read.has(String(it.id)))}
           </div>`).join('') : ANNOUNCE_WIDGET_EMPTY)}
       </div>
     </div>`;
 }
 
-function _announceListHTML(items, onHome) {
+function _announceListHTML(items, onHome, read) {
   return `
     <div style="display:flex;align-items:center;gap:8px;padding:14px 4px 10px">
       <button onclick="${onHome}" style="background:none;border:none;padding:4px;cursor:pointer;display:flex;align-items:center">
@@ -7574,7 +7614,7 @@ function _announceListHTML(items, onHome) {
       ${items.length ? items.map(it => `
         <div onclick="showAnnounceDetail('${it.id}')" style="display:flex;gap:10px;align-items:flex-start;padding:12px 14px;border-bottom:1px solid #f5f3e8;cursor:pointer;box-sizing:border-box">
           <div style="font-size:11px;color:#999;padding-top:2px;flex-shrink:0;width:58px">${esc(_announceDateLabel(it.publish_date))}</div>
-          <div style="flex:1;font-size:13px;color:#22703d;font-weight:600;line-height:1.5">${esc(it.title)}</div>
+          ${read ? _announceTitleHTML(it, read.has(String(it.id))) : `<div style="flex:1;font-size:13px;color:#22703d;font-weight:600;line-height:1.5">${esc(it.title)}</div>`}
         </div>`).join('') : '<div style="padding:14px 16px;color:#aaa;font-size:12.5px">現在、業務連絡はありません</div>'}
     </div>`;
 }
@@ -7603,12 +7643,13 @@ function showAnnounceList() {
   document.getElementById('partner-tabs-area').style.display = 'none';
   const drill = document.getElementById('announce-drill-wrap');
   drill.style.display = '';
-  drill.innerHTML = _announceListHTML(announceItems, 'announceGoHome()');
+  drill.innerHTML = _announceListHTML(announceItems, 'announceGoHome()', _announceReadSet());
 }
 
 function showAnnounceDetail(id) {
   const it = announceItems.find(a => String(a.id) === String(id));
   if (!it) return;
+  _markAnnounceRead(id);
   document.getElementById('announce-widget-wrap').style.display = 'none';
   document.getElementById('partner-tabs-area').style.display = 'none';
   const drill = document.getElementById('announce-drill-wrap');

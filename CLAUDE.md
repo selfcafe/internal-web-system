@@ -401,6 +401,7 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
   - 練習では配属店の設定に関係なく業務開始・マシン撮影を出す(`adjustSettings`)。位置情報は許可の流れだけ体験し、判定は常に範囲内・どこにも送らない。
 - **案内**(`onboarding-tour.js`): 押す所だけ明るく＋吹き出し、明るい所以外は押せない。章は好きな順・章ごとに修了。修了は`onboarding_log`シートに記録し、管理画面「設定 › ガイダンス › 受講状況」で見る。章のキーは`ONB_CHAPTER_LIST`と`CHAPTERS`でそろえる。
 - **試験運用の管理表**(2026-10-19〜): selfcafe001 のマイドライブのスプレッドシート「ポータル試験運用 テスト店舗の進み具合」。「ガイダンス」の4列だけ`syncOnboardingTrackSheet`が受講記録から毎朝(`sendDailyAttendanceCheck`の最初)書き直し、案内文・送った日・メモは人が入力する。表のIDは Script Properties `ONBOARDING_TRACK_SHEET_ID`(`setOnboardingTrackSheet`)。店は表の店舗名(末尾の「店」を除く)で stores.js・custom_stores の名前と照らす。試しに入れた受講記録は`deleteOnboardingProgress&name=…`で消す(管理者/スクリプト)。人が入力する列(案内文・送った日など)は`setOnboardingTrackValues&column=…&values={店名:値}`、店の行は`addOnboardingTrackStores&rows=[{area,store}]`(既にある店は飛ばす)で書ける(どちらも管理者/スクリプト)。2026-10-28に全71店へ広げた(全店のポータル移行のため)。
+- **業務連絡の枠**(2026-10-29〜): 店舗・管理者とも、公開日から2週間以内の新しいもの2件だけ(`ANNOUNCE_WIDGET_MAX`/`ANNOUNCE_WIDGET_DAYS`)。全部は「過去の業務連絡も見る」。店舗の画面だけ既読・未読があり(詳細を開いたら既読、端末×店舗ごとの localStorage `announce_read_<店舗>`)、未読は太字＋「未読」で、2週間・2件に関係なく読むまで枠に出る。端末で初めて開いたときは2週間より前のものを既読として始める。
 - **画面を変えたら**: 案内は要素のid・class・ボタンの文言で場所を探している。パートナー画面のid・文言を変えたら`onboarding-tour.js`の該当の手順も直し、全章を通すテストで確かめる。
 
 ### 複数店舗の担当者(店舗の切り替え・店舗間の在庫移動、2026-10-17〜)
