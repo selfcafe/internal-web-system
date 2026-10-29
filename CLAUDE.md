@@ -318,6 +318,8 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 - **納品済み・バッジ**: 納品済みボタンは商品ごとに独立(同じ納品予定日でも到着がずれるため)。NEWバッジの既読は`localStorage`の`seen_attention_{店舗}`。
 - **発注数量**: 随時発注の数量自動入力(消費量×1.5)は2026-09-29に廃止。月初発注(`processMonthlyReorder`)は別系統で、基準値をもとに計算し、対象店舗はGmail下書きを作る。今も稼働中。
 - **届いていない発注の差し引き**(2026-10-29〜、`_onOrderPieces_`): 月初発注(アペックス・トーヨー・Amazonの買い物リスト)は「基準値 −(期末在庫 ＋ 届いていない発注)」で数を出す。届いていない発注 = 発注タブに残っている(納品済みになっていない)行のうち、直近`ON_ORDER_RECENT_DAYS`(14)日以内に依頼・発注したもの(否認とその月の月初発注そのものは除く)。現場が依頼を忘れて二重に頼まないため。14日より古い行は「届いたのに納品済みの押し忘れ」とみなして数えない。差し引いた品は、アペックスは`_notifyHeldReorder_`のメール(selfcafe001宛て)、トーヨーは発注メモの下書き、Amazonは買い物リストの列に出す。店舗タブの発注数(R列の数式)には入れていない。
+- **納品済みの押し忘れ防止**(2026-10-29〜、塩川さん「漏れを完全に防止したい」): ①店の画面を開いたとき・ホーム(`goPartnerHome`)で、納品予定日を過ぎた(予定日なしは発注日から`DELIVERY_ASK_DAYS_NO_DATE`=5日)未納品の品を「届きましたか？」と答えるまで聞く(`askOverdueDeliveries`、全画面で他の操作不可。届いた=`_markDeliveredCore`、まだ=端末ごとにその日は聞かない`delivery_snooze_<店>`)。②棚卸の確認画面へ進む前(`goToInventoryConfirm`)は、日付に関係なく発注済み・未納品の品をすべて聞く。③予定日(なしは発注日+5日)から`DELIVERY_OVERDUE_NOTIFY_DAYS`=3日たっても未納品の品を、毎朝`sendDailyOrderNotification`の中で塩川用Botへ店ごとに送る(`notifyOverdueDeliveries_`、試算は`?action=getOverdueDeliveries`管理者/スクリプト)。定数は index.html と gas_backend.gs の両方にあるのでそろえる。練習モードでは聞かない。
+- **依頼するのは未依頼の行だけ**(2026-10-29〜): `lockGroup`は同じグループの依頼済み・発注済みの行の依頼日・新着を変えない(中村日赤鳥居通で9/30の品が新着に戻った)。依頼のあとは次の依頼用の空の行を出す。
 - **アイスの扱い終了**(2026-10-28、全店): 販売品のアイス(名前が「アイス」で始まる sales、レディーボーデン各種)は発注の候補から外す(index.html `isOrderStoppedProduct`、GAS `_orderableProducts_`=LINEの発注依頼の読み取り)。残った在庫を数えて処分できるよう、棚卸・チェックシートには残している。在庫が無くなったら店舗別取扱商品から外してよい。アイスカップ(cs3)は対象外。
 - **手動納品シート**: `MANUAL_DELIVERY_SHEET_ID`はdeploy-gas.ymlで値が差し込まれないため、本番では常に空(未使用)。
 - **忘れ物の運用**: 貴重品は警察に届けたうえでポータルに登録。それ以外も全てポータルに登録する。
