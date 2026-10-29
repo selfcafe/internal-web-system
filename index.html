@@ -669,7 +669,7 @@
       <div class="doc-menu-dd" id="manual-dd-sp" style="position:absolute;top:134px;right:0"></div>
       <div class="store-name-wrap" style="display:flex;align-items:baseline;align-self:stretch;gap:4px 12px">
         <span id="active-store-label" class="store-title-txt"></span>
-        <a class="guide-link-btn" href="guide.html" target="_blank" rel="noopener" onclick="this.href=getPartnerGuideUrl()">📖 使い方ガイド</a>
+        <a class="guide-link-btn" href="guide.html" onclick="this.href=getPartnerGuideUrl()">📖 使い方ガイド</a>
       </div>
     </div>
   </div>
@@ -1854,11 +1854,14 @@ const ADMIN_MANUAL_DOCS = [
   { label: 'テスト環境（練習用）', url: 'admin-portal-dojo.html' },
 ];
 
-function buildManualMenu(docs) {
+// 店舗側は同じタブで開く(新しいタブだとスマホの「←」で戻れず、タブも溜まっていくため。2026-10-29 梅田)。
+// ガイド側の「← ポータルに戻る」で戻ると、ログインしたまま元の画面に戻る(sessionStorageは同じタブなら残る)
+function buildManualMenu(docs, sameTab) {
   if (!docs.length) return '<div class="doc-menu-empty">資料はまだありません</div>';
+  const target = sameTab ? '' : ' target="_blank" rel="noopener"';
   return docs.map(d => {
     const url = typeof d.url === 'function' ? d.url() : d.url;
-    return `<a class="doc-menu-item" href="${esc(url)}" target="_blank" rel="noopener">${esc(d.label)}</a>`;
+    return `<a class="doc-menu-item" href="${esc(url)}"${target}>${esc(d.label)}</a>`;
   }).join('');
 }
 
@@ -1866,7 +1869,7 @@ function toggleManualMenu(suffix, docs) {
   const dd = document.getElementById('manual-dd-' + suffix);
   const wasOpen = dd.classList.contains('open');
   document.querySelectorAll('.doc-menu-dd.open').forEach(el => el.classList.remove('open'));
-  if (!wasOpen) { dd.innerHTML = buildManualMenu(docs); dd.classList.add('open'); }
+  if (!wasOpen) { dd.innerHTML = buildManualMenu(docs, !suffix.startsWith('admin')); dd.classList.add('open'); }
 }
 
 /* items配列を持つ旧形式 → フラット行に変換、groupId を付与 */
@@ -2280,6 +2283,13 @@ function updateInventoryField(idx, field, value) {
   setInventoryData(storeTab, data);
 }
 
+// iPhoneの日付欄の「リセット」は空にせず、画面を開いたときの日付に戻すだけなので、
+// 前に入れた日付を消せなかった(2026-10-29 梅田)。✕ボタンから空にする
+function clearInventoryExpiry(idx, field) {
+  updateInventoryField(idx, field, '');
+  renderInventory();
+}
+
 const INVENTORY_EXPIRED_NOTICE = '期限切れの商品があります。確認してください。処分の際は期末在庫を処分後の数字に修正し、処分数量欄に処分した個数を入力してください';
 const INVENTORY_NEARING_NOTICE = '消費期限が近付いています。期限までに消費しきれない場合はスタッフに連絡してください。';
 
@@ -2660,6 +2670,8 @@ function renderInventoryInputScreen(wrap, allProducts, period, periodData) {
           <div style="display:flex;gap:4px;align-items:center">
           <input type="date" value="${esc(d[slot]||'')}" style="${fieldStyle(slot)};flex:1;min-width:0"
             onchange="updateInventoryField(${i},'${slot}',this.value)">
+          ${d[slot] ? `<button type="button" onclick="clearInventoryExpiry(${i},'${slot}')" title="この日付を消す"
+            style="flex:none;padding:2px 5px;font-size:12px;line-height:1;color:#6b7280;background:#f3f4f6;border:1px solid #d1d5db;border-radius:4px;cursor:pointer">✕</button>` : ''}
           <input type="number" min="0" step="1" placeholder="個数" value="${esc(expQty[slot==='exp1'?'qty1':slot==='exp2'?'qty2':'qty3']||'')}"
             style="width:48px;flex:none;padding:2px 4px;border:1px solid #d1d5db;border-radius:4px;font-size:11px;text-align:right"
             onchange="updateInventoryExpQty('${esc(p.name)}','${slot==='exp1'?'qty1':slot==='exp2'?'qty2':'qty3'}',this.value)">

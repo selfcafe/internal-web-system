@@ -471,8 +471,19 @@
     #img-lightbox.open { display:flex; }
     #img-lightbox img { max-width:96vw; max-height:96vh; object-fit:contain; border-radius:6px; }
   </style>
+  <style>
+    /* ポータルへ戻るボタン(2026-10-29 梅田「ガイドを見た後に戻れない」)。長いページなので画面の左下に常に出す */
+    .back-to-portal {
+      position: fixed; left: 12px; bottom: calc(12px + env(safe-area-inset-bottom)); z-index: 50;
+      background: var(--accent); color: #fff; text-decoration: none;
+      font-size: 15px; font-weight: 700; padding: 10px 16px; border-radius: 999px;
+      box-shadow: 0 2px 8px rgba(0,0,0,.25);
+    }
+    body { padding-bottom: 64px; }
+  </style>
 </head>
 <body>
+<a href="./" class="back-to-portal" id="back-to-portal">← ポータルに戻る</a>
 
 <header class="site-header">
   <div class="container">
@@ -1868,6 +1879,18 @@ document.querySelectorAll('a[href^="#"]').forEach(function (a) {
     t.scrollIntoView({ block: 'start' });
     try { history.replaceState(null, '', a.getAttribute('href')); } catch (err) {}
   });
+});
+</script>
+<script>
+// ポータルから同じタブで開いたときは履歴を戻る(ログインしたまま元の画面へ)。
+// 新しいタブ(管理画面の「パートナー用」など)で開いたときはタブを閉じ、閉じられなければポータルを開く
+document.getElementById('back-to-portal').addEventListener('click', function (e) {
+  var fromPortal = false;
+  try { fromPortal = !!document.referrer && new URL(document.referrer).origin === location.origin; } catch (err) {}
+  e.preventDefault();
+  if (fromPortal && history.length > 1) { history.back(); return; }
+  window.close();
+  setTimeout(function () { location.href = './'; }, 300);
 });
 </script>
 </body>
