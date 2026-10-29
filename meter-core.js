@@ -3,6 +3,9 @@
      杯数×売価でメーター上の金額を出す。メーター上の金額はサブスク(オフィス決済)分も含むので実売上ではない(要検討)。
    - 使う店と機械・金種は設定 meter_config = {店舗ID: {machines:[{label, prices:[520,...]}]}}(外した店は null)。
      管理者が「使う店の設定」でチェックを入れて紐づける。
+   - salesReport: true の店(布袋。名鉄へ毎日売上を報告する)は、入力画面と月の表に「売上報告」として
+     総売上(=金額、税込)・税抜・消費税・客数(=杯数)を出す(2026-10-29〜、元のスプレッドシートの「売上報告」欄の代わり)。
+     税抜は 総売上÷1.1 を四捨五入、消費税は 総売上−税抜。
    - 記録はGASの meter_readings(getMeterReadings / saveMeterReading。同じ日は置き換え)。
    使い方: MeterCore.init({ get, post, names, configAll, onConfigSaved }) のあと
      MeterCore.mountSheet(要素, 店舗ID)  … 入力画面＋月の表(店舗・管理者で共通)
@@ -14,6 +17,8 @@
   const today = () => new Date().toLocaleDateString('sv');
   const yen = n => Number(n || 0).toLocaleString('ja-JP');
   const md = d => { const [, m, dd] = String(d).split('-'); return `${Number(m)}/${Number(dd)}`; };
+  // 売上報告の税抜・消費税(税込の総売上から。消費税は総売上−税抜にして、足すと総売上に合うように)
+  const exTax = t => Math.round(Number(t || 0) / 1.1);
   const monthOf = k => { const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - k); return d.toLocaleDateString('sv').slice(0, 7); };
 
   const CSS = `
@@ -96,6 +101,8 @@
       const buttons = this.buttonsOf(cfg);
       const days = this.daily(cfg, readings).filter(d => d.date.startsWith(month));
       if (!days.length) return '<div style="color:#aaa;padding:12px 0;font-size:13px">この月の記録はまだありません</div>';
+      const rep = !!cfg.salesReport;
+      const repCells = t => rep ? `<td>${yen(exTax(t))}</td><td>${yen(t - exTax(t))}</td>` : '';
       let sc = 0, sy = 0;
       const rows = days.map(d => {
         sc += d.cupsTotal; sy += d.yenTotal;
@@ -106,14 +113,14 @@
           return `<td><div style="font-weight:600">${t}</div><div style="color:#94a3b8;font-size:10px">${c}</div></td>`;
         }).join('');
         const w = d.warn.length ? ` class="ng" title="${esc(d.warn.join('／'))}"` : '';
-        return `<tr><td><span${w}>${md(d.date)}</span></td>${cells}<td><b>${d.cupsTotal}</b></td><td><b>${yen(d.yenTotal)}</b></td></tr>`;
+        return `<tr><td><span${w}>${md(d.date)}</span></td>${cells}<td><b>${d.cupsTotal}</b></td><td><b>${yen(d.yenTotal)}</b></td>${repCells(d.yenTotal)}</tr>`;
       }).join('');
       return `<div class="mc-month"><table>
-        <thead><tr><th rowspan="2">日付</th>${cfg.machines.map(m => `<th colspan="${(m.prices || []).length}">${esc(m.label || '')}</th>`).join('')}<th rowspan="2">杯数</th><th rowspan="2">金額(円)</th></tr>
+        <thead><tr><th rowspan="2">日付</th>${cfg.machines.map(m => `<th colspan="${(m.prices || []).length}">${esc(m.label || '')}</th>`).join('')}<th rowspan="2">${rep ? '杯数<br>(客数)' : '杯数'}</th><th rowspan="2">${rep ? '金額(円)<br>(総売上)' : '金額(円)'}</th>${rep ? '<th rowspan="2">税抜</th><th rowspan="2">消費税</th>' : ''}</tr>
         <tr>${buttons.map(b => `<th>${b.price}円</th>`).join('')}</tr></thead>
-        <tbody>${rows}<tr><td><b>合計</b></td>${buttons.map(() => '<td></td>').join('')}<td><b>${sc}</b></td><td><b>${yen(sy)}</b></td></tr></tbody>
+        <tbody>${rows}<tr><td><b>合計</b></td>${buttons.map(() => '<td></td>').join('')}<td><b>${sc}</b></td><td><b>${yen(sy)}</b></td>${repCells(sy)}</tr></tbody>
       </table></div>
-      <div style="font-size:11px;color:#64748b;margin-top:6px;line-height:1.6">太字は前回の記録からの杯数、小さい数字は機械の累計です。金額は杯数×売価（メーター上の金額。サブスク分も含むので実売上ではありません）。前回より小さい数字は「要確認」と出ます。</div>`;
+      <div style="font-size:11px;color:#64748b;margin-top:6px;line-height:1.6">太字は前回の記録からの杯数、小さい数字は機械の累計です。金額は杯数×売価（メーター上の金額。サブスク分も含むので実売上ではありません）。前回より小さい数字は「要確認」と出ます。${rep ? '税抜は金額÷1.1（四捨五入）、消費税は金額−税抜です。' : ''}</div>`;
     },
 
     /* ----- 入力画面＋月の表 ----- */
@@ -160,6 +167,15 @@
         ${machines}
         <div class="mc-card" style="display:flex;align-items:center;gap:12px;flex-wrap:wrap">
           <div style="font-size:16px">合計 <b class="mc-total-cups">0</b> 杯 ／ <b class="mc-total-yen">0</b> 円</div>
+          ${cfg.salesReport ? `<div class="mc-report" style="width:100%;background:var(--mc-green-bg);border-radius:8px;padding:8px 12px">
+            <div style="font-weight:700;color:var(--mc-green);margin-bottom:4px">売上報告（この日の分）</div>
+            <table class="mc-grid" style="width:auto"><tbody>
+              <tr><td>総売上</td><td class="mc-num"><b class="mc-rep-total">—</b> 円</td></tr>
+              <tr><td>税抜</td><td class="mc-num"><b class="mc-rep-ex">—</b> 円</td></tr>
+              <tr><td>消費税</td><td class="mc-num"><b class="mc-rep-tax">—</b> 円</td></tr>
+              <tr><td>客数</td><td class="mc-num"><b class="mc-rep-cust">—</b> 人</td></tr>
+            </tbody></table>
+            <div style="font-size:11px;color:#64748b;margin-top:4px">すべての金種を入れると出ます（前回の数字との差から計算）。</div></div>` : ''}
           <input type="text" class="mc-note-input" placeholder="メモ（機械の不具合・補償など）" value="${esc(noteToday)}" style="flex:1;min-width:180px">
           <button class="mc-btn mc-save" onclick="MeterCore.save()">保存する</button>
           <div class="mc-msg mc-save-msg" style="width:100%"></div>
@@ -194,6 +210,13 @@
       const tc = w.querySelector('.mc-total-cups'), ty = w.querySelector('.mc-total-yen');
       if (tc) tc.textContent = cups;
       if (ty) ty.textContent = yen(sum);
+      // 売上報告: 全部の金種が入って、前回より小さい数字が無いときだけ出す(途中の数字を報告してしまわないように)
+      if (w.querySelector('.mc-report')) {
+        const inputs = [...w.querySelectorAll('.mc-input')];
+        const ok = inputs.every(i => i.value !== '' && prev[i.dataset.key] && Number(i.value) >= prev[i.dataset.key].count);
+        const set = (c, v) => { const e = w.querySelector(c); if (e) e.textContent = ok ? v : '—'; };
+        set('.mc-rep-total', yen(sum)); set('.mc-rep-ex', yen(exTax(sum))); set('.mc-rep-tax', yen(sum - exTax(sum))); set('.mc-rep-cust', String(cups));
+      }
     },
     _saving: false,
     async save() {
@@ -257,6 +280,7 @@
             <div class="mc-machines" style="${on ? '' : 'display:none'}">
               <div class="mc-mlist">${ms.map(m => this.machineLine(m)).join('')}</div>
               <button class="mc-btn sub small" onclick="this.previousElementSibling.insertAdjacentHTML('beforeend', MeterCore.machineLine({label:'', prices:[]}))">＋ 機械を足す</button>
+              <label style="min-width:0;font-weight:400;font-size:13px;margin-top:6px"><input type="checkbox" class="mc-salesreport" ${c && c.salesReport ? 'checked' : ''}>売上報告（総売上・税抜・消費税・客数）を出す</label>
             </div>
             <div style="display:flex;gap:6px;align-items:center"><button class="mc-btn" style="padding:6px 14px" onclick="MeterCore.saveConfig('${esc(s)}', this)">保存</button><span class="mc-msg"></span></div>
           </div>`;
@@ -282,6 +306,7 @@
         if (old && JSON.stringify(old.machines.map(m => m.prices)) !== JSON.stringify(machines.map(m => m.prices))
             && !confirm('金種の並びを変えると、これまでの記録とボタンの対応がずれることがあります（記録は「何台目の何番目のボタン」で持っています）。このまま保存しますか？')) return;
         value = { machines };
+        if (row.querySelector('.mc-salesreport').checked) value.salesReport = true;
       }
       btn.disabled = true; msg.textContent = '保存中…';
       try {
