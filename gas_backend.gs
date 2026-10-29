@@ -6038,7 +6038,9 @@ function createOrderRequest(apiKey, storeId, items) {
     if (!again) return res;
     if (res._notify && res._notify.type === 'amazonOrderNew') {
       res._notify.items = res._notify.items.concat(again.items);
-      if (!res._notify.toyo) res._notify.toyo = again.toyo;
+      // トーヨーのカートのリンクは、新しい品と依頼中の品をまとめて1つにする（2026-10-29。前は新しい品だけで、
+      // 依頼中の品（高畑のブレンドA など）がカートに入らなかった）
+      res._notify.toyo = _toyoCartForRows_(storeId, rows.concat(resend)) || res._notify.toyo || again.toyo;
     }
     else res._notify = again;
     created.push('依頼中の品の通知をもう一度送ります（' + again.items.map(i => i.label).join('、') + '）');
