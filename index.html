@@ -7223,9 +7223,12 @@ function lockGroup(groupId) {
   // 商品を選んでいない行は依頼に含めず消す（最初の空の行を使わずに「＋ 商品を追加」で入れると、
   // 空の行も一緒に依頼され、本部の画面に商品名「—」の依頼が残っていた）
   const inGroup = r => (r.groupId||r.id) === groupId;
-  if (!storeRows.some(r => inGroup(r) && String(r.product || '').trim())) { alert('商品を選んでください。'); return; }
+  if (!storeRows.some(r => inGroup(r) && !r.locked && String(r.product || '').trim())) { alert('商品を選んでください。'); return; }
   storeRows = storeRows.filter(r => !inGroup(r) || String(r.product || '').trim());
-  const group = storeRows.filter(inGroup);
+  // 依頼するのは、まだ依頼していない行だけ。同じグループに依頼済み・発注済みの行が混ざっていても、そちらは
+  // 依頼日・新着を変えない(2026-10-29 中村日赤鳥居通: 9/30発注で納品済み未押下の品が、今日の依頼と一緒に
+  // 「新着の依頼」に戻り、もう一度発注された)
+  const group = storeRows.filter(r => inGroup(r) && !r.locked);
   if (group.some(r => !r.requestDate)) { alert('依頼日を入力してください。'); return; }
   // バラ・ケースを選べる品で「バラ 1」の依頼は、ほとんどがケースに切り替え忘れ（2026-10-29 心斎橋のココア 1袋。本当は1ケース）。
   // 1品ずつ「1ケースにしますか？」と聞き、OK ならケースにして依頼する
