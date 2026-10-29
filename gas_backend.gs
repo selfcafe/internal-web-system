@@ -1405,7 +1405,7 @@ function saveOrders(storeId, rows) {
     sheet.getRange(startRow, 1, newRows.length, ORDER_COLS.length).setValues(newRows);
   }
 
-  return _withAmazonOrderNotify_({ ok: true }, storeId, rows.filter(r => !wasNew[String(r.id)]));
+  return _withAmazonOrderNotify_({ ok: true }, storeId, rows.filter(r => !wasNew[String(r.id)]), { dedupe: true });
 }
 
 // シートの1行(getValuesの値)と、これから書く値が同じかどうか。シート側は数値・真偽値・
@@ -1484,7 +1484,7 @@ function upsertOrderRows(storeId, rows) {
     sheet.getRange(startRow, 1, toAppend.length, ORDER_COLS.length).setValues(toAppend);
   }
 
-  return _withAmazonOrderNotify_({ ok: true }, storeId, rows.filter(r => !wasNew[String(r.id)]));
+  return _withAmazonOrderNotify_({ ok: true }, storeId, rows.filter(r => !wasNew[String(r.id)]), { dedupe: true });
 }
 
 // 指定したidの行だけを個別に削除する。他の行（他店舗はもちろん、同じ店舗の
@@ -5527,7 +5527,9 @@ function _amazonUrlMap_() {
 // 「発注した」が押されると Bot がこのポータルの markAmazonOrdered を呼んで Amazon の品を発注済みにする。
 // 「否認する」→理由の返信で markAmazonDenied（理由は備考に入る）。
 // スクリプト プロパティ: GBP_PHOTO_BOT_URL（Bot のウェブアプリ URL）、GBP_PHOTO_BOT_API_KEY（Bot の API_KEY と同じ値）
-function _withAmazonOrderNotify_(result, storeId, rows) {
+// opts.dedupe: 店の画面からの保存のとき。同じ品・同じ数の依頼の通知を6時間以内にもう送っていれば送らない
+// （2026-10-29 高畑: 「依頼する」→「取り消す」→「依頼する」で同じ依頼の通知が2通来た）。中身が変わっていれば送る
+function _withAmazonOrderNotify_(result, storeId, rows, opts) {
   try {
     const urls = _amazonUrlMap_();
     const meta = _productMeta_();   // ケースのみの品は unit_mode がバラのままでもケース（ポータルの画面と同じ扱い）
@@ -5543,9 +5545,20 @@ function _withAmazonOrderNotify_(result, storeId, rows) {
     // トーヨーの品は「トーベンのカートに入れる」リンクを付ける（2026-10-16。依頼の品＋無料メンテナンスだけ）
     const ids = items.map(it => it.id);
     const toyo = _toyoCartForRows_(storeId, (rows || []).filter(r => r && ids.indexOf(String(r.id)) >= 0));
+    if (items.length && opts && opts.dedupe && _orderNotifySent_(storeId, items)) return result;
     if (items.length) result._notify = { type: 'amazonOrderNew', storeId: String(storeId), items, toyo };
   } catch (e) { console.error('_withAmazonOrderNotify_ error:', e.message); }
   return result;
+}
+
+// 同じ店・同じ品（行）・同じ数の通知を6時間以内に送っていれば true。送っていなければ覚えて false
+function _orderNotifySent_(storeId, items) {
+  const sig = String(storeId) + '|' + items.map(it => it.id + ':' + it.qty + ':' + it.unit).sort().join(',');
+  const key = 'ORDER_NOTIFY_' + Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, sig, Utilities.Charset.UTF_8));
+  const cache = CacheService.getScriptCache();
+  if (cache.get(key)) return true;
+  cache.put(key, '1', 6 * 60 * 60);
+  return false;
 }
 
 function _amazonUrlForNote_(storeId, note, urls) {
