@@ -8953,9 +8953,11 @@ function testNotify() {
 // 配送の遅れか押し忘れかを本部が確かめるため。index.html の同名の定数とそろえる
 const DELIVERY_ASK_DAYS_NO_DATE = 5;
 const DELIVERY_OVERDUE_NOTIFY_DAYS = 3;
+// この日より前に発注した品は対象外(古い未納品まで出ると混乱するため。2026-10-29 塩川さん)。index.html の同名の定数とそろえる
+const DELIVERY_CHECK_FROM = '2026-10-29';
 function _overdueDeliveryRows_(asOf) {
   const addDays = (d, n) => Utilities.formatDate(new Date(new Date(d + 'T00:00:00+09:00').getTime() + n * 86400000), 'Asia/Tokyo', 'yyyy-MM-dd');
-  return getOrders().filter(r => r.product && !r.denied && _dateStr(r.order_date)).map(r => {
+  return getOrders().filter(r => r.product && !r.denied && _dateStr(r.order_date) && _dateStr(r.order_date) >= DELIVERY_CHECK_FROM).map(r => {
     const due = _dateStr(r.delivery_date) || addDays(_dateStr(r.order_date), DELIVERY_ASK_DAYS_NO_DATE);
     return Object.assign({}, r, { _due: due, _notifyFrom: addDays(due, DELIVERY_OVERDUE_NOTIFY_DAYS) });
   }).filter(r => r._notifyFrom <= asOf);

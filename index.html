@@ -7349,6 +7349,8 @@ async function _markDeliveredCore(id) {
    さらに納品予定日から3日たっても納品済みにならない品は、GAS の notifyOverdueDeliveries_ が毎朝本部へ知らせる(定数は GAS とそろえる)。
    練習モード(ガイダンス)では聞かない */
 const DELIVERY_ASK_DAYS_NO_DATE = 5;
+// この日より前に発注した品は聞かない(古い未納品まで出ると混乱するため。2026-10-29 塩川さん)。GAS の同名の定数とそろえる
+const DELIVERY_CHECK_FROM = '2026-10-29';
 function _deliverySnoozeKey(sid) { return 'delivery_snooze_' + sid; }
 function _deliverySnooze(sid) { try { return JSON.parse(localStorage.getItem(_deliverySnoozeKey(sid)) || '{}') || {}; } catch (e) { return {}; } }
 function _deliveryDue(row) {
@@ -7359,7 +7361,7 @@ function _deliveryDue(row) {
 // all=true: 棚卸の前。日付・「まだ」に関係なく発注済みで未納品の品すべて
 function overdueDeliveryRows(all) {
   const t = today(), snooze = _deliverySnooze(storeTab);
-  return storeRows.filter(r => r.locked && !r.denied && r.orderDate && String(r.product || '').trim()).filter(r => {
+  return storeRows.filter(r => r.locked && !r.denied && r.orderDate && r.orderDate >= DELIVERY_CHECK_FROM && String(r.product || '').trim()).filter(r => {
     if (all) return true;
     if (snooze[r.id] === t) return false;
     return r.deliveryDate ? r.deliveryDate < t : _deliveryDue(r) <= t;
