@@ -459,7 +459,7 @@ const AUTH_STORE_ACTIONS = [
   'saveOrders', 'upsertOrders', 'saveChecksheetData', 'saveInventorySnapshot', 'recordInventoryDelivery',
   'checkWaterStockMismatch', 'saveAttendance', 'setAttendanceStartTime', 'saveLeaveRequest', 'saveDeliveryHistory', 'clearDeliveryHistory',
   'saveMachinePhotoSet', 'submitBugReport', 'addBugReportComment', 'saveLostItem',
-  'recordInventoryTransfer', 'cancelInventoryTransfer', 'getMeterReadings', 'saveMeterReading',
+  'recordInventoryTransfer', 'cancelInventoryTransfer', 'getMeterReadings', 'saveMeterReading', 'getMeterReportInfo',
 ];
 // 店舗の通行証なら店舗を問わず呼べるもの(IDで指す削除・画像保存など。getOrdersは自分の範囲の行だけ返す)
 const AUTH_ANY_ACTIONS = ['getOrders', 'getSteraProductGroups', 'getBugReportThread', 'saveOrderImage',
@@ -631,8 +631,9 @@ function _authGate_(action, p) {
 }
 
 // 店舗の端末に渡さない設定(パスワード類以外)。invoice_partners は旧請求書アプリの口座・住所で、
-// ポータルの画面はどこからも読まない(2026-10-18)
-const AUTH_ADMIN_ONLY_SETTING_KEYS = ['invoice_partners'];
+// ポータルの画面はどこからも読まない(2026-10-18)。meter_report_info は売上報告サイト(布袋→名鉄)のログイン情報で、
+// その店の通行証で getMeterReportInfo を呼んだときだけ返す(2026-10-29)
+const AUTH_ADMIN_ONLY_SETTING_KEYS = ['invoice_partners', 'meter_report_info'];
 // 設定の読み込み結果からパスワード類・口座情報・商品の単価を外す(拒否を有効にした後、管理者・スクリプト以外)。
 // 単価(all_products の price)は本部の仕入値で、FC店に見せると卸値との差が分かってしまうため外す。
 // 棚卸の金額は saveInventorySnapshot が all_products の単価で計算し直すので、店舗の端末に単価は要らない
@@ -796,6 +797,7 @@ function doGet(e) {
     else if (a === 'getMachinePhotoStatus')     result = getMachinePhotoStatus();
     else if (a === 'getMachinePhotoHistory')    result = getMachinePhotoHistory(e.parameter.storeId);
     else if (a === 'getMeterReadings')          result = getMeterReadings(e.parameter.storeId);
+    else if (a === 'getMeterReportInfo')        result = getMeterReportInfo(e.parameter.storeId);
     else if (a === 'migrateMachinePhotoColumns') result = migrateMachinePhotoColumns();
     else if (a === 'checkNewStoresFromMasterSheet') result = checkNewStoresFromMasterSheet();
     else if (a === 'setNewStoreCheckTrigger')   { setNewStoreCheckTrigger(); result = { ok: true }; }
@@ -2385,6 +2387,13 @@ function _meterReplaceDays_(storeId, days) {
     sheet.getRange(start, 1, newRows.length, METER_COLS.length).setValues(newRows);
   }
   return { ok: true, rows: newRows.length };
+}
+
+// 売上報告サイトのログイン情報(設定 meter_report_info = {店舗ID: {text}}、管理者が集計表の「使う店の設定」で入れる)。
+// 設定の読み込み(getSettings 等)からは外してあり(AUTH_ADMIN_ONLY_SETTING_KEYS)、ここだけで返す。店舗は自店の分だけ(AUTH_STORE_ACTIONS)
+function getMeterReportInfo(storeId) {
+  const all = _settingJson_('meter_report_info', {}) || {};
+  return { ok: true, info: (storeId && all[storeId]) || null };
 }
 
 // 店舗の画面から1日分を保存する

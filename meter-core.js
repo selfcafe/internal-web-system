@@ -6,6 +6,8 @@
    - salesReport: true の店(布袋。名鉄へ毎日売上を報告する)は、入力画面と月の表に「売上報告」として
      総売上(=金額、税込)・税抜・消費税・客数(=杯数)を出す(2026-10-29〜、元のスプレッドシートの「売上報告」欄の代わり)。
      税抜は 総売上÷1.1 を四捨五入、消費税は 総売上−税抜。
+     報告サイトのログイン情報は設定 meter_report_info({店舗ID:{text}})。設定の読み込みには入れず(公開で読めるため)、
+     getMeterReportInfo(その店の通行証だけ)で読んで、売上報告の下に「タップで表示」で出す。
    - 記録はGASの meter_readings(getMeterReadings / saveMeterReading。同じ日は置き換え)。
    使い方: MeterCore.init({ get, post, names, configAll, onConfigSaved }) のあと
      MeterCore.mountSheet(要素, 店舗ID)  … 入力画面＋月の表(店舗・管理者で共通)
@@ -175,7 +177,11 @@
               <tr><td>消費税</td><td class="mc-num"><b class="mc-rep-tax">—</b> 円</td></tr>
               <tr><td>客数</td><td class="mc-num"><b class="mc-rep-cust">—</b> 人</td></tr>
             </tbody></table>
-            <div style="font-size:11px;color:#64748b;margin-top:4px">すべての金種を入れると出ます（前回の数字との差から計算）。</div></div>` : ''}
+            <div style="font-size:11px;color:#64748b;margin-top:4px">すべての金種を入れると出ます（前回の数字との差から計算）。</div>
+            <div class="mc-login" style="display:none;margin-top:8px;font-size:13px">
+              <button class="mc-btn sub small" onclick="const b=this.nextElementSibling;b.style.display=b.style.display==='none'?'':'none';this.textContent=b.style.display==='none'?'報告サイトのログイン情報を表示':'閉じる'">報告サイトのログイン情報を表示</button>
+              <div class="mc-login-text" style="display:none;white-space:pre-wrap;background:white;border:1px solid #cbd5e1;border-radius:6px;padding:8px 10px;margin-top:6px;user-select:all"></div>
+            </div></div>` : ''}
           <input type="text" class="mc-note-input" placeholder="メモ（機械の不具合・補償など）" value="${esc(noteToday)}" style="flex:1;min-width:180px">
           <button class="mc-btn mc-save" onclick="MeterCore.save()">保存する</button>
           <div class="mc-msg mc-save-msg" style="width:100%"></div>
@@ -191,6 +197,20 @@
           ${this.monthTableHtml(cfg, readings, this.s.month)}
         </div>`;
       this.recalc();
+      if (cfg.salesReport) this.loadReportInfo(wrap, sid);
+    },
+    // 報告サイトのログイン情報(読めなくても入力・計算には関係しないので、黙って出さないだけ)
+    async loadReportInfo(wrap, sid) {
+      try {
+        if (!this.s.reportInfo || this.s.reportInfo.sid !== sid) {
+          const res = await this.o.get('getMeterReportInfo', { storeId: sid });
+          this.s.reportInfo = { sid, text: (res && res.info && res.info.text) || '' };
+        }
+        const box = wrap.querySelector('.mc-login');
+        if (!box || !this.s.reportInfo.text) return;
+        box.querySelector('.mc-login-text').textContent = this.s.reportInfo.text;
+        box.style.display = '';
+      } catch (e) { console.warn('getMeterReportInfo', e); }
     },
     refresh() { if (this.s.wrap && this.s.storeId) this.mountSheet(this.s.wrap, this.s.storeId); },
     draftInput(inp) { (this.s.draft[this.s.date] = this.s.draft[this.s.date] || {})[inp.dataset.key] = inp.value; this.recalc(); },
@@ -281,10 +301,30 @@
               <div class="mc-mlist">${ms.map(m => this.machineLine(m)).join('')}</div>
               <button class="mc-btn sub small" onclick="this.previousElementSibling.insertAdjacentHTML('beforeend', MeterCore.machineLine({label:'', prices:[]}))">＋ 機械を足す</button>
               <label style="min-width:0;font-weight:400;font-size:13px;margin-top:6px"><input type="checkbox" class="mc-salesreport" ${c && c.salesReport ? 'checked' : ''}>売上報告（総売上・税抜・消費税・客数）を出す</label>
+              <div style="font-size:12px;color:#64748b;margin-top:4px">報告サイトのログイン情報（その店の画面にだけ「タップで表示」で出ます）</div>
+              <textarea class="mc-reportinfo" data-sid="${esc(s)}" rows="3" placeholder="読み込み中…" disabled style="width:100%;font-family:inherit;font-size:13px;border:1px solid #cbd5e1;border-radius:6px;padding:6px 8px"></textarea>
             </div>
             <div style="display:flex;gap:6px;align-items:center"><button class="mc-btn" style="padding:6px 14px" onclick="MeterCore.saveConfig('${esc(s)}', this)">保存</button><span class="mc-msg"></span></div>
           </div>`;
         }).join('')}</div></div>`;
+      this.fillReportInfo(wrap);
+    },
+    // 管理者: 売上報告サイトのログイン情報を店ごとに読んで欄に入れる(設定の読み込みには入っていないので getMeterReportInfo で)。
+    // 集計表を使う店だけ読む(使っていない店は空欄のまま入力できる)
+    async fillReportInfo(wrap) {
+      const ph = '例: ID ○○ ／ パスワード ○○ ／ サイトのURL';
+      for (const ta of wrap.querySelectorAll('.mc-reportinfo')) {
+        const sid = ta.dataset.sid;
+        if (!this.configOf(sid)) { ta.disabled = false; ta.placeholder = ph; ta.dataset.orig = ''; continue; }
+        try {
+          const res = await this.o.get('getMeterReportInfo', { storeId: sid });
+          if (!res || res.error) throw new Error((res && res.error) || '');
+          ta.value = (res.info && res.info.text) || '';
+          ta.dataset.orig = ta.value;
+          ta.placeholder = ph;
+          ta.disabled = false;
+        } catch (e) { ta.placeholder = '読み込めませんでした（ここでは変更できません）'; }
+      }
     },
     machineLine(m) {
       return `<div class="mc-mline"><input type="text" class="mc-label" placeholder="機械の名前（例: 左・CS3）" value="${esc(m.label || '')}" style="width:170px">
@@ -312,6 +352,14 @@
       try {
         const res = await this.o.post('saveSettingMerge', { key: 'meter_config', value: JSON.stringify({ [sid]: value }) });
         if (!res || res.error) throw new Error((res && res.error) || '保存できませんでした');
+        const ta = row.querySelector('.mc-reportinfo');
+        if (ta && !ta.disabled && ta.value.trim() !== (ta.dataset.orig || '')) {
+          const text = ta.value.trim();
+          const r2 = await this.o.post('saveSettingMerge', { key: 'meter_report_info', value: JSON.stringify({ [sid]: text ? { text } : null }) });
+          if (!r2 || r2.error) throw new Error('ログイン情報を保存できませんでした: ' + ((r2 && r2.error) || ''));
+          ta.dataset.orig = text;
+          if (this.s.reportInfo && this.s.reportInfo.sid === sid) this.s.reportInfo = null;
+        }
         const all = Object.assign({}, this.o.configAll() || {}); all[sid] = value;
         this.o.onConfigSaved(all);
         msg.innerHTML = '<span class="ok">保存しました</span>';
