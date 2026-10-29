@@ -638,7 +638,9 @@
         { target: () => T.prodInput(1), wait: 'click', text: '2品目の「<b>タップして選択</b>」を押してください。' },
         { target: () => one('.prod-dropdown.open'), scroll: false, wait: () => T.prodChosen(1), text: '1品目とは別の商品を選んでください。' },
         { target: () => T.qtyPlus(1), wait: () => T.qtyVal(1) >= 1, text: '「<b>＋</b>」を押して、数を入れてください。' },
-        { target: () => one('#store-tbody .btn-request'), wait: () => !one('#store-tbody .btn-request'),
+        // 依頼すると次の依頼用の空の行がすぐ出る(2026-10-29〜)ので、「依頼する」ボタンが消えるのではなく、
+        // 商品を選んだ下書きが無くなった(=依頼した)ことで進む
+        { target: () => one('#store-tbody .btn-request'), wait: () => typeof storeRows !== 'undefined' && !storeRows.some(r => !r.locked && String(r.product || '').trim()),
           text: '内容を確かめたら「<b>依頼する →</b>」を押します。' },
         { target: '#ptab-order-history', wait: 'click', text: '送った依頼は「<b>依頼済み履歴</b>」で見られます。押してください。' },
         { target: '#order-history-panel', text: '本部が確認するまでは「<b>確認中</b>」と出ます。<br>間違えて送ったときは、確認中のうちなら「<b>取り下げ</b>」で取り消せます。' },

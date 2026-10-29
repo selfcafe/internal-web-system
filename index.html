@@ -7237,6 +7237,9 @@ function lockGroup(groupId) {
     if (confirm(`「${p.label || p.name}」が 1${unit} になっています。\n1ケース${pieces ? `（${pieces}${unit}）` : ''}にしますか？\n\nOK：1ケースにする\nキャンセル：1${unit}のまま依頼する`)) r.unitMode = 'case';
   });
   group.forEach(r => { r.locked = true; r.isNew = true; r.requestDate = today(); });
+  // 続けて次の依頼を入れられるよう、空の下書きを用意する(以前はログイン時にしか作らず、依頼のあと
+  // ログインし直さないと次の依頼を出せなかった。2026-10-29 中村日赤の問い合わせ)
+  if (!_ordersLoadFailed && storeRows.every(r => r.locked)) storeRows.push(newRow(null, null));
   saveA(storeTab, storeRows);
   renderStore();
 }
@@ -7247,7 +7250,11 @@ function unlockGroup(groupId) {
   renderStore();
 }
 
-function delRow(id) { storeRows = storeRows.filter(r=>r.id!==id); saveA(storeTab, storeRows); renderStore(); }
+function delRow(id) {
+  storeRows = storeRows.filter(r=>r.id!==id);
+  if (!_ordersLoadFailed && (!storeRows.length || storeRows.every(r => r.locked))) storeRows.push(newRow(null, null)); // 下書きが無くならないように(lockGroup と同じ)
+  saveA(storeTab, storeRows); renderStore();
+}
 
 function updStore(id, field, value) {
   const row = storeRows.find(r=>r.id===id); if (!row) return;
