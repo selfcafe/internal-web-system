@@ -208,7 +208,9 @@
         }
         const box = wrap.querySelector('.mc-login');
         if (!box || !this.s.reportInfo.text) return;
-        box.querySelector('.mc-login-text').textContent = this.s.reportInfo.text;
+        // URL は押せるリンクにする(ほかは文字のまま)
+        box.querySelector('.mc-login-text').innerHTML = esc(this.s.reportInfo.text)
+          .replace(/https?:\/\/[^\s<>"]+/g, u => `<a href="${u}" target="_blank" rel="noopener" style="word-break:break-all">${u}</a>`);
         box.style.display = '';
       } catch (e) { console.warn('getMeterReportInfo', e); }
     },
