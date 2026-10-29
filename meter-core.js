@@ -180,7 +180,7 @@
             <div style="font-size:11px;color:#64748b;margin-top:4px">すべての金種を入れると出ます（前回の数字との差から計算）。</div>
             <div class="mc-login" style="display:none;margin-top:8px;font-size:13px">
               <button class="mc-btn sub small" onclick="const b=this.nextElementSibling;b.style.display=b.style.display==='none'?'':'none';this.textContent=b.style.display==='none'?'報告サイトのログイン情報を表示':'閉じる'">報告サイトのログイン情報を表示</button>
-              <div class="mc-login-text" style="display:none;white-space:pre-wrap;background:white;border:1px solid #cbd5e1;border-radius:6px;padding:8px 10px;margin-top:6px;user-select:all"></div>
+              <div class="mc-login-text" style="display:none;white-space:pre-wrap;background:white;border:1px solid #cbd5e1;border-radius:6px;padding:8px 10px;margin-top:6px"></div>
             </div></div>` : ''}
           <input type="text" class="mc-note-input" placeholder="メモ（機械の不具合・補償など）" value="${esc(noteToday)}" style="flex:1;min-width:180px">
           <button class="mc-btn mc-save" onclick="MeterCore.save()">保存する</button>

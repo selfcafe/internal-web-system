@@ -724,7 +724,8 @@
       <br>
       【アペックス・トーヨーベンディング共通】<br>
       ・納品は発注日から土日祝日を除く３営業日以内となります。（商品や地域により、納品に１週間程度かかる場合があります）<br>
-      ・他商品に関して　3日～1週間程度時間がかかる可能性があるため、なるべく事前に発注依頼をください。
+      ・他商品に関して　3日～1週間程度時間がかかる可能性があるため、なるべく事前に発注依頼をください。<br>
+      ・写真の添付は必須ではありません。在庫が0で撮影できないときなどは、写真なしで依頼してください。
     </div>
     <div class="summary" id="store-summary"></div>
     <div class="table-wrap" id="store-table-wrap">
@@ -1024,7 +1025,7 @@
 </div>
 
 <script src="stores.js"></script>
-<script src="meter-core.js"></script>
+<script src="meter-core.js?v=20261029b"></script>
 <script>
 /* ===== Google Apps Script バックエンド ===== */
 const GAS_URL = 'https://script.google.com/macros/s/AKfycbzoqu607sj-rpYulIiDwnuyGSCTzoblzSqaq37cb5k5KiGsK7sisZew9sSRSBoYBSwo_A/exec';
@@ -7007,6 +7008,7 @@ function renderStore() {
           </label>
           ${gPhotos.map((u, pi) => `<span style="display:inline-flex;align-items:center"><img src="${esc(u)}" style="height:44px;border-radius:5px;cursor:pointer;border:1px solid #e5e7eb" onclick="showLostImage(this.src)" title="写真を拡大">
             <button onclick="removeOrderPhoto('${gid}',${pi})" style="font-size:11px;color:#9ca3af;background:none;border:none;cursor:pointer;padding:2px 4px" title="写真を削除">✕</button></span>`).join('')}
+          <span style="font-size:11px;color:#6b7280">写真は任意です（在庫が0で撮れないときは、写真なしで依頼できます）</span>
         </div>
       </td>`;
     }
