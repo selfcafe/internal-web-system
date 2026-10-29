@@ -566,7 +566,7 @@
         { text: `ここは <b>${esc(STORES[STORE] || '')}店</b> の練習用の画面です。<br>まずは画面の見方から始めましょう。<br>光っている所を押すと、次に進みます。` },
         { target: '#active-store-label', text: 'ここに、ログインしている<b>店の名前</b>が出ます。違う店の名前が出ていたら、ログインし直してください。' },
         { target: '#announce-widget-wrap', text: 'ここは<b>業務連絡</b>です。本部からのお知らせが届きます。毎日、出勤したら確認しましょう。' },
-        { target: '#announce-widget-wrap span[onclick="showAnnounceList()"]', wait: 'click', text: '「<b>一覧を見る</b>」を押してください。' },
+        { target: '#announce-widget-wrap span[onclick="showAnnounceList()"]', wait: 'click', text: '「<b>過去の業務連絡も見る</b>」を押してください。<br><span style="font-size:13px;color:#6b7280">この枠には、2週間以内の新しいもの2件だけが出ます。それより前のものは、ここから見られます。</span>' },
         { target: () => one('#announce-drill-wrap [onclick^="showAnnounceDetail"]'), wait: 'click', text: 'お知らせの一覧です。一番上のお知らせを押して、開いてみましょう。' },
         { target: '#announce-drill-wrap', text: 'お知らせの本文が読めます。' },
         { target: () => one('#announce-drill-wrap span[onclick="showAnnounceList()"]'), wait: 'click', text: '「<b>一覧に戻る</b>」を押してください。' },

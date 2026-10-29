@@ -7507,6 +7507,20 @@ function _announceScopeLabel(scopeStr) {
   return _announceScopeToAreas(scopeStr).join('・');
 }
 
+// 枠(ウィジェット)に出すのは、公開日から ANNOUNCE_WIDGET_DAYS 日以内の新しいもの ANNOUNCE_WIDGET_MAX 件だけ(2026-10-29 塩川さん
+// 「どんどん溜まっていくのは見にくい」)。それより前・それ以上は「過去の業務連絡も見る」の一覧で見られる
+const ANNOUNCE_WIDGET_MAX = 2;
+const ANNOUNCE_WIDGET_DAYS = 14;
+function _announceWidgetItems(items) {
+  const d = new Date(); d.setDate(d.getDate() - ANNOUNCE_WIDGET_DAYS);
+  const since = d.toLocaleDateString('sv');
+  return items.filter(it => String(it.publish_date || '').slice(0, 10) >= since).slice(0, ANNOUNCE_WIDGET_MAX);
+}
+function _announceMoreLink(onclick, total) {
+  return `<span onclick="${onclick}" style="font-size:12.5px;color:#22703d;cursor:pointer;white-space:nowrap">過去の業務連絡も見る${total ? `（全${total}件）` : ''}</span>`;
+}
+const ANNOUNCE_WIDGET_EMPTY = '<div style="padding:14px 16px;color:#aaa;font-size:12.5px">ここ2週間の新しい業務連絡はありません</div>';
+
 /* ----- パートナー側: ヘッダー直下ウィジェット＋一覧/詳細ドリルダウン ----- */
 
 let announceItems = [];
@@ -7529,7 +7543,7 @@ async function ensureAnnounceWidgetLoaded(storeId) {
 function renderAnnounceWidget(loading) {
   const wrap = document.getElementById('announce-widget-wrap');
   if (!wrap) return;
-  const items = announceItems.slice(0, 5);
+  const items = _announceWidgetItems(announceItems);
   wrap.innerHTML = `
     <div style="background:white;border-radius:10px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:14px;overflow:hidden">
       <div style="display:flex;align-items:center;gap:10px;padding:12px 14px;border-bottom:1px solid #f1eede">
@@ -7537,13 +7551,13 @@ function renderAnnounceWidget(loading) {
           <svg width="19" height="19" viewBox="0 0 24 24" fill="none"><path d="M3 9v6h3l7 4V5L6 9H3z" fill="white"/><path d="M16 8a5 5 0 010 8" stroke="white" stroke-width="2" stroke-linecap="round"/><path d="M19 6a9 9 0 010 12" stroke="white" stroke-width="2" stroke-linecap="round" opacity=".55"/></svg>
         </div>
         <div style="font-weight:700;font-size:16px;color:#333;flex:1">業務連絡</div>
-        <span onclick="showAnnounceList()" style="font-size:12.5px;color:#22703d;cursor:pointer;white-space:nowrap">一覧を見る</span>
+        ${_announceMoreLink('showAnnounceList()', announceItems.length)}
       </div>
       <div>${loading ? '<div style="padding:14px 16px;color:#aaa;font-size:12.5px">読み込み中…</div>' : (items.length ? items.map(it => `
           <div onclick="showAnnounceDetail('${it.id}')" style="display:flex;gap:10px;align-items:flex-start;padding:11px 14px;border-bottom:1px solid #f5f3e8;cursor:pointer;box-sizing:border-box">
             <div style="font-size:11px;color:#999;padding-top:2px;flex-shrink:0;width:58px">${esc(_announceDateLabel(it.publish_date))}</div>
             <div style="flex:1;font-size:13px;color:#22703d;font-weight:600;line-height:1.5">${esc(it.title)}</div>
-          </div>`).join('') : '<div style="padding:14px 16px;color:#aaa;font-size:12.5px">現在、業務連絡はありません</div>')}
+          </div>`).join('') : ANNOUNCE_WIDGET_EMPTY)}
       </div>
     </div>`;
 }
@@ -7659,7 +7673,8 @@ async function ensureAdminAnnounceWidgetLoaded() {
 function renderAdminAnnounceWidget(loading) {
   const wrap = document.getElementById('admin-announce-widget-wrap');
   if (!wrap) return;
-  const items = adminAnnounceItems.filter(i => i.status === 'published').slice(0, 5);
+  const published = adminAnnounceItems.filter(i => i.status === 'published');
+  const items = _announceWidgetItems(published);
   wrap.innerHTML = `
     <div style="background:white;border-radius:10px;box-shadow:0 1px 4px rgba(0,0,0,.08);margin-bottom:18px;overflow:hidden">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:14px 16px;border-bottom:1px solid #f1eede">
@@ -7667,14 +7682,14 @@ function renderAdminAnnounceWidget(loading) {
           <svg width="20" height="20" viewBox="0 0 24 24" fill="none"><path d="M3 9v6h3l7 4V5L6 9H3z" fill="white"/><path d="M16 8a5 5 0 010 8" stroke="white" stroke-width="2" stroke-linecap="round"/><path d="M19 6a9 9 0 010 12" stroke="white" stroke-width="2" stroke-linecap="round" opacity=".55"/></svg>
         </div>
         <div style="font-weight:700;font-size:17px;color:#333;flex:1">業務連絡</div>
-        <span onclick="showAdminAnnounceList()" style="font-size:12.5px;color:#22703d;cursor:pointer;white-space:nowrap">一覧を見る</span>
+        ${_announceMoreLink('showAdminAnnounceList()', adminAnnounceItems.length)}
         <button onclick="openAnnounceForm()" style="display:inline-flex;align-items:center;gap:5px;background:#22703d;color:white;border:none;border-radius:6px;padding:6px 12px;font-size:12.5px;font-weight:600;cursor:pointer;font-family:inherit">＋ 新規作成</button>
       </div>
       <div>${loading ? '<div style="padding:14px 16px;color:#aaa;font-size:12.5px">読み込み中…</div>' : (items.length ? items.map(it => `
           <div onclick="showAdminAnnounceDetail('${it.id}')" style="display:flex;gap:10px;align-items:flex-start;padding:11px 16px;border-bottom:1px solid #f5f3e8;cursor:pointer;box-sizing:border-box">
             <div style="font-size:11px;color:#999;padding-top:2px;flex-shrink:0;width:70px">${esc(_announceDateLabel(it.publish_date))}</div>
             <div style="flex:1;font-size:13px;color:#22703d;font-weight:600;line-height:1.5">${esc(it.title)}</div>
-          </div>`).join('') : '<div style="padding:14px 16px;color:#aaa;font-size:12.5px">現在、業務連絡はありません</div>')}
+          </div>`).join('') : ANNOUNCE_WIDGET_EMPTY)}
       </div>
     </div>`;
 }
