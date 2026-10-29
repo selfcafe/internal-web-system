@@ -6125,7 +6125,21 @@ function _apexDraftForOrderRows_(storeId, rows, onCarried) {
       }).join(',');
     };
     const spec = Object.keys(bySid).map(sid => specOf(sid, bySid[sid])).join(';');
-    const out = buildAdhocApexOrder(bk, spec, false, { source: 'アペックス 追加発注（Bot）', rowsBySid: bySid, pending: true });
+    let out = buildAdhocApexOrder(bk, spec, false, { source: 'アペックス 追加発注（Bot）', rowsBySid: bySid, pending: true });
+    // 作っている間に前の下書きが送られていたら、前の品を入れずに作り直す（2026-10-29 太閤通: 送ったのと同じ 13:16 に鳥居通の依頼が来て、
+    // 送った太閤通の品まで入った下書きができた）
+    if (out && out.ok && carried.length) {
+      let still = false;
+      try { Gmail.Users.Drafts.get('me', prev.draftId); still = true; } catch (e) { still = false; }
+      if (!still) {
+        try { Gmail.Users.Drafts.remove('me', out.draftId); } catch (e) {}
+        [out.pdfId, out.sheetId].filter(Boolean).forEach(id => { try { DriveApp.getFileById(id).setTrashed(true); } catch (e) {} });
+        Object.keys(bySid).forEach(sid => { if (sid !== storeId) delete bySid[sid]; });
+        bySid[storeId] = apexRows.slice();
+        carried = []; replacePrev = false;
+        out = buildAdhocApexOrder(bk, specOf(storeId, bySid[storeId]), false, { source: 'アペックス 追加発注（Bot）', rowsBySid: bySid, pending: true });
+      }
+    }
     if (!out || !out.ok) return '【アペックス】発注メールの下書きを作れませんでした（' + ((out && (out.error + ' ' + (out.details || []).join(' '))) || '不明') + '）。PC から作り直してください';
     // 作り直せたら、前の下書き・PDF・写しを消す（作り直しに失敗したときは前のものを残す）
     if (replacePrev) {
