@@ -722,7 +722,7 @@ function doGet(e) {
     else if (a === 'processMonthlyReorder')     result = processMonthlyReorder(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'previewBranchReorder')      result = buildBranchReorder(e.parameter.branch, e.parameter.periodLabel, true);
     else if (a === 'buildAmazonList')           result = buildAmazonList(e.parameter.periodLabel);
-    else if (a === 'buildBranchReorder')        result = buildBranchReorder(e.parameter.branch, e.parameter.periodLabel, false);
+    else if (a === 'buildBranchReorder')        result = buildBranchReorder(e.parameter.branch, e.parameter.periodLabel, false, { force: e.parameter.force === '1' });
     else if (a === 'previewToyoReorder')        result = buildToyoReorder(e.parameter.store, e.parameter.periodLabel, true);
     else if (a === 'buildToyoReorder')          result = buildToyoReorder(e.parameter.store, e.parameter.periodLabel, false);
     else if (a === 'authStatus')                result = authStatus();
@@ -6296,7 +6296,9 @@ function processMonthlyReorder(storeId, periodLabel) {
 
 // 支店まとめの発注書と下書きを作り直す。dryRun=true は計算結果を返すだけ(ファイル・下書きは作らない)。
 // ?action=previewBranchReorder&branch=...&periodLabel=... / ?action=buildBranchReorder&branch=...&periodLabel=... でも呼べる
-function buildBranchReorder(branchKey, periodLabel, dryRun) {
+// 支店の店がすべて棚卸を出すまでは下書き・発注タブの記録を作らない（2026-10-29 塩川さん。名古屋北で3店だけの下書きができ、
+// 途中で送ると「送信済み」になって残りの店が入らなくなるため）。そろわないうちに作るときは opts.force（&force=1）
+function buildBranchReorder(branchKey, periodLabel, dryRun, opts) {
   const b = _settingJson_('reorder_branches', {})[branchKey];
   if (!b) return { error: 'unknown_branch: ' + branchKey };
   const mail = _settingJson_('reorder_mail', {});
@@ -6320,6 +6322,7 @@ function buildBranchReorder(branchKey, periodLabel, dryRun) {
   const periodJa = _periodLabelJa_(periodLabel);
   const subject = `${mail.subject || '発注依頼'}（${b.label}支店 ${periodJa}分）`;
   const summary = { branch: b.label, subject, ordered: Object.keys(perStore).map(s => names[s] || s), notSubmitted: missing, held, onOrder };
+  if (!dryRun && missing.length && !(opts && opts.force)) return _waitBranchReorder_(branchKey, periodLabel, summary);
   if (!dryRun) { try { _notifyHeldReorder_(b.label, periodJa, held, onOrder); } catch (e) { console.error('_notifyHeldReorder_ error:', e.message); } }
   if (dryRun) {
     const detail = {};
@@ -6406,6 +6409,30 @@ function buildBranchReorder(branchKey, periodLabel, dryRun) {
     const stale = getOrders().filter(r => r.group_id === groupId && !keep.has(r.id)).map(r => r.id);
     if (stale.length) { try { deleteOrderRows(stale); } catch (e) { warnings.push('古い行の削除に失敗: ' + e.message); } }
     return Object.assign({ ok: true, draft: existingDrafts.length ? 'updated' : 'created', to, sheetUrl: ss.getUrl(), warnings }, summary);
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// 支店の棚卸がそろうのを待つ。それまでに作った途中の下書き（まだ送っていないもの）と、発注タブの記録（検品前）は消す。
+// 送信済みなら何もしない（送った分の記録は残す）
+function _waitBranchReorder_(branchKey, periodLabel, summary) {
+  const b = _settingJson_('reorder_branches', {})[branchKey];
+  const lock = LockService.getScriptLock();
+  lock.waitLock(60000);
+  try {
+    const drafts = GmailApp.getDrafts().filter(d => d.getMessage().getSubject() === summary.subject);
+    const groupId = 'monthly_' + branchKey + '_' + periodLabel;
+    const rows = getOrders().filter(r => r.group_id === groupId && !_dateStr(r.delivery_date));
+    if (!drafts.length && !rows.length) return Object.assign({ ok: true, skipped: 'waiting_for_stores' }, summary);
+    const src = SpreadsheetApp.openById(b.sheet);
+    const to = String(src.getSheets()[0].getRange('C1').getDisplayValue() || '').trim() || b.to;
+    const alreadySent = GmailApp.search(`in:sent to:${to} newer_than:180d`, 0, 100).some(thread =>
+      thread.getMessages().some(msg => msg.getSubject() === summary.subject));
+    if (alreadySent) return Object.assign({ ok: true, skipped: 'already_sent' }, summary);
+    drafts.forEach(d => d.deleteDraft());
+    if (rows.length) deleteOrderRows(rows.map(r => r.id));
+    return Object.assign({ ok: true, skipped: 'waiting_for_stores', draftsDeleted: drafts.length, rowsDeleted: rows.length }, summary);
   } finally {
     lock.releaseLock();
   }
