@@ -161,6 +161,13 @@
       const thisMonth = monthOf(0), lastMonth = monthOf(1);
       wrap.innerHTML = `
         <div class="mc-note">ドリンクマシンに出ている<b>金種（売価）ごとの累計の数字</b>を、そのまま入れてください。前回の数字との差が「杯数」、杯数×売価が「金額」として自動で出ます。毎日だいたい同じ時刻に読んでください。</div>
+        ${cfg.salesReport ? `<div class="mc-login mc-card" style="display:none;border-left:4px solid var(--mc-green)">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap">
+            <b style="color:var(--mc-green)">📋 売上報告サイトのログイン情報</b>
+            <button class="mc-btn sub small" onclick="const b=this.parentElement.nextElementSibling;b.style.display=b.style.display==='none'?'':'none';this.textContent=b.style.display==='none'?'表示する':'閉じる'">表示する</button>
+          </div>
+          <div class="mc-login-text" style="display:none;white-space:pre-wrap;background:#f8fafc;border:1px solid #cbd5e1;border-radius:6px;padding:8px 10px;margin-top:8px;font-size:14px;line-height:1.7"></div>
+        </div>` : ''}
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;flex-wrap:wrap">
           <b style="font-size:13px">読んだ日</b>
           <input type="date" value="${esc(date)}" max="${today()}" onchange="MeterCore.s.date=this.value||'${today()}';MeterCore.refresh()">
@@ -177,11 +184,7 @@
               <tr><td>消費税</td><td class="mc-num"><b class="mc-rep-tax">—</b> 円</td></tr>
               <tr><td>客数</td><td class="mc-num"><b class="mc-rep-cust">—</b> 人</td></tr>
             </tbody></table>
-            <div style="font-size:11px;color:#64748b;margin-top:4px">すべての金種を入れると出ます（前回の数字との差から計算）。</div>
-            <div class="mc-login" style="display:none;margin-top:8px;font-size:13px">
-              <button class="mc-btn sub small" onclick="const b=this.nextElementSibling;b.style.display=b.style.display==='none'?'':'none';this.textContent=b.style.display==='none'?'報告サイトのログイン情報を表示':'閉じる'">報告サイトのログイン情報を表示</button>
-              <div class="mc-login-text" style="display:none;white-space:pre-wrap;background:white;border:1px solid #cbd5e1;border-radius:6px;padding:8px 10px;margin-top:6px"></div>
-            </div></div>` : ''}
+            <div style="font-size:11px;color:#64748b;margin-top:4px">すべての金種を入れると出ます（前回の数字との差から計算）。</div></div>` : ''}
           <input type="text" class="mc-note-input" placeholder="メモ（機械の不具合・補償など）" value="${esc(noteToday)}" style="flex:1;min-width:180px">
           <button class="mc-btn mc-save" onclick="MeterCore.save()">保存する</button>
           <div class="mc-msg mc-save-msg" style="width:100%"></div>
