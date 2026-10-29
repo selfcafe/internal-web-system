@@ -2524,7 +2524,8 @@ function computeInventoryAnomaly(p, period, periodData) {
 }
 
 let inventoryStep = 'input'; // 'input'（数字入力） | 'confirm'（確認・棚卸完了）
-function goToInventoryConfirm() { inventoryStep = 'confirm'; renderInventory(); }
+// 確認画面へ進む前に、発注済みで納品済みになっていない品を聞く(当月納品の数が合わないまま送らないように。2026-10-29)
+async function goToInventoryConfirm() { await askOverdueDeliveries(true); inventoryStep = 'confirm'; renderInventory(); }
 function goToInventoryInput() { inventoryStep = 'input'; renderInventory(); }
 
 // 先月分の棚卸表を読み取り専用で表示するトグル（2026-07-15追加）。データは既に
@@ -6682,7 +6683,7 @@ async function showPage(p) {
   }
   document.getElementById('page-store').classList.toggle('active', p==='store');
   document.getElementById('page-admin').classList.toggle('active', p==='admin');
-  if (p==='store') { renderStore(); maybeShowAttendanceReminder(); }
+  if (p==='store') { renderStore(); maybeShowAttendanceReminder(); askOverdueDeliveries(false); }
   if (p==='admin') { renderAdmin(); refreshBugReportBadge(); }
   updateBadges();
 }
@@ -7314,6 +7315,11 @@ async function markDelivered(id) {
   const row = storeRows.find(r=>r.id===id); if (!row) return;
   if (!row.orderDate) { alert('発注日が記載されてから納品済みにできます。'); return; }
   if (!confirm('この依頼を納品済みにして履歴へ移動しますか？')) return;
+  await _markDeliveredCore(id);
+}
+// 納品済みの処理そのもの(確認なし)。発注タブのボタンと「届きましたか？」の確認(askOverdueDeliveries)の両方から使う
+async function _markDeliveredCore(id) {
+  const row = storeRows.find(r=>r.id===id); if (!row) return;
   if (_markDeliveredInProgress.has(id)) return;
   _markDeliveredInProgress.add(id);
   try {
@@ -7333,6 +7339,87 @@ async function markDelivered(id) {
   } finally {
     _markDeliveredInProgress.delete(id);
   }
+}
+
+/* ===== 納品済みの押し忘れ防止(2026-10-29 塩川さん「この作業の漏れを完全に防止したい」) =====
+   発注済みで納品済みになっていない品のうち、納品予定日を過ぎた品(予定日が無ければ発注日から DELIVERY_ASK_DAYS_NO_DATE 日たった品)を、
+   店の画面を開いたとき・ホームに戻ったときに「届きましたか？」と聞く。答えるまでほかの操作はできない。
+   「届いた」→ 発注タブの納品済みボタンと同じ処理。「まだ届いていない」→ この端末ではその日は聞かない(翌日また聞く)。
+   棚卸の確認画面へ進むときは、日付に関係なく発注済みで未納品の品をすべて聞く(数が合わなくなる原因を先に片付ける)。
+   さらに納品予定日から3日たっても納品済みにならない品は、GAS の notifyOverdueDeliveries_ が毎朝本部へ知らせる(定数は GAS とそろえる)。
+   練習モード(ガイダンス)では聞かない */
+const DELIVERY_ASK_DAYS_NO_DATE = 5;
+function _deliverySnoozeKey(sid) { return 'delivery_snooze_' + sid; }
+function _deliverySnooze(sid) { try { return JSON.parse(localStorage.getItem(_deliverySnoozeKey(sid)) || '{}') || {}; } catch (e) { return {}; } }
+function _deliveryDue(row) {
+  if (row.deliveryDate) return row.deliveryDate;
+  const d = new Date(row.orderDate + 'T00:00:00'); d.setDate(d.getDate() + DELIVERY_ASK_DAYS_NO_DATE);
+  return d.toLocaleDateString('sv');
+}
+// all=true: 棚卸の前。日付・「まだ」に関係なく発注済みで未納品の品すべて
+function overdueDeliveryRows(all) {
+  const t = today(), snooze = _deliverySnooze(storeTab);
+  return storeRows.filter(r => r.locked && !r.denied && r.orderDate && String(r.product || '').trim()).filter(r => {
+    if (all) return true;
+    if (snooze[r.id] === t) return false;
+    return r.deliveryDate ? r.deliveryDate < t : _deliveryDue(r) <= t;
+  });
+}
+let _deliveryAskOpen = null;
+function askOverdueDeliveries(all) {
+  if (sessionStorage.getItem('onboarding') === '1' || _ordersLoadFailed || !storeTab) return Promise.resolve();
+  if (_deliveryAskOpen) return _deliveryAskOpen;
+  const rows = overdueDeliveryRows(all);
+  if (!rows.length) return Promise.resolve();
+  _deliveryAskOpen = new Promise(resolve => {
+    const ov = document.createElement('div');
+    ov.id = 'delivery-ask-overlay';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:10050;background:rgba(15,23,42,.55);display:flex;align-items:flex-start;justify-content:center;overflow-y:auto;padding:24px 12px';
+    document.body.appendChild(ov);
+    const pending = new Set(rows.map(r => r.id));
+    const done = () => { ov.remove(); _deliveryAskOpen = null; renderStore(); resolve(); };
+    const qtyText = r => {
+      const p = prodByName(r.product) || {};
+      const useActual = r.actualQty !== '' && r.actualQty != null;
+      const mode = useActual ? (r.actualUnitMode || (p.caseOnly ? 'case' : 'piece')) : (p.caseOnly ? 'case' : (r.unitMode || 'piece'));
+      return (useActual ? r.actualQty : r.qty) + (mode === 'case' ? 'ケース' : (p.unit || r.unit || '個'));
+    };
+    const draw = () => {
+      const left = rows.filter(r => pending.has(r.id));
+      if (!left.length) { done(); return; }
+      ov.innerHTML = `<div style="background:white;border-radius:12px;max-width:520px;width:100%;padding:18px 16px;box-shadow:0 10px 30px rgba(0,0,0,.25)">
+        <div style="font-size:17px;font-weight:700;color:#c2410c;margin-bottom:6px">📦 届きましたか？</div>
+        <div style="font-size:13px;color:#475569;line-height:1.7;margin-bottom:12px">${all
+          ? '棚卸の前に、発注済みでまだ「納品済み」になっていない品を確かめます。'
+          : '納品予定日を過ぎても「納品済み」になっていない品があります。'}1つずつ答えてください（答えるまでほかの操作はできません）。<br>
+          <span style="font-size:12px">届いた数が依頼と違うときは、「届いた」を押したあと本部に連絡してください。</span></div>
+        ${left.map(r => `<div style="border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;margin-bottom:8px">
+          <div style="font-weight:700;font-size:15px">${esc(prodByName(r.product)?.label || r.label || r.product)}　${esc(qtyText(r))}</div>
+          <div style="font-size:12px;color:#64748b;margin:2px 0 8px">発注日 ${esc(r.orderDate)}／${r.deliveryDate ? '納品予定日 ' + esc(r.deliveryDate) : '納品予定日なし'}</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button data-id="${esc(r.id)}" data-act="yes" style="flex:1;min-width:140px;padding:10px;background:#22703d;color:white;border:none;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;font-family:inherit">届いた（納品済みにする）</button>
+            <button data-id="${esc(r.id)}" data-act="no" style="flex:1;min-width:140px;padding:10px;background:white;color:#334155;border:1px solid #cbd5e1;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;font-family:inherit">まだ届いていない</button>
+          </div></div>`).join('')}
+      </div>`;
+      ov.querySelectorAll('button[data-act]').forEach(b => b.onclick = async () => {
+        const id = b.dataset.id;
+        ov.querySelectorAll(`button[data-id="${CSS.escape(id)}"]`).forEach(x => { x.disabled = true; x.style.opacity = '.6'; });
+        if (b.dataset.act === 'yes') {
+          await _markDeliveredCore(id);
+        } else {
+          const sz = _deliverySnooze(storeTab);
+          const t = today();
+          Object.keys(sz).forEach(k => { if (sz[k] !== t) delete sz[k]; });
+          sz[id] = t;
+          try { localStorage.setItem(_deliverySnoozeKey(storeTab), JSON.stringify(sz)); } catch (e) {}
+        }
+        pending.delete(id);
+        draw();
+      });
+    };
+    draw();
+  });
+  return _deliveryAskOpen;
 }
 
 /* ===== 全体管理ページ ===== */
@@ -7539,6 +7626,7 @@ function goPartnerHome() {
   announceGoHome();
   switchPartnerTab('order');
   window.scrollTo(0, 0);
+  askOverdueDeliveries(false); // 納品予定日を過ぎた品の「届きましたか？」
 }
 function announceGoHome() {
   document.getElementById('announce-drill-wrap').style.display = 'none';

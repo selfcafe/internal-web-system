@@ -798,6 +798,8 @@ function doGet(e) {
     else if (a === 'getMachinePhotoHistory')    result = getMachinePhotoHistory(e.parameter.storeId);
     else if (a === 'getMeterReadings')          result = getMeterReadings(e.parameter.storeId);
     else if (a === 'getMeterReportInfo')        result = getMeterReportInfo(e.parameter.storeId);
+    else if (a === 'getOverdueDeliveries')      result = _overdueDeliveryRows_(e.parameter.asOf || Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd'))
+      .map(r => ({ store_id: r.store_id, product: r.product, qty: r.qty, order_date: _dateStr(r.order_date), delivery_date: _dateStr(r.delivery_date), due: r._due, notify_from: r._notifyFrom }));
     else if (a === 'migrateMachinePhotoColumns') result = migrateMachinePhotoColumns();
     else if (a === 'checkNewStoresFromMasterSheet') result = checkNewStoresFromMasterSheet();
     else if (a === 'setNewStoreCheckTrigger')   { setNewStoreCheckTrigger(); result = { ok: true }; }
@@ -8944,6 +8946,39 @@ function testNotify() {
   notifyNewOrder_('shibuya');
 }
 
+// ===== 納品済みの押し忘れ(2026-10-29 塩川さん「漏れを完全に防止したい」) =====
+// 店の画面は、納品予定日を過ぎた(予定日が無ければ発注日から DELIVERY_ASK_DAYS_NO_DATE 日たった)品を「届きましたか？」と
+// 答えるまで聞く(index.html の overdueDeliveryRows)。ここはその先: 納品予定日(無ければ発注日+5日)から
+// DELIVERY_OVERDUE_NOTIFY_DAYS 日たっても納品済みになっていない品を、毎朝(sendDailyOrderNotification)塩川用Botへ店ごとの一覧で送る。
+// 配送の遅れか押し忘れかを本部が確かめるため。index.html の同名の定数とそろえる
+const DELIVERY_ASK_DAYS_NO_DATE = 5;
+const DELIVERY_OVERDUE_NOTIFY_DAYS = 3;
+function _overdueDeliveryRows_(asOf) {
+  const addDays = (d, n) => Utilities.formatDate(new Date(new Date(d + 'T00:00:00+09:00').getTime() + n * 86400000), 'Asia/Tokyo', 'yyyy-MM-dd');
+  return getOrders().filter(r => r.product && !r.denied && _dateStr(r.order_date)).map(r => {
+    const due = _dateStr(r.delivery_date) || addDays(_dateStr(r.order_date), DELIVERY_ASK_DAYS_NO_DATE);
+    return Object.assign({}, r, { _due: due, _notifyFrom: addDays(due, DELIVERY_OVERDUE_NOTIFY_DAYS) });
+  }).filter(r => r._notifyFrom <= asOf);
+}
+function notifyOverdueDeliveries_() {
+  const today = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd');
+  const rows = _overdueDeliveryRows_(today);
+  if (!rows.length) return { ok: true, count: 0 };
+  const names = _storeNames_(), by = {};
+  rows.forEach(r => { (by[r.store_id] = by[r.store_id] || []).push(r); });
+  const lines = ['【納品済みになっていない品】納品予定日から' + DELIVERY_OVERDUE_NOTIFY_DAYS + '日以上たっても、店で「納品済み」が押されていません。',
+    '届いていないのか、押し忘れかを店に確かめてください。', ''];
+  Object.keys(by).sort((a, b) => String(names[a] || a).localeCompare(String(names[b] || b), 'ja')).forEach(sid => {
+    lines.push('■ ' + (names[sid] || sid) + (_isFcStore_(sid) ? '（FC）' : ''));
+    by[sid].sort((a, b) => a._due.localeCompare(b._due)).forEach(r =>
+      lines.push('  ・' + (r.label || r.product) + ' ' + (r.qty == null ? '' : r.qty) + (r.unit_mode === 'case' ? 'ケース' : (r.unit || '')) +
+        '（発注 ' + _dateStr(r.order_date) + '／' + (_dateStr(r.delivery_date) ? '納品予定 ' + _dateStr(r.delivery_date) : '納品予定日なし') + '）'));
+    lines.push('');
+  });
+  sendBugReportToOwnerBot_(lines.join('\n').slice(0, 1900));
+  return { ok: true, count: rows.length, stores: Object.keys(by).length };
+}
+
 function sendDailyOrderNotification() {
   purgeOldLostItems(); // 忘れ物の30日経過削除は読み取りのたびではなく、この日次バッチでのみ行う
   // 納品履歴の30日経過削除も同様、読み取りのたびではなくここでのみ行う。DELIVERY_HISTORY_SHEET_IDが
@@ -8952,6 +8987,7 @@ function sendDailyOrderNotification() {
   // 納品の記録（delivery_history）は発注履歴・原価・消費量の元にするので消さない（2026-10-15 塩川さん。以前は30日で消していた）
   try { purgeOldMachinePhotos(); } catch (e) { console.error('purgeOldMachinePhotos error:', e.message); }
   try { sendMachinePhotoReminder(); } catch (e) { console.error('sendMachinePhotoReminder error:', e.message); }
+  try { notifyOverdueDeliveries_(); } catch (e) { console.error('notifyOverdueDeliveries_ error:', e.message); }
   // 「◯◯エリアにて発注依頼があります。」の毎朝のチャンネル通知は 2026-10-14 にやめた（全体の会話には不要）。
   // 発注依頼は入った時点で塩川用Botへ1:1で届く（_withAmazonOrderNotify_）
 }
