@@ -7212,6 +7212,15 @@ function lockGroup(groupId) {
   storeRows = storeRows.filter(r => !inGroup(r) || String(r.product || '').trim());
   const group = storeRows.filter(inGroup);
   if (group.some(r => !r.requestDate)) { alert('依頼日を入力してください。'); return; }
+  // バラ・ケースを選べる品で「バラ 1」の依頼は、ほとんどがケースに切り替え忘れ（2026-10-29 心斎橋のココア 1袋。本当は1ケース）。
+  // 1品ずつ「1ケースにしますか？」と聞き、OK ならケースにして依頼する
+  group.forEach(r => {
+    const p = prodByName(r.product);
+    if (!p || p.caseOnly || !p.caseUnit || (r.unitMode || 'piece') !== 'piece' || Number(r.qty) !== 1) return;
+    const pieces = casePiecesFromUnit(p.caseUnit);
+    const unit = p.unit || '個';
+    if (confirm(`「${p.label || p.name}」が 1${unit} になっています。\n1ケース${pieces ? `（${pieces}${unit}）` : ''}にしますか？\n\nOK：1ケースにする\nキャンセル：1${unit}のまま依頼する`)) r.unitMode = 'case';
+  });
   group.forEach(r => { r.locked = true; r.isNew = true; r.requestDate = today(); });
   saveA(storeTab, storeRows);
   renderStore();
