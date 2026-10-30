@@ -9836,6 +9836,7 @@ function renderPricePhotoCard() {
   if (!card) return;
   const st = _pricePhotoState;
   if (!st || !st.on || st.storeId !== storeTab) { card.style.display = 'none'; return; }
+  _schedulePricePhotoPoll(st.machines.some(m => m.status === '読み取り中'));
   const byIdx = {};
   st.machines.forEach(m => { byIdx[m.machineIndex] = m; });
   const maxSent = st.machines.reduce((a, m) => Math.max(a, m.machineIndex + 1), 0);
@@ -9848,7 +9849,7 @@ function renderPricePhotoCard() {
     if (!m) state = '<span style="color:#b45309;font-weight:700">未提出</span>';
     else if (m.status === '読み取り済み') { state = '<span style="color:#16a34a;font-weight:700">✓ 届いています</span>'; action = `<button onclick="pickPricePhoto(${i})" style="${btn};background:white;color:#334155;border:1px solid #cbd5e1;font-weight:400">撮り直す</button>`; }
     else if (m.status === '撮り直し') state = `<span style="color:#c0392b;font-weight:700">撮り直しをお願いします</span><div style="font-size:12px;color:#c0392b;margin-top:2px">${esc(m.reason || '')}</div>`;
-    else { state = '<span style="color:#2563eb;font-weight:700">確認しています…（数分かかります）</span>'; action = ''; }
+    else { state = '<span style="color:#2563eb;font-weight:700">⏳ 確認しています…</span><div style="font-size:12px;color:#2563eb">1〜2分で、この画面のまま結果に切り替わります</div>'; action = ''; }
     return `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 0;border-top:1px solid #e5e7eb">
       <b style="min-width:52px">${i + 1}台目</b><div style="flex:1;min-width:150px">${state}</div>${action}</div>`;
   }).join('');
@@ -9865,6 +9866,21 @@ function renderPricePhotoCard() {
        <div style="font-size:12px;margin-top:6px"><a href="javascript:void(0)" onclick="_pricePhotoExtra++;renderPricePhotoCard()" style="color:#22703d">＋ 機械がもう1台ある</a></div>
        <input type="file" id="price-photo-input" accept="image/*" capture="environment" style="display:none" onchange="onPricePhotoPicked(this)">
        <div id="price-photo-msg" style="font-size:12.5px;margin-top:6px"></div>`;
+}
+// 確認中(読み取り中)の機械があるあいだ、15秒ごとに状態を取り直して画面を切り替える(更新ボタンを押さなくてよいように)。
+// 送ってから15分たっても終わらなければやめる(読み取りが止まっている。管理画面の「もう一度読み取る」で動かす)
+let _pricePhotoPollTimer = null, _pricePhotoPollStart = 0;
+function _schedulePricePhotoPoll(reading) {
+  if (_pricePhotoPollTimer) { clearTimeout(_pricePhotoPollTimer); _pricePhotoPollTimer = null; }
+  if (!reading) { _pricePhotoPollStart = 0; return; }
+  if (!_pricePhotoPollStart) _pricePhotoPollStart = Date.now();
+  if (Date.now() - _pricePhotoPollStart > 15 * 60 * 1000) return;
+  _pricePhotoPollTimer = setTimeout(() => {
+    _pricePhotoPollTimer = null;
+    const card = document.getElementById('price-photo-card');
+    if (card && card.offsetParent !== null && !document.hidden) loadPricePhotoCard(true);
+    else _schedulePricePhotoPoll(true);
+  }, 15000);
 }
 let _pricePhotoMachine = 0;
 function pickPricePhoto(i) {
@@ -9931,9 +9947,8 @@ async function onPricePhotoPicked(input) {
   try {
     const r = await gasPost('savePricePhotos', { storeId: storeTab, machineIndex: _pricePhotoMachine, images: [_shrinkForUpload(img)] });
     if (!r || r.error) throw new Error(r && r.error || '送れませんでした');
-    if (msg) msg.innerHTML = '<span style="color:#16a34a;font-weight:700">送りました。数分で確認結果がここに出ます。</span>';
+    if (msg) msg.innerHTML = '<span style="color:#16a34a;font-weight:700">送りました。1〜2分で、この画面のまま結果に切り替わります。</span>';
     setTimeout(() => loadPricePhotoCard(true), 1500);
-    setTimeout(() => loadPricePhotoCard(true), 120000);
   } catch (e) {
     if (msg) msg.innerHTML = `<span style="color:#c0392b">送れませんでした（${esc(e.message)}）。通信を確かめて、もう一度お試しください。</span>`;
   } finally {
