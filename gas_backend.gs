@@ -6160,7 +6160,7 @@ function _apexDraftForOrderRows_(storeId, rows, onCarried) {
     let alert = '';
     if (noCase.length) {
       const sidOf = nm => Object.keys(bySid).find(sid => (names[sid] || sid) === nm) || '';
-      const cand = noCase.map(nm => { const c = _caseCandidate_(sidOf(nm), meta); return c ? nm + ' ' + c + '1ケース' : ''; }).filter(Boolean);
+      const cand = noCase.map(nm => { const c = _caseCandidate_(sidOf(nm), meta); return c ? nm + ' ' + c : ''; }).filter(Boolean);
       alert = '⚠⚠ 1ケース以上の品がありません：' + noCase.join('・') + '\nアペックスへは1回の発注で1品以上を1ケースにする決まりです。このまま送らず、店に確かめてケースにする品を足してください' +
         (cand.length ? '（候補: ' + cand.join('、') + '）' : '') + '\n';
     }
@@ -6175,17 +6175,16 @@ function _apexDraftForOrderRows_(storeId, rows, onCarried) {
   }
 }
 
-// 1ケースに上げる候補（月初発注と同じ考え方: 基準値が1ケース以上ある品の中で、まずブレンド、無ければ基準値がいちばん多いケース数の品）。無ければ ''
+// 1ケースに上げる候補（月初発注と同じ考え方で、まずブレンド。無ければ基準値がいちばん1ケースに近い品）。
+// 小さな店（どの品も基準値が1ケース未満。2026-10-30 御器所・桜山）でも候補は出し、1ケースと月の基準値を並べて判断できるようにする。
+// 返り値は「ブレンド1ケース（1ケース25／月の基準値9）」の形。基準値が無ければ ''
 function _caseCandidate_(storeId, meta) {
   const targets = _getReorderTargets_()[storeId] || {};
-  const list = Object.keys(meta).filter(n => {
-    const m = meta[n];
-    return APEX_ORDER_VENDORS.indexOf(m.vendor || '') >= 0 && m.casePieces && (String(m.code) in targets) && Number(targets[String(m.code)]) >= m.casePieces;
-  });
+  const tg = n => Number(targets[String(meta[n].code)]) || 0;
+  const list = Object.keys(meta).filter(n => APEX_ORDER_VENDORS.indexOf(meta[n].vendor || '') >= 0 && meta[n].casePieces && tg(n) > 0);
   if (!list.length) return '';
-  const blend = list.find(n => /ブレンド/.test(n));
-  if (blend) return blend;
-  return list.sort((a, b) => Number(targets[String(meta[b].code)]) / meta[b].casePieces - Number(targets[String(meta[a].code)]) / meta[a].casePieces)[0];
+  const name = list.find(n => /ブレンド/.test(n)) || list.sort((a, b) => tg(b) / meta[b].casePieces - tg(a) / meta[a].casePieces)[0];
+  return name + '1ケース（1ケース' + meta[name].casePieces + '／月の基準値' + tg(name) + '）';
 }
 
 // 動作確認用（エディタから実行）: 今の新着の Amazon の依頼を、店舗ごとに Bot へ送る（塩川さんに実際に届く）
