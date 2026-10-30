@@ -6072,7 +6072,7 @@ function createOrderRequest(apiKey, storeId, items) {
   // アペックス（apex・cs3）の品は、その店の支店の都度発注書と Gmail 下書きも作る（2026-10-15。それまでは登録だけで止まっていた）。
   // 結果は Bot の返事に出るよう created の最後に1行足す（Bot 側は created をそのまま並べて表示している）
   const apex = _apexDraftForOrderRows_(storeId, rows.concat(fixedBot), carried => carried.forEach(r => resend.push(r)));
-  if (apex) created.push(apex);
+  if (apex) created[/^⚠/.test(apex) ? 'unshift' : 'push'](apex);   // 1ケースに届かない店の注意は返事の先頭に
   return addResend(Object.assign(res, { created, skipped, apexDraft: apex || '' }));
 }
 
@@ -6153,15 +6153,39 @@ function _apexDraftForOrderRows_(storeId, rows, onCarried) {
     const same = carried.filter(r => r.store_id === storeId);
     if (same.length && onCarried) onCarried(same);
     const names = _storeNames_();
+    // 1ケース以上の品が無い店（アペックスの最低条件。2026-10-30 御器所・桜山）は、目立つように先頭に出し、ケースに上げる候補を添える
+    const NO_CASE = /^(.+) は1ケース以上の品が無い（アペックスの最低条件）$/;
+    const noCase = out.warnings.map(w => (String(w).match(NO_CASE) || [])[1]).filter(Boolean);
+    const warns = out.warnings.filter(w => !NO_CASE.test(String(w)));
+    let alert = '';
+    if (noCase.length) {
+      const sidOf = nm => Object.keys(bySid).find(sid => (names[sid] || sid) === nm) || '';
+      const cand = noCase.map(nm => { const c = _caseCandidate_(sidOf(nm), meta); return c ? nm + ' ' + c + '1ケース' : ''; }).filter(Boolean);
+      alert = '⚠⚠ 1ケース以上の品がありません：' + noCase.join('・') + '\nアペックスへは1回の発注で1品以上を1ケースにする決まりです。このまま送らず、店に確かめてケースにする品を足してください' +
+        (cand.length ? '（候補: ' + cand.join('、') + '）' : '') + '\n';
+    }
     const mergedNote = carried.length ? '（今日まだ送っていない前の下書きの品（' +
       carried.map(r => (r.store_id !== storeId ? (names[r.store_id] || r.store_id) + ' ' : '') + (r.label || r.product)).join('、') +
       '）とまとめて1通にしました。前の下書きは消しました）' : (replacePrev ? '（同じ品の前の下書きは作り直して消しました）' : '');
-    return '【アペックス】' + out.branch + '支店の発注メールの下書きを作りました（' + out.lines.map(l => l.split('　').slice(1, 3).join(' ')).join('・') +
-      '、税抜' + Number(out.total).toLocaleString() + '円）' + mergedNote + '。Gmail の下書きを確認して送り、通知の［アペックス 発注した］を押してください' + (out.warnings.length ? '。注意: ' + out.warnings.join(' / ') : '');
+    return alert + '【アペックス】' + out.branch + '支店の発注メールの下書きを作りました（' + out.lines.map(l => l.split('　').slice(1, 3).join(' ')).join('・') +
+      '、税抜' + Number(out.total).toLocaleString() + '円）' + mergedNote + '。Gmail の下書きを確認して送り、通知の［アペックス 発注した］を押してください' + (warns.length ? '。注意: ' + warns.join(' / ') : '');
   } catch (e) {
     console.error('_apexDraftForOrderRows_ error:', e.message);
     return '【アペックス】発注メールの下書きを作れませんでした（' + e.message + '）。PC から作り直してください';
   }
+}
+
+// 1ケースに上げる候補（月初発注と同じ考え方: 基準値が1ケース以上ある品の中で、まずブレンド、無ければ基準値がいちばん多いケース数の品）。無ければ ''
+function _caseCandidate_(storeId, meta) {
+  const targets = _getReorderTargets_()[storeId] || {};
+  const list = Object.keys(meta).filter(n => {
+    const m = meta[n];
+    return APEX_ORDER_VENDORS.indexOf(m.vendor || '') >= 0 && m.casePieces && (String(m.code) in targets) && Number(targets[String(m.code)]) >= m.casePieces;
+  });
+  if (!list.length) return '';
+  const blend = list.find(n => /ブレンド/.test(n));
+  if (blend) return blend;
+  return list.sort((a, b) => Number(targets[String(meta[b].code)]) / meta[b].casePieces - Number(targets[String(meta[a].code)]) / meta[a].casePieces)[0];
 }
 
 // 動作確認用（エディタから実行）: 今の新着の Amazon の依頼を、店舗ごとに Bot へ送る（塩川さんに実際に届く）

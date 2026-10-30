@@ -7240,6 +7240,20 @@ function lockGroup(groupId) {
     const unit = p.unit || '個';
     if (confirm(`「${p.label || p.name}」が 1${unit} になっています。\n1ケース${pieces ? `（${pieces}${unit}）` : ''}にしますか？\n\nOK：1ケースにする\nキャンセル：1${unit}のまま依頼する`)) r.unitMode = 'case';
   });
+  // アペックスの品がどれも1ケースに届いていなければ確認する（アペックスへは1回の発注で1品以上を1ケースにする決まり。
+  // 2026-10-30 御器所の砂糖5袋だけ・桜山のココア・リンゴ・紅茶の袋だけで、発注書が作れなかった）。
+  // まだ発注していない依頼にケースの品があれば、一緒に発注するので聞かない
+  const isApex = r => { const p = prodByName(r.product); return !!p && (p.vendor === 'apex' || p.vendor === 'cs3'); };
+  const reachesCase = r => {
+    const p = prodByName(r.product), cp = p && casePiecesFromUnit(p.caseUnit), pcs = p && qtyToPieces(p, r.qty, r.unitMode);
+    return !!cp && pcs != null && pcs >= cp;
+  };
+  const apexNew = group.filter(isApex);
+  const pendingCase = storeRows.some(r => !inGroup(r) && r.locked && r.isNew && !r.orderDate && !r.denied && isApex(r) && reachesCase(r));
+  if (apexNew.length && !apexNew.some(reachesCase) && !pendingCase) {
+    const names = apexNew.map(r => { const p = prodByName(r.product); return p.label || p.name; }).join('、');
+    if (!confirm(`アペックスの品（${names}）が、どれも1ケースに届いていません。\nアペックスへは、1回の発注で1品以上を1ケース以上にする決まりです。\nケースで頼める品（コーヒー豆・カップなど）が必要なら、一緒に足してください。\n\nOK：このまま依頼する\nキャンセル：戻って品を足す・数を直す`)) return;
+  }
   group.forEach(r => { r.locked = true; r.isNew = true; r.requestDate = today(); });
   // 続けて次の依頼を入れられるよう、空の下書きを用意する(以前はログイン時にしか作らず、依頼のあと
   // ログインし直さないと次の依頼を出せなかった。2026-10-29 中村日赤の問い合わせ)
