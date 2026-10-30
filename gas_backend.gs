@@ -2849,9 +2849,10 @@ const PRICE_LEDGER_DIFF_TAB = '標準と違う所';
 const PRICE_LEDGER_HELP_TAB = '使い方';
 const PRICE_LEDGER_COLS = ['エリア', '店舗', '店舗ID', '機械', '段', '左から', 'メニュー', '温冷', 'サイズ', '価格', '確かさ', '読み取り日', '写真'];
 
-function _pricePhotoRequestOn_() {
+// on=全店に出す。stores=[店舗ID…] はその店だけに出す(試し撮り用。全店に出す前に1店で確かめるため)
+function _pricePhotoRequestOn_(storeId) {
   const v = _settingJson_('price_photo_request', {}) || {};
-  return !!v.on;
+  return !!v.on || (!!storeId && Array.isArray(v.stores) && v.stores.indexOf(String(storeId)) >= 0);
 }
 
 function _pricePhotoRows_() {
@@ -2884,7 +2885,7 @@ function getPricePhotoStatus(storeId) {
   const sid = String(storeId || '');
   const latest = _latestPricePhotos_(_pricePhotoRows_().filter(r => String(r.store_id) === sid));
   const counts = _machinePhotoMachineCounts_();
-  return { ok: true, on: _pricePhotoRequestOn_(), configuredCount: counts[sid] >= 1 ? Number(counts[sid]) : null,
+  return { ok: true, on: _pricePhotoRequestOn_(sid), configuredCount: counts[sid] >= 1 ? Number(counts[sid]) : null,
     machines: Object.keys(latest).map(k => _pricePhotoView_(latest[k])).sort((a, b) => a.machineIndex - b.machineIndex) };
 }
 

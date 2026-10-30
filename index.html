@@ -9992,7 +9992,9 @@ async function savePricePhotoRequest(on) {
   if (!confirm(on ? '全店の店舗画面に「ドリンクマシンの料金の写真を送ってください」を出します。よろしいですか？' : '店舗画面のお願いを止めます。よろしいですか？')) {
     const cb = document.getElementById('price-photo-on'); if (cb) cb.checked = !on; return;
   }
-  await _gasSaveSetting('price_photo_request', JSON.stringify({ on: !!on }));
+  // on だけ書き換える(試し撮り用の stores は残す)
+  const r = await gasPost('saveSettingMerge', { key: 'price_photo_request', value: JSON.stringify({ on: !!on }) });
+  if (!r || r.error) alert('保存できませんでした：' + (r && r.error));
 }
 async function redispatchPricePhoto(id) {
   if (!confirm('この写真をもう一度読み取ります（利用料が少しかかります）。よろしいですか？')) return;
