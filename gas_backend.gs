@@ -970,8 +970,26 @@ function json(data) {
 // ----------------------------------------------------------------
 
 function getSheet(name) {
-  const ss = SpreadsheetApp.openById(SHEET_ID);
+  const ss = _mainSs_();
   return ss.getSheetByName(name) || ss.insertSheet(name);
+}
+
+// 本体のスプレッドシートを開く。1回の実行の中では開いたものを使い回す。
+// 「サービスに接続できなくなりました」など Google 側の一時的な失敗は、1秒・2秒待って2回までやり直す
+// (2026-10-29 22:35 に getOnboardingProgress が1回だけこれで落ちた。前後の実行は正常)。
+// 「ドキュメントがありません」は失敗まで数分かかる長い障害なので、やり直さない(6分の上限を超えるため)
+let _cachedMainSs = null;
+function _mainSs_() {
+  if (_cachedMainSs) return _cachedMainSs;
+  for (let i = 0; ; i++) {
+    try {
+      _cachedMainSs = SpreadsheetApp.openById(SHEET_ID);
+      return _cachedMainSs;
+    } catch (e) {
+      if (i >= 2 || !/接続できなく|一時的|サーバー エラー|Service|timed out|try again/i.test(e.message)) throw e;
+      Utilities.sleep(1000 * (i + 1));
+    }
+  }
 }
 
 // DELIVERY_HISTORY_SHEET_IDが一度も設定されず、「納品済み」操作がdelivery_historyへの保存に
@@ -1313,7 +1331,7 @@ function migrateOrderColumns() {
 // （_dateStrは行ごとに呼ばれるため、毎回openByIdし直すと行数分だけ無駄な呼び出しが発生し遅くなる）
 let _cachedTz = null;
 function _sheetTz() {
-  if (!_cachedTz) _cachedTz = SpreadsheetApp.openById(SHEET_ID).getSpreadsheetTimeZone();
+  if (!_cachedTz) _cachedTz = _mainSs_().getSpreadsheetTimeZone();
   return _cachedTz;
 }
 
