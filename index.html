@@ -9857,7 +9857,10 @@ function renderPricePhotoCard() {
     ? `<div style="font-size:13px;color:#16a34a;font-weight:700">✓ ドリンクマシンの料金の写真は届いています。ありがとうございました。</div>
        <div style="font-size:12px;margin-top:4px"><a href="javascript:void(0)" onclick="_pricePhotoExtra++;renderPricePhotoCard()" style="color:#22703d">機械がもう1台ある場合はこちら</a></div>`
     : `<b style="color:#22703d">【本部より】ドリンクマシンの料金の写真を送ってください</b>
-       <div style="font-size:12.5px;margin:4px 0 6px">ドリンクマシンの<b>正面（ボタンと値段）</b>を撮って送ってください。<br>${PRICE_PHOTO_TIPS}</div>
+       <div style="display:flex;gap:10px;align-items:flex-start;margin:4px 0 6px">
+         <a href="machine-sample-price.jpg" target="_blank" rel="noopener" style="flex:0 0 auto;text-align:center;font-size:11px;color:#666;text-decoration:none"><img src="machine-sample-price.jpg" alt="お手本" style="width:84px;border-radius:4px;display:block;margin-bottom:2px">お手本（タップで拡大）</a>
+         <div style="font-size:12.5px">ドリンクマシンの<b>正面（ボタンと値段）</b>を、お手本のように撮って送ってください。<br>${PRICE_PHOTO_TIPS}</div>
+       </div>
        ${rows}
        <div style="font-size:12px;margin-top:6px"><a href="javascript:void(0)" onclick="_pricePhotoExtra++;renderPricePhotoCard()" style="color:#22703d">＋ 機械がもう1台ある</a></div>
        <input type="file" id="price-photo-input" accept="image/*" capture="environment" style="display:none" onchange="onPricePhotoPicked(this)">
