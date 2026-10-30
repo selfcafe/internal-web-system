@@ -780,7 +780,7 @@
       steps: () => [
         { target: T.homeBtn, text: '迷ったら「<b>ホーム</b>」。最初の画面に戻れます。' },
         { target: () => isMobile() ? one('.partner-hdr-pinwheel .phw-tr') : one('.partner-hdr-btns .portal-logout-btn'),
-          text: '仕事が終わったら「<b>ログアウト</b>」を押します。<br>何もしないまま30分たつと、自動でログアウトします。<br><span style="font-size:13px;color:#6b7280">（練習中にここを押すと、ガイダンスが終わります）</span>' },
+          text: '仕事が終わったら「<b>ログアウト</b>」を押します。<br>何もしないまま3時間たつと、自動でログアウトします。<br><span style="font-size:13px;color:#6b7280">（練習中にここを押すと、ガイダンスが終わります）</span>' },
         { text: 'スマホの<b>ホーム画面にアイコンを追加</b>しておくと、すぐに開けて便利です。やり方は「使い方ガイド」に載っています。' },
         { text: 'おつかれさまでした！ 目次で、まだ終わっていない章があれば進めてください。<br>全部終わったら「練習を終える」で、いつものログイン画面に戻ります。', nextLabel: '章を終える' },
       ],

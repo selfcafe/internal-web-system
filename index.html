@@ -6035,7 +6035,9 @@ function _syncReorderTargets() {
   _gasSaveSetting('reorder_targets', localStorage.getItem(REORDER_TARGETS_KEY) || '{}');
 }
 
-const SESSION_MS     = 30 * 60 * 1000; // 30分
+// 店舗ログインで操作が無いときの自動ログアウトまでの時間。清掃・補充の間に切れて何度もログインし直す
+// 報告(No.16)があり、30分から3時間に延ばした。通行証(GAS側 AUTH_TOKEN_MS)の12時間は別
+const SESSION_MS     = 3 * 60 * 60 * 1000; // 3時間
 const STORE_PW_KEY   = 'store_passwords';
 
 function getStorePassword(storeId) {
