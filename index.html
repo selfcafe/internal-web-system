@@ -9705,6 +9705,7 @@ const SETTINGS_MENU = [
     { key:'list',   label:'商品一覧',     build:_spProductList },
     { key:'add',    label:'商品の追加',   build:_spProductAdd },
     { key:'vendor', label:'仕入先',       build:_spVendor },
+    { key:'ledger', label:'取扱商品の台帳', build:_spProductLedger },
   ]},
   { key:'checksheet', label:'チェックシート', pages:[
     { key:'list',     label:'項目一覧',   build:_spCsList },
@@ -9716,6 +9717,93 @@ const SETTINGS_MENU = [
     { key:'pw',       label:'練習用パスワード', build:_spOnboardingPw },
   ]},
 ];
+
+/* --- 取扱商品の台帳(店舗×商品のスプレッドシート、2026-10-30〜)。仕組みは gas_backend.gs の「取扱商品の台帳」 --- */
+function _spProductLedger() {
+  setTimeout(loadProductLedgerInfo, 0);
+  return `
+    <div style="${_SP_NOTE}">どの店でどの商品を扱うかを、スプレッドシート（店舗×商品の表）で管理します。<b>台帳が正です。</b>台帳でチェックを付け外ししたら、ここで違いを確かめて「ポータルに反映する」を押すと、パートナー画面に反映されます。「店舗別設定 › 取扱商品」で直した分は、自動で台帳にも書かれます。</div>
+    <div id="ledger-link" style="margin:6px 0 12px;font-size:13px;color:#aaa">読み込み中…</div>
+    <div style="display:flex;gap:8px;flex-wrap:wrap">
+      <button onclick="previewProductLedger()" style="${_SP_BTN}">台帳とポータルの違いを見る</button>
+      <button onclick="rebuildProductLedger()" style="${_SP_BTN_SUB}">ポータルの今の状態で台帳を作り直す</button>
+      <span id="ledger-msg" style="${_SP_MSG}"></span>
+    </div>
+    <div style="${_SP_NOTE};margin-top:8px">店舗や商品を足した・消したときは「作り直す」で台帳の列・行をそろえます（台帳で直してまだ反映していない分は消えるので、先に反映してください）。</div>
+    <div id="ledger-preview" style="margin-top:12px"></div>`;
+}
+async function loadProductLedgerInfo() {
+  const el = document.getElementById('ledger-link');
+  if (!el) return;
+  try {
+    const r = await gasGet('getProductLedgerInfo');
+    el.innerHTML = r && r.exists
+      ? `<a href="${esc(r.url)}" target="_blank" rel="noopener" style="color:#22703d;font-weight:700">📄 取扱商品の台帳を開く</a> <span style="color:#888;font-size:12px">（selfcafe001@gmail.com で開いてください）</span>`
+      : '<span style="color:#b45309">台帳はまだありません。「ポータルの今の状態で台帳を作り直す」を押すと作ります。</span>';
+  } catch (e) { el.innerHTML = '<span style="color:#c0392b">読み込めませんでした</span>'; }
+}
+let _ledgerPreview = null;
+const _LEDGER_ERRORS = {
+  no_ledger: '台帳がまだありません。先に「作り直す」で作ってください。',
+  ledger_empty: '台帳の「取扱商品」タブが空です。「作り直す」で作り直してください。',
+  duplicate_store: '台帳に同じ店舗IDの列が2つあります。片方を消してください：',
+  changed_since_preview: '違いを見たあとで台帳かポータルが変わりました。もう一度「違いを見る」を押してください。',
+};
+async function previewProductLedger() {
+  const box = document.getElementById('ledger-preview');
+  const msg = document.getElementById('ledger-msg');
+  box.innerHTML = '<div style="color:#aaa;font-size:13px">台帳を読んでいます…</div>';
+  msg.textContent = '';
+  let r;
+  try { r = await gasGet('previewProductLedger'); } catch (e) { box.innerHTML = '<div style="color:#c0392b;font-size:13px">読み込めませんでした</div>'; return; }
+  if (!r || r.error) { box.innerHTML = `<div style="color:#c0392b;font-size:13px">${esc((_LEDGER_ERRORS[r && r.error] || 'エラー：' + (r && r.error)) + (r && r.detail ? r.detail : ''))}</div>`; return; }
+  _ledgerPreview = r;
+  const warn = (r.warnings || []).map(w => `<div style="font-size:12px;color:#b45309;background:#fef9c3;border:1px solid #fde68a;border-radius:6px;padding:6px 10px;margin-bottom:6px">${esc(w)}</div>`).join('');
+  if (!r.changes.length) { box.innerHTML = warn + '<div style="font-size:13px;color:#22703d;font-weight:700">台帳とポータルは同じです。反映するものはありません。</div>'; return; }
+  const li = (arr, color) => arr.map(n => `<li style="color:${color}">${esc(n)}</li>`).join('');
+  box.innerHTML = warn + `
+    <div style="font-size:13px;font-weight:700;margin-bottom:6px">反映すると、次の${r.changes.length}店が変わります</div>
+    ${r.changes.map(c => {
+      const used = {}; (c.hideUsed || []).forEach(u => { used[u.name] = u.last; });
+      return `<div style="border:1px solid #e5e7eb;border-radius:8px;padding:8px 12px;margin-bottom:8px;background:white">
+        <div style="font-weight:700;font-size:13px">${esc(c.storeName)}</div>
+        ${c.show.length ? `<div style="font-size:12px;margin-top:4px">＋ 表示する（${c.show.length}）<ul style="margin:2px 0 0 18px;padding:0">${li(c.show, '#16a34a')}</ul></div>` : ''}
+        ${c.hide.length ? `<div style="font-size:12px;margin-top:4px">－ 表示しない（${c.hide.length}）<ul style="margin:2px 0 0 18px;padding:0">${c.hide.map(n => `<li style="color:#c0392b">${esc(n)}${used[n] ? ` <b style="color:#b45309">⚠ 最近使っています（最後 ${esc(used[n])}）</b>` : ''}</li>`).join('')}</ul></div>` : ''}
+      </div>`;
+    }).join('')}
+    <button onclick="applyProductLedger()" style="${_SP_BTN}">ポータルに反映する</button>`;
+}
+async function applyProductLedger() {
+  const r = _ledgerPreview;
+  const msg = document.getElementById('ledger-msg');
+  if (!r || !r.changes.length) return;
+  const used = r.changes.flatMap(c => (c.hideUsed || []).map(u => `・${c.storeName}：${u.name}（最後 ${u.last}）`));
+  if (used.length && !confirm('次の商品は、その店で最近使われています（チェックシートの補充・発注依頼の記録）。\n表示しないにすると、パートナーの発注・チェックシート・棚卸の画面から消えます。\n\n' +
+    used.slice(0, 15).join('\n') + (used.length > 15 ? `\nほか${used.length - 15}件` : '') + '\n\n本当に使わなくなった場合だけ「OK」を押してください。')) return;
+  if (!confirm(`${r.changes.length}店の取扱商品をポータルに反映します。よろしいですか？`)) return;
+  msg.textContent = '反映しています…';
+  let res;
+  try { res = await gasPost('applyProductLedger', { sig: r.sig }); } catch (e) { msg.textContent = ''; alert('反映できませんでした。通信を確かめてもう一度お試しください。'); return; }
+  if (!res || res.error) { msg.textContent = ''; alert(_LEDGER_ERRORS[res && res.error] || ('反映できませんでした：' + (res && res.error))); return; }
+  if (res.cfg) localStorage.setItem(STORE_PRODUCTS_KEY, JSON.stringify(res.cfg));
+  _ledgerPreview = null;
+  document.getElementById('ledger-preview').innerHTML = '';
+  msg.textContent = `✓ ${res.changed}店を反映しました`;
+}
+async function rebuildProductLedger() {
+  const msg = document.getElementById('ledger-msg');
+  let pending = 0;
+  try { const p = await gasGet('previewProductLedger'); if (p && p.ok) pending = p.changes.length; } catch (e) {}
+  if (!confirm((pending ? `⚠ 台帳には、まだポータルに反映していない変更が${pending}店分あります。作り直すとその変更は消えます。\n\n` : '') +
+    'ポータルの今の取扱商品で台帳を作り直します。よろしいですか？\n（ポータル側の設定は変わりません）')) return;
+  msg.textContent = '作っています…（30秒ほどかかります）';
+  let r;
+  try { r = await gasGet('buildProductLedger'); } catch (e) { msg.textContent = ''; alert('作れませんでした。もう一度お試しください。'); return; }
+  if (!r || r.error) { msg.textContent = ''; alert('作れませんでした：' + (r && r.error)); return; }
+  msg.textContent = `✓ ${r.stores}店×${r.products}品で作りました`;
+  document.getElementById('ledger-preview').innerHTML = '';
+  loadProductLedgerInfo();
+}
 
 /* --- ガイダンス(初めての人向けの練習モード、onboarding-*.js)の設定 --- */
 function _spOnboardingPw() {
@@ -9902,7 +9990,7 @@ function _spMachinesBlock() {
 }
 function _spProductsBlock() {
   return `
-    <div style="${_SP_NOTE}">店舗ごとに取り扱う商品を選択してください。未設定の場合は全商品が表示されます。</div>
+    <div style="${_SP_NOTE}">店舗ごとに取り扱う商品を選択してください。未設定の場合は全商品が表示されます。ここで直した分は「商品・棚卸 › 取扱商品の台帳」（全店×全商品の表）にも自動で書かれます。</div>
     <div id="store-prod-cfg-body"></div>
     <div style="margin-top:10px;display:flex;gap:8px">
       <button onclick="saveStoreProdCfg()" style="${_SP_BTN}">保存</button>

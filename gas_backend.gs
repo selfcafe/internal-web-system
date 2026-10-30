@@ -699,6 +699,9 @@ function doGet(e) {
     else if (a === 'getLostItems')      result = getLostItems(e.parameter.month, e.parameter.storeId);
     else if (a === 'getChecksheetData') result = getChecksheetData(e.parameter.storeId);
     else if (a === 'getProductUsage')   result = getProductUsage(e.parameter.days);
+    else if (a === 'getProductLedgerInfo') result = getProductLedgerInfo();
+    else if (a === 'previewProductLedger') result = previewProductLedger();
+    else if (a === 'buildProductLedger') result = buildProductLedger();
     else if (a === 'getSteraStockEstimate') result = getSteraStockEstimate(e.parameter.storeId);
     else if (a === 'getSteraProductGroups') result = getSteraProductGroups();
     else if (a === 'getInventoryHistory') result = getInventoryHistory(e.parameter.storeId, e.parameter.periodLabel);
@@ -823,6 +826,8 @@ function doPost(e) {
   let _pre = null;
   try { _pre = JSON.parse(e.postData.contents); } catch (_) {}
   if (_pre && _pre.action === 'login') return json(authLogin(_pre.password));
+  // 取扱商品の台帳を触る処理は店舗名(stores.js)を使う。ロック中に通信しないよう、先に読んでおく
+  if (_pre && (_pre.action === 'applyProductLedger' || _pre.key === 'store_product_cfg')) { try { _storeNames_(); } catch (_) {} }
   const lock = LockService.getScriptLock();
   // ロック待ち時間を計測してログに残す（2026-08-12、doPostが同時に何件も来た時に
   // 「ロック待ちで詰まっている」のか「処理自体が遅い」のかを次回切り分けられるようにするため）
@@ -859,6 +864,7 @@ function doPost(e) {
     else if (b.action === 'deleteOrders')       result = deleteOrderRows(b.ids);
     else if (b.action === 'saveSetting')        result = saveSetting(b.key, b.value);
     else if (b.action === 'saveSettingMerge')   result = saveSettingMerge(b.key, b.value);
+    else if (b.action === 'applyProductLedger') result = applyProductLedger(b.sig);
     else if (b.action === 'saveLostItem')       result = saveLostItem(b.item, b.imagesBase64, b.imageMime);
     else if (b.action === 'deleteLostItem')     result = deleteLostItem(b.id, b.imageUrl);
     else if (b.action === 'saveOrderImage')     result = saveOrderImage(b.imageBase64, b.imageMime, b.filename);
@@ -1629,9 +1635,12 @@ function saveSetting(key, value) {
   const ki = data[0].indexOf('key');
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][ki]) === String(key)) {
-      _logSettingHistory(key, _readSettingRow_(data, i));
+      const oldValue = _readSettingRow_(data, i);
+      _logSettingHistory(key, oldValue);
       _writeSettingValue_(sheet, i + 1, value);
       _invalidateSettingsCache_();
+      // 取扱商品を丸ごと保存したときも、変わったマスだけ台帳に書く(saveSettingMerge と同じ)
+      if (key === 'store_product_cfg') { try { _ledgerReflectPortalChange_(JSON.parse(oldValue || '{}'), JSON.parse(value || '{}')); } catch (e) { console.error('台帳への書き込みに失敗:', e.message); } }
       return { ok: true };
     }
   }
@@ -1647,7 +1656,7 @@ function saveSetting(key, value) {
 // 消してしまう事故につながる(2026-08-29、store_product_cfgが60店舗→1店舗に消えた事故で発覚)。
 // この関数はシート側の最新値に対してpatchJsonの内容だけをマージしてから保存するので、
 // 呼び出し側が持つキャッシュが古くても他店舗のデータを巻き込まない
-function saveSettingMerge(key, patchJson) {
+function saveSettingMerge(key, patchJson, opts) {
   const sheet = getSheet(SHEET_SETTINGS);
   ensureHeaders(sheet, ['key', 'value']);
   const data = sheet.getDataRange().getValues();
@@ -1663,9 +1672,12 @@ function saveSettingMerge(key, patchJson) {
         return { error: 'current_value_unreadable' };
       }
       _logSettingHistory(key, oldValue);
+      const before = key === 'store_product_cfg' ? JSON.parse(JSON.stringify(obj)) : null;
       Object.assign(obj, patch);
       _writeSettingValue_(sheet, i + 1, JSON.stringify(obj));
       _invalidateSettingsCache_();
+      // 管理画面で取扱商品を直したら、変わったマスだけ取扱商品の台帳にも書く(台帳から反映したときは書かない)
+      if (before && !(opts && opts.skipLedger)) { try { _ledgerReflectPortalChange_(before, obj); } catch (e) { console.error('台帳への書き込みに失敗:', e.message); } }
       return { ok: true };
     }
   }
@@ -2523,6 +2535,319 @@ function getProductUsage(days) {
   });
   getOrders().forEach(o => { if (!o.denied) put(String(o.store_id), o.product, String(o.request_date || o.order_date || '').slice(0, 10)); });
   return out;
+}
+
+// ===== 取扱商品の台帳(店舗×商品のスプレッドシート、2026-10-30〜) =====
+// 店舗ごとに扱う商品が増えていくため、人が見渡せて直せる表を別のスプレッドシートに持つ(ユーザー指示「A: 台帳が正」)。
+// ポータルが実際に使うのは今までどおり settings の store_product_cfg({店舗ID: [表示しない商品名…]})。
+// 台帳 → ポータル: 管理画面「商品・棚卸 › 取扱商品の台帳」で違いを確かめてから反映(applyProductLedger)。
+// ポータル → 台帳: 管理画面の「取扱商品」で直したら、変わったマスだけ台帳にも書く(_ledgerReflectPortalChange_)。
+//   変わっていないマスは触らないので、台帳で直して未反映のマスは消えない。
+// 店舗・商品が増えたら「ポータルの今の状態で台帳を作り直す」(buildProductLedger)。未反映の台帳の変更はそのとき消える。
+// 台帳のIDは Script Properties PRODUCT_LEDGER_SHEET_ID(初回の作成で自動で入る。公開リポジトリなのでコードに書かない)。
+// 人向けの説明は台帳の「使い方」タブと admin-guide.html、HANDOVER.md。
+const PRODUCT_LEDGER_NAME = '取扱商品の台帳（店舗×商品）';
+const PRODUCT_LEDGER_TAB = '取扱商品';
+const PRODUCT_LEDGER_LOG_TAB = '反映の記録';
+const PRODUCT_LEDGER_HELP_TAB = '使い方';
+// 1行目=エリア、2行目=店舗名、3行目=店舗ID(プログラムが店を見分ける列。消さない)、4行目から商品
+const PRODUCT_LEDGER_HEAD_ROWS = 3;
+// A=仕入先、B=商品名、C=メモ(自由記入。作り直しても商品名で引き継ぐ)、D列から店舗
+const PRODUCT_LEDGER_FIRST_STORE_COL = 4;
+// システム一式のフォルダ(HANDOVER.md 1-2 に載っているもの)。作った台帳をここへ移す
+const PRODUCT_LEDGER_FOLDER_ID = '1clucdJh7gXCgML8HoC2Ol5xrvLuXx-98';
+const PRODUCT_LEDGER_AREA_ORDER = ['東海', '関西', '関東', '関東ニッカ', 'FC', '業務委託'];
+
+function _productLedgerSs_() {
+  const id = PropertiesService.getScriptProperties().getProperty('PRODUCT_LEDGER_SHEET_ID');
+  if (!id) return null;
+  try { return SpreadsheetApp.openById(id); } catch (e) { return null; }
+}
+
+// 台帳に並べる店舗: エリア順(PRODUCT_LEDGER_AREA_ORDER)、エリア内は stores.js の順、管理画面で足した店はその後ろ
+function _ledgerStores_() {
+  const js = _storeNamesJs_();
+  const custom = _customStoreNames_();
+  const ids = _allStoreIds_();
+  const order = Object.keys(js).concat(Object.keys(custom).filter(id => !js[id]));
+  const list = order.filter(id => ids.indexOf(id) >= 0).map((id, i) => {
+    const area = _areaForStore_(id) || 'その他';
+    const ai = PRODUCT_LEDGER_AREA_ORDER.indexOf(area);
+    return { id: id, name: js[id] || custom[id] || id, area: area, sortKey: (ai < 0 ? 99 : ai) * 1000 + i };
+  });
+  return list.sort((a, b) => a.sortKey - b.sortKey);
+}
+
+// 台帳に並べる商品: 商品一覧(all_products)の順。仕入先は vendor_config の名前で出す
+function _ledgerProducts_() {
+  const vendors = {};
+  (_settingJson_('vendor_config', []) || []).forEach(v => { if (v && v.key) vendors[v.key] = v.label || v.key; });
+  const seen = {};
+  return (_settingJson_('all_products', []) || []).filter(p => p && p.name && !seen[p.name] && (seen[p.name] = true))
+    .map(p => ({ name: String(p.name), vendor: vendors[p.vendor] || p.vendor || '' }));
+}
+
+function getProductLedgerInfo() {
+  const ss = _productLedgerSs_();
+  return ss ? { ok: true, exists: true, url: ss.getUrl() } : { ok: true, exists: false };
+}
+
+// ポータルの今の取扱商品(store_product_cfg)から台帳を作る(無ければスプレッドシートごと作る)。
+// 台帳で直して未反映の分は消える(呼ぶ前に previewProductLedger で確かめる)
+function buildProductLedger() {
+  let ss = _productLedgerSs_();
+  let created = false;
+  if (!ss) {
+    ss = SpreadsheetApp.create(PRODUCT_LEDGER_NAME);
+    PropertiesService.getScriptProperties().setProperty('PRODUCT_LEDGER_SHEET_ID', ss.getId());
+    created = true;
+    try { DriveApp.getFileById(ss.getId()).moveTo(DriveApp.getFolderById(PRODUCT_LEDGER_FOLDER_ID)); } catch (e) { console.error('台帳をフォルダへ移せませんでした:', e.message); }
+  }
+  const stores = _ledgerStores_();
+  const products = _ledgerProducts_();
+  const cfg = _settingJson_('store_product_cfg', {}) || {};
+
+  let sh = ss.getSheetByName(PRODUCT_LEDGER_TAB);
+  const memo = {};
+  if (sh && sh.getLastRow() > PRODUCT_LEDGER_HEAD_ROWS) {
+    sh.getRange(PRODUCT_LEDGER_HEAD_ROWS + 1, 2, sh.getLastRow() - PRODUCT_LEDGER_HEAD_ROWS, 2).getValues()
+      .forEach(r => { if (r[0] && r[1] !== '') memo[String(r[0])] = r[1]; });
+  }
+  if (!sh) sh = ss.insertSheet(PRODUCT_LEDGER_TAB, 0);
+  sh.clear(); sh.clearConditionalFormatRules();
+  sh.getRange(1, 1, sh.getMaxRows(), sh.getMaxColumns()).clearDataValidations();
+  if (sh.getFrozenRows()) sh.setFrozenRows(0);
+  if (sh.getFrozenColumns()) sh.setFrozenColumns(0);
+
+  const nCols = PRODUCT_LEDGER_FIRST_STORE_COL - 1 + stores.length;
+  const nRows = PRODUCT_LEDGER_HEAD_ROWS + products.length;
+  if (sh.getMaxColumns() < nCols) sh.insertColumnsAfter(sh.getMaxColumns(), nCols - sh.getMaxColumns());
+  if (sh.getMaxRows() < nRows + 5) sh.insertRowsAfter(sh.getMaxRows(), nRows + 5 - sh.getMaxRows());
+
+  const head = [
+    ['', 'エリア →', ''].concat(stores.map(s => s.area)),
+    ['仕入先', '商品名', 'メモ'].concat(stores.map(s => s.name)),
+    ['', '（店舗ID・消さない）', ''].concat(stores.map(s => s.id)),
+  ];
+  const body = products.map(p => [p.vendor, p.name, memo[p.name] || ''].concat(stores.map(s => {
+    const ex = Array.isArray(cfg[s.id]) ? cfg[s.id] : [];
+    return ex.indexOf(p.name) < 0;
+  })));
+  sh.getRange(1, 1, nRows, nCols).setValues(head.concat(body));
+
+  const fc = PRODUCT_LEDGER_FIRST_STORE_COL;
+  if (products.length && stores.length) {
+    const grid = sh.getRange(PRODUCT_LEDGER_HEAD_ROWS + 1, fc, products.length, stores.length);
+    grid.insertCheckboxes().setHorizontalAlignment('center');
+    // 扱っていない(チェック無し)マスを灰色に
+    sh.setConditionalFormatRules([SpreadsheetApp.newConditionalFormatRule()
+      .whenFormulaSatisfied('=' + grid.getCell(1, 1).getA1Notation() + '=FALSE')
+      .setBackground('#eeeeee').setRanges([grid]).build()]);
+  }
+  sh.getRange(1, 1, 1, nCols).setFontSize(9).setFontColor('#666666').setHorizontalAlignment('center');
+  sh.getRange(2, 1, 1, nCols).setFontWeight('bold').setBackground('#22703d').setFontColor('#ffffff')
+    .setWrap(true).setVerticalAlignment('middle').setHorizontalAlignment('center');
+  sh.getRange(3, 1, 1, nCols).setFontSize(8).setFontColor('#999999').setHorizontalAlignment('center');
+  sh.setRowHeight(2, 60);
+  sh.setColumnWidth(1, 120); sh.setColumnWidth(2, 260); sh.setColumnWidth(3, 140);
+  if (stores.length) sh.setColumnWidths(fc, stores.length, 62);
+  // 仕入先が変わる行に線を引いて区切る
+  for (let i = 1; i < products.length; i++) {
+    if (products[i].vendor !== products[i - 1].vendor) {
+      sh.getRange(PRODUCT_LEDGER_HEAD_ROWS + 1 + i, 1, 1, nCols).setBorder(true, null, null, null, null, null, '#22703d', SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+    }
+  }
+  // エリアが変わる列に線
+  for (let j = 1; j < stores.length; j++) {
+    if (stores[j].area !== stores[j - 1].area) {
+      sh.getRange(1, fc + j, nRows, 1).setBorder(null, true, null, null, null, null, '#22703d', SpreadsheetApp.BorderStyle.SOLID_MEDIUM);
+    }
+  }
+  sh.setFrozenRows(PRODUCT_LEDGER_HEAD_ROWS);
+  sh.setFrozenColumns(PRODUCT_LEDGER_FIRST_STORE_COL - 1);
+  sh.getRange(3, 1, 1, nCols).protect().setWarningOnly(true).setDescription('店舗IDの行です。ポータルが店を見分けるのに使うので消さないでください');
+
+  _ensureProductLedgerHelp_(ss);
+  _ensureProductLedgerLog_(ss).appendRow([new Date(), '（全店）', '', created ? '台帳を新しく作った' : 'ポータルの今の状態で作り直した', '']);
+  const def = ss.getSheetByName('シート1') || ss.getSheetByName('Sheet1');
+  if (def && ss.getSheets().length > 1) ss.deleteSheet(def);
+  ss.setActiveSheet(sh);
+  return { ok: true, created: created, url: ss.getUrl(), stores: stores.length, products: products.length };
+}
+
+function _ensureProductLedgerLog_(ss) {
+  let sh = ss.getSheetByName(PRODUCT_LEDGER_LOG_TAB);
+  if (!sh) {
+    sh = ss.insertSheet(PRODUCT_LEDGER_LOG_TAB);
+    sh.appendRow(['日時', '店舗', '商品', '変更', 'どこから']);
+    sh.getRange(1, 1, 1, 5).setFontWeight('bold').setBackground('#22703d').setFontColor('#ffffff');
+    sh.setFrozenRows(1);
+    sh.setColumnWidth(1, 150); sh.setColumnWidth(2, 160); sh.setColumnWidth(3, 260); sh.setColumnWidth(4, 220);
+  }
+  return sh;
+}
+
+function _ensureProductLedgerHelp_(ss) {
+  let sh = ss.getSheetByName(PRODUCT_LEDGER_HELP_TAB);
+  if (!sh) sh = ss.insertSheet(PRODUCT_LEDGER_HELP_TAB);
+  sh.clear();
+  const lines = [
+    ['取扱商品の台帳　使い方'],
+    [''],
+    ['■ この表は何か'],
+    ['・どの店でどの商品を扱うかの一覧です。チェックが付いている商品が、その店のパートナー画面（発注・チェックシート・棚卸）に出ます。'],
+    ['・ポータルの「取扱商品」の設定は、この台帳を正として管理します。'],
+    [''],
+    ['■ 変えるとき（台帳 → ポータル）'],
+    ['1. 「取扱商品」タブで、店の列と商品の行が交わるマスのチェックを付ける／外す。'],
+    ['2. ポータルの管理画面「設定 › 商品・棚卸 › 取扱商品の台帳」を開き、「台帳とポータルの違いを見る」を押す。'],
+    ['3. 変わる内容（表示する／表示しない）を確かめて「ポータルに反映する」を押す。ここで初めてパートナー画面が変わります。'],
+    ['・最近その店で使われている商品（チェックシートの補充・発注依頼の記録）を表示しないにするときは、確認の表示が出ます。'],
+    ['・反映した内容は「反映の記録」タブに残ります。'],
+    [''],
+    ['■ 管理画面の「取扱商品」で直したとき（ポータル → 台帳）'],
+    ['・管理画面の「設定 › 店舗別設定 › 取扱商品」で直すと、変わったマスだけ自動でこの台帳にも書かれます。'],
+    [''],
+    ['■ 店舗や商品が増えた・減ったとき'],
+    ['・管理画面の「取扱商品の台帳」で「ポータルの今の状態で台帳を作り直す」を押すと、列（店舗）・行（商品）がそろいます。'],
+    ['・作り直すと、台帳で直してまだ反映していないチェックは消えます。先に反映してから作り直してください。'],
+    ['・メモ列（C列）は商品名で引き継がれます。'],
+    [''],
+    ['■ さわらないでほしい所'],
+    ['・3行目の店舗ID（ポータルが店を見分けるのに使います）。'],
+    ['・B列の商品名（ポータルの商品名と同じでないと、その行は反映されません）。商品名を変えるときはポータルの「商品一覧」で変えてから作り直します。'],
+    ['・行や列の並べ替え・挿入はしてもかまいません（店舗IDと商品名で見分けるため）。'],
+    [''],
+    ['■ 補足'],
+    ['・ここで決めるのは「画面に出す商品」だけです。発注の基準値・チェックシートの清掃項目・集計表の金種は、それぞれ管理画面で設定します。'],
+    ['・台帳が壊れたり分からなくなったら、「作り直す」でいつでもポータルの今の状態に戻せます（ポータル側の設定は変わりません）。'],
+  ];
+  sh.getRange(1, 1, lines.length, 1).setValues(lines).setWrap(true).setVerticalAlignment('top');
+  sh.setColumnWidth(1, 820);
+  sh.getRange(1, 1).setFontSize(14).setFontWeight('bold');
+  lines.forEach((l, i) => { if (/^■/.test(l[0])) sh.getRange(i + 1, 1).setFontWeight('bold').setFontColor('#22703d'); });
+  return sh;
+}
+
+// 台帳を読んで {storeIds, names, checked[商品][店舗]} を返す
+function _readProductLedger_(ss) {
+  const sh = ss.getSheetByName(PRODUCT_LEDGER_TAB);
+  if (!sh || sh.getLastRow() <= PRODUCT_LEDGER_HEAD_ROWS) return null;
+  const v = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getValues();
+  const idRow = v[PRODUCT_LEDGER_HEAD_ROWS - 1];
+  const cols = [];
+  for (let c = PRODUCT_LEDGER_FIRST_STORE_COL - 1; c < idRow.length; c++) if (String(idRow[c]).trim()) cols.push({ c: c, id: String(idRow[c]).trim() });
+  const rows = [];
+  for (let r = PRODUCT_LEDGER_HEAD_ROWS; r < v.length; r++) {
+    const name = String(v[r][1] || '').trim();
+    if (name) rows.push({ name: name, cells: cols.map(x => v[r][x.c] === true || String(v[r][x.c]).toUpperCase() === 'TRUE') });
+  }
+  return { storeIds: cols.map(x => x.id), rows: rows };
+}
+
+// 台帳とポータルの違い。新しい「表示しない」リスト = 台帳に無い商品名は今の設定のまま + 台帳でチェックの無い商品
+function _productLedgerDiff_() {
+  const ss = _productLedgerSs_();
+  if (!ss) return { error: 'no_ledger' };
+  const led = _readProductLedger_(ss);
+  if (!led) return { error: 'ledger_empty' };
+  const cfg = _settingJson_('store_product_cfg', {}) || {};
+  const names = _storeNames_();
+  const allIds = _allStoreIds_();
+  const productNames = _ledgerProducts_().map(p => p.name);
+  const ledgerNames = led.rows.map(r => r.name);
+  const warnings = [];
+  const unknownProducts = ledgerNames.filter(n => productNames.indexOf(n) < 0);
+  if (unknownProducts.length) warnings.push('ポータルの商品一覧に無い商品名の行があります（反映しません）: ' + unknownProducts.join('、'));
+  const missingProducts = productNames.filter(n => ledgerNames.indexOf(n) < 0);
+  if (missingProducts.length) warnings.push('台帳に無い商品があります（今の設定のまま。「作り直す」で行が足されます）: ' + missingProducts.join('、'));
+  const unknownStores = led.storeIds.filter(id => allIds.indexOf(id) < 0);
+  if (unknownStores.length) warnings.push('ポータルに無い店舗IDの列があります（反映しません）: ' + unknownStores.join('、'));
+  const missingStores = allIds.filter(id => led.storeIds.indexOf(id) < 0);
+  if (missingStores.length) warnings.push('台帳に無い店舗があります（今の設定のまま。「作り直す」で列が足されます）: ' + missingStores.map(id => names[id] || id).join('、'));
+  const dup = led.storeIds.filter((id, i) => led.storeIds.indexOf(id) !== i);
+  if (dup.length) return { error: 'duplicate_store', detail: dup.join('、') };
+
+  const changes = [];
+  const patch = {};
+  led.storeIds.forEach((sid, j) => {
+    if (allIds.indexOf(sid) < 0) return;
+    const cur = Array.isArray(cfg[sid]) ? cfg[sid].map(String) : [];
+    const next = cur.filter(n => ledgerNames.indexOf(n) < 0 || unknownProducts.indexOf(n) >= 0);
+    led.rows.forEach(r => { if (unknownProducts.indexOf(r.name) < 0 && !r.cells[j] && next.indexOf(r.name) < 0) next.push(r.name); });
+    const show = cur.filter(n => next.indexOf(n) < 0);
+    const hide = next.filter(n => cur.indexOf(n) < 0);
+    if (show.length || hide.length) {
+      changes.push({ storeId: sid, storeName: names[sid] || sid, show: show, hide: hide });
+      patch[sid] = next;
+    }
+  });
+  return { ok: true, url: ss.getUrl(), changes: changes, patch: patch, warnings: warnings };
+}
+
+function previewProductLedger() {
+  const d = _productLedgerDiff_();
+  if (d.error) return d;
+  // 表示しないにする品のうち、その店で最近(180日)使われているもの
+  let usage = {};
+  try { usage = getProductUsage(180); } catch (e) {}
+  d.changes.forEach(c => { c.hideUsed = c.hide.filter(n => (usage[c.storeId] || {})[n]).map(n => ({ name: n, last: usage[c.storeId][n] })); });
+  d.sig = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify(d.patch)));
+  delete d.patch;
+  return d;
+}
+
+// sig は previewProductLedger の値。見たあとで台帳かポータルが変わっていたら反映しない(見ていない変更を入れないため)
+function applyProductLedger(sig) {
+  const d = _productLedgerDiff_();
+  if (d.error) return d;
+  const now = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, JSON.stringify(d.patch)));
+  if (!sig || sig !== now) return { error: 'changed_since_preview' };
+  if (!d.changes.length) return { ok: true, changed: 0 };
+  const res = saveSettingMerge('store_product_cfg', JSON.stringify(d.patch), { skipLedger: true });
+  if (!res || !res.ok) return res || { error: 'save_failed' };
+  try {
+    const log = _ensureProductLedgerLog_(_productLedgerSs_());
+    const at = new Date();
+    const rows = [];
+    d.changes.forEach(c => {
+      c.show.forEach(n => rows.push([at, c.storeName, n, '表示する', '台帳から反映']));
+      c.hide.forEach(n => rows.push([at, c.storeName, n, '表示しない', '台帳から反映']));
+    });
+    if (rows.length) log.getRange(log.getLastRow() + 1, 1, rows.length, 5).setValues(rows);
+  } catch (e) { console.error('反映の記録を書けませんでした:', e.message); }
+  return { ok: true, changed: d.changes.length, cfg: _settingJson_('store_product_cfg', {}) };
+}
+
+// 管理画面の「取扱商品」で store_product_cfg が変わったとき、変わったマスだけ台帳に書く(台帳が無ければ何もしない)
+function _ledgerReflectPortalChange_(oldCfg, newCfg) {
+  const ss = _productLedgerSs_();
+  if (!ss) return;
+  const sh = ss.getSheetByName(PRODUCT_LEDGER_TAB);
+  if (!sh || sh.getLastRow() <= PRODUCT_LEDGER_HEAD_ROWS) return;
+  const lastCol = sh.getLastColumn();
+  const ids = sh.getRange(PRODUCT_LEDGER_HEAD_ROWS, 1, 1, lastCol).getValues()[0].map(x => String(x).trim());
+  const nameCol = sh.getRange(PRODUCT_LEDGER_HEAD_ROWS + 1, 2, sh.getLastRow() - PRODUCT_LEDGER_HEAD_ROWS, 1).getValues().map(r => String(r[0]).trim());
+  const names = _storeNames_();
+  const logRows = [];
+  const at = new Date();
+  const sids = {};
+  Object.keys(oldCfg || {}).concat(Object.keys(newCfg || {})).forEach(s => { sids[s] = true; });
+  Object.keys(sids).forEach(sid => {
+    const before = Array.isArray((oldCfg || {})[sid]) ? oldCfg[sid] : [];
+    const after = Array.isArray((newCfg || {})[sid]) ? newCfg[sid] : [];
+    const c = ids.indexOf(sid);
+    const flip = before.filter(n => after.indexOf(n) < 0).map(n => [n, true]).concat(after.filter(n => before.indexOf(n) < 0).map(n => [n, false]));
+    flip.forEach(([n, shown]) => {
+      const r = nameCol.indexOf(n);
+      if (c >= PRODUCT_LEDGER_FIRST_STORE_COL - 1 && r >= 0) sh.getRange(PRODUCT_LEDGER_HEAD_ROWS + 1 + r, c + 1).setValue(shown);
+      logRows.push([at, names[sid] || sid, n, shown ? '表示する' : '表示しない', c < 0 || r < 0 ? '管理画面（台帳に行・列が無い）' : '管理画面']);
+    });
+  });
+  if (logRows.length) {
+    const log = _ensureProductLedgerLog_(ss);
+    log.getRange(log.getLastRow() + 1, 1, logRows.length, 5).setValues(logRows);
+  }
 }
 
 // "2026-07"のような年月文字列を書き込むと、Sheetsが日付型セルへ自動変換し、

@@ -306,6 +306,7 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 - **Firebaseのルール**: Firebase RTDBのセキュリティルールはコンソールにしか無い。新しいパスを足したらルールにも追加する(`curl <db>/<path>.json`で"Permission denied"が出るかで確認できる)。
 - **CSSの罠**: グローバルの`input[type=number]{min-height:38px}`と、モバイルの`font-size:16px !important`には、インライン指定では勝てない。ID付きセレクタで上書きする。
 - **表示店舗の設定**: 除外リスト方式(`store_checksheet_cfg`/`store_product_cfg`)。複数店舗の変更は1回の読み込み・1回の同期にまとめる。
+- **取扱商品の台帳**(2026-10-30〜、ユーザー指示「台帳が正」): 別スプレッドシート「取扱商品の台帳（店舗×商品）」(ID は Script Properties `PRODUCT_LEDGER_SHEET_ID`、システム一式のフォルダ内)。1行目エリア・2行目店舗名・3行目店舗ID・4行目から商品(B列=商品名、C列=メモ)、マスはチェックボックス。台帳→ポータルは管理画面「商品・棚卸 › 取扱商品の台帳」の`previewProductLedger`→`applyProductLedger(sig)`(sig が違えば止める、`saveSettingMerge`に`skipLedger`)。ポータル→台帳は`saveSetting`/`saveSettingMerge`で`store_product_cfg`が変わると`_ledgerReflectPortalChange_`が変わったマスだけ書く。店舗・商品の増減は`buildProductLedger`(作り直し、未反映分は消える)。台帳に無い商品名・店舗は今の設定のまま残す。ユーザーと店ごとのメニュー変更を進めるときは、台帳を直して違いを見せ、確認をもらってから反映する。人向けの説明は台帳の「使い方」タブ・admin-guide.html `#product-ledger`・HANDOVER.md 1-3。
 - **取扱商品は「迷ったら表示する」(2026-10-26 ユーザー方針)**: 表示して困ることは少ないが、無くて困ることは多い。表示しないにするのは「機械を外した」「店舗が扱っていないと答えた」など確かな理由があるときだけ。履歴(台帳・請求書・チェックシート)が見つからないことだけを理由に表示しないにしない。経緯: 2026-10-10 の一括反映(selfcafe-automation の portal_product_audit.py、請求書を7〜9月だけで判定)で使っている品を表示しないにしてしまい、「○○が無い」のバグ報告が続いた(No.6・8・9・12)。10/26 に請求書の全期間で全店を照合し直して戻し、同スクリプトも「履歴なし→表示する」・請求書は全期間に直した。管理画面で表示しないにするときは、直近180日に補充・発注の記録がある品なら確認が出る(`getProductUsage`)。
 
 ### 発注・納品
