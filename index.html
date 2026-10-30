@@ -714,18 +714,10 @@
       <button class="btn-history active" id="ptab-order-request" onclick="switchOrderSubTab('request')">発注依頼</button>
       <button class="btn-history" id="ptab-order-history" onclick="switchOrderSubTab('history')">依頼済み履歴 <span class="history-badge" id="history-badge" style="display:none"></span></button>
     </div>
-    <div class="note-box">
-      【機械の見分け方】<br>
-      ・<b>アペックス</b>：赤と黒の機械<br>
-      ・<b>トーヨーベンディング</b>：なっちゃんの機械<br>
-      <br>
-      【アペックス依頼時】<br>
-      ・いずれか１商品は１ケース以上でご依頼ください（１ケースも無い場合、送料が発生します）。例）コーヒー豆１ケース＋フィルター１本＋砂糖１袋<br>
-      <br>
-      【トーヨーベンディング依頼時】<br>
-      ・１ケース以上でなくても大丈夫です。<br>
-      <br>
-      【アペックス・トーヨーベンディング共通】<br>
+    <div class="note-box" id="order-note">
+      <!-- 店舗の機械に合わせた部分は renderOrderMachineNote が入れる(現場に機械を見分けさせない、2026-10-30 ユーザー指示) -->
+      <div id="order-note-machine"></div>
+      【共通】<br>
       ・納品は発注日から土日祝日を除く３営業日以内となります。（商品や地域により、納品に１週間程度かかる場合があります）<br>
       ・他商品に関して　3日～1週間程度時間がかかる可能性があるため、なるべく事前に発注依頼をください。<br>
       ・写真の添付は必須ではありません。在庫が0で撮影できないときなどは、写真なしで依頼してください。
@@ -1608,11 +1600,14 @@ const DEFAULT_VENDOR_CONFIG = [
 ];
 let VENDOR_CONFIG = [...DEFAULT_VENDOR_CONFIG];
 // パートナー画面の見出しで、どの機械の品かが分かるように添える説明(2026-10-28、現場から「どれがアペックスか
-// 分からない人がいる」と意見。連絡しなくても画面で分かるようにする)。名前(vendor_config)とは別に持つ
-const VENDOR_MACHINE_HINT = { apex: '赤と黒の機械', toyo: 'なっちゃんの機械' };
+// 分からない人がいる」と意見)。2026-10-30から、機械の見た目で見分けさせず、その店舗の機械(store_machines)の
+// 仕入先にだけ「この店舗の機械」と付ける(見た目の説明が混同を生んだため、ユーザー指示)
 function vendorPartnerLabel(key, label) {
   const base = label || key;
-  return VENDOR_MACHINE_HINT[key] ? `${base}（${VENDOR_MACHINE_HINT[key]}）` : base;
+  const sid = typeof storeTab !== 'undefined' ? storeTab : '';
+  const machines = sid ? (getStoreMachines(sid) || []) : [];
+  const mine = getMachineDefs().some(m => m.vendor === key && machines.includes(m.key));
+  return mine ? `${base}（この店舗の機械）` : base;
 }
 const VENDOR_CONFIG_KEY = 'vendor_config';
 function saveVendorConfig() {
@@ -6897,8 +6892,26 @@ function buildStoreGroups(rows) {
   return [...map.values()].sort((a,b) => (a[0].requestDate||'').localeCompare(b[0].requestDate||''));
 }
 
+// 発注タブの注意書きのうち、その店舗の機械(store_machines)に合わせた部分。
+// CS3もアペックスから仕入れるので、アペックスと同じ「1ケース以上」のルール。機械が未設定の店だけ従来の見分け方を出す
+function renderOrderMachineNote() {
+  const el = document.getElementById('order-note-machine');
+  if (!el) return;
+  const APEX_RULE = '・いずれか１商品は１ケース以上でご依頼ください（１ケースも無い場合、送料が発生します）。例）コーヒー豆１ケース＋フィルター１本＋砂糖１袋<br>';
+  const TOYO_RULE = '・１ケース以上でなくても大丈夫です。<br>';
+  const machines = getStoreMachines(storeTab) || [];
+  const parts = [];
+  if (machines.includes('100rs')) parts.push(`【この店舗の機械は<b>アペックス（100RS）</b>です】<br>${APEX_RULE}`);
+  if (machines.includes('cs3'))   parts.push(`【この店舗の機械は<b>CS3</b>です（アペックスに発注します）】<br>${APEX_RULE}`);
+  if (machines.includes('jcc'))   parts.push(`【この店舗の機械は<b>トーヨーベンディング（JCC）</b>です】<br>${TOYO_RULE}`);
+  el.innerHTML = parts.length ? parts.join('<br>') + '<br>'
+    : '【機械の見分け方】<br>・<b>アペックス</b>：赤と黒の機械<br>・<b>トーヨーベンディング</b>：なっちゃんの機械<br><br>'
+      + `【アペックス依頼時】<br>${APEX_RULE}<br>【トーヨーベンディング依頼時】<br>${TOYO_RULE}<br>`;
+}
+
 function renderStore() {
   ensureAnnounceWidgetLoaded(storeTab);
+  renderOrderMachineNote();
   const isMobile = window.innerWidth < 640;
   const table = document.getElementById('store-table');
   isMobile ? table.classList.add('card-mode') : table.classList.remove('card-mode');
