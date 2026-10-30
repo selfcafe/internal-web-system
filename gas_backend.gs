@@ -460,6 +460,7 @@ const AUTH_STORE_ACTIONS = [
   'checkWaterStockMismatch', 'saveAttendance', 'setAttendanceStartTime', 'saveLeaveRequest', 'saveDeliveryHistory', 'clearDeliveryHistory',
   'saveMachinePhotoSet', 'submitBugReport', 'addBugReportComment', 'saveLostItem',
   'recordInventoryTransfer', 'cancelInventoryTransfer', 'getMeterReadings', 'saveMeterReading', 'getMeterReportInfo',
+  'getPricePhotoStatus', 'savePricePhotos',
 ];
 // 店舗の通行証なら店舗を問わず呼べるもの(IDで指す削除・画像保存など。getOrdersは自分の範囲の行だけ返す)
 const AUTH_ANY_ACTIONS = ['getOrders', 'getSteraProductGroups', 'getBugReportThread', 'saveOrderImage',
@@ -702,6 +703,10 @@ function doGet(e) {
     else if (a === 'getProductLedgerInfo') result = getProductLedgerInfo();
     else if (a === 'previewProductLedger') result = previewProductLedger();
     else if (a === 'buildProductLedger') result = buildProductLedger();
+    else if (a === 'getPricePhotoStatus') result = getPricePhotoStatus(e.parameter.storeId);
+    else if (a === 'getPricePhotoList')   result = getPricePhotoList();
+    else if (a === 'getPricePhotoImages') result = getPricePhotoImages(e.parameter.id);
+    else if (a === 'rebuildPriceLedgerDiff') result = rebuildPriceLedgerDiff();
     else if (a === 'getSteraStockEstimate') result = getSteraStockEstimate(e.parameter.storeId);
     else if (a === 'getSteraProductGroups') result = getSteraProductGroups();
     else if (a === 'getInventoryHistory') result = getInventoryHistory(e.parameter.storeId, e.parameter.periodLabel);
@@ -865,6 +870,10 @@ function doPost(e) {
     else if (b.action === 'saveSetting')        result = saveSetting(b.key, b.value);
     else if (b.action === 'saveSettingMerge')   result = saveSettingMerge(b.key, b.value);
     else if (b.action === 'applyProductLedger') result = applyProductLedger(b.sig);
+    else if (b.action === 'savePricePhotos')    result = savePricePhotos(b.storeId, b.machineIndex, b.images);
+    else if (b.action === 'setPricePhotoResult') result = setPricePhotoResult(b.id, b.status, b.reason, b.result);
+    else if (b.action === 'redispatchPricePhoto') result = redispatchPricePhoto(b.id);
+    else if (b.action === 'deletePricePhoto')   result = deletePricePhoto(b.id);
     else if (b.action === 'saveLostItem')       result = saveLostItem(b.item, b.imagesBase64, b.imageMime);
     else if (b.action === 'deleteLostItem')     result = deleteLostItem(b.id, b.imageUrl);
     else if (b.action === 'saveOrderImage')     result = saveOrderImage(b.imageBase64, b.imageMime, b.filename);
@@ -960,6 +969,7 @@ function _dispatchNotifies_(result) {
       }
       else if (n.type === 'bugReportLineWorksAck') sendBugReportBotNotification_(n.message, n.userId);
       else if (n.type === 'amazonOrderNew')        sendAmazonOrderToBot_(n.storeId, n.items, n.toyo);
+      else if (n.type === 'pricePhotoNew')         dispatchPricePhotoRead_(n.id);
     } catch (e) {
       console.error('LINE WORKS通知エラー(ロック解放後):', e.message);
     }
@@ -2818,6 +2828,288 @@ function applyProductLedger(sig) {
   } catch (e) { console.error('反映の記録を書けませんでした:', e.message); }
   return { ok: true, changed: d.changes.length, cfg: _settingJson_('store_product_cfg', {}) };
 }
+
+// ===== ドリンクの料金の写真と料金台帳(2026-10-30〜) =====
+// 店ごと・機械ごとにドリンクの料金が違うと分かったため、現場にドリンクマシンの正面(ボタンと値段)を撮って送ってもらい、
+// Claude が読み取って本部用の「ドリンク料金の台帳」に書く(店舗・パートナーには台帳を見せない)。
+// 流れ: パートナー画面 savePricePhotos → price_photos シートに「読み取り中」で1行 → 通知(ロック解放後)で
+//   GitHub の repository_dispatch(price-photo)→ .github/workflows/price-photo-read.yml → scripts/read_price_photo.py が
+//   getPricePhotoImages で写真を受け取り Claude で読む → setPricePhotoResult で「読み取り済み」(台帳に書く)か
+//   「撮り直し」(理由をパートナー画面に出す)にする。
+// 撮った直後のぼけ・暗さ・小ささの判定は端末側(index.html の _checkPricePhotoQuality)。
+// お願いを店の画面に出すかは settings の price_photo_request({on:true})。管理画面「設定 › ドリンク料金」で切り替える。
+// 台帳のIDは Script Properties PRICE_LEDGER_SHEET_ID(最初の書き込みで自動で作る)。
+const SHEET_PRICE_PHOTOS = 'price_photos';
+const PRICE_PHOTO_COLS = ['id', 'store_id', 'machine_index', 'uploaded_at', 'photos_json', 'status', 'reason', 'read_at', 'result_json'];
+const PRICE_PHOTO_STATUS = { reading: '読み取り中', done: '読み取り済み', retake: '撮り直し', failed: '読み取り失敗' };
+const PRICE_LEDGER_NAME = 'ドリンク料金の台帳（本部用）';
+const PRICE_LEDGER_TAB = '店舗別の料金';
+const PRICE_LEDGER_STD_TAB = '標準メニュー';
+const PRICE_LEDGER_DIFF_TAB = '標準と違う所';
+const PRICE_LEDGER_HELP_TAB = '使い方';
+const PRICE_LEDGER_COLS = ['エリア', '店舗', '店舗ID', '機械', '段', '左から', 'メニュー', '温冷', 'サイズ', '価格', '確かさ', '読み取り日', '写真'];
+
+function _pricePhotoRequestOn_() {
+  const v = _settingJson_('price_photo_request', {}) || {};
+  return !!v.on;
+}
+
+function _pricePhotoRows_() {
+  const sh = getSheet(SHEET_PRICE_PHOTOS);
+  ensureHeaders(sh, PRICE_PHOTO_COLS);
+  return sheetRows(sh, PRICE_PHOTO_COLS);
+}
+
+// 店×機械ごとの最新の1件
+// シートが日時の文字列を日付型にしてしまうので、読むときに文字列へ戻す
+function _ppTime_(v) { return v instanceof Date ? Utilities.formatDate(v, _sheetTz(), 'yyyy-MM-dd HH:mm:ss') : String(v || ''); }
+function _latestPricePhotos_(rows) {
+  const latest = {};
+  rows.forEach(r => {
+    const k = r.store_id + '|' + r.machine_index;
+    if (!latest[k] || _ppTime_(r.uploaded_at) > _ppTime_(latest[k].uploaded_at)) latest[k] = r;
+  });
+  return latest;
+}
+
+function _pricePhotoView_(r) {
+  let photos = [];
+  try { photos = JSON.parse(r.photos_json || '[]'); } catch (e) {}
+  return { id: r.id, storeId: String(r.store_id), machineIndex: Number(r.machine_index) || 0, uploadedAt: _ppTime_(r.uploaded_at),
+    status: r.status || '', reason: r.reason || '', readAt: _ppTime_(r.read_at), photos: photos };
+}
+
+// パートナー画面用: お願いを出すか・その店の機械ごとの最新の状態
+function getPricePhotoStatus(storeId) {
+  const sid = String(storeId || '');
+  const latest = _latestPricePhotos_(_pricePhotoRows_().filter(r => String(r.store_id) === sid));
+  const counts = _machinePhotoMachineCounts_();
+  return { ok: true, on: _pricePhotoRequestOn_(), configuredCount: counts[sid] >= 1 ? Number(counts[sid]) : null,
+    machines: Object.keys(latest).map(k => _pricePhotoView_(latest[k])).sort((a, b) => a.machineIndex - b.machineIndex) };
+}
+
+// 管理画面用: 全店の状態
+function getPricePhotoList() {
+  const latest = _latestPricePhotos_(_pricePhotoRows_());
+  const byStore = {};
+  Object.keys(latest).forEach(k => { const v = _pricePhotoView_(latest[k]); (byStore[v.storeId] = byStore[v.storeId] || []).push(v); });
+  const names = _storeNames_();
+  const counts = _machinePhotoMachineCounts_();
+  const stores = _allStoreIds_().map(id => ({ storeId: id, storeName: names[id] || id, area: _areaForStore_(id) || '',
+    configuredCount: counts[id] >= 1 ? Number(counts[id]) : null,
+    machines: (byStore[id] || []).sort((a, b) => a.machineIndex - b.machineIndex) }));
+  const led = _priceLedgerSs_();
+  return { ok: true, on: _pricePhotoRequestOn_(), ledgerUrl: led ? led.getUrl() : '', stores: stores };
+}
+
+// images: base64(JPEG)の配列(1台分、4枚まで)
+function savePricePhotos(storeId, machineIndex, images) {
+  const sid = String(storeId || '');
+  const list = (Array.isArray(images) ? images : []).filter(Boolean).slice(0, 4);
+  if (!sid) return { error: 'storeId がありません' };
+  if (!list.length) return { error: '写真がありません' };
+  const idx = Math.max(0, parseInt(machineIndex, 10) || 0);
+  const id = Utilities.getUuid();
+  const urls = list.map((b64, i) => saveImageToDrive(b64, 'image/jpeg', 'price_' + sid + '_' + idx + '_' + id + '_' + i));
+  const sh = getSheet(SHEET_PRICE_PHOTOS);
+  ensureHeaders(sh, PRICE_PHOTO_COLS);
+  const at = Utilities.formatDate(new Date(), _sheetTz(), 'yyyy-MM-dd HH:mm:ss');
+  sh.appendRow([id, sid, idx, at, JSON.stringify(urls), PRICE_PHOTO_STATUS.reading, '', '', '']);
+  return { ok: true, id: id, uploadedAt: at, _notify: { type: 'pricePhotoNew', id: id } };
+}
+
+function dispatchPricePhotoRead_(id) {
+  const token = PropertiesService.getScriptProperties().getProperty('GITHUB_DISPATCH_TOKEN');
+  if (!token) { console.warn('料金の写真の読み取り: GITHUB_DISPATCH_TOKEN が未設定のため起動しません'); return; }
+  const res = UrlFetchApp.fetch('https://api.github.com/repos/selfcafe/internal-web-system/dispatches', {
+    method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+    headers: { Authorization: 'Bearer ' + token, Accept: 'application/vnd.github+json' },
+    payload: JSON.stringify({ event_type: 'price-photo', client_payload: { id: String(id) } })
+  });
+  if (res.getResponseCode() !== 204) console.warn('料金の写真の読み取りの起動に失敗 ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 200));
+}
+
+// 管理画面の「もう一度読み取る」(読み取り中に戻して起動し直す)
+function redispatchPricePhoto(id) {
+  const hit = _findPricePhotoRow_(id);
+  if (!hit) return { error: 'not_found' };
+  hit.sheet.getRange(hit.row, PRICE_PHOTO_COLS.indexOf('status') + 1, 1, 2).setValues([[PRICE_PHOTO_STATUS.reading, '']]);
+  return { ok: true, _notify: { type: 'pricePhotoNew', id: String(id) } };
+}
+
+function _findPricePhotoRow_(id) {
+  const sh = getSheet(SHEET_PRICE_PHOTOS);
+  if (sh.getLastRow() <= 1) return null;
+  const ids = sh.getRange(2, 1, sh.getLastRow() - 1, 1).getValues();
+  for (let i = 0; i < ids.length; i++) if (String(ids[i][0]) === String(id)) return { sheet: sh, row: i + 2 };
+  return null;
+}
+
+// 読み取り用(スクリプトの鍵だけ): 写真の元の画像を base64 で返す(サムネイルではなく Drive の元ファイル)
+function getPricePhotoImages(id) {
+  const r = _pricePhotoRows_().find(x => String(x.id) === String(id));
+  if (!r) return { error: 'not_found' };
+  const v = _pricePhotoView_(r);
+  const images = v.photos.map(u => {
+    const m = String(u).match(/[?&]id=([^&]+)/);
+    if (!m) return null;
+    const blob = DriveApp.getFileById(m[1]).getBlob();
+    return { mime: blob.getContentType() || 'image/jpeg', data: Utilities.base64Encode(blob.getBytes()) };
+  }).filter(Boolean);
+  return { ok: true, id: v.id, storeId: v.storeId, storeName: _storeNames_()[v.storeId] || v.storeId, machineIndex: v.machineIndex, images: images };
+}
+
+// 読み取りの結果を書く(スクリプトの鍵・管理者)。status は PRICE_PHOTO_STATUS の値。
+// result: {buttons:[{unit,row,position,menu,temp,size,price,confidence}]}。読み取り済みなら料金台帳に書く
+function setPricePhotoResult(id, status, reason, resultJson) {
+  const ok = Object.keys(PRICE_PHOTO_STATUS).some(k => PRICE_PHOTO_STATUS[k] === status);
+  if (!ok) return { error: 'bad_status' };
+  const hit = _findPricePhotoRow_(id);
+  if (!hit) return { error: 'not_found' };
+  let result = null;
+  if (resultJson) { try { result = typeof resultJson === 'string' ? JSON.parse(resultJson) : resultJson; } catch (e) { return { error: 'bad_result' }; } }
+  const at = Utilities.formatDate(new Date(), _sheetTz(), 'yyyy-MM-dd HH:mm:ss');
+  const c = PRICE_PHOTO_COLS.indexOf('status') + 1;
+  hit.sheet.getRange(hit.row, c, 1, 4).setValues([[status, String(reason || '').slice(0, 300), at, result ? JSON.stringify(result) : '']]);
+  let ledger = null;
+  if (status === PRICE_PHOTO_STATUS.done && result) {
+    const r = _pricePhotoRows_().find(x => String(x.id) === String(id));
+    ledger = _writePriceLedger_(_pricePhotoView_(r), result.buttons || []);
+  }
+  return { ok: true, ledger: ledger };
+}
+
+function _priceLedgerSs_() {
+  const id = PropertiesService.getScriptProperties().getProperty('PRICE_LEDGER_SHEET_ID');
+  if (!id) return null;
+  try { return SpreadsheetApp.openById(id); } catch (e) { return null; }
+}
+
+function _ensurePriceLedger_() {
+  let ss = _priceLedgerSs_();
+  if (!ss) {
+    ss = SpreadsheetApp.create(PRICE_LEDGER_NAME);
+    PropertiesService.getScriptProperties().setProperty('PRICE_LEDGER_SHEET_ID', ss.getId());
+    try { DriveApp.getFileById(ss.getId()).moveTo(DriveApp.getFolderById(PRODUCT_LEDGER_FOLDER_ID)); } catch (e) { console.error('料金台帳をフォルダへ移せませんでした:', e.message); }
+  }
+  const head = (name, cols, widths) => {
+    let sh = ss.getSheetByName(name);
+    if (!sh) {
+      sh = ss.insertSheet(name);
+      sh.getRange(1, 1, 1, cols.length).setValues([cols]).setFontWeight('bold').setBackground('#22703d').setFontColor('#ffffff');
+      sh.setFrozenRows(1);
+      (widths || []).forEach((w, i) => { if (w) sh.setColumnWidth(i + 1, w); });
+    }
+    return sh;
+  };
+  head(PRICE_LEDGER_TAB, PRICE_LEDGER_COLS, [60, 140, 120, 50, 40, 50, 200, 50, 50, 60, 70, 140, 80]);
+  head(PRICE_LEDGER_STD_TAB, ['メニュー', '温冷', 'サイズ', '標準価格', 'メモ'], [200, 60, 60, 80, 240]);
+  head(PRICE_LEDGER_DIFF_TAB, ['店舗', '機械', 'メニュー', '温冷', 'サイズ', 'この店の価格', '標準価格', '差', '読み取り日'], [140, 50, 200, 50, 50, 90, 80, 60, 140]);
+  _ensurePriceLedgerHelp_(ss);
+  const def = ss.getSheetByName('シート1') || ss.getSheetByName('Sheet1');
+  if (def && ss.getSheets().length > 1) ss.deleteSheet(def);
+  return ss;
+}
+
+function _ensurePriceLedgerHelp_(ss) {
+  if (ss.getSheetByName(PRICE_LEDGER_HELP_TAB)) return;
+  const sh = ss.insertSheet(PRICE_LEDGER_HELP_TAB);
+  const lines = [
+    ['ドリンク料金の台帳（本部用）　使い方'], [''],
+    ['■ この台帳は何か'],
+    ['・店ごと・機械ごとのドリンクの料金（ボタンの値段）の一覧です。本部だけが使います（店舗・パートナーの画面には出ません）。'],
+    ['・現場がポータルから送ったドリンクマシンの正面の写真を、Claude が自動で読み取って「店舗別の料金」タブに書きます。'],
+    [''],
+    ['■ タブ'],
+    ['・店舗別の料金: 読み取った結果。同じ店・同じ機械の写真がまた届くと、その機械の行は新しい結果に入れ替わります。「確かさ」が「要確認」の行は、写真で確かめてください（写真の列のリンクから開けます）。'],
+    ['・標準メニュー: 本部が決める標準の価格を手で入れます（メニュー・温冷・サイズ・標準価格）。メニュー名は「店舗別の料金」と同じ書き方にしてください。'],
+    ['・標準と違う所: 標準メニューと値段が違うボタンの一覧です。写真の読み取りのたび、または管理画面の「標準との違いを作り直す」で作り直します（手で直さない）。'],
+    [''],
+    ['■ 写真を集める・撮り直してもらう'],
+    ['・ポータルの管理画面「設定 › ドリンク料金 › 写真の提出状況」で、店の画面にお願いを出す／止めるを切り替えます。'],
+    ['・読み取れなかった写真は、自動で「撮り直し」になり、理由つきで店の画面にもう一度お願いが出ます。'],
+    ['・同じ画面で、店ごとの提出状況・写真・「もう一度読み取る」「撮り直しを頼む」が使えます。'],
+    [''],
+    ['■ 注意'],
+    ['・料金を変えたときは、店頭の機械の表示・ステラ（決済）の設定も変える必要があります。この台帳を変えても機械の値段は変わりません。'],
+    ['・読み取りには Claude の API を使います（写真1回ごとに少し利用料がかかります）。'],
+  ];
+  sh.getRange(1, 1, lines.length, 1).setValues(lines).setWrap(true).setVerticalAlignment('top');
+  sh.setColumnWidth(1, 820);
+  sh.getRange(1, 1).setFontSize(14).setFontWeight('bold');
+  lines.forEach((l, i) => { if (/^■/.test(l[0])) sh.getRange(i + 1, 1).setFontWeight('bold').setFontColor('#22703d'); });
+}
+
+// 店×機械の行を入れ替える
+function _writePriceLedger_(photo, buttons) {
+  const ss = _ensurePriceLedger_();
+  const sh = ss.getSheetByName(PRICE_LEDGER_TAB);
+  const names = _storeNames_();
+  const machineLabel = (photo.machineIndex + 1) + '台目';
+  const last = sh.getLastRow();
+  if (last > 1) {
+    const v = sh.getRange(2, 1, last - 1, PRICE_LEDGER_COLS.length).getValues();
+    const keep = v.filter(r => !(String(r[2]) === photo.storeId && String(r[3]).indexOf(machineLabel) === 0));
+    if (keep.length !== v.length) {
+      sh.getRange(2, 1, last - 1, PRICE_LEDGER_COLS.length).clearContent();
+      if (keep.length) sh.getRange(2, 1, keep.length, PRICE_LEDGER_COLS.length).setValues(keep);
+    }
+  }
+  const area = _areaForStore_(photo.storeId) || '';
+  const link = photo.photos[0] ? '=HYPERLINK("' + String(photo.photos[0]).replace(/sz=w\d+/, 'sz=w2000') + '","写真")' : '';
+  const rows = buttons.map(b => [area, names[photo.storeId] || photo.storeId, photo.storeId,
+    machineLabel + (b.unit ? '（' + b.unit + '）' : ''), b.row || '', b.position || '', b.menu || '', b.temp || '', b.size || '',
+    b.price == null ? '' : Number(b.price), b.confidence === 'low' ? '要確認' : '', photo.uploadedAt, link]);
+  if (rows.length) sh.getRange(sh.getLastRow() + 1, 1, rows.length, PRICE_LEDGER_COLS.length).setValues(rows);
+  rebuildPriceLedgerDiff_(ss);
+  return { url: ss.getUrl(), rows: rows.length };
+}
+
+// 写真を1件消す(管理者・スクリプト。試しに送ったものなど)。その店×機械の写真がほかに無ければ、台帳の行も消す
+function deletePricePhoto(id) {
+  const hit = _findPricePhotoRow_(id);
+  if (!hit) return { error: 'not_found' };
+  const r = _pricePhotoRows_().find(x => String(x.id) === String(id));
+  hit.sheet.deleteRow(hit.row);
+  const rest = _pricePhotoRows_().some(x => String(x.store_id) === String(r.store_id) && Number(x.machine_index) === Number(r.machine_index));
+  const ss = _priceLedgerSs_();
+  if (!rest && ss) {
+    const sh = ss.getSheetByName(PRICE_LEDGER_TAB);
+    const label = (Number(r.machine_index) + 1) + '台目';
+    for (let i = sh.getLastRow(); i >= 2; i--) {
+      const v = sh.getRange(i, 3, 1, 2).getValues()[0];
+      if (String(v[0]) === String(r.store_id) && String(v[1]).indexOf(label) === 0) sh.deleteRow(i);
+    }
+    rebuildPriceLedgerDiff_(ss);
+  }
+  return { ok: true };
+}
+
+// 標準メニューと値段が違うボタンの一覧を作り直す
+function rebuildPriceLedgerDiff_(ssArg) {
+  const ss = ssArg || _priceLedgerSs_();
+  if (!ss) return { error: 'no_ledger' };
+  const std = {};
+  const stdSh = ss.getSheetByName(PRICE_LEDGER_STD_TAB);
+  if (stdSh && stdSh.getLastRow() > 1) {
+    stdSh.getRange(2, 1, stdSh.getLastRow() - 1, 4).getValues().forEach(r => {
+      if (r[0] !== '' && r[3] !== '') std[[String(r[0]).trim(), String(r[1]).trim(), String(r[2]).trim()].join('|')] = Number(r[3]);
+    });
+  }
+  const sh = ss.getSheetByName(PRICE_LEDGER_TAB);
+  const out = [];
+  if (sh && sh.getLastRow() > 1) {
+    sh.getRange(2, 1, sh.getLastRow() - 1, PRICE_LEDGER_COLS.length).getValues().forEach(r => {
+      const k = [String(r[6]).trim(), String(r[7]).trim(), String(r[8]).trim()].join('|');
+      if (std[k] != null && r[9] !== '' && Number(r[9]) !== std[k]) out.push([r[1], r[3], r[6], r[7], r[8], Number(r[9]), std[k], Number(r[9]) - std[k], r[11]]);
+    });
+  }
+  const d = ss.getSheetByName(PRICE_LEDGER_DIFF_TAB);
+  if (d.getLastRow() > 1) d.getRange(2, 1, d.getLastRow() - 1, 9).clearContent();
+  if (out.length) d.getRange(2, 1, out.length, 9).setValues(out);
+  return { ok: true, url: ss.getUrl(), diffs: out.length, standards: Object.keys(std).length };
+}
+function rebuildPriceLedgerDiff() { return rebuildPriceLedgerDiff_(_ensurePriceLedger_()); }
 
 // 管理画面の「取扱商品」で store_product_cfg が変わったとき、変わったマスだけ台帳に書く(台帳が無ければ何もしない)
 function _ledgerReflectPortalChange_(oldCfg, newCfg) {

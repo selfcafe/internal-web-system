@@ -696,6 +696,8 @@
       <button onclick="dismissMeterNotice()" style="padding:6px 14px;background:white;color:#334155;border:1px solid #cbd5e1;border-radius:6px;cursor:pointer;font-family:inherit">閉じる</button>
     </div>
   </div>
+  <!-- 本部からのドリンクの料金の写真のお願い(renderPricePhotoCard が出し入れ。お願いを出している間だけ) -->
+  <div id="price-photo-card" style="display:none;background:#fffbeb;border:1px solid #fcd34d;border-radius:8px;padding:10px 14px;margin:0 0 12px;font-size:13px;line-height:1.7"></div>
   <!-- パートナー機能タブ -->
   <div class="partner-tab-bar">
     <button class="partner-tab active" id="ptab-order"     onclick="switchPartnerTab('order')">発注<span id="ptab-order-badge" class="ptab-badge" style="display:none">NEW</span><span id="ptab-delivery-badge" class="ptab-badge ptab-badge-delivery" style="display:none">納品</span></button>
@@ -4493,6 +4495,7 @@ function updatePartnerMeterTabVisibility() {
   let dismissed = false;
   try { dismissed = localStorage.getItem('meter_notice_dismissed_' + storeTab) === '1'; } catch (_) {}
   if (notice) notice.style.display = on && !dismissed ? '' : 'none';
+  loadPricePhotoCard();
 }
 function openMeterFromNotice() {
   switchPartnerTab('checklist');
@@ -9712,6 +9715,9 @@ const SETTINGS_MENU = [
     { key:'add',      label:'項目の追加', build:_spCsAdd },
     { key:'category', label:'カテゴリ',   build:_spCsCategory },
   ]},
+  { key:'price', label:'ドリンク料金', pages:[
+    { key:'photos', label:'写真の提出状況', build:_spPricePhotos },
+  ]},
   { key:'onboarding', label:'ガイダンス', pages:[
     { key:'progress', label:'受講状況',         build:_spOnboardingProgress },
     { key:'pw',       label:'練習用パスワード', build:_spOnboardingPw },
@@ -9803,6 +9809,208 @@ async function rebuildProductLedger() {
   msg.textContent = `✓ ${r.stores}店×${r.products}品で作りました`;
   document.getElementById('ledger-preview').innerHTML = '';
   loadProductLedgerInfo();
+}
+
+/* ===== ドリンクの料金の写真(2026-10-30〜)。仕組みは gas_backend.gs の「ドリンクの料金の写真と料金台帳」 =====
+   本部がお願いを出している間(settings price_photo_request.on)、店の画面の上に「ドリンクマシンの正面を撮って送ってください」を出す。
+   機械1台ずつ送る。撮った直後に端末でぼけ・暗さ・小ささを調べ(_checkPricePhotoQuality)、送ったあとは Claude が読み取って
+   「読み取り済み」か「撮り直し(理由つき)」になる。台数は機械内写真の台数設定があればそれ、無ければ1台から「もう1台ある」で足す */
+let _pricePhotoState = null;      // {storeId, at, on, configuredCount, machines:[...]}
+let _pricePhotoExtra = 0;         // 「もう1台ある」で足した台数(この画面を開いている間だけ)
+let _pricePhotoBusy = false;
+async function loadPricePhotoCard(force) {
+  const card = document.getElementById('price-photo-card');
+  if (!card) return;
+  const sid = storeTab;
+  if (!force && _pricePhotoState && _pricePhotoState.storeId === sid && Date.now() - _pricePhotoState.at < 60000) { renderPricePhotoCard(); return; }
+  try {
+    const r = await gasGet('getPricePhotoStatus', { storeId: sid });
+    if (sid !== storeTab) return;
+    _pricePhotoState = r && r.ok ? { storeId: sid, at: Date.now(), on: !!r.on, configuredCount: r.configuredCount, machines: r.machines || [] } : null;
+  } catch (e) { _pricePhotoState = null; }
+  renderPricePhotoCard();
+}
+const PRICE_PHOTO_TIPS = '・<b>1台ずつ、正面から</b>撮ってください（2台を1枚に入れない）<br>・<b>ボタンと値段の部分が画面いっぱい</b>になるくらい近づいてください<br>・<b>光の反射</b>が入らない角度で撮ってください';
+function renderPricePhotoCard() {
+  const card = document.getElementById('price-photo-card');
+  if (!card) return;
+  const st = _pricePhotoState;
+  if (!st || !st.on || st.storeId !== storeTab) { card.style.display = 'none'; return; }
+  const byIdx = {};
+  st.machines.forEach(m => { byIdx[m.machineIndex] = m; });
+  const maxSent = st.machines.reduce((a, m) => Math.max(a, m.machineIndex + 1), 0);
+  const n = Math.max(st.configuredCount || 1, maxSent) + _pricePhotoExtra;
+  const allDone = Array.from({ length: n }, (_, i) => byIdx[i]).every(m => m && m.status === '読み取り済み');
+  const btn = 'padding:7px 14px;background:#22703d;color:white;border:none;border-radius:6px;font-weight:700;cursor:pointer;font-family:inherit;font-size:13px';
+  const rows = Array.from({ length: n }, (_, i) => {
+    const m = byIdx[i];
+    let state, action = `<button onclick="pickPricePhoto(${i})" style="${btn}">📷 撮影する</button>`;
+    if (!m) state = '<span style="color:#b45309;font-weight:700">未提出</span>';
+    else if (m.status === '読み取り済み') { state = '<span style="color:#16a34a;font-weight:700">✓ 届いています</span>'; action = `<button onclick="pickPricePhoto(${i})" style="${btn};background:white;color:#334155;border:1px solid #cbd5e1;font-weight:400">撮り直す</button>`; }
+    else if (m.status === '撮り直し') state = `<span style="color:#c0392b;font-weight:700">撮り直しをお願いします</span><div style="font-size:12px;color:#c0392b;margin-top:2px">${esc(m.reason || '')}</div>`;
+    else { state = '<span style="color:#2563eb;font-weight:700">確認しています…（数分かかります）</span>'; action = ''; }
+    return `<div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:8px 0;border-top:1px solid #e5e7eb">
+      <b style="min-width:52px">${i + 1}台目</b><div style="flex:1;min-width:150px">${state}</div>${action}</div>`;
+  }).join('');
+  card.style.display = '';
+  card.innerHTML = allDone
+    ? `<div style="font-size:13px;color:#16a34a;font-weight:700">✓ ドリンクマシンの料金の写真は届いています。ありがとうございました。</div>
+       <div style="font-size:12px;margin-top:4px"><a href="javascript:void(0)" onclick="_pricePhotoExtra++;renderPricePhotoCard()" style="color:#22703d">機械がもう1台ある場合はこちら</a></div>`
+    : `<b style="color:#22703d">【本部より】ドリンクマシンの料金の写真を送ってください</b>
+       <div style="font-size:12.5px;margin:4px 0 6px">ドリンクマシンの<b>正面（ボタンと値段）</b>を撮って送ってください。<br>${PRICE_PHOTO_TIPS}</div>
+       ${rows}
+       <div style="font-size:12px;margin-top:6px"><a href="javascript:void(0)" onclick="_pricePhotoExtra++;renderPricePhotoCard()" style="color:#22703d">＋ 機械がもう1台ある</a></div>
+       <input type="file" id="price-photo-input" accept="image/*" capture="environment" style="display:none" onchange="onPricePhotoPicked(this)">
+       <div id="price-photo-msg" style="font-size:12.5px;margin-top:6px"></div>`;
+}
+let _pricePhotoMachine = 0;
+function pickPricePhoto(i) {
+  if (_pricePhotoBusy) return;
+  _pricePhotoMachine = i;
+  const inp = document.getElementById('price-photo-input');
+  if (inp) { inp.value = ''; inp.click(); }
+}
+function _loadImageFile(file) {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file);
+    const img = new Image();
+    img.onload = () => { resolve(img); };
+    img.onerror = () => { URL.revokeObjectURL(url); reject(new Error('画像を読み込めませんでした')); };
+    img.src = url;
+  });
+}
+// 撮った写真の状態を端末の中で調べる。問題があれば理由の文、無ければ ''。
+// ぼけ: 長い辺を800pxに縮めた白黒画像のラプラシアンの分散(小さいほどぼけている)。値はお手本の写真で決めた
+const PRICE_PHOTO_MIN_SIDE = 900, PRICE_PHOTO_MIN_BRIGHT = 35, PRICE_PHOTO_MIN_SHARP = 60;
+function _checkPricePhotoQuality(img) {
+  const w0 = img.naturalWidth, h0 = img.naturalHeight;
+  if (Math.min(w0, h0) < PRICE_PHOTO_MIN_SIDE) return '写真が小さすぎます。カメラで撮った写真をそのまま選んでください。';
+  const s = 800 / Math.max(w0, h0);
+  const w = Math.round(w0 * s), h = Math.round(h0 * s);
+  const c = document.createElement('canvas'); c.width = w; c.height = h;
+  const ctx = c.getContext('2d', { willReadFrequently: true });
+  ctx.drawImage(img, 0, 0, w, h);
+  const d = ctx.getImageData(0, 0, w, h).data;
+  const g = new Float32Array(w * h);
+  let sum = 0;
+  for (let i = 0; i < w * h; i++) { const v = 0.299 * d[i * 4] + 0.587 * d[i * 4 + 1] + 0.114 * d[i * 4 + 2]; g[i] = v; sum += v; }
+  const mean = sum / (w * h);
+  if (mean < PRICE_PHOTO_MIN_BRIGHT) return '写真が暗すぎます。明るい所で、または照明が当たるように撮ってください。';
+  let n = 0, s1 = 0, s2 = 0;
+  for (let y = 1; y < h - 1; y++) for (let x = 1; x < w - 1; x++) {
+    const i = y * w + x;
+    const lap = g[i - w] + g[i + w] + g[i - 1] + g[i + 1] - 4 * g[i];
+    s1 += lap; s2 += lap * lap; n++;
+  }
+  const v = s2 / n - (s1 / n) * (s1 / n);
+  window._lastPricePhotoSharpness = v;
+  if (v < PRICE_PHOTO_MIN_SHARP) return '写真がぼやけているようです。スマホを動かさないように、ピントを合わせてから撮ってください。';
+  return '';
+}
+// 送る前に長い辺を2400pxまで縮める(読み取りに十分で、通信を軽くする)
+function _shrinkForUpload(img) {
+  const s = Math.min(1, 2400 / Math.max(img.naturalWidth, img.naturalHeight));
+  const c = document.createElement('canvas');
+  c.width = Math.round(img.naturalWidth * s); c.height = Math.round(img.naturalHeight * s);
+  c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
+  return c.toDataURL('image/jpeg', 0.88).split(',')[1];
+}
+async function onPricePhotoPicked(input) {
+  const file = input.files && input.files[0];
+  if (!file) return;
+  const msg = document.getElementById('price-photo-msg');
+  let img;
+  try { img = await _loadImageFile(file); } catch (e) { alert(e.message); return; }
+  const problem = _checkPricePhotoQuality(img);
+  if (problem && !confirm(problem + '\n\n「キャンセル」で撮り直します。このまま送る場合は「OK」を押してください。')) { pickPricePhoto(_pricePhotoMachine); return; }
+  _pricePhotoBusy = true;
+  if (msg) msg.innerHTML = '<span style="color:#2563eb">送っています…</span>';
+  try {
+    const r = await gasPost('savePricePhotos', { storeId: storeTab, machineIndex: _pricePhotoMachine, images: [_shrinkForUpload(img)] });
+    if (!r || r.error) throw new Error(r && r.error || '送れませんでした');
+    if (msg) msg.innerHTML = '<span style="color:#16a34a;font-weight:700">送りました。数分で確認結果がここに出ます。</span>';
+    setTimeout(() => loadPricePhotoCard(true), 1500);
+    setTimeout(() => loadPricePhotoCard(true), 120000);
+  } catch (e) {
+    if (msg) msg.innerHTML = `<span style="color:#c0392b">送れませんでした（${esc(e.message)}）。通信を確かめて、もう一度お試しください。</span>`;
+  } finally {
+    _pricePhotoBusy = false;
+    try { URL.revokeObjectURL(img.src); } catch (_) {}
+  }
+}
+
+/* --- 管理画面「設定 › ドリンク料金 › 写真の提出状況」 --- */
+function _spPricePhotos() {
+  setTimeout(loadPricePhotoAdmin, 0);
+  return `
+    <div style="${_SP_NOTE}">店ごと・機械ごとのドリンクの料金を、現場が撮ったドリンクマシンの正面の写真から Claude が読み取り、本部用の「ドリンク料金の台帳」に書きます。読み取れない写真は自動で「撮り直し」になり、理由つきで店の画面にもう一度お願いが出ます。読み取りには写真1回ごとに少し利用料がかかります。</div>
+    <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;margin:8px 0">
+      <input type="checkbox" id="price-photo-on" onchange="savePricePhotoRequest(this.checked)"> 店の画面に「料金の写真を送ってください」を出す（全店）
+    </label>
+    <div id="price-photo-admin" style="margin-top:8px"><div style="color:#aaa;font-size:13px">読み込み中…</div></div>`;
+}
+async function loadPricePhotoAdmin() {
+  const wrap = document.getElementById('price-photo-admin');
+  if (!wrap) return;
+  let r;
+  try { r = await gasGet('getPricePhotoList'); } catch (e) { wrap.innerHTML = '<div style="color:#c0392b;font-size:13px">読み込めませんでした</div>'; return; }
+  if (!r || !r.ok) { wrap.innerHTML = `<div style="color:#c0392b;font-size:13px">読み込めませんでした（${esc(r && r.error || '')}）</div>`; return; }
+  const cb = document.getElementById('price-photo-on');
+  if (cb) cb.checked = !!r.on;
+  const cnt = { none: 0, done: 0, retake: 0, other: 0 };
+  r.stores.forEach(s => {
+    if (!s.machines.length) cnt.none++;
+    else if (s.machines.every(m => m.status === '読み取り済み')) cnt.done++;
+    else if (s.machines.some(m => m.status === '撮り直し')) cnt.retake++;
+    else cnt.other++;
+  });
+  const th = 'padding:6px 8px;font-size:12px;background:#22703d;color:white;white-space:nowrap;text-align:left';
+  const td = 'padding:6px 8px;font-size:12px;border-bottom:1px solid #eee;vertical-align:top';
+  const color = { '読み取り済み': '#16a34a', '撮り直し': '#c0392b', '読み取り中': '#2563eb', '読み取り失敗': '#b45309' };
+  const small = 'padding:3px 8px;font-size:11px;border:1px solid #cbd5e1;background:white;border-radius:4px;cursor:pointer;font-family:inherit;margin:2px 4px 0 0';
+  const rows = r.stores.map(s => {
+    if (!s.machines.length) return `<tr><td style="${td}">${esc(s.area)}</td><td style="${td};font-weight:700">${esc(s.storeName)}</td><td style="${td}" colspan="3"><span style="color:#b45309">未提出</span></td></tr>`;
+    return s.machines.map((m, k) => `<tr>
+      ${k === 0 ? `<td style="${td}" rowspan="${s.machines.length}">${esc(s.area)}</td><td style="${td};font-weight:700" rowspan="${s.machines.length}">${esc(s.storeName)}</td>` : ''}
+      <td style="${td};white-space:nowrap">${m.machineIndex + 1}台目</td>
+      <td style="${td}"><b style="color:${color[m.status] || '#555'}">${esc(m.status)}</b>${m.reason ? `<div style="color:#666">${esc(m.reason)}</div>` : ''}<div style="color:#999">送信 ${esc(m.uploadedAt)}</div></td>
+      <td style="${td}">${m.photos.map((u, i) => `<a href="${esc(String(u).replace(/sz=w\d+/, 'sz=w2000'))}" target="_blank" rel="noopener">写真${i + 1}</a>`).join(' ')}<br>
+        <button style="${small}" onclick="redispatchPricePhoto('${esc(m.id)}')">もう一度読み取る</button><button style="${small}" onclick="askPricePhotoRetake('${esc(m.id)}')">撮り直しを頼む</button></td></tr>`).join('');
+  }).join('');
+  wrap.innerHTML = `
+    <div style="font-size:13px;margin-bottom:8px">${r.ledgerUrl ? `<a href="${esc(r.ledgerUrl)}" target="_blank" rel="noopener" style="color:#22703d;font-weight:700">📄 ドリンク料金の台帳を開く</a>` : '<span style="color:#888">ドリンク料金の台帳は、最初の写真を読み取ったときに作られます。</span>'}
+      <button onclick="rebuildPriceLedgerDiffAdmin()" style="${_SP_BTN_SUB};margin-left:8px;padding:5px 12px">標準との違いを作り直す</button> <span id="price-ledger-msg" style="${_SP_MSG}"></span></div>
+    <div style="font-size:13px;margin-bottom:8px">全${r.stores.length}店：<b style="color:#16a34a">読み取り済み ${cnt.done}</b>／<b style="color:#c0392b">撮り直し待ち ${cnt.retake}</b>／確認中など ${cnt.other}／<b style="color:#b45309">未提出 ${cnt.none}</b></div>
+    <div style="overflow-x:auto"><table style="border-collapse:collapse;background:white;overflow:visible;min-width:560px">
+      <thead><tr><th style="${th}">エリア</th><th style="${th}">店舗</th><th style="${th}">機械</th><th style="${th}">状態</th><th style="${th}">写真</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+}
+async function savePricePhotoRequest(on) {
+  if (!confirm(on ? '全店の店舗画面に「ドリンクマシンの料金の写真を送ってください」を出します。よろしいですか？' : '店舗画面のお願いを止めます。よろしいですか？')) {
+    const cb = document.getElementById('price-photo-on'); if (cb) cb.checked = !on; return;
+  }
+  await _gasSaveSetting('price_photo_request', JSON.stringify({ on: !!on }));
+}
+async function redispatchPricePhoto(id) {
+  if (!confirm('この写真をもう一度読み取ります（利用料が少しかかります）。よろしいですか？')) return;
+  const r = await gasPost('redispatchPricePhoto', { id });
+  if (!r || r.error) { alert('できませんでした：' + (r && r.error)); return; }
+  loadPricePhotoAdmin();
+}
+async function askPricePhotoRetake(id) {
+  const reason = prompt('店の画面に出す撮り直しの理由を入れてください', 'ボタンの値段が読み取れませんでした。ボタンと値段が全部はっきり写るように、もう一度撮ってください。');
+  if (!reason) return;
+  const r = await gasPost('setPricePhotoResult', { id, status: '撮り直し', reason });
+  if (!r || r.error) { alert('できませんでした：' + (r && r.error)); return; }
+  loadPricePhotoAdmin();
+}
+async function rebuildPriceLedgerDiffAdmin() {
+  const msg = document.getElementById('price-ledger-msg');
+  if (msg) msg.textContent = '作り直しています…';
+  try {
+    const r = await gasGet('rebuildPriceLedgerDiff');
+    if (msg) msg.textContent = r && r.ok ? `✓ 標準と違う所 ${r.diffs}件（標準メニュー ${r.standards}件）` : '作り直せませんでした';
+  } catch (e) { if (msg) msg.textContent = '作り直せませんでした'; }
 }
 
 /* --- ガイダンス(初めての人向けの練習モード、onboarding-*.js)の設定 --- */

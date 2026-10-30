@@ -1,0 +1,47 @@
+name: price photo read
+
+# ドリンクマシンの料金の写真が届いたら、Claude で値段を読み取ってポータルに書く(2026-10-30)。
+# 起動: GAS の savePricePhotos → _dispatchNotifies_ → dispatchPricePhotoRead_ が repository_dispatch(price-photo)を送る。
+#       管理画面の「もう一度読み取る」も同じ。手で動かすときは workflow_dispatch で写真のIDを入れる。
+# 読めた → 「読み取り済み」(GAS がドリンク料金の台帳に書く)。読めない → 「撮り直し」(理由が店の画面に出る)。
+# リポジトリは公開で Actions のログも誰でも見られるので、読み取った中身はログに出さない(scripts/read_price_photo.py)。
+on:
+  repository_dispatch:
+    types: [price-photo]
+  workflow_dispatch:
+    inputs:
+      photo_id:
+        description: "写真のID(price_photos の id)"
+        required: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: price-photo-${{ github.event.client_payload.id || inputs.photo_id }}
+  cancel-in-progress: false
+
+jobs:
+  read:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      PHOTO_ID: ${{ github.event.client_payload.id || inputs.photo_id }}
+      PORTAL_SCRIPT_KEY: ${{ secrets.PORTAL_SCRIPT_KEY }}
+      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Check photo id
+        run: |
+          case "$PHOTO_ID" in ''|*[!0-9a-fA-F-]*) echo "::error::写真のIDの形が違います"; exit 1;; esac
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install
+        run: pip install --quiet anthropic
+
+      - name: Read prices
+        run: python scripts/read_price_photo.py "$PHOTO_ID"
