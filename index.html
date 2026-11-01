@@ -613,6 +613,8 @@
     <h2>セルフカフェ社内ポータル</h2>
     <div class="site-lock-rule"></div>
     <p>パスワードを入力してください</p>
+    <!-- 店舗でログアウトした直後だけ出す(2026-11-01 喜志 No.19「ログアウトするとログイン画面になり、うまく進みません」。ログイン画面に戻るのが業務終了の合図だと分からなかった) -->
+    <div id="site-logout-notice" style="display:none;background:#f0fdf4;border:1px solid #86efac;color:#166534;font-size:13px;border-radius:8px;padding:10px 12px;margin-bottom:12px;text-align:left;line-height:1.6">ログアウトしました。お疲れさまでした。<br>この画面になれば業務終了です。このまま画面を閉じてください（業務終了の打刻はありません）。</div>
     <div id="site-sync-warning" style="display:none;background:#fef2f2;border:1px solid #fca5a5;color:#b91c1c;font-size:12.5px;border-radius:8px;padding:10px 12px;margin-bottom:12px;text-align:left;line-height:1.5"></div>
     <form id="site-login-form" onsubmit="submitSiteLogin(); return false;" autocomplete="on">
       <input type="text" name="username" autocomplete="username" style="display:none" aria-hidden="true">
@@ -6160,6 +6162,7 @@ function adminLogout() {
 
 async function siteLogout() {
   if (window.__ONB) { onbExit(); return; } // 練習モードを終えていつものログイン画面へ
+  const wasStore = sessionStorage.getItem('admin_authed') !== '1';
   // チェックシートの未保存分は、通行証を消す前(この店舗の通行証のうち)に送る。最大8秒待つ
   if (isSiteAuthed() && _authToken() && storeTab && _checksheetUnsavedCount(storeTab) > 0) {
     try { await Promise.race([saveChecksheetNow(storeTab), new Promise(r => setTimeout(r, 8000))]); } catch (_) {}
@@ -6178,7 +6181,10 @@ async function siteLogout() {
   inp.value = '';
   prefillLastPassword();
   populateLoginStoreSelect();
-  setTimeout(() => inp.focus(), 100);
+  // 店舗のログアウトは業務終了の操作なので、ログイン画面に戻ったことが終了の合図だと分かるようにする。入力欄にフォーカスするとキーボードが出て「もう一度ログインする」ように見えるため、店舗では当てない
+  const notice = document.getElementById('site-logout-notice');
+  if (notice) notice.style.display = wasStore ? 'block' : 'none';
+  if (!wasStore) setTimeout(() => inp.focus(), 100);
 }
 
 function autoLogout(message) {
@@ -6196,6 +6202,8 @@ function autoLogout(message) {
   inp.value = '';
   prefillLastPassword();
   populateLoginStoreSelect();
+  const logoutNotice = document.getElementById('site-logout-notice');
+  if (logoutNotice) logoutNotice.style.display = 'none';
   document.getElementById('site-pw-error').textContent = message || 'セッションが切れました。再度ログインしてください。';
   setTimeout(() => inp.focus(), 100);
   setTimeout(() => { document.getElementById('site-pw-error').textContent = ''; }, 8000);
@@ -6210,6 +6218,8 @@ setInterval(() => {
 async function submitSiteLogin() {
   const val = document.getElementById('site-pw-input').value.trim();
   const err = document.getElementById('site-pw-error');
+  const logoutNotice = document.getElementById('site-logout-notice');
+  if (logoutNotice) logoutNotice.style.display = 'none';
   if (!val) { err.textContent = 'パスワードを入力してください'; setTimeout(() => { err.textContent=''; }, 2000); return; }
   const loginBtn = document.querySelector('button.btn-pin-submit');
   const setBusy = busy => { if (loginBtn) { loginBtn.disabled = busy; loginBtn.textContent = busy ? '確認中…' : 'ログイン'; } };
