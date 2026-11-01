@@ -6035,7 +6035,7 @@ function _syncReorderTargets() {
   _gasSaveSetting('reorder_targets', localStorage.getItem(REORDER_TARGETS_KEY) || '{}');
 }
 
-const SESSION_MS     = 30 * 60 * 1000; // 30分
+const SESSION_MS     = 3 * 60 * 60 * 1000; // 3時間(何も触らずにいるとログアウト。2026-11-01 谷町九丁目の No.16「業務中に何回もログインし直す」を受けて30分から延長)
 const STORE_PW_KEY   = 'store_passwords';
 
 function getStorePassword(storeId) {
