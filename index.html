@@ -2308,6 +2308,17 @@ function getInventoryPeriod(baseDate) {
     deadlineLabel: `${monthEnd.getMonth() + 1}/${monthEnd.getDate()}`,
   };
 }
+// 棚卸表タブ（入力・確認・送信）が対象にする月。月初の5日までは前月分として扱う
+// （2026-11、月末の棚卸が日付をまたいで翌月分として保存され、月初発注で「棚卸なし」になったため）。
+// 納品済み・店舗間移動・チェックシートの残り在庫はGAS側も実際の日付で月を決めるので、getInventoryPeriodのまま。
+const INVENTORY_GRACE_DAYS = 5;
+function getInventoryCountPeriod(baseDate) {
+  const d = baseDate || new Date();
+  if (d.getDate() <= INVENTORY_GRACE_DAYS) {
+    return { ...getInventoryPeriod(new Date(d.getFullYear(), d.getMonth() - 1, 1)), grace: true };
+  }
+  return getInventoryPeriod(d);
+}
 function _prevPeriodLabel(label) {
   const [y, m] = label.split('-').map(Number);
   const d = new Date(y, m - 2, 1);
@@ -2363,7 +2374,7 @@ function setInventoryPeriodData(storeId, periodLabel, rec) {
   localStorage.setItem(INVENTORY_PERIOD_KEY, JSON.stringify(all));
 }
 function updateInventoryPeriodField(section, name, value) {
-  const period = getInventoryPeriod();
+  const period = getInventoryCountPeriod();
   const rec = getInventoryPeriodData(storeTab, period.label);
   if (section === 'remarks') rec.remarks = value;
   else rec[section][name] = value;
@@ -2380,7 +2391,7 @@ function computeEndStockFromExpQty(q) {
   return vals.reduce((sum, v) => sum + (v || 0), 0);
 }
 function updateInventoryExpQty(productName, slot, value) {
-  const period = getInventoryPeriod();
+  const period = getInventoryCountPeriod();
   const rec = getInventoryPeriodData(storeTab, period.label);
   if (!rec.expQty[productName]) rec.expQty[productName] = {};
   rec.expQty[productName][slot] = value;
@@ -2556,7 +2567,7 @@ function renderInventory(loading = false) {
     wrap.innerHTML = '<div style="color:#aaa;padding:20px">商品が設定されていません</div>';
     return;
   }
-  const period = getInventoryPeriod();
+  const period = getInventoryCountPeriod();
   document.getElementById('inventory-lastmonth-btn')?.classList.toggle('active', inventoryShowLastMonth);
   if (inventoryShowLastMonth) { renderInventoryLastMonthScreen(wrap, allProducts, period); return; }
   const periodData = getInventoryPeriodData(storeTab, period.label);
@@ -2725,7 +2736,7 @@ function renderInventoryInputScreen(wrap, allProducts, period, periodData) {
       📦 発注タブで<b>納品済みボタンを押してから</b>棚卸完了をするようにしてください。
     </div>
     <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
-      <span style="font-size:12px;color:#6b7263">${period.year}年${period.month}月分（締め日の目安: ${esc(period.startLabel)}〜${esc(period.deadlineLabel)}）</span>
+      <span style="font-size:12px;color:#6b7263">${period.year}年${period.month}月分（締め日の目安: ${esc(period.startLabel)}〜${esc(period.deadlineLabel)}${period.grace ? `、${INVENTORY_GRACE_DAYS}日まで受付` : ''}）</span>
     </div>
     ${expiredBanner}
     ${nearingBanner}
@@ -2899,7 +2910,7 @@ async function submitInventory() {
 }
 
 async function _submitInventoryInner() {
-  const period = getInventoryPeriod();
+  const period = getInventoryCountPeriod();
   const periodData = getInventoryPeriodData(storeTab, period.label);
   const data = getInventoryData(storeTab);
   const allProducts = _inventoryProductList();
@@ -4421,7 +4432,7 @@ async function switchPartnerTab(tab) {
     renderInventory(!hasCachedInventoryData);
     // デイリーカウントはチェックシートの補充数量から算出するため、最新のチェックシートデータも合わせて取得する
     // （期首在庫/当月納品/チェックシートの4リクエストはGAS側の複合アクション1本にまとめている）
-    await loadInventoryTabData(storeTab, getInventoryPeriod().label);
+    await loadInventoryTabData(storeTab, getInventoryCountPeriod().label);
     renderInventory();
   }
   if (tab === 'checklist') {
