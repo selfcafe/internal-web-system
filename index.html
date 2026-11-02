@@ -2312,12 +2312,33 @@ function getInventoryPeriod(baseDate) {
 // （2026-11、月末の棚卸が日付をまたいで翌月分として保存され、月初発注で「棚卸なし」になったため）。
 // 納品済み・店舗間移動・チェックシートの残り在庫はGAS側も実際の日付で月を決めるので、getInventoryPeriodのまま。
 const INVENTORY_GRACE_DAYS = 5;
-function getInventoryCountPeriod(baseDate) {
-  const d = baseDate || new Date();
+function _inventoryCountPeriodAt(d) {
   if (d.getDate() <= INVENTORY_GRACE_DAYS) {
     return { ...getInventoryPeriod(new Date(d.getFullYear(), d.getMonth() - 1, 1)), grace: true };
   }
   return getInventoryPeriod(d);
+}
+// 入力の途中で対象月が変わる(5日→6日の0時をまたぐ)と、入れた数が前の月の分に残ったまま画面が空になり、
+// 送信も新しい月の分になってしまう。最後の入力から6時間は入力を始めた月のままにする（再読み込みしても続く）
+const INVENTORY_PERIOD_PIN_KEY = 'inventory_period_pin';
+const INVENTORY_PERIOD_PIN_MS = 6 * 60 * 60 * 1000;
+function _inventoryPeriodPins() {
+  try { return JSON.parse(localStorage.getItem(INVENTORY_PERIOD_PIN_KEY) || '{}'); } catch (e) { return {}; }
+}
+function touchInventoryPeriodPin(label) {
+  const pins = _inventoryPeriodPins();
+  pins[storeTab] = { label, at: Date.now() };
+  try { localStorage.setItem(INVENTORY_PERIOD_PIN_KEY, JSON.stringify(pins)); } catch (e) {}
+}
+function getInventoryCountPeriod(baseDate) {
+  const cur = _inventoryCountPeriodAt(baseDate || new Date());
+  if (baseDate) return cur;
+  const pin = _inventoryPeriodPins()[storeTab];
+  if (pin && pin.label < cur.label && Date.now() - pin.at < INVENTORY_PERIOD_PIN_MS) {
+    const [y, m] = pin.label.split('-').map(Number);
+    return { ...getInventoryPeriod(new Date(y, m - 1, 1)), pinned: true };
+  }
+  return cur;
 }
 function _prevPeriodLabel(label) {
   const [y, m] = label.split('-').map(Number);
@@ -2379,6 +2400,7 @@ function updateInventoryPeriodField(section, name, value) {
   if (section === 'remarks') rec.remarks = value;
   else rec[section][name] = value;
   setInventoryPeriodData(storeTab, period.label, rec);
+  touchInventoryPeriodPin(period.label);
   renderInventory();
 }
 
@@ -2397,6 +2419,7 @@ function updateInventoryExpQty(productName, slot, value) {
   rec.expQty[productName][slot] = value;
   rec.endStock[productName] = computeEndStockFromExpQty(rec.expQty[productName]);
   setInventoryPeriodData(storeTab, period.label, rec);
+  touchInventoryPeriodPin(period.label);
   renderInventory();
 }
 
@@ -2736,7 +2759,7 @@ function renderInventoryInputScreen(wrap, allProducts, period, periodData) {
       📦 発注タブで<b>納品済みボタンを押してから</b>棚卸完了をするようにしてください。
     </div>
     <div style="display:flex;justify-content:flex-end;margin-bottom:10px">
-      <span style="font-size:12px;color:#6b7263">${period.year}年${period.month}月分（締め日の目安: ${esc(period.startLabel)}〜${esc(period.deadlineLabel)}${period.grace ? `、${INVENTORY_GRACE_DAYS}日まで受付` : ''}）</span>
+      <span style="font-size:12px;color:#6b7263">${period.year}年${period.month}月分（締め日の目安: ${esc(period.startLabel)}〜${esc(period.deadlineLabel)}${period.grace ? `、${INVENTORY_GRACE_DAYS}日まで受付` : ''}${period.pinned ? '、入力の途中で日付が変わったのでこの月のまま' : ''}）</span>
     </div>
     ${expiredBanner}
     ${nearingBanner}
