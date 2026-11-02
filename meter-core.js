@@ -125,6 +125,43 @@
       <div style="font-size:11px;color:#64748b;margin-top:6px;line-height:1.6">太字は前回の記録からの杯数、小さい数字は機械の累計です。金額は杯数×売価（メーター上の金額。サブスク分も含むので実売上ではありません）。前回より小さい数字は「要確認」と出ます。${rep ? '税抜は金額÷1.1（四捨五入）、消費税は金額−税抜です。' : ''}</div>`;
     },
 
+    // 月の集計表を CSV で保存する(2026-11-02、新守山から「経理処理に使いたい」)。Excel で文字化けしないよう UTF-8 の BOM を付ける
+    monthCsv(cfg, readings, month) {
+      const buttons = this.buttonsOf(cfg), rep = !!cfg.salesReport;
+      const days = this.daily(cfg, readings).filter(d => d.date.startsWith(month));
+      const notes = {};
+      (readings || []).forEach(r => { if (r && r.note && String(r.date).startsWith(month)) notes[r.date] = r.note; });
+      const q = v => { const t = v == null ? '' : String(v); return /[",\r\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+      const head = ['日付'];
+      cfg.machines.forEach(m => (m.prices || []).forEach(p => { const l = (m.label ? m.label + ' ' : '') + Number(p) + '円'; head.push(l + ' 杯数', l + ' 累計'); }));
+      head.push('杯数合計', '金額(円)');
+      if (rep) head.push('税抜', '消費税');
+      head.push('メモ');
+      let sc = 0, sy = 0;
+      const rows = days.map(d => {
+        sc += d.cupsTotal; sy += d.yenTotal;
+        const r = [d.date];
+        buttons.forEach(b => { const cup = d.cups[b.key]; r.push(cup === undefined ? '' : (cup < 0 ? '要確認' : cup), d.counts[b.key] === undefined ? '' : d.counts[b.key]); });
+        r.push(d.cupsTotal, d.yenTotal);
+        if (rep) r.push(exTax(d.yenTotal), d.yenTotal - exTax(d.yenTotal));
+        r.push(notes[d.date] || '');
+        return r;
+      });
+      const total = ['合計'].concat(buttons.flatMap(() => ['', '']), [sc, sy], rep ? [exTax(sy), sy - exTax(sy)] : [], ['']);
+      return '﻿' + [head].concat(rows, [total]).map(r => r.map(q).join(',')).join('\r\n') + '\r\n';
+    },
+    downloadMonthCsv() {
+      const sid = this.s.storeId, cfg = this.configOf(sid);
+      if (!cfg || !this.s.readings) return;
+      const month = this.s.month, name = (this.o.names() || {})[sid] || sid;
+      const blob = new Blob([this.monthCsv(cfg, this.s.readings, month)], { type: 'text/csv;charset=utf-8' });
+      const a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = `集計表_${name}_${month}.csv`;
+      document.body.appendChild(a); a.click(); a.remove();
+      setTimeout(() => URL.revokeObjectURL(a.href), 10000);
+    },
+
     /* ----- 入力画面＋月の表 ----- */
     async loadReadings(sid, force) {
       if (!force && this.s.storeId === sid && this.s.readings) return;
@@ -196,6 +233,7 @@
               <option value="${thisMonth}" ${this.s.month === thisMonth ? 'selected' : ''}>今月（${Number(thisMonth.slice(5))}月）</option>
               <option value="${lastMonth}" ${this.s.month === lastMonth ? 'selected' : ''}>先月（${Number(lastMonth.slice(5))}月）</option>
             </select>
+            <button class="mc-btn sub small" onclick="MeterCore.downloadMonthCsv()" style="margin-left:auto">⬇ CSVで保存</button>
           </div>
           ${this.monthTableHtml(cfg, readings, this.s.month)}
         </div>`;
