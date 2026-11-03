@@ -1654,6 +1654,7 @@ function saveSetting(key, value) {
   for (let i = 1; i < data.length; i++) {
     if (String(data[i][ki]) === String(key)) {
       const oldValue = _readSettingRow_(data, i);
+      if (key === 'all_products') value = _keepProductPrices_(oldValue, value);
       _logSettingHistory(key, oldValue);
       _writeSettingValue_(sheet, i + 1, value);
       _invalidateSettingsCache_();
@@ -1667,6 +1668,27 @@ function saveSetting(key, value) {
   _writeSettingValue_(sheet, sheet.getLastRow(), value);
   _invalidateSettingsCache_();
   return { ok: true };
+}
+
+// 商品一覧を丸ごと保存するとき、送られてきた商品に単価(price)の項目そのものが無ければ、今の単価を残す。
+// 店舗の端末・鍵なしの読み込みには単価を渡さない(_sanitizeSettingsRows_)ので、その一覧をそのまま保存すると
+// 全商品の単価が消える(2026-10-21 17:11 に68品の単価が消え、10月末の棚卸の金額が0になった。11/3 に履歴から戻した)。
+// 単価を消したいときは price を空文字で送る(項目を残す)
+function _keepProductPrices_(oldValue, value) {
+  try {
+    const before = JSON.parse(oldValue || '[]'), after = JSON.parse(value || '[]');
+    if (!Array.isArray(before) || !Array.isArray(after)) return value;
+    const byCode = {}, byName = {};
+    before.forEach(p => { if (p && p.price !== undefined) { if (p.code) byCode[String(p.code)] = p.price; if (p.name) byName[p.name] = p.price; } });
+    let kept = 0;
+    after.forEach(p => {
+      if (!p || Object.prototype.hasOwnProperty.call(p, 'price')) return;
+      const v = p.code && byCode[String(p.code)] !== undefined ? byCode[String(p.code)] : byName[p.name];
+      if (v !== undefined) { p.price = v; kept++; }
+    });
+    if (kept) console.warn('all_products の保存で単価の無い商品が ' + kept + ' 件あったので、今の単価を残しました');
+    return kept ? JSON.stringify(after) : value;
+  } catch (e) { return value; }
 }
 
 // {店舗ID: 値, ...}形式の設定（store_product_cfg等）専用。saveSettingは端末側のlocalStorage
