@@ -1134,7 +1134,11 @@ function _syncStoreToDb(storeId, rows, deletedIds) {
   const run = prev.catch(() => {}).then(async () => {
     try {
       const dbRows = (ORDERS_CACHE[storeId] || rows).map(r => _rowToDb(r, storeId));
-      if (dbRows.length) await gasPost('upsertOrders', { storeId, rows: dbRows });
+      if (dbRows.length) {
+        const res = await gasPost('upsertOrders', { storeId, rows: dbRows });
+        // 否認した品のアペックス発注メールの下書きを消した・残っている、の知らせ(2026-11-03)
+        if (res && res.apexDraftNotes && res.apexDraftNotes.length) alert(res.apexDraftNotes.join('\n\n'));
+      }
       if (deletedIds && deletedIds.length) await gasPost('deleteOrders', { ids: deletedIds });
       _fbDb.ref('orders_updated').set({ ts: Date.now(), by: _CLIENT_ID });
     } catch(e) { console.error('GAS sync error:', e); }

@@ -1496,11 +1496,15 @@ function upsertOrderRows(storeId, rows) {
   const dateCols = ['request_date', 'order_date', 'delivery_date'];
   const toAppend = [];
   const changedRowNums = [];
+  const deniedIdx = ORDER_COLS.indexOf('denied');
+  const newlyDenied = [];   // 管理画面で否認した行（発注メールの下書きを片づける）
   rows.forEach(r => {
     const values = ORDER_COLS.map(c => (r[c] === undefined || r[c] === null) ? '' : r[c]);
     const rowNum = idToRowNum[String(r.id)];
     if (rowNum) {
       if (_orderRowSame_(current[String(r.id)], values)) return;
+      const was = current[String(r.id)][deniedIdx];
+      if ((r.denied === true || String(r.denied) === 'TRUE') && !(was === true || String(was) === 'TRUE')) newlyDenied.push(String(r.id));
       sheet.getRange(rowNum, 1, 1, ORDER_COLS.length).setValues([values]);
       changedRowNums.push(rowNum);
     } else {
@@ -1522,7 +1526,9 @@ function upsertOrderRows(storeId, rows) {
     sheet.getRange(startRow, 1, toAppend.length, ORDER_COLS.length).setValues(toAppend);
   }
 
-  return _withAmazonOrderNotify_({ ok: true }, storeId, rows.filter(r => !wasNew[String(r.id)]), { dedupe: true });
+  const res = { ok: true };
+  if (newlyDenied.length) res.apexDraftNotes = _cleanupDeniedApexDrafts_(newlyDenied);   // 管理画面がお知らせに出す
+  return _withAmazonOrderNotify_(res, storeId, rows.filter(r => !wasNew[String(r.id)]), { dedupe: true });
 }
 
 // 指定したidの行だけを個別に削除する。他の行（他店舗はもちろん、同じ店舗の
@@ -6302,7 +6308,7 @@ function markAmazonOrdered(apiKey, ids) {
 // 管理画面と同じく、発注日が入っている行は否認しない
 function markAmazonDenied(apiKey, ids, reason) {
   const add = String(reason || '').trim() ? '【否認理由】' + String(reason).trim() : '';
-  return _updateAmazonRows_(apiKey, ids, (sheet, rowNum, r, ix) => {
+  const out = _updateAmazonRows_(apiKey, ids, (sheet, rowNum, r, ix) => {
     if (_dateStr(r[ix('order_date')])) return '（発注日が入っているため否認できません）';
     sheet.getRange(rowNum, ix('denied') + 1).setValue(true);
     sheet.getRange(rowNum, ix('is_new') + 1).setValue(true);
@@ -6311,6 +6317,64 @@ function markAmazonDenied(apiKey, ids, reason) {
       sheet.getRange(rowNum, ix('note') + 1).setValue(note ? note + '\n' + add : add);
     }
   });
+  if (out.ok && out.marked.length) out.apexDraftNotes = _cleanupDeniedApexDrafts_(ids);   // Bot の返事に出す
+  return out;
+}
+
+// 否認したアペックスの品の発注メールの下書きを片づける（2026-11-03 塩川さん。否認しても下書きが残り、送ってよいか迷った:
+// 11/3 南森町のフィルター（月初で発注済み）・梅田のロースト（取り扱い終了））。
+// 行の備考にある発注書 PDF の名前（_registerOrderedRows_ が「…（PDF名）」で入れる）で、同じ発注書の行を集める。
+//  ・全部が否認なら: 添付名が同じ Gmail の下書きを消し、PDF と写し（APEX_BOT_DRAFT_* に残っていれば）をゴミ箱へ
+//  ・否認していない品が残っていれば: 下書きは触らず、否認した品が入ったままだと返す（人が直して送る）
+// 下書きが無い（送った・消した）ときは何もしない。失敗しても否認は止めない。返り値は知らせる文の配列
+function _cleanupDeniedApexDrafts_(ids) {
+  try {
+    const want = new Set((ids || []).map(String));
+    const sheet = getSheet(SHEET_ORDERS);
+    if (!want.size || sheet.getLastRow() <= 1) return [];
+    const data = sheet.getDataRange().getValues().slice(1);
+    const h = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0], ix = c => h.indexOf(c);
+    const isTrue = v => v === true || String(v) === 'TRUE';
+    const PDF_RE = /\d{4}-\d{2}-\d{2}_[^\n／]*?\.pdf/g;
+    const docs = new Set();
+    data.forEach(r => {
+      if (want.has(String(r[ix('id')])) && isTrue(r[ix('denied')])) (String(r[ix('note')]).match(PDF_RE) || []).forEach(n => docs.add(n));
+    });
+    if (!docs.size) return [];
+    const names = _storeNames_();
+    const label = r => (names[r[ix('store_id')]] || r[ix('store_id')]) + ' ' + (r[ix('label')] || r[ix('product')]);
+    const drafts = GmailApp.getDrafts().filter(d => /発注/.test(d.getMessage().getSubject()));
+    const props = PropertiesService.getScriptProperties();
+    const msgs = [];
+    docs.forEach(doc => {
+      const draft = drafts.find(d => d.getMessage().getAttachments().some(a => a.getName() === doc));
+      if (!draft) return;
+      const subject = draft.getMessage().getSubject();
+      const rows = data.filter(r => String(r[ix('note')]).indexOf(doc) >= 0);
+      const denied = rows.filter(r => isTrue(r[ix('denied')]));
+      if (denied.length < rows.length) {
+        msgs.push('⚠ 否認した品（' + denied.map(label).join('、') + '）が発注メールの下書きに入ったままです。直してから送ってください\n件名: ' + subject);
+        return;
+      }
+      const draftId = draft.getId();
+      draft.deleteDraft();
+      const trashed = [];
+      const pdfs = DriveApp.getFilesByName(doc);
+      while (pdfs.hasNext()) { const f = pdfs.next(); if (f.getMimeType() === MimeType.PDF) { f.setTrashed(true); trashed.push('PDF'); } }
+      Object.keys(props.getProperties()).filter(k => k.indexOf('APEX_BOT_DRAFT_') === 0).forEach(k => {
+        let p = null;
+        try { p = JSON.parse(props.getProperty(k) || 'null'); } catch (e) { p = null; }
+        if (!p || p.draftId !== draftId || !p.sheetId) return;
+        try { DriveApp.getFileById(p.sheetId).setTrashed(true); trashed.push('発注書の写し'); } catch (e) {}
+      });
+      msgs.push('否認したので発注メールの下書きを消しました（' + denied.map(label).join('、') + '）\n件名: ' + subject +
+        (trashed.length ? '\n' + trashed.join('・') + 'はゴミ箱へ移しました' : ''));
+    });
+    return msgs;
+  } catch (e) {
+    console.error('_cleanupDeniedApexDrafts_ error:', e.message);
+    return ['発注メールの下書きを片づけられませんでした（' + e.message + '）。Gmail の下書きを確かめてください'];
+  }
 }
 
 // 新着（未対応）の行だけ apply する。apply が文字列を返したら処理せず already に理由付きで入れる
