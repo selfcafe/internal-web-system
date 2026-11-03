@@ -4569,7 +4569,14 @@ function _toyoDefaultPeriod() {   // 月初の棚卸は前の月の分
   const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1);
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
 }
-function _toyoSiteUnit(it) { return it.bean ? 'kg' : (it.lot > 1 ? 'ケース' : (it.unit || '')); }
+// 在庫・基準値はポータルの単位（本・袋・個）、数は Bカートの単位（豆 kg、カップ・蓋 ケース）。数の横に「＝4袋」のように
+// ポータルの単位でも出して、在庫・基準値と見比べられるようにする（2026-11-03 塩川さん）
+function _toyoPortalUnit(it) { return it.unit || ((PRODUCTS.find(p => p.name === it.product) || {}).unit) || ''; }
+function _toyoSiteUnit(it) { return it.bean ? 'kg' : (it.lot > 1 ? 'ケース' : _toyoPortalUnit(it)); }
+function _toyoConvText(it, siteQty) {
+  if (_toyoLot(it) <= 1) return '';
+  return `＝${siteQty * _toyoLot(it)}${_toyoPortalUnit(it)}（1${it.bean ? 'kg' : 'ケース'}＝${_toyoLot(it)}${_toyoPortalUnit(it)}）`;
+}
 function _toyoLot(it) { return it.lot > 1 ? it.lot : 1; }
 
 async function renderToyoReorderAdmin(force) {
@@ -4645,10 +4652,11 @@ function _renderToyoPlanBody() {
         .filter(Boolean).join('・');
       return `<tr data-si="${si}" data-ii="${ii}">
         <td style="padding:4px 6px">${esc(it.label)}${it.bcartId ? '' : ' <span style="color:#c0392b;font-size:11px">（Bカートの番号なし）</span>'}<div style="font-size:11px;color:#888">${info}</div></td>
-        <td style="padding:4px 6px;text-align:right">${it.counted === null || it.counted === undefined ? '—' : esc(String(it.counted))}</td>
-        <td style="padding:4px 6px;text-align:right">${esc(String(it.target || '—'))}</td>
+        <td style="padding:4px 6px;text-align:right;white-space:nowrap">${it.counted === null || it.counted === undefined ? '—' : esc(String(it.counted)) + '<span style="font-size:11px;color:#777">' + esc(_toyoPortalUnit(it)) + '</span>'}</td>
+        <td style="padding:4px 6px;text-align:right;white-space:nowrap">${it.target ? esc(String(it.target)) + '<span style="font-size:11px;color:#777">' + esc(_toyoPortalUnit(it)) + '</span>' : '—'}</td>
         <td style="padding:4px 6px;white-space:nowrap"><input type="number" min="0" step="1" class="toyo-qty" value="${skipped ? 0 : siteQty}" oninput="_toyoPlanRecalc(${si})"
-          style="width:56px;border:1px solid #ddd;border-radius:6px;padding:3px 5px;font-family:inherit"> <span style="font-size:12px;color:#555">${esc(_toyoSiteUnit(it))}</span>${lot > 1 && !it.bean ? '' : ''}</td>
+          style="width:56px;border:1px solid #ddd;border-radius:6px;padding:3px 5px;font-family:inherit"> <span style="font-size:12px;color:#555">${esc(_toyoSiteUnit(it))}</span>
+          <span class="toyo-conv" style="font-size:11px;color:#777;margin-left:2px">${esc(_toyoConvText(it, skipped ? 0 : siteQty))}</span></td>
         <td style="padding:4px 6px;text-align:right" class="toyo-amt"></td>
         <td style="padding:4px 6px;white-space:nowrap"><label style="font-size:12px"><input type="checkbox" class="toyo-skip" ${skipped ? 'checked' : ''} onchange="_toyoPlanRecalc(${si})"> 見送り</label>
           <input type="text" class="toyo-skip-reason" placeholder="理由" value="${esc(skipLog[it.product] || '')}"
@@ -4695,6 +4703,7 @@ function _toyoPlanCollect(si) {
     const pieces = siteQty * _toyoLot(it);
     const amt = pieces * (it.unitPrice || 0);
     tr.querySelector('.toyo-amt').textContent = amt ? amt.toLocaleString() + '円' : '';
+    tr.querySelector('.toyo-conv').textContent = _toyoConvText(it, siteQty);
     if (skip) skips.push({ product: it.product, reason: reasonEl.value.trim() });
     if (pieces > 0) { items.push({ product: it.product, qty: pieces }); total += amt; if (it.bcartId) cart.push(it.bcartId + 'x' + siteQty); }
   });
