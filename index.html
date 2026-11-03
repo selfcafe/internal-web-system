@@ -969,6 +969,7 @@
     <button class="sub-tab"        id="sub-lost"     onclick="switchAdminView('lost')">忘れ物一覧</button>
     <button class="sub-tab"        id="sub-machinePhoto" onclick="switchAdminView('machinePhoto')">機械内写真</button>
     <button class="sub-tab"        id="sub-meter"    onclick="switchAdminView('meter')">集計表</button>
+    <button class="sub-tab"        id="sub-toyoReorder" onclick="switchAdminView('toyoReorder')">トーヨー月初発注</button>
     <button class="sub-tab"        id="sub-bugreport" onclick="switchAdminView('bugreport')">バグ報告<span class="tab-badge" id="badge-bugreport" style="display:none"></span></button>
   </div>
 
@@ -4556,6 +4557,155 @@ function renderMeterAdmin() {
   MeterCore.mountAdmin(container);
 }
 
+/* ===== トーヨー月初発注（管理画面、2026-11-03） =====
+   棚卸から出したトーヨー（Bカート）の店ごとの発注案を並べ、数を直して［カートに入れる］→ Bカートで注文を確定 →
+   ［発注登録］で発注タブに検品待ちの行を入れる（GAS registerToyoMonthlyOrder）。登録は確定のあとだけ。
+   数の欄は Bカートの単位（豆は kg＝4袋、カップ・蓋はケース、ほかは袋・個）。見送りにした品の店の依頼は理由つきで否認する */
+let _toyoPlan = null;            // getToyoMonthlyPlans の結果
+let _toyoPlanPeriod = '';
+function _toyoDefaultPeriod() {   // 月初の棚卸は前の月の分
+  const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1);
+  return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
+}
+function _toyoSiteUnit(it) { return it.bean ? 'kg' : (it.lot > 1 ? 'ケース' : (it.unit || '')); }
+function _toyoLot(it) { return it.lot > 1 ? it.lot : 1; }
+
+async function renderToyoReorderAdmin(force) {
+  document.querySelector('#page-admin .table-wrap').style.display = 'none';
+  document.getElementById('pagination').style.display = 'none';
+  document.getElementById('admin-thead').innerHTML = '';
+  document.getElementById('admin-tbody').innerHTML = '';
+  document.getElementById('admin-summary').innerHTML = '';
+  const container = document.getElementById('settings-container');
+  container.style.display = 'block';
+  if (!_toyoPlanPeriod) _toyoPlanPeriod = _toyoDefaultPeriod();
+  container.innerHTML = `<div class="settings-card">
+      <div class="settings-card-title">トーヨー月初発注（Bカート）</div>
+      <div style="${_SP_NOTE}">棚卸から出した発注案です。数を直して［カートに入れる］→ Bカートで注文を確定 →［発注登録］の順に進めてください。
+        ［発注登録］を押すと、店の発注タブに「発注済み（検品待ち）」で入ります（注文を確定する前は押さないでください）。</div>
+      <div style="display:flex;gap:8px;align-items:center;margin-bottom:12px">
+        <label style="font-size:13px">棚卸の月 <input type="month" id="toyo-plan-period" value="${esc(_toyoPlanPeriod)}" onchange="_toyoPlanPeriod=this.value;renderToyoReorderAdmin(true)"
+          style="border:1px solid #ddd;border-radius:6px;padding:5px 8px;font-family:inherit"></label>
+        <button onclick="renderToyoReorderAdmin(true)" style="${_SP_BTN_SUB}">読み直す</button>
+      </div>
+      <div id="toyo-plan-body"><div style="font-size:13px;color:#888">読み込み中…</div></div>
+    </div>`;
+  if (force || !_toyoPlan || _toyoPlan.periodLabel !== _toyoPlanPeriod) {
+    const res = await gasGet('getToyoMonthlyPlans', { periodLabel: _toyoPlanPeriod });
+    if (!res || res.error || !res.stores) {
+      document.getElementById('toyo-plan-body').innerHTML = `<div style="color:#c0392b;font-size:13px">読み込めませんでした: ${esc((res && res.error) || '')}</div>`;
+      return;
+    }
+    _toyoPlan = res;
+  }
+  _renderToyoPlanBody();
+}
+
+function _renderToyoPlanBody() {
+  const body = document.getElementById('toyo-plan-body');
+  if (!body || !_toyoPlan) return;
+  const STATUS = { open: ['未登録', '#b45309'], registered: ['登録済み', '#22703d'], not_submitted: ['棚卸がまだ', '#888'], no_targets: ['基準値なし', '#888'] };
+  body.innerHTML = _toyoPlan.stores.map((st, si) => {
+    const [label, color] = STATUS[st.status] || [st.status, '#888'];
+    const head = `<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px">
+        <div style="font-weight:700;font-size:14px">${esc(st.store)} <span style="font-size:11px;color:#888">${esc(st.area)}</span></div>
+        <span style="font-size:12px;font-weight:700;color:${color}">${esc(label)}</span></div>`;
+    if (st.status === 'not_submitted' || st.status === 'no_targets') {
+      return `<div style="border:1px solid #eee;border-radius:10px;padding:10px 12px;margin-bottom:10px">${head}
+        <div style="font-size:12px;color:#888">${st.status === 'no_targets' ? '発注基準値が入っていないので、案を出せません（依頼が来た品だけ都度発注）。' : 'この月の棚卸がまだ届いていません。'}</div></div>`;
+    }
+    const reg = {};
+    (st.registered || []).forEach(r => { reg[r.product] = r; });
+    const skipLog = {};
+    ((st.log && st.log.skips) || []).forEach(x => { skipLog[x.product] = x.reason; });
+    const loggedQty = {};
+    ((st.log && st.log.items) || []).forEach(x => { loggedQty[x.product] = x.qty; });
+    const rows = st.items.map((it, ii) => {
+      const lot = _toyoLot(it);
+      // 登録済みなら登録した数、まだなら案の数
+      const pieces = st.status === 'registered' ? (loggedQty[it.product] !== undefined ? loggedQty[it.product] : 0) : it.qty;
+      const siteQty = Math.round(pieces / lot);
+      const skipped = skipLog[it.product] !== undefined;
+      const info = [it.onOrder ? `未着 ${it.onOrder}` : '', it.requested ? `<b style="color:#b45309">店の依頼 ${it.requested}</b>` : '', it.added ? `送料のため +${it.added}` : '']
+        .filter(Boolean).join('・');
+      return `<tr data-si="${si}" data-ii="${ii}">
+        <td style="padding:4px 6px">${esc(it.label)}${it.bcartId ? '' : ' <span style="color:#c0392b;font-size:11px">（Bカートの番号なし）</span>'}<div style="font-size:11px;color:#888">${info}</div></td>
+        <td style="padding:4px 6px;text-align:right">${it.counted === null || it.counted === undefined ? '—' : esc(String(it.counted))}</td>
+        <td style="padding:4px 6px;text-align:right">${esc(String(it.target || '—'))}</td>
+        <td style="padding:4px 6px;white-space:nowrap"><input type="number" min="0" step="1" class="toyo-qty" value="${skipped ? 0 : siteQty}" oninput="_toyoPlanRecalc(${si})"
+          style="width:56px;border:1px solid #ddd;border-radius:6px;padding:3px 5px;font-family:inherit"> <span style="font-size:12px;color:#555">${esc(_toyoSiteUnit(it))}</span>${lot > 1 && !it.bean ? '' : ''}</td>
+        <td style="padding:4px 6px;text-align:right" class="toyo-amt"></td>
+        <td style="padding:4px 6px;white-space:nowrap"><label style="font-size:12px"><input type="checkbox" class="toyo-skip" ${skipped ? 'checked' : ''} onchange="_toyoPlanRecalc(${si})"> 見送り</label>
+          <input type="text" class="toyo-skip-reason" placeholder="理由" value="${esc(skipLog[it.product] || '')}"
+          style="width:150px;border:1px solid #ddd;border-radius:6px;padding:3px 5px;font-size:12px;font-family:inherit;${skipped ? '' : 'display:none'}"></td>
+      </tr>`;
+    }).join('');
+    const regNote = st.status === 'registered' && st.log ? `<div style="font-size:11.5px;color:#22703d;margin-top:4px">登録: ${esc(String(st.log.at || '').slice(0, 16).replace('T', ' '))}（直して押し直すと上書きします）</div>` : '';
+    return `<div style="border:1px solid #e3e3e3;border-radius:10px;padding:10px 12px;margin-bottom:12px" id="toyo-store-${si}">${head}
+      <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px;overflow:visible">
+        <thead><tr style="background:#f6f6f6;font-size:12px"><th style="text-align:left;padding:4px 6px">品</th><th style="padding:4px 6px">在庫</th><th style="padding:4px 6px">基準値</th>
+          <th style="padding:4px 6px">数（Bカート）</th><th style="padding:4px 6px">金額</th><th style="padding:4px 6px">見送り</th></tr></thead>
+        <tbody>${rows}</tbody></table></div>
+      <div style="font-size:12px;color:#555;margin-top:4px">無料メンテナンス 1回（毎月。カートのリンクに入ります）</div>
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
+        <span class="toyo-total" style="font-weight:700;font-size:13px"></span>
+        <a class="toyo-cart" target="_blank" rel="noopener" style="${_SP_BTN_SUB};text-decoration:none">カートに入れる</a>
+        <button onclick="registerToyoPlan(${si})" style="${_SP_BTN}">発注登録</button>
+        <span class="toyo-msg" style="${_SP_MSG}"></span>
+      </div>${regNote}
+    </div>`;
+  }).join('') || '<div style="font-size:13px;color:#888">トーヨーの機械の店がありません（店舗別設定の「設置している機械」）。</div>';
+  _toyoPlan.stores.forEach((st, si) => { if (st.status === 'open' || st.status === 'registered') _toyoPlanRecalc(si); });
+}
+
+// 入力欄から、その店の登録する品（ポータルの数）・見送り・金額・カートのリンクを作る
+function _toyoPlanCollect(si) {
+  const st = _toyoPlan.stores[si];
+  const box = document.getElementById('toyo-store-' + si);
+  const items = [], skips = [], cart = [];
+  let total = 0;
+  box.querySelectorAll('tbody tr').forEach(tr => {
+    const it = st.items[Number(tr.dataset.ii)];
+    const skip = tr.querySelector('.toyo-skip').checked;
+    const reasonEl = tr.querySelector('.toyo-skip-reason');
+    reasonEl.style.display = skip ? '' : 'none';
+    const siteQty = skip ? 0 : Math.max(0, Math.floor(Number(tr.querySelector('.toyo-qty').value) || 0));
+    const pieces = siteQty * _toyoLot(it);
+    const amt = pieces * (it.unitPrice || 0);
+    tr.querySelector('.toyo-amt').textContent = amt ? amt.toLocaleString() + '円' : '';
+    if (skip) skips.push({ product: it.product, reason: reasonEl.value.trim() });
+    if (pieces > 0) { items.push({ product: it.product, qty: pieces }); total += amt; if (it.bcartId) cart.push(it.bcartId + 'x' + siteQty); }
+  });
+  return { st, box, items, skips, cart, total };
+}
+
+function _toyoPlanRecalc(si) {
+  const { st, box, cart, total } = _toyoPlanCollect(si);
+  const free = total >= (_toyoPlan.freeShipping || 20000);
+  box.querySelector('.toyo-total').innerHTML = `合計（税抜） ${total.toLocaleString()}円 <span style="color:${free ? '#22703d' : '#c0392b'}">${free ? '送料無料' : '送料がかかります'}</span>`;
+  const a = box.querySelector('.toyo-cart');
+  if (cart.length) {
+    a.href = 'https://mirubiki-coffee.i16.bcart.jp/list.php#sc-cart=' + cart.concat('mx1').join(',') +
+      '&store=' + encodeURIComponent(st.store) + (st.area ? '&area=' + encodeURIComponent(st.area) : '');
+    a.style.pointerEvents = ''; a.style.opacity = '';
+  } else { a.removeAttribute('href'); a.style.pointerEvents = 'none'; a.style.opacity = '0.5'; }
+}
+
+async function registerToyoPlan(si) {
+  const { st, box, items, skips, total } = _toyoPlanCollect(si);
+  const msg = box.querySelector('.toyo-msg');
+  if (!items.length && !skips.length) { msg.textContent = '登録する品がありません'; return; }
+  const lines = items.map(x => { const it = st.items.find(i => i.product === x.product); return `・${it.label} ${Math.round(x.qty / _toyoLot(it))}${_toyoSiteUnit(it)}`; });
+  const skipLines = skips.map(x => `・${String(x.product).replace(/^㋣/, '')}（見送り${x.reason ? '：' + x.reason : ''}）`);
+  if (!confirm(`${st.store}（${_toyoPlanPeriod.replace('-', '年')}月分）を発注登録します。\nBカートで注文を確定しましたか？\n\n${lines.concat(skipLines).join('\n')}\n\n合計（税抜） ${total.toLocaleString()}円`)) return;
+  msg.textContent = '登録中…';
+  const res = await gasPost('registerToyoMonthlyOrder', { storeId: st.storeId, periodLabel: _toyoPlanPeriod, items, skips });
+  if (!res || res.error) { msg.style.color = '#c0392b'; msg.textContent = '登録できませんでした: ' + ((res && res.error) || ''); return; }
+  msg.style.color = '';
+  msg.textContent = `登録しました（${res.rows}品${res.denied && res.denied.length ? '・依頼の否認 ' + res.denied.length + '件' : ''}）`;
+  setTimeout(() => renderToyoReorderAdmin(true), 800);
+}
+
 // 2026-08-24〜10-17はFC店の「発注」タブを隠していた(FCは自社で仕入れる前提)。2026-10-18から
 // FC店も直営と同じく発注依頼を出し、本部がアペックスへ発注する(FC店への請求はアペックスの請求書と
 // 卸値で本部が作る。卸値はポータルに持たせない)ので、全店で出す
@@ -7569,8 +7719,8 @@ function switchAdminView(v) {
   if (v === 'lost') _lostForceRefresh = true;
   if (v === 'history') _historyForceRefresh = true;
   if (v === 'bugreport') _bugReportAdminForceRefresh = true;
-  ['overview','history','lost','machinePhoto','meter','bugreport'].forEach(k => document.getElementById('sub-'+k)?.classList.toggle('active', k===v));
-  document.getElementById('admin-region-nav')?.classList.toggle('nav-disabled', v === 'lost' || v === 'bugreport');
+  ['overview','history','lost','machinePhoto','meter','toyoReorder','bugreport'].forEach(k => document.getElementById('sub-'+k)?.classList.toggle('active', k===v));
+  document.getElementById('admin-region-nav')?.classList.toggle('nav-disabled', v === 'lost' || v === 'bugreport' || v === 'toyoReorder');
   const hideFc = _fcTabHiddenForView_(v);
   const subFcEl = document.getElementById('sub-fc'), menuFcEl = document.getElementById('menu-fc');
   if (subFcEl) subFcEl.style.display = hideFc ? 'none' : '';
@@ -7587,6 +7737,7 @@ function renderAdmin() {
   else if (adminView==='lost')       renderLostAdmin();
   else if (adminView==='machinePhoto') renderMachinePhotoAdmin();
   else if (adminView==='meter')      renderMeterAdmin();
+  else if (adminView==='toyoReorder') renderToyoReorderAdmin();
   else if (adminView==='attendance') renderAttendanceAdmin();
   else if (adminView==='bugreport')  renderBugReportAdmin();
   else                                renderSettings();

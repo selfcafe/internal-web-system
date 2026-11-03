@@ -733,6 +733,7 @@ function doGet(e) {
     else if (a === 'buildBranchReorder')        result = buildBranchReorder(e.parameter.branch, e.parameter.periodLabel, false, { force: e.parameter.force === '1' });
     else if (a === 'previewToyoReorder')        result = buildToyoReorder(e.parameter.store, e.parameter.periodLabel, true);
     else if (a === 'buildToyoReorder')          result = buildToyoReorder(e.parameter.store, e.parameter.periodLabel, false);
+    else if (a === 'getToyoMonthlyPlans')       result = getToyoMonthlyPlans(e.parameter.periodLabel);
     else if (a === 'authStatus')                result = authStatus();
     else if (a === 'debugOrderText')            result = debugOrderText(e.parameter.storeText || '', e.parameter.body || '');
     else if (a === 'buildAdhocApexOrder')       result = buildAdhocApexOrder(e.parameter.branch, e.parameter.items, e.parameter.dryRun === '1' || e.parameter.dryRun === 'true');
@@ -916,6 +917,7 @@ function doPost(e) {
     else if (b.action === 'getProductAlternatives') result = getProductAlternatives(b.apiKey, b.text);
     else if (b.action === 'resendOrderNotify')  result = resendOrderNotify(b.storeId);   // 管理者・スクリプトだけ（2026-10-24）
     else if (b.action === 'registerApexOrder')  result = registerApexOrder(b.storeId, b.items, b.source, b.document);
+    else if (b.action === 'registerToyoMonthlyOrder') result = registerToyoMonthlyOrder(b.storeId, b.periodLabel, b.items, b.skips);
     else if (b.action === 'setAuthEnforce')     result = setAuthEnforce(b.on);
     else result = { error: 'Unknown action: ' + b.action };
   } catch(err) {
@@ -5967,7 +5969,10 @@ function _storeIsToyo_(storeId) {
   return Array.isArray(m) && m.indexOf('jcc') >= 0;
 }
 
-function _toyoReorderItems_(storeId, periodLabel) {
+// 届いていない発注は「発注済み（発注日あり）」だけ在庫に足す。店の依頼（発注日なし）はまだ頼んでいないので、
+// 足さずに「依頼」として数に入れる（基準値から出した数と依頼の数の多いほう）。2026-11-03 上里: 抹茶ラテの依頼3袋を
+// 届いていない発注と数えて0になり、依頼の品が頼まれないところだった。基準値の無い品・棚卸に無い品の依頼も足す
+function _toyoReorderItems_(storeId, periodLabel, orders) {
   const targets = _getReorderTargets_()[storeId];
   if (!targets || !Object.keys(targets).length) return { submitted: false, noTargets: true, items: [] };
   const sheetId = _inventorySheetIdForPeriod_(periodLabel);
@@ -5975,7 +5980,12 @@ function _toyoReorderItems_(storeId, periodLabel) {
   const idx = {};
   INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
   const meta = _productMeta_();
-  const onOrder = _onOrderPieces_(storeId, periodLabel);
+  const onOrder = _onOrderPieces_(storeId, periodLabel, orders);
+  const split = product => {
+    const rows = (onOrder[product] || {}).rows || [];
+    const sum = st => rows.filter(x => x.status === st).reduce((a, x) => a + x.pieces, 0);
+    return { ordered: sum('発注済み'), requested: sum('依頼中'), requestIds: rows.filter(x => x.status === '依頼中').map(x => x.id) };
+  };
   const items = [];
   let submitted = false;
   for (let i = 1; i < data.length; i++) {
@@ -5990,12 +6000,23 @@ function _toyoReorderItems_(storeId, periodLabel) {
     const info = meta[r[idx.product]] || {};
     if (info.vendor !== 'toyo') continue;
     const lot = info.casePieces || 1;
-    const oo = (onOrder[r[idx.product]] || {}).pieces || 0;   // 届いていない発注(_onOrderPieces_)
-    const target = Number(targets[code]), stock = Number(endStock) + oo;
+    const sp = split(r[idx.product]);
+    const target = Number(targets[code]), stock = Number(endStock) + sp.ordered;
     const need = Math.max(0, target - stock);
-    items.push({ code, product: r[idx.product], target, endStock: stock, counted: Number(endStock), onOrder: oo, lot, qty: Math.ceil(need / lot) * lot,
-      unitPrice: info.price || 0, added: 0 });
+    const qty = Math.max(Math.ceil(need / lot) * lot, Math.ceil(sp.requested / lot) * lot);
+    items.push({ code, product: r[idx.product], target, endStock: stock, counted: Number(endStock), onOrder: sp.ordered,
+      requested: sp.requested, requestIds: sp.requestIds, lot, qty, unitPrice: info.price || 0, added: 0 });
   }
+  // 基準値が無い・棚卸に無い品の依頼
+  if (submitted) Object.keys(onOrder).forEach(product => {
+    const info = meta[product] || {};
+    if (info.vendor !== 'toyo' || items.some(it => it.product === product)) return;
+    const sp = split(product);
+    if (!(sp.requested > 0)) return;
+    const lot = info.casePieces || 1;
+    items.push({ code: String(info.code || ''), product, target: 0, endStock: sp.ordered, counted: null, onOrder: sp.ordered,
+      requested: sp.requested, requestIds: sp.requestIds, lot, qty: Math.ceil(sp.requested / lot) * lot, unitPrice: info.price || 0, added: 0 });
+  });
   return { submitted, items: _toyoTopUp_(items) };
 }
 
@@ -6031,7 +6052,7 @@ function buildToyoReorder(storeId, periodLabel, dryRun) {
   const total = _toyoAmount_(items);
   const storeName = _storeNames_()[storeId] || storeId;
   const periodJa = _periodLabelJa_(periodLabel);
-  const lines = items.map(it => `${String(it.product).replace(/^㋣/, '')}：${_toyoQtyText_(it)}${it.added ? `（送料無料に乗せるため+${it.added}）` : ''}${it.onOrder ? `（届いていない発注 ${it.onOrder} を差し引き）` : ''}　${(it.qty * it.unitPrice).toLocaleString()}円`);
+  const lines = items.map(it => `${String(it.product).replace(/^㋣/, '')}：${_toyoQtyText_(it)}${it.added ? `（送料無料に乗せるため+${it.added}）` : ''}${it.onOrder ? `（届いていない発注 ${it.onOrder} を差し引き）` : ''}${it.requested ? `（店の依頼 ${it.requested} を含む）` : ''}　${(it.qty * it.unitPrice).toLocaleString()}円`);
   // 届いていない発注があって、今回は頼まなくてよくなった品も書いておく(押し忘れで実は届いている場合に気づけるように)
   r.items.filter(it => it.onOrder && !(it.qty > 0)).forEach(it =>
     lines.push(`（${String(it.product).replace(/^㋣/, '')}：届いていない発注 ${it.onOrder} があるので今回は無し）`));
@@ -6061,6 +6082,107 @@ function buildToyoReorder(storeId, periodLabel, dryRun) {
   return Object.assign(result, { draftCreated: true });
 }
 
+// ===== トーヨーの月初発注を発注タブに記録する（2026-11-03） =====
+// 発注メモ（buildToyoReorder）は Gmail の下書きを作るだけで、発注タブに行が入らなかった（現場が検品できず、
+// 次の月初でも届いていない発注として差し引かれない）。本部が Bカートで注文を確定したあとに、管理画面の
+// 「トーヨー月初発注」の［発注登録］（registerToyoMonthlyOrder）で発注日入りの行（＝検品待ち）を入れる。
+//   ・行は店×月で1グループ（group_id = monthly_toyo_<店>_<月>）。押し直しても行は増えず、数を上書きする
+//   ・店の依頼（未発注）の品は、その依頼の行をそのまま発注済みにする（新しい行は作らない）
+//   ・見送った品の依頼は、理由つきで否認する。依頼の無い品の見送りは toyo_monthly_log に理由を残す
+// 下書きの時点では入れない（注文しなかったときに記録だけ残らないように）
+const TOYO_MONTHLY_LOG_KEY = 'toyo_monthly_log';
+function _toyoMonthlyGroup_(storeId, periodLabel) { return 'monthly_toyo_' + storeId + '_' + periodLabel; }
+function _toyoMonthlyTag_(periodLabel) { return 'トーヨー 月初発注（' + _periodLabelJa_(periodLabel) + '分）'; }
+// その店・その月に登録済みの行（グループが同じか、依頼の行を発注済みにしたもの＝備考に印）
+function _toyoMonthlyRegisteredRows_(storeId, periodLabel, orders) {
+  const g = _toyoMonthlyGroup_(storeId, periodLabel), tag = _toyoMonthlyTag_(periodLabel);
+  return (orders || getOrders()).filter(r => String(r.store_id) === String(storeId) && !r.denied &&
+    (String(r.group_id || '') === g || String(r.note || '').indexOf(tag) >= 0));
+}
+function _toyoStores_() {
+  const machines = _settingJson_('store_machines', {});
+  return Object.keys(machines).filter(sid => Array.isArray(machines[sid]) && machines[sid].indexOf('jcc') >= 0 && !_storeIsFullOp_(sid));
+}
+
+// 管理画面の一覧: トーヨーの店ごとの発注案と、登録済みかどうか
+function getToyoMonthlyPlans(periodLabel) {
+  if (!/^\d{4}-\d{2}$/.test(String(periodLabel || ''))) return { error: 'periodLabel（YYYY-MM）が要ります' };
+  const orders = getOrders(), meta = _productMeta_(), names = _storeNames_();
+  const log = _settingJson_(TOYO_MONTHLY_LOG_KEY, {});
+  const stores = _toyoStores_().map(sid => {
+    const r = _toyoReorderItems_(sid, periodLabel, orders);
+    const registered = _toyoMonthlyRegisteredRows_(sid, periodLabel, orders).map(o => ({ id: String(o.id), product: o.product,
+      qty: o.qty, actual_qty: o.actual_qty, unit_mode: o.unit_mode, case_unit: o.case_unit, order_date: o.order_date, delivery_date: o.delivery_date }));
+    const items = (r.items || []).map(it => {
+      const m = meta[it.product] || {};
+      return Object.assign({}, it, { label: String(it.product).replace(/^㋣/, ''), unit: m.unit || '', caseOnly: !!m.caseOnly,
+        bean: TOYO_BEAN_CODES.indexOf(String(it.code)) >= 0, bcartId: TOYO_BCART_IDS[String(it.code)] || null });
+    });
+    return { storeId: sid, store: names[sid] || sid, area: TOYO_STORE_AREA[sid] || '',
+      status: r.noTargets ? 'no_targets' : (!r.submitted ? 'not_submitted' : (registered.length ? 'registered' : 'open')),
+      items, registered, log: log[sid + '_' + periodLabel] || null };
+  });
+  return { ok: true, periodLabel, freeShipping: TOYO_FREE_SHIPPING, stores };
+}
+
+// items: [{product, qty（ポータルの数＝袋・本・個。lot の倍数）}]、skips: [{product, reason}]
+function registerToyoMonthlyOrder(storeId, periodLabel, items, skips) {
+  storeId = _normalizeStoreId_(storeId);
+  if (!_storeNames_()[storeId]) return { error: '店舗が見つかりません: ' + storeId };
+  if (!/^\d{4}-\d{2}$/.test(String(periodLabel || ''))) return { error: 'periodLabel（YYYY-MM）が要ります' };
+  const meta = _productMeta_();
+  const orders = getOrders();
+  const mine = orders.filter(r => String(r.store_id) === String(storeId));
+  const group = _toyoMonthlyGroup_(storeId, periodLabel), tag = _toyoMonthlyTag_(periodLabel);
+  const before = _toyoMonthlyRegisteredRows_(storeId, periodLabel, orders);
+  const pending = product => mine.filter(r => r.product === product && !r.denied && !r.order_date);
+  const valid = (items || []).filter(it => it && it.product && Number(it.qty) > 0);
+  const bad = valid.filter(it => (meta[it.product] || {}).vendor !== 'toyo');
+  if (bad.length) return { error: 'トーヨーの商品ではありません: ' + bad.map(it => it.product).join('、') };
+  const stripTag = n => String(n || '').split('／').filter(x => x && x !== tag).join('／');
+  const bases = [];
+  const regItems = valid.map(it => {
+    const m = meta[it.product] || {};
+    // 前に登録した行 → 店の依頼の行 → 新しい行（id は店×月×商品で固定）の順に使う
+    const base = before.find(r => r.product === it.product) || pending(it.product)[0];
+    if (base) bases.push(Object.assign({}, base, { note: stripTag(base.note) }));
+    return { product: it.product, label: String(it.product), qty: Number(it.qty), unit: m.unit || '', unitPrice: m.price || 0,
+      portalCode: String(m.code || ''), sheetCode: String(m.code || ''), vendor: 'toyo', caseOnly: !!m.caseOnly, casePieces: m.casePieces || 0,
+      id: base ? String(base.id) : group + '_' + (m.code || it.product) };
+  });
+  const res = regItems.length ? _registerOrderedRows_(storeId, regItems, 'トーヨー 月初発注', _periodLabelJa_(periodLabel) + '分',
+    { groupId: group, rows: bases, skipLines: before.length > 0 }) : { rows: 0, ids: [] };
+  // 前に登録したのに今回は外した品: 新しく作った行は消し、依頼の行は依頼に戻す
+  const keep = new Set((res.ids || []).map(String));
+  const dropped = before.filter(r => !keep.has(String(r.id)));
+  const del = dropped.filter(r => String(r.id).indexOf(group + '_') === 0).map(r => String(r.id));
+  const back = dropped.filter(r => String(r.id).indexOf(group + '_') !== 0)
+    .map(r => Object.assign({}, r, { order_date: '', is_new: true, note: stripTag(r.note) }));
+  if (back.length) upsertOrderRows(storeId, back);
+  if (del.length) deleteOrderRows(del);
+  // 見送り: 依頼の行は理由つきで否認（パートナーの画面に「否認されました。備考を確認してください。」）
+  const denied = [];
+  (skips || []).filter(x => x && x.product).forEach(x => {
+    const reason = String(x.reason || '').trim();
+    pending(x.product).filter(r => !keep.has(String(r.id))).forEach(r => {
+      const add = '【否認理由】' + (reason || '今回の月初発注では見送りました。');
+      denied.push(Object.assign({}, r, { denied: true, is_new: true, note: r.note ? r.note + '\n' + add : add }));
+    });
+  });
+  if (denied.length) upsertOrderRows(storeId, denied);
+  // 記録（見送りの理由・登録した日）。100日より古い月は消す
+  try {
+    const all = _settingJson_(TOYO_MONTHLY_LOG_KEY, {});
+    const cut = Utilities.formatDate(new Date(Date.now() - 100 * 86400000), 'Asia/Tokyo', 'yyyy-MM');
+    Object.keys(all).forEach(k => { const m = k.match(/_(\d{4}-\d{2})$/); if (m && m[1] < cut) delete all[k]; });
+    all[storeId + '_' + periodLabel] = { at: new Date().toISOString(), items: valid.map(it => ({ product: it.product, qty: Number(it.qty) })),
+      skips: (skips || []).filter(x => x && x.product).map(x => ({ product: x.product, reason: String(x.reason || '') })) };
+    saveSetting(TOYO_MONTHLY_LOG_KEY, JSON.stringify(all));
+  } catch (e) { console.error('toyo_monthly_log の保存に失敗:', e.message); }
+  _pingOrdersUpdated_('toyo-monthly');
+  return { ok: true, rows: res.rows || 0, ids: res.ids || [], deleted: del.length, reverted: back.length, denied: denied.map(r => r.product) };
+}
+
 // ===== 届いていない発注を月初発注から差し引く（2026-10-29 塩川さん） =====
 // 現場は発注依頼を出したことを忘れて棚卸を出すので、依頼中・発注済みでまだ「納品済み」になっていない品は
 // 期末在庫に足してから基準値と比べる（基準値 −（期末在庫 ＋ 届いていない分））。二重に頼まないように。
@@ -6068,13 +6190,15 @@ function buildToyoReorder(storeId, periodLabel, dryRun) {
 // 押し忘れているとみなす（期末在庫に入っているはずなので、足すと二重に数えて発注が足りなくなる）。
 // その月の月初発注そのもの（group_id = monthly_<支店>_<月>）は、作り直すたびに自分を差し引かないよう除く。否認は除く
 const ON_ORDER_RECENT_DAYS = 14;
-function _onOrderPieces_(storeId, periodLabel) {
+// orders: 何店ぶんも続けて呼ぶとき用に、読み済みの getOrders() を渡せる
+function _onOrderPieces_(storeId, periodLabel, orders) {
   const meta = _productMeta_();
   const since = Utilities.formatDate(new Date(Date.now() - ON_ORDER_RECENT_DAYS * 86400000), 'Asia/Tokyo', 'yyyy-MM-dd');
   const out = {};
-  getOrders().forEach(r => {
+  (orders || getOrders()).forEach(r => {
     if (String(r.store_id) !== String(storeId) || !r.product || r.denied) return;
     if (/^monthly_/.test(String(r.group_id || '')) && String(r.group_id).endsWith('_' + periodLabel)) return;
+    if (String(r.note || '').indexOf(_toyoMonthlyTag_(periodLabel)) >= 0) return;   // トーヨーの月初で発注済みにした依頼の行
     const d = r.order_date || r.request_date || '';
     if (!d || d < since) return;
     const info = meta[r.product] || {};
@@ -6087,7 +6211,7 @@ function _onOrderPieces_(storeId, periodLabel) {
     const pieces = mode === 'case' ? n * cp : n;
     const o = out[r.product] || (out[r.product] = { pieces: 0, rows: [] });
     o.pieces += pieces;
-    o.rows.push({ date: d, pieces, status: r.order_date ? '発注済み' : '依頼中' });
+    o.rows.push({ id: String(r.id), date: d, pieces, status: r.order_date ? '発注済み' : '依頼中' });
   });
   return out;
 }
@@ -7332,6 +7456,7 @@ function _pingOrdersUpdated_(by) {
 // items: [{product, label, qty（袋・本・個）, unit, unitPrice, portalCode, sheetCode, vendor, id?}]
 // opts.groupId: まとめる単位（月初の支店まとめは支店×月で固定にして、作り直しで行が増えないようにする）
 // opts.rows: すでにある依頼の行（Bot から登録した行）。渡したときは新しい行を作らず、その行を発注済みにする
+// opts.skipLines: order_lines に明細を足さない（登録し直しで明細が二重にならないように）
 // opts.pending: 発注済みにしない（新着・発注日なしのまま。Bot の［発注した］で markAmazonOrdered が発注済みにする。
 //   2026-10-18 塩川さん: 下書きのメールを送り忘れると発注漏れになるため、Amazon と同じく押して完了にする）
 function _registerOrderedRows_(storeId, items, source, documentName, opts) {
@@ -7366,7 +7491,7 @@ function _registerOrderedRows_(storeId, items, source, documentName, opts) {
   });
   if (!rows.length) return { rows: 0 };
   upsertOrderRows(storeId, rows);   // is_new=false なので Amazon の通知は出ない
-  _logOrderLines_(storeId, lines);
+  if (!opts.skipLines) _logOrderLines_(storeId, lines);   // 同じ発注の登録し直し（トーヨーの月初）は明細を足さない
   _pingOrdersUpdated_('gas-apex-order');
   return { rows: rows.length, ids: rows.map(r => r.id) };
 }
