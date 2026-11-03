@@ -6788,13 +6788,15 @@ function filterProd(rowId) {
 
   const VENDOR_LABELS = Object.fromEntries(VENDOR_CONFIG.map(v => [v.key, v.label]));
   const VENDOR_ORDER  = VENDOR_CONFIG.map(v => v.key);
-  const usedProducts = new Set(storeRows.filter(r => r.id !== rowId && r.product).map(r => r.product));
+  const usedRows = new Map(storeRows.filter(r => r.id !== rowId && r.product).map(r => [r.product, r]));
   const optHTML = p => {
-    const inUse = p.name !== 'その他' && usedProducts.has(p.name);
+    const used = p.name !== 'その他' ? usedRows.get(p.name) : null;
+    const inUse = !!used;
+    const st = used ? prodInUseState(used) : null;
     return `<div class="prod-option${inUse ? ' prod-in-use' : ''}" data-name="${esc(p.name)}" data-label="${esc(p.label)}"
-      ${inUse ? '' : `onclick="selectProd('${rowId}','${esc(p.name)}','${esc(p.label)}')" onmouseenter="focusProdOpt(this)"`}>
+      ${inUse ? `onclick="prodInUseTap('${rowId}','${esc(p.name)}','${esc(p.label)}')"` : `onclick="selectProd('${rowId}','${esc(p.name)}','${esc(p.label)}')" onmouseenter="focusProdOpt(this)"`}>
       ${esc(p.label)}
-      ${inUse ? '<span style="font-size:10px;background:#94a3b8;color:white;border-radius:3px;padding:1px 5px;margin-left:5px">依頼中</span>' : ''}
+      ${st ? `<span style="font-size:10px;background:${st.color};color:white;border-radius:3px;padding:1px 5px;margin-left:5px">${st.tag}</span>` : ''}
       ${!inUse && p.caseOnly ? '<span style="font-size:10px;background:#ef4444;color:white;border-radius:3px;padding:1px 5px;margin-left:5px">ケース注文のみ</span>' : ''}
       ${!inUse && !p.caseOnly && p.caseUnit ? '<span style="font-size:10px;background:#22703d;color:white;border-radius:3px;padding:1px 5px;margin-left:5px">個数/ケース選択可</span>' : ''}
       <span style="font-size:11px;color:#888;margin-left:6px">${p.caseOnly ? 'ケース'+caseSizeHint(p.caseUnit) : (esc(p.unit)+caseSizeHint(p.caseUnit))}</span>
@@ -6816,9 +6818,41 @@ function focusProdOpt(el) {
   el.classList.add('focused');
 }
 
+// 同じ商品の行が店の一覧に残っていて選べない理由(2026-11-03、カインズ上里本庄「ブレンドAが選択出来ません」。
+// 9/29に発注した分が「納品済み」になっておらず、以前は理由の分からない「依頼中」だけが出ていた)
+function prodInUseState(row) {
+  if (row.denied)   return { key: 'denied',  tag: '否認済み',     color: '#dc2626' };
+  if (!row.locked)  return { key: 'draft',   tag: 'この依頼で選択中', color: '#94a3b8' };
+  if (row.orderDate) return { key: 'ordered', tag: '納品済み待ち', color: '#d97706' };
+  return { key: 'pending', tag: '依頼中', color: '#94a3b8' };
+}
+// 選べない商品をタップしたときに、選べない理由と直し方を出す。発注済みで届いている品はここで納品済みにして、そのまま選べるようにする
+async function prodInUseTap(rowId, name, label) {
+  const row = storeRows.find(r => r.id !== rowId && r.product === name);
+  if (!row) { selectProd(rowId, name, label); return; }
+  const st = prodInUseState(row);
+  if (st.key === 'ordered') {
+    const ok = confirm(`「${label || name}」は ${row.orderDate} に発注した分が、まだ「納品済み」になっていません。\n\n`
+      + '届いていれば「OK」を押してください。納品済みにして、この商品を選べるようにします。\n'
+      + 'まだ届いていなければ「キャンセル」を押してください(届くまで同じ商品は依頼できません。急ぐときは本部に連絡してください)。');
+    if (!ok) return;
+    await _markDeliveredCore(row.id);
+    if (storeRows.some(r => r.id === row.id)) return;   // 納品済みにできなかった
+    selectProd(rowId, name, label);
+    return;
+  }
+  if (st.key === 'denied') {
+    alert(`「${label || name}」は否認された依頼が残っているため選べません。\n「依頼済み履歴」で否認された依頼の備考を確かめ、「依頼取り下げ」を押すと、もう一度選べます。`);
+  } else if (st.key === 'pending') {
+    alert(`「${label || name}」はすでに依頼していて、本部で確認中です。\n数を変えたいときは「依頼済み履歴」でその依頼を「取り下げ」てから、もう一度依頼してください。`);
+  } else {
+    alert(`「${label || name}」はこの依頼の別の行で選んでいます。数量はその行で変えてください。`);
+  }
+}
+
 function selectProd(rowId, name, label) {
   const duplicate = name !== 'その他' && storeRows.find(r => r.id !== rowId && r.product === name);
-  if (duplicate) return;
+  if (duplicate) { prodInUseTap(rowId, name, label); return; }
   const el = document.getElementById('pi-'+rowId);
   if (el) el.innerHTML = label ? esc(label) : '<span class="prod-placeholder">タップして選択</span>';
   document.getElementById('pd-'+rowId).classList.remove('open');
@@ -7413,8 +7447,11 @@ async function _markDeliveredCore(id) {
    さらに納品予定日から3日たっても納品済みにならない品は、GAS の notifyOverdueDeliveries_ が毎朝本部へ知らせる(定数は GAS とそろえる)。
    練習モード(ガイダンス)では聞かない */
 const DELIVERY_ASK_DAYS_NO_DATE = 5;
-// この日より前に発注した品は聞かない(古い未納品まで出ると混乱するため。2026-10-29 塩川さん)。GAS の同名の定数とそろえる
-const DELIVERY_CHECK_FROM = '2026-10-29';
+// この日より前に発注した品は聞かない(古い未納品まで出ると混乱するため。2026-10-29 塩川さん)。
+// 2026-11-03 に 10/29 → 9/1 へ広げた: 10/29 より前の発注で納品済みを押していない品(17店・51件、すべて9〜10月)が
+// 一度も聞かれず残り、同じ商品を依頼できなくなっていた(カインズ上里本庄のブレンドA)。
+// GAS の同名の定数(本部への毎朝の通知)は 10/29 のまま(古い品を本部へ毎日知らせないため)
+const DELIVERY_CHECK_FROM = '2026-09-01';
 function _deliverySnoozeKey(sid) { return 'delivery_snooze_' + sid; }
 function _deliverySnooze(sid) { try { return JSON.parse(localStorage.getItem(_deliverySnoozeKey(sid)) || '{}') || {}; } catch (e) { return {}; } }
 function _deliveryDue(row) {
