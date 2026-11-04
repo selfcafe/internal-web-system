@@ -9247,10 +9247,13 @@ function getLineWorksAccessToken_(forceRefresh) {
 }
 
 // channelIdOverrideを渡すとそのチャンネルへ、省略時は従来通りLW_CHANNEL_ID（発注等の既定チャンネル）へ送信する
+// 2026-11-04: 社長依頼で「社内ポータル通知」Botの役割を塩川用Botに統合。まず塩川用Bot(action 'portalNotify')に頼み、
+// 送れなかったとき(塩川用Botがまだそのグループにいない等)だけ、今まで通り「社内ポータル通知」Botで送る
 function sendLineWorksNotification(message, channelIdOverride) {
   var props = PropertiesService.getScriptProperties();
   var botId     = props.getProperty('LW_BOT_ID');
   var channelId = channelIdOverride || props.getProperty('LW_CHANNEL_ID');
+  if (_sendViaOwnerBot_(channelId, message)) return;
   var url = 'https://www.worksapis.com/v1.0/bots/' + botId + '/channels/' + channelId + '/messages';
   var body = JSON.stringify({content: {type: 'text', text: message}});
   var token = getLineWorksAccessToken_();
@@ -9269,6 +9272,20 @@ function sendLineWorksNotification(message, channelIdOverride) {
       payload: body
     });
   }
+}
+
+function _sendViaOwnerBot_(channelId, message) {
+  try {
+    var props = PropertiesService.getScriptProperties();
+    var url = props.getProperty('GBP_PHOTO_BOT_URL'), apiKey = props.getProperty('GBP_PHOTO_BOT_API_KEY');
+    if (!url || !apiKey || !channelId) return false;
+    var res = UrlFetchApp.fetch(url, { method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+      payload: JSON.stringify({ action: 'portalNotify', apiKey: apiKey, channelId: channelId, text: message }) });
+    var out = {};
+    try { out = JSON.parse(res.getContentText()); } catch (e) {}
+    if (!out.ok) console.warn('塩川用Botで送れず、社内ポータル通知Botで送ります: ' + (out.error || res.getResponseCode()));
+    return !!out.ok;
+  } catch (e) { console.warn('塩川用Botへの依頼に失敗: ' + e.message); return false; }
 }
 
 function testLineWorksNotification() {
