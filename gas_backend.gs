@@ -6199,7 +6199,8 @@ function _toyoPlanForStore_(sid, periodLabel, orders) {
       bean: TOYO_BEAN_CODES.indexOf(String(it.code)) >= 0, bcartId: TOYO_BCART_IDS[String(it.code)] || null });
   });
   return { storeId: sid, store: names[sid] || sid, area: TOYO_STORE_AREA[sid] || '',
-    status: r.noTargets ? 'no_targets' : (!r.submitted ? 'not_submitted' : (registered.length ? 'registered' : 'open')),
+    // 行が無くても登録の記録があれば全部見送り（2026-11-04。前は「未登録」のままに見えた）
+    status: r.noTargets ? 'no_targets' : (!r.submitted ? 'not_submitted' : (registered.length ? 'registered' : (log[sid + '_' + periodLabel] ? 'skipped' : 'open'))),
     items, registered, log: log[sid + '_' + periodLabel] || null };
 }
 

@@ -4575,7 +4575,7 @@ function renderMeterAdmin() {
 let _toyoPlan = null;            // getToyoMonthlyPlans の結果
 let _toyoPlanPeriod = '';
 const _toyoOpen = new Set();     // 開いている店（店ID）。読み直しても開いたまま
-const TOYO_STATUS_ORDER = ['open', 'registered', 'not_submitted', 'no_targets'];
+const TOYO_STATUS_ORDER = ['open', 'registered', 'skipped', 'not_submitted', 'no_targets'];
 function _toyoDefaultPeriod() {   // 月初の棚卸は前の月の分
   const d = new Date(); d.setDate(1); d.setMonth(d.getMonth() - 1);
   return d.getFullYear() + '-' + String(d.getMonth() + 1).padStart(2, '0');
@@ -4648,9 +4648,9 @@ function _renderToyoPlanBody() {
   const staleNote = _toyoPlanStale ? '<div style="font-size:12px;color:#b45309;margin-bottom:8px">前回の内容を表示しています。最新を読み込み中…（終わるまで［発注登録］は押せません）</div>' : '';
   // 店ごとにたたむ。たたんだままでも状態（未登録など）と金額が見える
   const STATUS = { open: ['未登録', 'background:#d97706;color:white'], registered: ['登録済み', 'background:#e6f2ea;color:#22703d'],
-    not_submitted: ['棚卸がまだ', 'background:#eee;color:#777'], no_targets: ['基準値なし', 'background:#eee;color:#777'] };
+    skipped: ['見送り', 'background:#eef2f7;color:#4a5b70'], not_submitted: ['棚卸がまだ', 'background:#eee;color:#777'], no_targets: ['基準値なし', 'background:#eee;color:#777'] };
   const count = k => _toyoPlan.stores.filter(st => st.status === k).length;
-  const summary = `<div style="font-size:13px;margin-bottom:10px">未登録 <b style="color:#d97706">${count('open')}店</b>・登録済み ${count('registered')}店・棚卸がまだ ${count('not_submitted')}店${count('no_targets') ? '・基準値なし ' + count('no_targets') + '店' : ''}</div>`;
+  const summary = `<div style="font-size:13px;margin-bottom:10px">未登録 <b style="color:#d97706">${count('open')}店</b>・登録済み ${count('registered')}店${count('skipped') ? '・見送り ' + count('skipped') + '店' : ''}・棚卸がまだ ${count('not_submitted')}店${count('no_targets') ? '・基準値なし ' + count('no_targets') + '店' : ''}</div>`;
   const frame = (st, si, inner) => {
     const [label, badge] = STATUS[st.status] || [st.status, 'background:#eee;color:#777'];
     const open = _toyoOpen.has(st.storeId);
@@ -4676,7 +4676,7 @@ function _renderToyoPlanBody() {
     const rows = st.items.map((it, ii) => {
       const lot = _toyoLot(it);
       // 登録済みなら登録した数、まだなら案の数
-      const pieces = st.status === 'registered' ? (loggedQty[it.product] !== undefined ? loggedQty[it.product] : 0) : it.qty;
+      const pieces = st.status === 'registered' || st.status === 'skipped' ? (loggedQty[it.product] !== undefined ? loggedQty[it.product] : 0) : it.qty;
       const siteQty = Math.round(pieces / lot);
       const skipped = skipLog[it.product] !== undefined;
       const info = [it.onOrder ? `未着 ${it.onOrder}` : '', it.requested ? `<b style="color:#b45309">店の依頼 ${it.requested}</b>` : '', it.added ? `送料のため +${it.added}` : '']
@@ -4694,7 +4694,8 @@ function _renderToyoPlanBody() {
           style="width:150px;border:1px solid #ddd;border-radius:6px;padding:3px 5px;font-size:12px;font-family:inherit;${skipped ? '' : 'display:none'}"></td>
       </tr>`;
     }).join('');
-    const regNote = st.status === 'registered' && st.log ? `<div style="font-size:11.5px;color:#22703d;margin-top:4px">登録: ${esc(String(st.log.at || '').slice(0, 16).replace('T', ' '))}（直して押し直すと上書きします）</div>` : '';
+    const regAt = st.log && st.log.at ? new Date(st.log.at).toLocaleString('ja-JP', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }) : '';
+    const regNote = (st.status === 'registered' || st.status === 'skipped') && st.log ? `<div style="font-size:11.5px;color:#22703d;margin-top:4px">${st.status === 'skipped' ? '全部見送り' : '登録'}: ${esc(regAt)}（直して押し直すと上書きします）</div>` : '';
     return frame(st, si, `
       <div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px;overflow:visible">
         <thead><tr style="background:#f6f6f6;font-size:12px"><th style="text-align:left;padding:4px 6px">品</th><th style="padding:4px 6px">在庫</th><th style="padding:4px 6px">基準値</th>
@@ -4705,10 +4706,11 @@ function _renderToyoPlanBody() {
         <span class="toyo-total" style="font-weight:700;font-size:13px"></span>
         <a class="toyo-cart" target="_blank" rel="noopener" style="${_SP_BTN_SUB};text-decoration:none">カートに入れる</a>
         <button onclick="registerToyoPlan(${si})" style="${_SP_BTN}${_toyoPlanStale ? ';opacity:0.5;cursor:not-allowed' : ''}"${_toyoPlanStale ? ' disabled' : ''}>発注登録</button>
+        <button onclick="toyoSkipAll(${si})" style="${_SP_BTN_SUB}${_toyoPlanStale ? ';opacity:0.5;cursor:not-allowed' : ''}"${_toyoPlanStale ? ' disabled' : ''}>全部見送り</button>
         <span class="toyo-msg" style="${_SP_MSG}"></span>
       </div>${regNote}`);
   }).join('') || '<div style="font-size:13px;color:#888">トーヨーの機械の店がありません（店舗別設定の「設置している機械」）。</div>');
-  _toyoPlan.stores.forEach((st, si) => { if (st.status === 'open' || st.status === 'registered') _toyoPlanRecalc(si); });
+  _toyoPlan.stores.forEach((st, si) => { if (['open', 'registered', 'skipped'].indexOf(st.status) >= 0) _toyoPlanRecalc(si); });
 }
 
 function _toyoToggle(si) {
@@ -4745,13 +4747,28 @@ function _toyoPlanRecalc(si) {
   const { st, box, cart, total } = _toyoPlanCollect(si);
   const free = total >= (_toyoPlan.freeShipping || 20000);
   box.querySelector('.toyo-total').innerHTML = `合計（税抜） ${total.toLocaleString()}円 <span style="color:${free ? '#22703d' : '#c0392b'}">${free ? '送料無料' : '送料がかかります'}</span>`;
-  box.querySelector('.toyo-head-total').innerHTML = `${total.toLocaleString()}円${free ? '' : ' <span style="color:#c0392b">送料あり</span>'}`;
+  box.querySelector('.toyo-head-total').innerHTML = total ? `${total.toLocaleString()}円${free ? '' : ' <span style="color:#c0392b">送料あり</span>'}` : '';
   const a = box.querySelector('.toyo-cart');
   if (cart.length) {
     a.href = 'https://mirubiki-coffee.i16.bcart.jp/list.php#sc-cart=' + cart.concat('mx1').join(',') +
       '&store=' + encodeURIComponent(st.store) + (st.area ? '&area=' + encodeURIComponent(st.area) : '');
     a.style.pointerEvents = ''; a.style.opacity = '';
   } else { a.removeAttribute('href'); a.style.pointerEvents = 'none'; a.style.opacity = '0.5'; }
+}
+
+// 全部の品を見送りにして登録する（2026-11-04 塩川さん「一括見送りがあると良い」）。理由は1つ聞いて全部の品に入れる。
+// 店の依頼がある品は、その理由で否認になる（registerToyoMonthlyOrder）
+function toyoSkipAll(si) {
+  if (_toyoPlanStale) return;
+  const st = _toyoPlan.stores[si], box = document.getElementById('toyo-store-' + si);
+  const reason = prompt(`${st.store} の全部の品を見送りにします。理由を入れてください（店の依頼がある品は、この理由で否認します）`, '今月は発注を見送り');
+  if (reason === null) return;
+  box.querySelectorAll('tbody tr').forEach(tr => {
+    tr.querySelector('.toyo-skip').checked = true;
+    tr.querySelector('.toyo-skip-reason').value = reason.trim();
+  });
+  _toyoPlanRecalc(si);
+  registerToyoPlan(si);
 }
 
 async function registerToyoPlan(si) {
