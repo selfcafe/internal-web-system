@@ -9288,6 +9288,29 @@ function _sendViaOwnerBot_(channelId, message) {
   } catch (e) { console.warn('塩川用Botへの依頼に失敗: ' + e.message); return false; }
 }
 
+// 通知先のグループ（スクリプト プロパティの LW_CHANNEL_ID〜）すべてに、塩川用Botが入っているかを確かめる（送らない。2026-11-04）。
+// 「入っていない」と出たグループには LINE WORKS で塩川用Botを招待する。全部「OK」なら社内ポータル通知Botは外してよい
+function checkOwnerBotChannels() {
+  var props = PropertiesService.getScriptProperties();
+  var url = props.getProperty('GBP_PHOTO_BOT_URL'), apiKey = props.getProperty('GBP_PHOTO_BOT_API_KEY');
+  var all = props.getProperties(), seen = {}, lines = [];
+  Object.keys(all).filter(function (k) { return /^LW_CHANNEL_ID/.test(k) && all[k]; }).sort().forEach(function (k) {
+    var ch = all[k];
+    if (seen[ch]) { lines.push(k + ': ' + seen[ch] + ' と同じグループ'); return; }
+    seen[ch] = k;
+    var out = {};
+    try {
+      var res = UrlFetchApp.fetch(url, { method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+        payload: JSON.stringify({ action: 'portalNotify', apiKey: apiKey, channelId: ch, checkOnly: true }) });
+      out = JSON.parse(res.getContentText());
+    } catch (e) { out = { ok: false, error: e.message }; }
+    lines.push(k + ': ' + (out.ok ? 'OK（塩川用Botが入っている）' : '入っていない・確認できない（' + (out.error || '') + '）'));
+  });
+  console.log(lines.join('
+'));
+  return lines;
+}
+
 function testLineWorksNotification() {
   sendLineWorksNotification('【テスト】LINE WORKS通知の接続テストです。');
 }
