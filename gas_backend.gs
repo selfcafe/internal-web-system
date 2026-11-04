@@ -1560,10 +1560,15 @@ function deleteOrderRows(ids) {
 // 負荷軽減のため追加。設定はsaveSetting経由の変更なら即キャッシュ破棄されるので、
 // 反映漏れは最大60秒のみ）
 const SETTINGS_CACHE_KEY = 'settings_rows_v1';
+// 1回の実行の中では読んだ設定を使い回す（2026-11-04）。設定は全部で100KBを超えていて CacheService に入らず、
+// _settingJson_・_productMeta_ などを呼ぶたびに設定シートを読み直していた（トーヨー月初発注の一覧が店×品で数十回読み、30秒以上かかった）。
+// 保存したときは _invalidateSettingsCache_ が消す
+let _settingsMemo = null;
 function getSettings() {
+  if (_settingsMemo) return _settingsMemo;
   const cache = CacheService.getScriptCache();
   const cached = cache.get(SETTINGS_CACHE_KEY);
-  if (cached) { try { return JSON.parse(cached); } catch (e) {} }
+  if (cached) { try { return (_settingsMemo = JSON.parse(cached)); } catch (e) {} }
   const sheet = getSheet(SHEET_SETTINGS);
   if (sheet.getLastRow() <= 1) return [];
   const data = sheet.getDataRange().getValues();
@@ -1571,7 +1576,7 @@ function getSettings() {
   const vcols = _settingValueCols_(data[0]);
   const rows = data.slice(1).map(r => ({ key: r[ki], value: vcols.map(c => r[c]).join('') }));
   try { cache.put(SETTINGS_CACHE_KEY, JSON.stringify(rows), 60); } catch (e) {}
-  return rows;
+  return (_settingsMemo = rows);
 }
 
 // ===== 長い設定値の分割保存（2026-10-10） =====
@@ -1613,6 +1618,7 @@ function _readSettingRow_(data, i) {
   return _settingValueCols_(data[0]).map(c => data[i][c]).join('');
 }
 function _invalidateSettingsCache_() {
+  _settingsMemo = null;
   try {
     const cache = CacheService.getScriptCache();
     cache.remove(SETTINGS_CACHE_KEY);
@@ -3993,12 +3999,15 @@ function _steraSheetIdsForRange_(fromDateExclusive, toDateInclusive) {
 const INVENTORY_LOG_CACHE_KEY = 'inventory_log_rows_v1';
 // sheetId省略時は現行ファイル(従来通りの挙動・キャッシュキーも変えない)。年またぎで旧ファイルを
 // 指定された場合だけキャッシュキーをsheetIdごとに分ける(現行ファイルのキャッシュと混ざらないように)
+// 1回の実行の中では読んだ棚卸ログを使い回す（2026-11-04。100KBを超えるとキャッシュに入らず、店ごとに読み直していた）
+const _inventoryLogMemo = {};
 function _inventoryLogRowsCached_(sheetId) {
   const id = sheetId || INVENTORY_SHEET_ID;
+  if (_inventoryLogMemo[id]) return _inventoryLogMemo[id];
   const cache = CacheService.getScriptCache();
   const cacheKey = id === INVENTORY_SHEET_ID ? INVENTORY_LOG_CACHE_KEY : (INVENTORY_LOG_CACHE_KEY + ':' + id);
   const cached = cache.get(cacheKey);
-  if (cached) return JSON.parse(cached);
+  if (cached) return (_inventoryLogMemo[id] = JSON.parse(cached));
   const sheet = getInventorySheet(id);
   const data = sheet.getLastRow() > 1 ? sheet.getDataRange().getValues() : [];
   // Date型セルはJSON化でUTC文字列に化けてしまうため、キャッシュに入れる前に文字列化しておく
@@ -4007,12 +4016,13 @@ function _inventoryLogRowsCached_(sheetId) {
     v instanceof Date ? Utilities.formatDate(v, _invSheetTz(id), "yyyy-MM-dd'T'HH:mm:ss") : v
   ));
   try { cache.put(cacheKey, JSON.stringify(safe), 25); } catch (e) {} // 100KB超過時は諦めて次回も都度読む
-  return safe;
+  return (_inventoryLogMemo[id] = safe);
 }
 // sheetId省略時は現行ファイルのキャッシュのみ無効化(従来通り)。年またぎで旧ファイルへ書き込んだ
 // 場合はそちらのキャッシュキーを無効化する必要がある(saveInventorySnapshot参照、2026-09-12)
 function _invalidateInventoryLogCache_(sheetId) {
   const id = sheetId || INVENTORY_SHEET_ID;
+  delete _inventoryLogMemo[id];
   const cacheKey = id === INVENTORY_SHEET_ID ? INVENTORY_LOG_CACHE_KEY : (INVENTORY_LOG_CACHE_KEY + ':' + id);
   try { CacheService.getScriptCache().remove(cacheKey); } catch (e) {}
 }
