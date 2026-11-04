@@ -711,7 +711,7 @@
   <!-- 発注タブ -->
   <div id="partner-tab-order" class="partner-tab-content active">
     <div id="order-new-msg" style="display:none;font-size:13px;font-weight:700;color:#dc2626;background:#fee2e2;border:1px solid #fca5a5;border-radius:8px;padding:8px 12px;margin-bottom:10px">依頼済み履歴に新着があります</div>
-    <div id="delivery-new-msg" style="display:none;font-size:13px;font-weight:700;color:#c2410c;background:#ffedd5;border:1px solid #fdba74;border-radius:8px;padding:8px 12px;margin-bottom:10px">納品予定の商品があります。</div>
+    <div id="delivery-new-msg" style="display:none;font-size:13px;font-weight:700;color:#c2410c;background:#ffedd5;border:1px solid #fdba74;border-radius:8px;padding:8px 12px;margin-bottom:10px">届いたら「納品済み」を押す商品があります。</div>
     <div class="toolbar">
       <button class="btn-history active" id="ptab-order-request" onclick="switchOrderSubTab('request')">発注依頼</button>
       <button class="btn-history" id="ptab-order-history" onclick="switchOrderSubTab('history')">依頼済み履歴 <span class="history-badge" id="history-badge" style="display:none"></span></button>
@@ -2182,9 +2182,11 @@ function actualQtyCell(sid, row) {
   </div>`;
 }
 
-function displayCell(value) {
-  return value ? `<div class="display-cell">${esc(value)}</div>` : `<div class="display-cell empty">入力不要</div>`;
+function displayCell(value, emptyText) {
+  return value ? `<div class="display-cell">${esc(value)}</div>` : `<div class="display-cell empty">${esc(emptyText || '入力不要')}</div>`;
 }
+// 納品予定日が空の品(アペックスの月初発注など)は「入力不要」だと「届かない」と読まれるので、未定と出す(2026-11-04 谷町九丁目 No.20)
+const NO_DELIVERY_DATE_TEXT = '未定（届いたら「納品済み」を押してください）';
 
 function countNewGroups(sid) {
   const rows = loadA(sid).filter(r => r.locked && r.isNew && !r.denied);
@@ -7288,7 +7290,7 @@ function renderStore() {
       tr.innerHTML = `
         ${reqCell}
         <td class="c-order" data-label="発注日">${displayCell(row.orderDate)}</td>
-        <td class="c-delivery" data-label="納品予定日">${displayCell(row.deliveryDate)}</td>
+        <td class="c-delivery" data-label="納品予定日">${displayCell(row.deliveryDate, NO_DELIVERY_DATE_TEXT)}</td>
         ${productCell}${qtyCell}${noteCell}${actionCell}`;
       tbody.appendChild(tr);
     });
@@ -7485,7 +7487,7 @@ function renderOrderHistory() {
         tr.innerHTML = `
           ${reqCell}
           <td class="c-order" data-label="発注日">${displayCell(row.orderDate)}</td>
-          <td class="c-delivery" data-label="納品予定日">${displayCell(row.deliveryDate)}</td>
+          <td class="c-delivery" data-label="納品予定日">${displayCell(row.deliveryDate, NO_DELIVERY_DATE_TEXT)}</td>
           <td class="c-product" data-label="商品名" style="font-size:13px">${pLabel ? esc(pLabel) : '<span style="color:#bbb">未選択</span>'}</td>
           <td class="c-qty" data-label="数量">${qtyTableCellHTML(row)}${actualQtyLine}</td>
           <td class="c-note" data-label="備考" style="font-size:13px;color:#555;white-space:pre-wrap">${esc(row.note)}</td>
