@@ -918,6 +918,7 @@ function doPost(e) {
     else if (b.action === 'resendOrderNotify')  result = resendOrderNotify(b.storeId);   // 管理者・スクリプトだけ（2026-10-24）
     else if (b.action === 'registerApexOrder')  result = registerApexOrder(b.storeId, b.items, b.source, b.document);
     else if (b.action === 'registerToyoMonthlyOrder') result = registerToyoMonthlyOrder(b.storeId, b.periodLabel, b.items, b.skips);
+    else if (b.action === 'notifyToyoMonthlyCart') result = sendToyoMonthlyToBot_(b.storeId, b.periodLabel, b.lines, b.cartUrl, true);
     else if (b.action === 'setAuthEnforce')     result = setAuthEnforce(b.on);
     else result = { error: 'Unknown action: ' + b.action };
   } catch(err) {
@@ -6098,13 +6099,38 @@ function buildToyoReorder(storeId, periodLabel, dryRun) {
   // スマホの Gmail は下書きを編集画面で開くので、文字だけの URL はリンクにならない（2026-11-04 塩川さん）。
   // HTML の本文にカートのボタンを付ける。ボタンが押せないアプリ向けに、長押しでコピーできる URL も残す
   const opts = { htmlBody: _toyoMemoHtml_(body, cartUrl) };
+  // それでもスマホの下書きではボタンも押せなかった（2026-11-04）。カートのリンクは塩川用Botにボタンで送る（Bot なら押せる）
+  let botNote = '';
+  if (cartUrl) { try { sendToyoMonthlyToBot_(storeId, periodLabel, lines, cartUrl, false); } catch (e) { botNote = e.message; console.error('トーヨー発注のBot通知:', e.message); } }
   if (existing.length) {
     existing[0].update(to, subject, body, opts);
     existing.slice(1).forEach(d => d.deleteDraft());
-    return Object.assign(result, { draftUpdated: true });
+    return Object.assign(result, { draftUpdated: true }, botNote ? { botError: botNote } : {});
   }
   GmailApp.createDraft(to, subject, body, opts);
-  return Object.assign(result, { draftCreated: true });
+  return Object.assign(result, { draftCreated: true }, botNote ? { botError: botNote } : {});
+}
+
+// トーヨーの月初発注のカートのリンクを塩川用Bot（gas/gbp-photo-bot の action 'toyoMonthly'）へ送る（2026-11-04）。
+// 棚卸を送り直すたびに buildToyoReorder が呼ばれるので、同じ店・月・内容は6時間に1回だけ送る（force は管理画面・スクリプトから送り直すとき）
+function sendToyoMonthlyToBot_(storeId, periodLabel, lines, cartUrl, force) {
+  const props = PropertiesService.getScriptProperties();
+  const url = props.getProperty('GBP_PHOTO_BOT_URL'), apiKey = props.getProperty('GBP_PHOTO_BOT_API_KEY');
+  if (!url || !apiKey) throw new Error('GBP_PHOTO_BOT_URL / GBP_PHOTO_BOT_API_KEY が未設定です');
+  if (!/^https:\/\/mirubiki-coffee\.i16\.bcart\.jp\//.test(String(cartUrl || ''))) throw new Error('カートのリンクがありません');
+  lines = (Array.isArray(lines) ? lines : []).map(String);
+  const cache = CacheService.getScriptCache();
+  const key = 'toyobot_' + Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5,
+    [storeId, periodLabel, cartUrl].concat(lines).join('\n'), Utilities.Charset.UTF_8));
+  if (!force && cache.get(key)) return { ok: true, skipped: 'already_sent' };
+  const res = UrlFetchApp.fetch(url, { method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+    payload: JSON.stringify({ action: 'toyoMonthly', apiKey, store: _storeNames_()[storeId] || storeId, period: _periodLabelJa_(periodLabel),
+      area: TOYO_STORE_AREA[storeId] || '', lines, url: cartUrl }) });
+  let out = {};
+  try { out = JSON.parse(res.getContentText()); } catch (e) {}
+  if (!out.ok) throw new Error('Botへの送信失敗 ' + res.getResponseCode() + ': ' + res.getContentText().slice(0, 200));
+  cache.put(key, '1', 21600);
+  return { ok: true, sent: out.sent || 1 };
 }
 
 function _toyoMemoHtml_(body, cartUrl) {
