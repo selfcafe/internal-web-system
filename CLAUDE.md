@@ -428,7 +428,7 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
   - 遠隔での状態確認手段は無い(`selfcafe/pc-remote-ops`のrunnerは消えており、不要とオーナー判断で作り直さない。2026-10-06、7.4)。
 - **タスク登録スクリプト**: `scripts/register_*.ps1`と`run_*.cmd`は`C:\Users\80000785`とUserIdを決め打ちしている。別PCへ移すときは書き換えが必要。PythonはPATHでなくフルパスで指定する。
 - **Bot構成**:
-  - 「社内ポータル通知」: 発注・業務開始・休み申請。
+  - 「社内ポータル通知」: 発注・業務開始・休み申請。2026-11-04 社長依頼で塩川用Bot(selfcafe-automation の gas/gbp-photo-bot、Bot 13233186)に統合する: Script Propertiesの`LW_BOT_ID`/`LW_CLIENT_ID`/`LW_CLIENT_SECRET`/`LW_SERVICE_ACCT`/`LW_PRIVATE_KEY`を塩川用Botのアプリの値に差し替え、塩川用Botを各通知グループ(`LW_CHANNEL_ID*`)に招待する。招待されたグループは塩川用Bot側で自動的に「通知専用」(名指しとボタンだけ反応)になる。送信コード(`sendLineWorksNotification`)は変えていない(トークンのキャッシュのキーにClient IDを含めただけ)。
   - 在庫差異検知Bot「佐藤テスト」: 1:1の`userId`宛。Script Propertiesは`LW_*_STOCK`。この1:1トークへの返信で任意期間を再調査できる。
   - バグ報告Bot: 6章。
   - 会費ペイ承認Bot・GBP承認Botは、別GASプロジェクト`kaihipay-gbp-approval-bot`にある(4章)。

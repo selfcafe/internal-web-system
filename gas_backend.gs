@@ -9220,13 +9220,16 @@ function createLineWorksJWT_() {
 // （2026-07-24、発注・出勤・休み申請など全通知でJWT署名＋認証リクエストの往復が毎回発生し
 // 保存操作の応答が遅く感じられるとの指摘を受けて追加）。失効していた場合はsendLineWorksNotification
 // 側で401検知時に自動で取り直すので、キャッシュが古くても実害は無い
+// 2026-11-04: 「社内ポータル通知」Botを塩川用Botに統合（LW_BOT_ID等を塩川用Botのアプリの値に差し替え）。
+// 差し替え直後に前のアプリのトークンを使い回さないよう、キャッシュのキーにClient IDを含める
 function getLineWorksAccessToken_(forceRefresh) {
   var cache = CacheService.getScriptCache();
+  var props = PropertiesService.getScriptProperties();
+  var cacheKey = 'LW_ACCESS_TOKEN_' + props.getProperty('LW_CLIENT_ID');
   if (!forceRefresh) {
-    var cached = cache.get('LW_ACCESS_TOKEN');
+    var cached = cache.get(cacheKey);
     if (cached) return cached;
   }
-  var props = PropertiesService.getScriptProperties();
   var jwt = createLineWorksJWT_();
   var payload = 'assertion=' + encodeURIComponent(jwt)
     + '&grant_type=' + encodeURIComponent('urn:ietf:params:oauth:grant-type:jwt-bearer')
@@ -9239,7 +9242,7 @@ function getLineWorksAccessToken_(forceRefresh) {
     payload: payload
   });
   var token = JSON.parse(res.getContentText()).access_token;
-  try { cache.put('LW_ACCESS_TOKEN', token, 3000); } catch (e) {} // 50分。CacheServiceの上限21600秒以内
+  try { cache.put(cacheKey, token, 3000); } catch (e) {} // 50分。CacheServiceの上限21600秒以内
   return token;
 }
 
