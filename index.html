@@ -2052,6 +2052,15 @@ function caseQtyParts(row) {
   if (product && mode === 'case' && product.caseUnit) {
     const caseSize = casePiecesFromUnit(product.caseUnit);
     if (caseSize != null) {
+      // 数量が無い行は「ケース」だけが出て数が抜けたように見えるので、未入力と出す
+      if (row.qty === '' || row.qty == null) return { qtyPart: '数量未入力', sizePart: caseSizeHint(caseSize) };
+      // 本部の発注はケースの倍数でない数を 1.2ケース のような小数で入れる（30本＝1.2ケース）。
+      // 発注書は本・袋の数なので、割り切れないときは本・袋の数を先に出す（2026-11-04 心斎橋 0.15ケース＝3本で混乱）
+      const n = Number(row.qty);
+      if (!Number.isNaN(n) && !Number.isInteger(n)) {
+        const pieces = Math.round(n * caseSize);
+        return { qtyPart: `${pieces}${esc(product.unit || row.unit || '個')}（${esc(row.qty)}ケース）`, sizePart: caseSizeHint(caseSize) };
+      }
       return { qtyPart: `${esc(row.qty)}ケース`, sizePart: caseSizeHint(caseSize) };
     }
   }
