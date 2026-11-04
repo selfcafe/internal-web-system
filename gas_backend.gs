@@ -6095,13 +6095,29 @@ function buildToyoReorder(storeId, periodLabel, dryRun) {
     .concat(lines, ['', `商品総額（税抜） ${total.toLocaleString()}円 → ${total >= TOYO_FREE_SHIPPING ? '送料無料' : `送料がかかります（${TOYO_FREE_SHIPPING.toLocaleString()}円未満）`}`,
       '', '配送先はこの店舗を選び、注文確定は人が行います。']
       .concat(cartUrl ? ['', 'トーベンのカートに入れる（iPhone の Safari で開く。設定は https://selfcafe.github.io/internal-web-system/tools/bcart-setup.html ）:', cartUrl] : [])).join('\n');
+  // スマホの Gmail は下書きを編集画面で開くので、文字だけの URL はリンクにならない（2026-11-04 塩川さん）。
+  // HTML の本文にカートのボタンを付ける。ボタンが押せないアプリ向けに、長押しでコピーできる URL も残す
+  const opts = { htmlBody: _toyoMemoHtml_(body, cartUrl) };
   if (existing.length) {
-    existing[0].update(to, subject, body);
+    existing[0].update(to, subject, body, opts);
     existing.slice(1).forEach(d => d.deleteDraft());
     return Object.assign(result, { draftUpdated: true });
   }
-  GmailApp.createDraft(to, subject, body);
+  GmailApp.createDraft(to, subject, body, opts);
   return Object.assign(result, { draftCreated: true });
+}
+
+function _toyoMemoHtml_(body, cartUrl) {
+  const esc = t => String(t).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+  const head = cartUrl ? body.split('トーベンのカートに入れる')[0].replace(/\s+$/, '') : body;
+  let html = `<div style="font-family:sans-serif;font-size:15px;line-height:1.6">${head.split('\n').map(esc).join('<br>')}`;
+  if (cartUrl) {
+    html += `<br><br><a href="${esc(cartUrl)}" style="display:inline-block;background:#d97706;color:#fff;font-weight:bold;text-decoration:none;padding:12px 20px;border-radius:8px">トーベンのカートに入れる</a><br><br>` +
+      `<span style="font-size:13px;color:#555">iPhone の Safari で開いてください（設定は <a href="https://selfcafe.github.io/internal-web-system/tools/bcart-setup.html">こちら</a>）。<br>` +
+      `ボタンが押せないときは、下のURLを長押しでコピーして Safari に貼り付けてください。</span><br>` +
+      `<a href="${esc(cartUrl)}" style="font-size:12px;word-break:break-all">${esc(cartUrl)}</a>`;
+  }
+  return html + '</div>';
 }
 
 // ===== トーヨーの月初発注を発注タブに記録する（2026-11-03） =====
