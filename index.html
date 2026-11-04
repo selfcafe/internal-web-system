@@ -7263,9 +7263,10 @@ function renderStore() {
       const isDenied    = group.some(r => r.denied);
       const hasOrderDate = group.some(r => r.orderDate);
       if (isDenied) {
+        const deniedNames = group.filter(r => r.denied).map(r => esc(prodByName(r.product)?.label || r.product || '未選択')).join('、');
         addTr.innerHTML = `<td colspan="7" style="padding:5px 12px 8px;border-bottom:none;background:#fee2e2">
-          <span style="font-weight:700;color:#dc2626">✕ 否認されました。備考を確認してください。</span>
-          <button class="btn-withdraw" style="margin-left:12px" onclick="withdrawDenied('${gid}')">依頼取り下げ</button>
+          <span style="font-weight:700;color:#dc2626">✕ 否認された品: ${deniedNames}（理由は備考）</span>
+          <button class="btn-withdraw" style="margin-left:12px" onclick="withdrawDenied('${gid}')">否認された品を取り下げ</button>
         </td>`;
       } else {
         const cancelBtn = hasOrderDate
@@ -7360,36 +7361,49 @@ function renderOrderHistory() {
   groups.forEach((group, gi) => {
     const gid = group[0].groupId || group[0].id;
     const N   = group.length;
-    const isDenied    = group.some(r => r.denied);
     const photoHtml = orderPhotoUrls(group[0]).map(u =>
       `<img src="${esc(u)}" style="height:36px;border-radius:5px;cursor:pointer;border:1px solid #e5e7eb;margin-left:6px;vertical-align:middle" onclick="showLostImage(this.src)" title="写真を拡大">`
     ).join('');
 
-    const isOrdered = !group[0].isNew;
+    // 否認は商品(行)ごと。以前は1品でも否認があると依頼全体に「否認されました」を出していたため、
+    // 発注済みの品まで否認されたように見えた(2026-11-04、相川駅前「カップMだけ否決か全商品か」)。
+    // 否認した品は品ごとに理由と取り下げを出し、ほかの品はいつもどおり確認中・納品済みを出す
+    const okRows     = group.filter(r => !r.denied);
+    const deniedRows = group.filter(r => r.denied);
+    const isOrdered = okRows.length ? !okRows[0].isNew : false;
 
     // 発注済みの依頼は、納品予定日が同じ商品同士でも実際の到着タイミングが商品ごとに
     // ずれることがあるため、納品予定日でグルーピングせず商品(行)ごとに個別の
     // 「納品済み」ボタンを出す。届いた商品から個別に納品済みにできる。
-    let actionGroups;
-    if (isDenied) {
-      actionGroups = [{
-        rows: group,
-        statusHtml: `<span style="font-weight:700;color:#dc2626;font-size:13px">✕ 否認されました。備考を確認してください。</span>${photoHtml}`,
-        actionBtn: `<button class="btn-withdraw" onclick="withdrawDenied('${gid}')">依頼取り下げ</button>`,
-      }];
+    let actionGroups = [];
+    if (!okRows.length) {
+      // 全部否認のときは下の否認の行だけ
     } else if (!isOrdered) {
       actionGroups = [{
-        rows: group,
+        rows: okRows,
         statusHtml: `<span class="locked-status" style="color:#d97706">⌛ 確認中</span>${photoHtml}`,
         actionBtn: `<button class="btn-cancel-lock" onclick="unlockGroup('${gid}')">取り下げ</button>`,
       }];
     } else {
-      actionGroups = group.map((row, di) => ({
+      actionGroups = okRows.map((row, di) => ({
         rows: [row],
         statusHtml: `<span class="locked-status">✓ 依頼済み</span>${di === 0 ? photoHtml : ''}`,
         actionBtn: `<button class="btn-done" onclick="markDelivered('${row.id}')"
             ${!row.orderDate ? 'disabled title="発注日が記載されてから押せます" style="opacity:0.4;cursor:not-allowed"' : ''}>納品済み</button>`,
       }));
+    }
+    deniedRows.forEach((row, di) => actionGroups.push({
+      rows: [row],
+      denied: true,
+      statusHtml: `<span style="font-weight:700;color:#dc2626;font-size:13px">✕ この品は否認されました。理由は備考を見てください。</span>${!okRows.length && di === 0 ? photoHtml : ''}`,
+      actionBtn: `<button class="btn-withdraw" onclick="withdrawDeniedRow('${row.id}')">取り下げ</button>`,
+    }));
+    if (deniedRows.length && okRows.length) {
+      // 否認した品と、そうでない品が混ざっていることを依頼の頭で言う
+      const sumTr = document.createElement('tr');
+      sumTr.innerHTML = `<td colspan="7" style="padding:6px 12px;background:#fff7ed;font-size:13px;color:#9a3412;border-bottom:none">
+        この依頼で否認したのは <b>${deniedRows.map(r => esc(prodByName(r.product)?.label || r.product || '未選択')).join('、')}</b> だけです。ほかの ${okRows.length} 品は${isOrdered ? '発注済み' : '確認中'}です。</td>`;
+      tbody.appendChild(sumTr);
     }
 
     let rowIdxInGroup = 0;
@@ -7399,6 +7413,7 @@ function renderOrderHistory() {
         const tr = document.createElement('tr');
         tr.classList.add('locked-row');
         if (globalI === 0) tr.classList.add('group-first');
+        if (ag.denied) tr.classList.add('denied-row');
 
         const pLabel = prodByName(row.product)?.label || row.product || '';
         const showReq = (globalI === 0) || isMobile;
@@ -9057,9 +9072,24 @@ function denyOrderRowCheck(sid, rowId, msgId) {
 
 /* グループ単位で否認(取り下げ)。パートナー側から否認済みの依頼自体を削除する操作で、
    admin側の商品別ボタンとは別物のためそのまま維持する */
+// 否認した品だけを消す。以前は依頼(グループ)ごと消していたため、同じ依頼の発注済みの品まで消え、
+// 検品待ちに出なくなっていた(2026-11-02 相川駅前)
 function withdrawDenied(groupId) {
-  if (!confirm('否認された依頼を取り下げますか？')) return;
-  storeRows = storeRows.filter(r => (r.groupId || r.id) !== groupId);
+  const denied = storeRows.filter(r => (r.groupId || r.id) === groupId && r.denied);
+  if (!denied.length) return;
+  const names = denied.map(r => prodByName(r.product)?.label || r.product || '未選択').join('、');
+  if (!confirm(`否認された「${names}」を取り下げますか？\n（同じ依頼のほかの品はそのまま残ります）`)) return;
+  const ids = new Set(denied.map(r => r.id));
+  storeRows = storeRows.filter(r => !ids.has(r.id));
+  saveA(storeTab, storeRows);
+  renderStore();
+}
+function withdrawDeniedRow(rowId) {
+  const row = storeRows.find(r => r.id === rowId && r.denied);
+  if (!row) return;
+  const name = prodByName(row.product)?.label || row.product || '未選択';
+  if (!confirm(`否認された「${name}」を取り下げますか？\n（同じ依頼のほかの品はそのまま残ります）`)) return;
+  storeRows = storeRows.filter(r => r.id !== rowId);
   saveA(storeTab, storeRows);
   renderStore();
 }
