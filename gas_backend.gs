@@ -9306,8 +9306,7 @@ function checkOwnerBotChannels() {
     } catch (e) { out = { ok: false, error: e.message }; }
     lines.push(k + ': ' + (out.ok ? 'OK（塩川用Botが入っている）' : '入っていない・確認できない（' + (out.error || '') + '）'));
   });
-  console.log(lines.join('
-'));
+  console.log(lines.join('\n'));
   return lines;
 }
 
