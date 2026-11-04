@@ -4608,22 +4608,42 @@ async function renderToyoReorderAdmin(force) {
       </div>
       <div id="toyo-plan-body"><div style="font-size:13px;color:#888">読み込み中…</div></div>
     </div>`;
-  if (force || !_toyoPlan || _toyoPlan.periodLabel !== _toyoPlanPeriod) {
-    const res = await gasGet('getToyoMonthlyPlans', { periodLabel: _toyoPlanPeriod });
-    if (!res || res.error || !res.stores) {
-      document.getElementById('toyo-plan-body').innerHTML = `<div style="color:#c0392b;font-size:13px">読み込めませんでした: ${esc((res && res.error) || '')}</div>`;
-      return;
-    }
-    // 未登録の店を上に
-    res.stores.sort((a, b) => TOYO_STATUS_ORDER.indexOf(a.status) - TOYO_STATUS_ORDER.indexOf(b.status));
-    _toyoPlan = res;
-  }
+  // 前回の一覧（この端末の控え）をすぐ出し、裏で読み直して差し替える（2026-11-04。読み込みに5秒ほどかかるため）。
+  // 差し替わるまでは［発注登録］を押せない（古い数で登録しないように）
+  if (!_toyoPlan || _toyoPlan.periodLabel !== _toyoPlanPeriod) _toyoPlan = _toyoPlanLoad(_toyoPlanPeriod);
+  _toyoPlanStale = true;
   _renderToyoPlanBody();
+  const seq = ++_toyoPlanSeq, period = _toyoPlanPeriod;
+  const res = await gasGet('getToyoMonthlyPlans', { periodLabel: period });
+  if (seq !== _toyoPlanSeq || period !== _toyoPlanPeriod) return;   // 待っている間に月を変えた・読み直した
+  if (!res || res.error || !res.stores) {
+    const body = document.getElementById('toyo-plan-body');
+    const msg = `<div style="color:#c0392b;font-size:13px;margin-bottom:8px">読み込めませんでした: ${esc((res && res.error) || '')}（［読み直す］を押してください）</div>`;
+    if (body) { if (_toyoPlan) body.insertAdjacentHTML('afterbegin', msg); else body.innerHTML = msg; }
+    return;
+  }
+  // 未登録の店を上に
+  res.stores.sort((a, b) => TOYO_STATUS_ORDER.indexOf(a.status) - TOYO_STATUS_ORDER.indexOf(b.status));
+  _toyoPlan = res;
+  _toyoPlanStale = false;
+  _toyoPlanSave(res);
+  _renderToyoPlanBody();
+}
+
+const TOYO_PLAN_LS = 'toyo_plan_cache_v1';
+let _toyoPlanStale = false;      // 控えを出していて、最新を読み込み中
+let _toyoPlanSeq = 0;
+function _toyoPlanSave(plan) { try { localStorage.setItem(TOYO_PLAN_LS, JSON.stringify(plan)); } catch (e) {} }
+function _toyoPlanLoad(period) {
+  try { const p = JSON.parse(localStorage.getItem(TOYO_PLAN_LS) || 'null'); return p && p.periodLabel === period && Array.isArray(p.stores) ? p : null; }
+  catch (e) { return null; }
 }
 
 function _renderToyoPlanBody() {
   const body = document.getElementById('toyo-plan-body');
-  if (!body || !_toyoPlan) return;
+  if (!body) return;
+  if (!_toyoPlan) { body.innerHTML = '<div style="font-size:13px;color:#888">読み込み中…</div>'; return; }
+  const staleNote = _toyoPlanStale ? '<div style="font-size:12px;color:#b45309;margin-bottom:8px">前回の内容を表示しています。最新を読み込み中…（終わるまで［発注登録］は押せません）</div>' : '';
   // 店ごとにたたむ。たたんだままでも状態（未登録など）と金額が見える
   const STATUS = { open: ['未登録', 'background:#d97706;color:white'], registered: ['登録済み', 'background:#e6f2ea;color:#22703d'],
     not_submitted: ['棚卸がまだ', 'background:#eee;color:#777'], no_targets: ['基準値なし', 'background:#eee;color:#777'] };
@@ -4641,7 +4661,7 @@ function _renderToyoPlanBody() {
       <div class="toyo-body" style="padding:0 12px 10px;${open ? '' : 'display:none'}">${inner}</div>
     </div>`;
   };
-  body.innerHTML = summary + (_toyoPlan.stores.map((st, si) => {
+  body.innerHTML = staleNote + summary + (_toyoPlan.stores.map((st, si) => {
     if (st.status === 'not_submitted' || st.status === 'no_targets') {
       return frame(st, si, `<div style="font-size:12px;color:#888">${st.status === 'no_targets' ? '発注基準値が入っていないので、案を出せません（依頼が来た品だけ都度発注）。' : 'この月の棚卸がまだ届いていません。'}</div>`);
     }
@@ -4682,7 +4702,7 @@ function _renderToyoPlanBody() {
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
         <span class="toyo-total" style="font-weight:700;font-size:13px"></span>
         <a class="toyo-cart" target="_blank" rel="noopener" style="${_SP_BTN_SUB};text-decoration:none">カートに入れる</a>
-        <button onclick="registerToyoPlan(${si})" style="${_SP_BTN}">発注登録</button>
+        <button onclick="registerToyoPlan(${si})" style="${_SP_BTN}${_toyoPlanStale ? ';opacity:0.5;cursor:not-allowed' : ''}"${_toyoPlanStale ? ' disabled' : ''}>発注登録</button>
         <span class="toyo-msg" style="${_SP_MSG}"></span>
       </div>${regNote}`);
   }).join('') || '<div style="font-size:13px;color:#888">トーヨーの機械の店がありません（店舗別設定の「設置している機械」）。</div>');
@@ -4735,6 +4755,7 @@ function _toyoPlanRecalc(si) {
 async function registerToyoPlan(si) {
   const { st, box, items, skips, total } = _toyoPlanCollect(si);
   const msg = box.querySelector('.toyo-msg');
+  if (_toyoPlanStale) { msg.textContent = '最新の読み込みが終わってから押してください'; return; }
   if (!items.length && !skips.length) { msg.textContent = '登録する品がありません'; return; }
   const lines = items.map(x => { const it = st.items.find(i => i.product === x.product); return `・${it.label} ${Math.round(x.qty / _toyoLot(it))}${_toyoSiteUnit(it)}`; });
   const skipLines = skips.map(x => `・${String(x.product).replace(/^㋣/, '')}（見送り${x.reason ? '：' + x.reason : ''}）`);
@@ -4742,9 +4763,15 @@ async function registerToyoPlan(si) {
   msg.textContent = '登録中…';
   const res = await gasPost('registerToyoMonthlyOrder', { storeId: st.storeId, periodLabel: _toyoPlanPeriod, items, skips });
   if (!res || res.error) { msg.style.color = '#c0392b'; msg.textContent = '登録できませんでした: ' + ((res && res.error) || ''); return; }
-  msg.style.color = '';
-  msg.textContent = `登録しました（${res.rows}品${res.denied && res.denied.length ? '・依頼の否認 ' + res.denied.length + '件' : ''}）`;
-  setTimeout(() => renderToyoReorderAdmin(true), 800);
+  const done = `登録しました（${res.rows}品${res.denied && res.denied.length ? '・依頼の否認 ' + res.denied.length + '件' : ''}）`;
+  // 返事に入っているこの店の新しい状態で、この店だけ書き換える（一覧は読み直さない。2026-11-04）
+  const i = res.plan && _toyoPlan ? _toyoPlan.stores.findIndex(x => x.storeId === st.storeId) : -1;
+  if (i < 0) { msg.style.color = ''; msg.textContent = done; setTimeout(() => renderToyoReorderAdmin(true), 800); return; }
+  _toyoPlan.stores[i] = res.plan;
+  _toyoPlanSave(_toyoPlan);
+  _renderToyoPlanBody();
+  const nb = document.getElementById('toyo-store-' + i);
+  if (nb) nb.querySelector('.toyo-msg').textContent = done;
 }
 
 // 2026-08-24〜10-17はFC店の「発注」タブを隠していた(FCは自社で仕入れる前提)。2026-10-18から

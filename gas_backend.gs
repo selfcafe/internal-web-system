@@ -6181,22 +6181,26 @@ function _toyoStores_() {
 // 管理画面の一覧: トーヨーの店ごとの発注案と、登録済みかどうか
 function getToyoMonthlyPlans(periodLabel) {
   if (!/^\d{4}-\d{2}$/.test(String(periodLabel || ''))) return { error: 'periodLabel（YYYY-MM）が要ります' };
-  const orders = getOrders(), meta = _productMeta_(), names = _storeNames_();
-  const log = _settingJson_(TOYO_MONTHLY_LOG_KEY, {});
-  const stores = _toyoStores_().map(sid => {
-    const r = _toyoReorderItems_(sid, periodLabel, orders);
-    const registered = _toyoMonthlyRegisteredRows_(sid, periodLabel, orders).map(o => ({ id: String(o.id), product: o.product,
-      qty: o.qty, actual_qty: o.actual_qty, unit_mode: o.unit_mode, case_unit: o.case_unit, order_date: o.order_date, delivery_date: o.delivery_date }));
-    const items = (r.items || []).map(it => {
-      const m = meta[it.product] || {};
-      return Object.assign({}, it, { label: String(it.product).replace(/^㋣/, ''), unit: m.unit || '', caseOnly: !!m.caseOnly,
-        bean: TOYO_BEAN_CODES.indexOf(String(it.code)) >= 0, bcartId: TOYO_BCART_IDS[String(it.code)] || null });
-    });
-    return { storeId: sid, store: names[sid] || sid, area: TOYO_STORE_AREA[sid] || '',
-      status: r.noTargets ? 'no_targets' : (!r.submitted ? 'not_submitted' : (registered.length ? 'registered' : 'open')),
-      items, registered, log: log[sid + '_' + periodLabel] || null };
-  });
+  const orders = getOrders();
+  const stores = _toyoStores_().map(sid => _toyoPlanForStore_(sid, periodLabel, orders));
   return { ok: true, periodLabel, freeShipping: TOYO_FREE_SHIPPING, stores };
+}
+
+// 一覧の1店分。［発注登録］の返事にも入れて、画面は一覧を読み直さずにその店だけ書き換える（2026-11-04）
+function _toyoPlanForStore_(sid, periodLabel, orders) {
+  const meta = _productMeta_(), names = _storeNames_();
+  const log = _settingJson_(TOYO_MONTHLY_LOG_KEY, {});
+  const r = _toyoReorderItems_(sid, periodLabel, orders);
+  const registered = _toyoMonthlyRegisteredRows_(sid, periodLabel, orders).map(o => ({ id: String(o.id), product: o.product,
+    qty: o.qty, actual_qty: o.actual_qty, unit_mode: o.unit_mode, case_unit: o.case_unit, order_date: o.order_date, delivery_date: o.delivery_date }));
+  const items = (r.items || []).map(it => {
+    const m = meta[it.product] || {};
+    return Object.assign({}, it, { label: String(it.product).replace(/^㋣/, ''), unit: m.unit || '', caseOnly: !!m.caseOnly,
+      bean: TOYO_BEAN_CODES.indexOf(String(it.code)) >= 0, bcartId: TOYO_BCART_IDS[String(it.code)] || null });
+  });
+  return { storeId: sid, store: names[sid] || sid, area: TOYO_STORE_AREA[sid] || '',
+    status: r.noTargets ? 'no_targets' : (!r.submitted ? 'not_submitted' : (registered.length ? 'registered' : 'open')),
+    items, registered, log: log[sid + '_' + periodLabel] || null };
 }
 
 // items: [{product, qty（ポータルの数＝袋・本・個。lot の倍数）}]、skips: [{product, reason}]
@@ -6254,7 +6258,9 @@ function registerToyoMonthlyOrder(storeId, periodLabel, items, skips) {
     saveSetting(TOYO_MONTHLY_LOG_KEY, JSON.stringify(all));
   } catch (e) { console.error('toyo_monthly_log の保存に失敗:', e.message); }
   _pingOrdersUpdated_('toyo-monthly');
-  return { ok: true, rows: res.rows || 0, ids: res.ids || [], deleted: del.length, reverted: back.length, denied: denied.map(r => r.product) };
+  let plan = null;
+  try { plan = _toyoPlanForStore_(storeId, periodLabel, getOrders()); } catch (e) { console.error('登録後の発注案:', e.message); }
+  return { ok: true, rows: res.rows || 0, ids: res.ids || [], deleted: del.length, reverted: back.length, denied: denied.map(r => r.product), plan };
 }
 
 // ===== 届いていない発注を月初発注から差し引く（2026-10-29 塩川さん） =====
