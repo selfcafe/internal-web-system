@@ -617,11 +617,12 @@
     <form id="site-login-form" onsubmit="submitSiteLogin(); return false;" autocomplete="on">
       <!-- ブラウザのパスワード保存で、どの店のパスワードかを区別するための名前(見えない。履歴を押すとその店の名前が入る) -->
       <input type="text" name="username" autocomplete="username" tabindex="-1" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
-      <div id="login-history" style="display:none;text-align:left;margin-bottom:10px"></div>
       <label class="site-lock-field-label" for="site-pw-input" id="site-pw-label">パスワード</label>
-      <div>
+      <div style="position:relative">
         <input class="pin-input" id="site-pw-input" type="text" name="password"
           autocomplete="current-password" placeholder="パスワード">
+        <!-- 押すと出る、この端末で使った店の一覧(renderLoginHistory) -->
+        <div id="login-history" style="display:none;position:absolute;left:0;right:0;top:100%;margin-top:4px;background:white;border:1px solid #e5dcb8;border-radius:10px;box-shadow:0 6px 18px rgba(0,0,0,.12);z-index:20;max-height:280px;overflow-y:auto;font-size:14px"></div>
       </div>
       <div class="pin-error" id="site-pw-error"></div>
       <button type="submit" class="btn-pin-submit">ログイン</button>
@@ -6526,7 +6527,7 @@ async function submitSiteLogin() {
     if (storeId === '__admin__') {
       sessionStorage.setItem('last_active', String(Date.now()));
       document.getElementById('site-lock').classList.add('hidden');
-      _saveCredential('admin', val);
+      _saveCredential('管理者', val, { role: 'admin' });
       showPage('admin');
     } else {
       sessionStorage.setItem('site_authed', '1');
@@ -6538,7 +6539,7 @@ async function submitSiteLogin() {
       localStorage.removeItem(STORE_PW_KEY);
       localStorage.removeItem('onboarding_password');
       document.getElementById('site-lock').classList.add('hidden');
-      _saveCredential(mgr ? (mgr.name || '担当者') : (STORES[storeId] || storeId), val);
+      _saveCredential(mgr ? (mgr.name || '担当者') : (STORES[storeId] || storeId), val, mgr ? { role: 'mgr' } : { role: 'store', sid: storeId });
       // 前の店舗の未保存分は、新しい通行証の範囲に入っているときだけ送る(範囲外は断られるので端末に残し、
       // その店舗で次にログインしたときに送る。ログアウト時はsiteLogoutが前の通行証のうちに送っている)
       if (storeTab && storeTab !== storeId && (res.stores || []).includes(storeTab)) saveChecksheetNow(storeTab);
@@ -6552,60 +6553,91 @@ async function submitSiteLogin() {
   }
 }
 
-// ログインの履歴(2026-11-05、複数の店を受け持つ人向け)。この端末でログインした店・担当者・管理者の名前だけを
-// localStorage login_history に新しい順で残し、ログイン画面に「最近ログインした店舗」として出す。パスワードは残さない。
-// 押すと見えない名前の欄にその名前を入れてパスワード欄へ移るので、ブラウザが店ごとに保存したパスワードを候補に出せる
-// (保存も名前つきになる。Chrome・Edge は _saveCredential の PasswordCredential でも名前つきで保存する)
-const LOGIN_HISTORY_KEY = 'login_history', LOGIN_HISTORY_MAX = 8;
+// ログインの履歴(2026-11-05、複数の店を受け持つ人向け。Google の検索履歴のように、パスワード欄を押すと
+// この端末で使った店が下に並び、選ぶとそのままログインする)。localStorage login_history に新しい順で
+// {name, sid, role, pw?, at} を残す。パスワードを残すのは店舗のパスワードだけ(セルフカフェHPの店のページの
+// アドレスの末尾で、もともと人に見られてよい決まりのため。2026-10-28)。管理者・担当者のパスワードは残さない
+// (選ぶと名前が入り、パスワードは手で入れる。ブラウザが名前つきで保存していれば候補に出る)。
+// 履歴を作る前からの端末は、前回ログインした店と、店ごとに端末に残っている記録(業務連絡の既読など)から店を拾う。
+const LOGIN_HISTORY_KEY = 'login_history', LOGIN_HISTORY_MAX = 12;
+const _LOGIN_HIST_TRACE = /^(?:announce_read_|seen_attention_|delivery_snooze_|meter_notice_dismissed_)(.+)$/;
 function _loginHistory() {
   let v = [];
   try { v = JSON.parse(localStorage.getItem(LOGIN_HISTORY_KEY) || '[]'); } catch (_) {}
   v = Array.isArray(v) ? v.filter(x => x && x.name) : [];
-  // 履歴を作る前からの端末は、前回ログインした店(last_login_store)を最初の1件にする(公開直後に何も出ないと分かりにくいため)
-  if (!v.length) {
-    try { const sid = localStorage.getItem('last_login_store'); if (sid && STORES[sid]) v = [{ name: STORES[sid], at: 0 }]; } catch (_) {}
-  }
-  return v;
+  const names = new Set(v.map(x => x.name));
+  const add = sid => { if (sid && STORES[sid] && !names.has(STORES[sid])) { names.add(STORES[sid]); v.push({ name: STORES[sid], sid, role: 'store', at: 0 }); } };
+  try {
+    add(localStorage.getItem('last_login_store'));
+    for (let i = 0; i < localStorage.length; i++) { const m = String(localStorage.key(i) || '').match(_LOGIN_HIST_TRACE); if (m) add(m[1]); }
+  } catch (_) {}
+  return v.slice(0, LOGIN_HISTORY_MAX);
 }
-function _pushLoginHistory(name) {
-  if (!name) return;
-  const list = [{ name: String(name), at: Date.now() }].concat(_loginHistory().filter(x => x.name !== String(name))).slice(0, LOGIN_HISTORY_MAX);
+function _pushLoginHistory(entry) {
+  if (!entry || !entry.name) return;
+  const e = { name: String(entry.name), sid: entry.sid || '', role: entry.role || '', at: Date.now() };
+  if (entry.role === 'store' && entry.pw) e.pw = entry.pw;
+  let saved = [];
+  try { saved = JSON.parse(localStorage.getItem(LOGIN_HISTORY_KEY) || '[]'); } catch (_) {}
+  const list = [e].concat((Array.isArray(saved) ? saved : []).filter(x => x && x.name !== e.name)).slice(0, LOGIN_HISTORY_MAX);
   try { localStorage.setItem(LOGIN_HISTORY_KEY, JSON.stringify(list)); } catch (_) {}
 }
+function _removeLoginHistory(name) {
+  let saved = [];
+  try { saved = JSON.parse(localStorage.getItem(LOGIN_HISTORY_KEY) || '[]'); } catch (_) {}
+  saved = (Array.isArray(saved) ? saved : []).filter(x => x && x.name !== name);
+  // 端末の記録から拾った店は、消したことを覚えておかないとまた出てくる
+  saved.push({ name, removed: true, at: Date.now() });
+  try { localStorage.setItem(LOGIN_HISTORY_KEY, JSON.stringify(saved)); } catch (_) {}
+}
+function _visibleLoginHistory() {
+  let saved = [];
+  try { saved = JSON.parse(localStorage.getItem(LOGIN_HISTORY_KEY) || '[]'); } catch (_) {}
+  const removed = new Set((Array.isArray(saved) ? saved : []).filter(x => x && x.removed).map(x => x.name));
+  return _loginHistory().filter(x => !x.removed && !removed.has(x.name));
+}
+// パスワード欄の下に出す一覧(空欄のときだけ。入力を始めたら閉じる)
 function renderLoginHistory() {
   const box = document.getElementById('login-history');
-  if (!box) return;
-  const list = _loginHistory();
-  if (!list.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  const pw = document.getElementById('site-pw-input');
+  if (!box || !pw) return;
+  const list = _visibleLoginHistory();
+  if (!list.length || pw.value || document.activeElement !== pw) { box.style.display = 'none'; return; }
   box.style.display = '';
-  box.innerHTML = `<div style="font-size:11px;letter-spacing:.12em;color:#b6952f;font-weight:700;margin:0 0 6px 2px">最近ログインした店舗</div>
-    <div style="display:flex;flex-wrap:wrap;gap:6px">${list.map((x, i) =>
-      `<button type="button" onclick="pickLoginHistory(${i})" class="login-hist-chip" style="padding:6px 12px;border:1px solid #d6c27a;background:#fffdf3;color:#5a4200;border-radius:16px;font-size:13px;cursor:pointer;font-family:inherit">${esc(x.name)}</button>`).join('')}</div>
-    <div style="margin-top:4px"><a href="javascript:void(0)" onclick="clearLoginHistory()" style="font-size:11px;color:#94a3b8">履歴を消す</a></div>`;
+  box.innerHTML = list.map((x, i) => `<div class="login-hist-item" data-i="${i}" onmousedown="event.preventDefault()" onclick="pickLoginHistory(${i})"
+      style="display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;border-top:${i ? '1px solid #f1ead2' : 'none'}">
+      <span style="color:#94a3b8">🕘</span><span style="flex:1;text-align:left;color:#3f3a2a">${esc(x.name)}</span>
+      <span onmousedown="event.preventDefault()" onclick="event.stopPropagation();deleteLoginHistory(${i})" title="履歴から消す" style="color:#94a3b8;padding:0 4px;font-size:16px">×</span></div>`).join('');
 }
 function pickLoginHistory(i) {
-  const x = _loginHistory()[i];
+  const x = _visibleLoginHistory()[i];
   if (!x) return;
   const u = document.querySelector('#site-login-form input[name="username"]');
   if (u) u.value = x.name;
-  document.querySelectorAll('#login-history .login-hist-chip').forEach((b, k) => {
-    b.style.background = k === i ? '#22703d' : '#fffdf3'; b.style.color = k === i ? 'white' : '#5a4200';
-  });
   const label = document.getElementById('site-pw-label');
   if (label) label.textContent = `「${x.name}」のパスワード`;
   const pw = document.getElementById('site-pw-input');
+  document.getElementById('login-history').style.display = 'none';
+  if (x.pw && pw) { pw.value = x.pw; submitSiteLogin(); return; }
   if (pw) { pw.value = ''; pw.focus(); }
 }
-function clearLoginHistory() {
-  if (!confirm('この端末のログインの履歴（店舗名の一覧）を消します。保存されたパスワードは消えません。よろしいですか？')) return;
-  try { localStorage.removeItem(LOGIN_HISTORY_KEY); } catch (_) {}
-  const label = document.getElementById('site-pw-label');
-  if (label) label.textContent = 'パスワード';
+function deleteLoginHistory(i) {
+  const x = _visibleLoginHistory()[i];
+  if (!x) return;
+  _removeLoginHistory(x.name);
   renderLoginHistory();
 }
+document.addEventListener('DOMContentLoaded', () => {
+  const pw = document.getElementById('site-pw-input');
+  if (!pw) return;
+  pw.addEventListener('focus', renderLoginHistory);
+  pw.addEventListener('click', renderLoginHistory);
+  pw.addEventListener('input', renderLoginHistory);
+  pw.addEventListener('blur', () => setTimeout(renderLoginHistory, 150));
+});
 
-function _saveCredential(id, password) {
-  _pushLoginHistory(id);
+function _saveCredential(id, password, opts) {
+  _pushLoginHistory({ name: id, sid: opts && opts.sid, role: opts && opts.role, pw: password });
   if (!window.PasswordCredential) return;
   try {
     const usernameInput = document.querySelector('#site-login-form input[name="username"]');
