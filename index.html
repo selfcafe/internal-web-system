@@ -6489,12 +6489,15 @@ async function submitSiteLogin() {
     setBusy(false);
     if (!res || !res.ok) {
       err.textContent = (res && res.error) || 'パスワードが違います';
+      // 履歴の候補で入れなかった(パスワードが変わった)ときは、その候補を消して手で入れてもらう
+      if (_loginFromHistory) { _removeLoginHistory(_loginFromHistory); err.textContent = `「${_loginFromHistory}」のパスワードが変わったようです。新しいパスワードを入れてください`; _loginFromHistory = ''; }
       document.getElementById('site-pw-input').value = '';
       document.getElementById('site-pw-input').focus();
       setTimeout(() => { err.textContent = ''; }, 3000);
       return;
     }
     sessionStorage.setItem('auth_t', res.token);
+    _loginFromHistory = '';
     if (res.role !== 'onb') _loadOrders(); // 通行証の範囲(店舗・担当店舗・全店舗)で読み直す。showPageが読み終わりを待つ
     // ガイダンス(練習)用のパスワードなら、名前と配属店を選ぶ開始画面へ(onboarding-tour.js)
     if (res.role === 'onb') { if (window.onbShowStartScreen) onbShowStartScreen(); return; }
@@ -6527,7 +6530,12 @@ async function submitSiteLogin() {
     if (storeId === '__admin__') {
       sessionStorage.setItem('last_active', String(Date.now()));
       document.getElementById('site-lock').classList.add('hidden');
-      _saveCredential('管理者', val, { role: 'admin' });
+      let remember = _loginHistory().some(x => x.role === 'admin');
+      if (!remember && localStorage.getItem('admin_remember_declined') !== '1') {
+        remember = confirm('この端末に管理者パスワードを覚えますか？\n次からはパスワード欄を押して「管理者」を選ぶだけでログインできます。\n\n※自分専用の端末のときだけ「OK」を押してください（お店の共有の端末では「キャンセル」）。');
+        if (!remember) localStorage.setItem('admin_remember_declined', '1');
+      }
+      _saveCredential('管理者', val, { role: 'admin', remember });
       showPage('admin');
     } else {
       sessionStorage.setItem('site_authed', '1');
@@ -6558,19 +6566,21 @@ async function submitSiteLogin() {
 // {name, sid, role, pw?, at} を残す。パスワードを残すのは店舗のパスワードだけ(セルフカフェHPの店のページの
 // アドレスの末尾で、もともと人に見られてよい決まりのため。2026-10-28)。管理者・担当者のパスワードは残さない
 // (選ぶと名前が入り、パスワードは手で入れる。ブラウザが名前つきで保存していれば候補に出る)。
-// 一覧に出すのは、この端末で一度ログインした店(パスワードを残したもの)だけ。管理者・担当者はパスワードを残さないので出さない。過去の端末の記録から
+// 一覧に出すのは、この端末で一度ログインした店(パスワードを残したもの)だけ。担当者はパスワードを残さないので出さない。
+// 管理者は、ログインしたときに「この端末に覚える」を選んだときだけ残して出す(自分の端末だけで使う。2026-11-05 ユーザー依頼)。過去の端末の記録から
 // 店を拾うと、押してもパスワードが入らない候補が混ざって分かりにくかったため、拾わない(2026-11-05 ユーザー選択)。
 const LOGIN_HISTORY_KEY = 'login_history', LOGIN_HISTORY_MAX = 12;
+let _loginFromHistory = '';
 function _loginHistory() {
   let v = [];
   try { v = JSON.parse(localStorage.getItem(LOGIN_HISTORY_KEY) || '[]'); } catch (_) {}
-  v = Array.isArray(v) ? v.filter(x => x && x.name && x.role === 'store' && x.pw) : [];
+  v = Array.isArray(v) ? v.filter(x => x && x.name && (x.role === 'store' || x.role === 'admin') && x.pw) : [];
   return v.slice(0, LOGIN_HISTORY_MAX);
 }
 function _pushLoginHistory(entry) {
   if (!entry || !entry.name) return;
   const e = { name: String(entry.name), sid: entry.sid || '', role: entry.role || '', at: Date.now() };
-  if (entry.role === 'store' && entry.pw) e.pw = entry.pw;
+  if ((entry.role === 'store' || (entry.role === 'admin' && entry.remember)) && entry.pw) e.pw = entry.pw;
   let saved = [];
   try { saved = JSON.parse(localStorage.getItem(LOGIN_HISTORY_KEY) || '[]'); } catch (_) {}
   const list = [e].concat((Array.isArray(saved) ? saved : []).filter(x => x && x.name !== e.name)).slice(0, LOGIN_HISTORY_MAX);
@@ -6605,7 +6615,7 @@ function pickLoginHistory(i) {
   if (label) label.textContent = `「${x.name}」のパスワード`;
   const pw = document.getElementById('site-pw-input');
   document.getElementById('login-history').style.display = 'none';
-  if (x.pw && pw) { pw.value = x.pw; submitSiteLogin(); return; }
+  if (x.pw && pw) { pw.value = x.pw; _loginFromHistory = x.name; submitSiteLogin(); return; }
   if (pw) { pw.value = ''; pw.focus(); }
 }
 function deleteLoginHistory(i) {
@@ -6624,7 +6634,7 @@ document.addEventListener('DOMContentLoaded', () => {
 });
 
 function _saveCredential(id, password, opts) {
-  _pushLoginHistory({ name: id, sid: opts && opts.sid, role: opts && opts.role, pw: password });
+  _pushLoginHistory({ name: id, sid: opts && opts.sid, role: opts && opts.role, remember: opts && opts.remember, pw: password });
   if (!window.PasswordCredential) return;
   try {
     const usernameInput = document.querySelector('#site-login-form input[name="username"]');
