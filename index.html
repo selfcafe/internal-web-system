@@ -6558,7 +6558,14 @@ async function submitSiteLogin() {
 // (保存も名前つきになる。Chrome・Edge は _saveCredential の PasswordCredential でも名前つきで保存する)
 const LOGIN_HISTORY_KEY = 'login_history', LOGIN_HISTORY_MAX = 8;
 function _loginHistory() {
-  try { const v = JSON.parse(localStorage.getItem(LOGIN_HISTORY_KEY) || '[]'); return Array.isArray(v) ? v.filter(x => x && x.name) : []; } catch (_) { return []; }
+  let v = [];
+  try { v = JSON.parse(localStorage.getItem(LOGIN_HISTORY_KEY) || '[]'); } catch (_) {}
+  v = Array.isArray(v) ? v.filter(x => x && x.name) : [];
+  // 履歴を作る前からの端末は、前回ログインした店(last_login_store)を最初の1件にする(公開直後に何も出ないと分かりにくいため)
+  if (!v.length) {
+    try { const sid = localStorage.getItem('last_login_store'); if (sid && STORES[sid]) v = [{ name: STORES[sid], at: 0 }]; } catch (_) {}
+  }
+  return v;
 }
 function _pushLoginHistory(name) {
   if (!name) return;
