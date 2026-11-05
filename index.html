@@ -6606,7 +6606,7 @@ function renderLoginHistory() {
   box.style.display = '';
   box.innerHTML = list.map((x, i) => `<div class="login-hist-item" data-i="${i}" onmousedown="event.preventDefault()" onclick="pickLoginHistory(${i})"
       style="display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;border-top:${i ? '1px solid #f1ead2' : 'none'}">
-      <span style="color:#94a3b8">🕘</span><span style="flex:1;text-align:left;color:#3f3a2a">${esc(x.name)}</span>
+      <span style="color:#94a3b8">🕘</span><span style="flex:1;text-align:left;color:#3f3a2a">${esc(x.name)}${x.pw ? '' : '<span style="display:block;font-size:11px;color:#94a3b8">次の1回だけパスワードの入力が必要</span>'}</span>
       <span onmousedown="event.preventDefault()" onclick="event.stopPropagation();deleteLoginHistory(${i})" title="履歴から消す" style="color:#94a3b8;padding:0 4px;font-size:16px">×</span></div>`).join('');
 }
 function pickLoginHistory(i) {
@@ -6615,7 +6615,7 @@ function pickLoginHistory(i) {
   const u = document.querySelector('#site-login-form input[name="username"]');
   if (u) u.value = x.name;
   const label = document.getElementById('site-pw-label');
-  if (label) label.textContent = `「${x.name}」のパスワード`;
+  if (label) label.textContent = x.pw ? `「${x.name}」のパスワード` : (x.role === 'store' || !x.role ? `「${x.name}」のパスワードを入れてください（次からは選ぶだけでログインできます）` : `「${x.name}」のパスワードを入れてください`);
   const pw = document.getElementById('site-pw-input');
   document.getElementById('login-history').style.display = 'none';
   if (x.pw && pw) { pw.value = x.pw; submitSiteLogin(); return; }
