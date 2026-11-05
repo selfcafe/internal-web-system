@@ -8798,10 +8798,7 @@ function renderOverview() {
   const newStores   = storeData.filter(s => s.hasNew);
   const otherStores = storeData.filter(s => !s.hasNew);
 
-  // プルダウンのデフォルト店舗
-  if (!adminOverviewDropdownStore || !STORES[adminOverviewDropdownStore]) {
-    adminOverviewDropdownStore = otherStores[0]?.sid || '';
-  }
+  // プルダウンは最初は何も選ばない(以前は先頭の店=ささしまを自動で開いていたが、ログインのたびに並ぶのは余計とのこと。2026-11-05)
 
   // 新着カード
   const newCards = newStores.map(({sid, sname, groups, newCnt}) => {
