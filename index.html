@@ -9083,12 +9083,10 @@ async function renderHistory() {
   const totalCnt = storeData.reduce((n, s) => n + s.cnt, 0);
   document.getElementById('admin-summary').innerHTML = `【${region.label}】履歴 ${totalCnt} 件（納品確認日から1ヶ月で自動削除）`;
 
-  // デフォルト店舗
-  if (!adminHistDropdownStore || !STORES[adminHistDropdownStore]) {
-    adminHistDropdownStore = storeData[0]?.sid || '';
-  }
+  // 最初は何も選ばない(発注依頼一覧と同じ。以前は先頭の店を自動で開いていた。2026-11-05)
+  if (adminHistDropdownStore && !STORES[adminHistDropdownStore]) adminHistDropdownStore = '';
 
-  const options = storeData.map(({sid, sname, cnt}) =>
+  const options = `<option value="" ${!adminHistDropdownStore ? 'selected' : ''}>――――</option>` + storeData.map(({sid, sname, cnt}) =>
     `<option value="${esc(sid)}" ${sid === adminHistDropdownStore ? 'selected' : ''}>${esc(sname)}（${cnt}件）</option>`
   ).join('');
 
