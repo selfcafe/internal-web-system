@@ -615,8 +615,10 @@
     <p>パスワードを入力してください</p>
     <div id="site-sync-warning" style="display:none;background:#fef2f2;border:1px solid #fca5a5;color:#b91c1c;font-size:12.5px;border-radius:8px;padding:10px 12px;margin-bottom:12px;text-align:left;line-height:1.5"></div>
     <form id="site-login-form" onsubmit="submitSiteLogin(); return false;" autocomplete="on">
-      <input type="text" name="username" autocomplete="username" style="display:none" aria-hidden="true">
-      <label class="site-lock-field-label" for="site-pw-input">パスワード</label>
+      <!-- ブラウザのパスワード保存で、どの店のパスワードかを区別するための名前(見えない。履歴を押すとその店の名前が入る) -->
+      <input type="text" name="username" autocomplete="username" tabindex="-1" aria-hidden="true" style="position:absolute;left:-9999px;width:1px;height:1px;opacity:0">
+      <div id="login-history" style="display:none;text-align:left;margin-bottom:10px"></div>
+      <label class="site-lock-field-label" for="site-pw-input" id="site-pw-label">パスワード</label>
       <div>
         <input class="pin-input" id="site-pw-input" type="text" name="password"
           autocomplete="current-password" placeholder="パスワード">
@@ -6550,7 +6552,53 @@ async function submitSiteLogin() {
   }
 }
 
+// ログインの履歴(2026-11-05、複数の店を受け持つ人向け)。この端末でログインした店・担当者・管理者の名前だけを
+// localStorage login_history に新しい順で残し、ログイン画面に「最近ログインした店舗」として出す。パスワードは残さない。
+// 押すと見えない名前の欄にその名前を入れてパスワード欄へ移るので、ブラウザが店ごとに保存したパスワードを候補に出せる
+// (保存も名前つきになる。Chrome・Edge は _saveCredential の PasswordCredential でも名前つきで保存する)
+const LOGIN_HISTORY_KEY = 'login_history', LOGIN_HISTORY_MAX = 8;
+function _loginHistory() {
+  try { const v = JSON.parse(localStorage.getItem(LOGIN_HISTORY_KEY) || '[]'); return Array.isArray(v) ? v.filter(x => x && x.name) : []; } catch (_) { return []; }
+}
+function _pushLoginHistory(name) {
+  if (!name) return;
+  const list = [{ name: String(name), at: Date.now() }].concat(_loginHistory().filter(x => x.name !== String(name))).slice(0, LOGIN_HISTORY_MAX);
+  try { localStorage.setItem(LOGIN_HISTORY_KEY, JSON.stringify(list)); } catch (_) {}
+}
+function renderLoginHistory() {
+  const box = document.getElementById('login-history');
+  if (!box) return;
+  const list = _loginHistory();
+  if (!list.length) { box.style.display = 'none'; box.innerHTML = ''; return; }
+  box.style.display = '';
+  box.innerHTML = `<div style="font-size:11px;letter-spacing:.12em;color:#b6952f;font-weight:700;margin:0 0 6px 2px">最近ログインした店舗</div>
+    <div style="display:flex;flex-wrap:wrap;gap:6px">${list.map((x, i) =>
+      `<button type="button" onclick="pickLoginHistory(${i})" class="login-hist-chip" style="padding:6px 12px;border:1px solid #d6c27a;background:#fffdf3;color:#5a4200;border-radius:16px;font-size:13px;cursor:pointer;font-family:inherit">${esc(x.name)}</button>`).join('')}</div>
+    <div style="margin-top:4px"><a href="javascript:void(0)" onclick="clearLoginHistory()" style="font-size:11px;color:#94a3b8">履歴を消す</a></div>`;
+}
+function pickLoginHistory(i) {
+  const x = _loginHistory()[i];
+  if (!x) return;
+  const u = document.querySelector('#site-login-form input[name="username"]');
+  if (u) u.value = x.name;
+  document.querySelectorAll('#login-history .login-hist-chip').forEach((b, k) => {
+    b.style.background = k === i ? '#22703d' : '#fffdf3'; b.style.color = k === i ? 'white' : '#5a4200';
+  });
+  const label = document.getElementById('site-pw-label');
+  if (label) label.textContent = `「${x.name}」のパスワード`;
+  const pw = document.getElementById('site-pw-input');
+  if (pw) { pw.value = ''; pw.focus(); }
+}
+function clearLoginHistory() {
+  if (!confirm('この端末のログインの履歴（店舗名の一覧）を消します。保存されたパスワードは消えません。よろしいですか？')) return;
+  try { localStorage.removeItem(LOGIN_HISTORY_KEY); } catch (_) {}
+  const label = document.getElementById('site-pw-label');
+  if (label) label.textContent = 'パスワード';
+  renderLoginHistory();
+}
+
 function _saveCredential(id, password) {
+  _pushLoginHistory(id);
   if (!window.PasswordCredential) return;
   try {
     const usernameInput = document.querySelector('#site-login-form input[name="username"]');
@@ -6967,6 +7015,7 @@ function showLock() {
   if (location.hash === '#admin') history.replaceState(null, '', location.pathname + location.search);
   if (isSiteAuthed()) { showPage('store'); return; }
   document.getElementById('site-lock').classList.remove('hidden');
+  renderLoginHistory();
   setTimeout(() => document.getElementById('site-pw-input')?.focus(), 100);
 }
 
@@ -11675,6 +11724,7 @@ if (!(sessionStorage.getItem('admin_authed') === '1' || isSiteAuthed())) {
     showPage('store');
   } else {
     document.getElementById('site-lock').classList.remove('hidden');
+    renderLoginHistory();
     setTimeout(() => document.getElementById('site-pw-input')?.focus(), 100);
   }
 })();
