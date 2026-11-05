@@ -6558,19 +6558,13 @@ async function submitSiteLogin() {
 // {name, sid, role, pw?, at} を残す。パスワードを残すのは店舗のパスワードだけ(セルフカフェHPの店のページの
 // アドレスの末尾で、もともと人に見られてよい決まりのため。2026-10-28)。管理者・担当者のパスワードは残さない
 // (選ぶと名前が入り、パスワードは手で入れる。ブラウザが名前つきで保存していれば候補に出る)。
-// 履歴を作る前からの端末は、前回ログインした店と、店ごとに端末に残っている記録(業務連絡の既読など)から店を拾う。
+// 一覧に出すのは、この端末で一度ログインした店(パスワードを残したもの)だけ。管理者・担当者はパスワードを残さないので出さない。過去の端末の記録から
+// 店を拾うと、押してもパスワードが入らない候補が混ざって分かりにくかったため、拾わない(2026-11-05 ユーザー選択)。
 const LOGIN_HISTORY_KEY = 'login_history', LOGIN_HISTORY_MAX = 12;
-const _LOGIN_HIST_TRACE = /^(?:announce_read_|seen_attention_|delivery_snooze_|meter_notice_dismissed_)(.+)$/;
 function _loginHistory() {
   let v = [];
   try { v = JSON.parse(localStorage.getItem(LOGIN_HISTORY_KEY) || '[]'); } catch (_) {}
-  v = Array.isArray(v) ? v.filter(x => x && x.name) : [];
-  const names = new Set(v.map(x => x.name));
-  const add = sid => { if (sid && STORES[sid] && !names.has(STORES[sid])) { names.add(STORES[sid]); v.push({ name: STORES[sid], sid, role: 'store', at: 0 }); } };
-  try {
-    add(localStorage.getItem('last_login_store'));
-    for (let i = 0; i < localStorage.length; i++) { const m = String(localStorage.key(i) || '').match(_LOGIN_HIST_TRACE); if (m) add(m[1]); }
-  } catch (_) {}
+  v = Array.isArray(v) ? v.filter(x => x && x.name && x.role === 'store' && x.pw) : [];
   return v.slice(0, LOGIN_HISTORY_MAX);
 }
 function _pushLoginHistory(entry) {
@@ -6585,17 +6579,10 @@ function _pushLoginHistory(entry) {
 function _removeLoginHistory(name) {
   let saved = [];
   try { saved = JSON.parse(localStorage.getItem(LOGIN_HISTORY_KEY) || '[]'); } catch (_) {}
-  saved = (Array.isArray(saved) ? saved : []).filter(x => x && x.name !== name);
-  // 端末の記録から拾った店は、消したことを覚えておかないとまた出てくる
-  saved.push({ name, removed: true, at: Date.now() });
+  saved = (Array.isArray(saved) ? saved : []).filter(x => x && x.name !== name && !x.removed);
   try { localStorage.setItem(LOGIN_HISTORY_KEY, JSON.stringify(saved)); } catch (_) {}
 }
-function _visibleLoginHistory() {
-  let saved = [];
-  try { saved = JSON.parse(localStorage.getItem(LOGIN_HISTORY_KEY) || '[]'); } catch (_) {}
-  const removed = new Set((Array.isArray(saved) ? saved : []).filter(x => x && x.removed).map(x => x.name));
-  return _loginHistory().filter(x => !x.removed && !removed.has(x.name));
-}
+function _visibleLoginHistory() { return _loginHistory(); }
 // パスワード欄の下に出す一覧(空欄のときだけ。入力を始めたら閉じる)
 function renderLoginHistory() {
   const box = document.getElementById('login-history');
@@ -6606,7 +6593,7 @@ function renderLoginHistory() {
   box.style.display = '';
   box.innerHTML = list.map((x, i) => `<div class="login-hist-item" data-i="${i}" onmousedown="event.preventDefault()" onclick="pickLoginHistory(${i})"
       style="display:flex;align-items:center;gap:10px;padding:10px 12px;cursor:pointer;border-top:${i ? '1px solid #f1ead2' : 'none'}">
-      <span style="color:#94a3b8">🕘</span><span style="flex:1;text-align:left;color:#3f3a2a">${esc(x.name)}${x.pw ? '' : '<span style="display:block;font-size:11px;color:#94a3b8">次の1回だけパスワードの入力が必要</span>'}</span>
+      <span style="color:#94a3b8">🕘</span><span style="flex:1;text-align:left;color:#3f3a2a">${esc(x.name)}</span>
       <span onmousedown="event.preventDefault()" onclick="event.stopPropagation();deleteLoginHistory(${i})" title="履歴から消す" style="color:#94a3b8;padding:0 4px;font-size:16px">×</span></div>`).join('');
 }
 function pickLoginHistory(i) {
@@ -6615,7 +6602,7 @@ function pickLoginHistory(i) {
   const u = document.querySelector('#site-login-form input[name="username"]');
   if (u) u.value = x.name;
   const label = document.getElementById('site-pw-label');
-  if (label) label.textContent = x.pw ? `「${x.name}」のパスワード` : (x.role === 'store' || !x.role ? `「${x.name}」のパスワードを入れてください（次からは選ぶだけでログインできます）` : `「${x.name}」のパスワードを入れてください`);
+  if (label) label.textContent = `「${x.name}」のパスワード`;
   const pw = document.getElementById('site-pw-input');
   document.getElementById('login-history').style.display = 'none';
   if (x.pw && pw) { pw.value = x.pw; submitSiteLogin(); return; }
