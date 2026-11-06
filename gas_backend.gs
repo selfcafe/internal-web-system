@@ -897,6 +897,7 @@ function doPost(e) {
     else if (b.action === 'saveOnboardingProgress') result = saveOnboardingProgress(b.name, b.storeId, b.chapter, b.chapterTitle, b.deviceId);
     else if (b.action === 'deleteLeaveRequest')  result = deleteLeaveRequest(b.id);
     else if (b.action === 'deleteAttendance')    result = deleteAttendance(b.id);
+    else if (b.action === 'addAttendanceRecord') result = addAttendanceRecord(b.storeId, b.name, b.clockedAt);
     else if (b.action === 'saveDeliveryHistory') result = saveDeliveryHistory(b.storeId, b.row);
     else if (b.action === 'reportDeliveryMismatch') result = reportDeliveryMismatch(b.storeId, b);
     else if (b.action === 'clearDeliveryHistory') result = clearDeliveryHistory(b.storeId);
@@ -3370,6 +3371,26 @@ function saveAttendance(storeId, name, lat, lng) {
   const result = { ok: true, withinRange, updated: updatedExisting };
   if (withinRange === false && ATTENDANCE_GPS_NOTIFY_ENABLED) result._notify = { type: 'attendanceGpsIssue', storeId, name };
   return result;
+}
+
+// 打刻し忘れ・打刻が残らなかった日の分を、本部があとから足す(2026-11-06、栄生で名前を入れずに押して 11/2〜11/5 が残らなかった)。
+// 管理者・スクリプトの鍵だけ(AUTH_*_ACTIONS に入れない)。clockedAt は 'yyyy-MM-dd HH:mm' か 'yyyy-MM-dd HH:mm:ss'。
+// 店舗内で押した扱い(within_range=true、位置は空)にして、業務した日数に数える。同じ人・同じ営業日の打刻があれば足さない
+function addAttendanceRecord(storeId, name, clockedAt) {
+  storeId = String(storeId || '').trim(); name = String(name || '').trim(); clockedAt = String(clockedAt || '').trim();
+  if (!storeId || !name) return { error: '店舗と名前は必須です' };
+  const m = clockedAt.match(/^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2})(?::(\d{2}))?$/);
+  if (!m) return { error: '日時は yyyy-MM-dd HH:mm の形で入れてください' };
+  const at = new Date(Number(m[1]), Number(m[2]) - 1, Number(m[3]), Number(m[4]), Number(m[5]), Number(m[6] || 0));
+  if (at.getTime() > Date.now()) return { error: '先の日時は入れられません' };
+  const bizDate = _businessDateFromDateTime_(Utilities.formatDate(at, _sheetTz(), 'yyyy-MM-dd HH:mm:ss'));
+  const dup = getAttendance(storeId).find(r => String(r.name || '').trim() === name && _businessDateFromDateTime_(r.clocked_at) === bizDate);
+  if (dup) return { ok: true, skipped: true, existing: dup.clocked_at };
+  const sheet = getSheet(SHEET_ATTENDANCE);
+  ensureHeaders(sheet, ATTENDANCE_COLS);
+  sheet.appendRow([Utilities.getUuid(), storeId, name, at, '', '', true]);
+  _invalidateAttendanceCache_();
+  return { ok: true, added: Utilities.formatDate(at, _sheetTz(), 'yyyy-MM-dd HH:mm:ss') };
 }
 
 // 店から離れた打刻(要確認)の本人申告「実際に業務を始めた時刻」を、その人の今日(営業日)の打刻の行に書く(2026-10-28)。
