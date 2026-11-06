@@ -126,6 +126,7 @@
     .toolbar { display:flex; gap:10px; margin-bottom:14px; align-items:center; }
     button { border:none; border-radius:6px; cursor:pointer; font-family:inherit; }
     .btn-done      { background:#f97316; color:white; padding:8px 12px; font-size:13px; font-weight:700; }
+    .btn-mismatch  { background:white; color:#b91c1c; border:1px solid #fca5a5; padding:6px 10px; font-size:12px; font-weight:700; margin-top:6px; }
     .btn-del       { background:#ef4444; color:white; padding:8px 12px; font-size:13px; }
     .btn-confirm   { background:#22703d; color:#fff; padding:7px 11px; font-size:12px; font-weight:700; border:none; }
     .btn-unconfirm { background:#6b7280; color:white; padding:7px 11px; font-size:12px; }
@@ -785,7 +786,7 @@
           <select id="attendance-name-sel" onchange="renderAttendanceHistory();renderAttendanceTally();renderLeaveRequests();renderLeaveTally()" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:10px;font-size:15px;font-family:inherit;margin-bottom:10px"></select>
         </div>
         <div id="attendance-name-free-wrap" style="display:none">
-          <input id="attendance-name-free" type="text" maxlength="20" autocomplete="name" placeholder="お名前（例：山田）" oninput="renderAttendanceHistory();renderAttendanceTally()" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:10px;font-size:15px;margin-bottom:10px;box-sizing:border-box">
+          <input id="attendance-name-free" type="text" maxlength="20" autocomplete="name" placeholder="お名前（例：山田）" oninput="_rememberAttendanceFreeName();renderAttendanceHistory();renderAttendanceTally()" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:10px;font-size:15px;margin-bottom:10px;box-sizing:border-box">
         </div>
         <button id="attendance-clockin-btn" onclick="doAttendanceClockIn()" style="width:100%;background:#22703d;color:white;padding:12px;font-size:16px;font-weight:700;border-radius:8px;border:none;cursor:pointer;font-family:inherit">業務開始</button>
         <div id="attendance-msg" style="font-size:13px;margin-top:8px;min-height:18px"></div>
@@ -4876,6 +4877,19 @@ function renderAttendanceNameSelect() {
 
 // 1名モードは登録済みの唯一の名前（未登録なら空文字）、複数名モードはドロップダウンの選択値
 const ATTENDANCE_FREE_NAME_KEY = 'attendance_free_name_'; // + 店舗ID。スタッフ未登録の店で前回入れた名前
+// 名前欄が空なら、この端末で前回入れた名前→サーバーの候補(その店で最後に打刻した人、無ければ受講記録の人)の順で入れておく
+// (2026-11-06 塩川さん「名前の入力は自動で」。入れ忘れると打刻が残らず、業務した日が数えられなかった)
+function _fillAttendanceFreeName(suggested) {
+  const inp = document.getElementById('attendance-name-free');
+  if (!inp || inp.value.trim() || !_attendanceNeedsFreeName()) return;
+  let v = '';
+  try { v = localStorage.getItem(ATTENDANCE_FREE_NAME_KEY + storeTab) || ''; } catch (e) {}
+  inp.value = v || suggested || '';
+}
+function _rememberAttendanceFreeName() {
+  const v = (document.getElementById('attendance-name-free')?.value || '').trim();
+  if (v) { try { localStorage.setItem(ATTENDANCE_FREE_NAME_KEY + storeTab, v); } catch (e) {} }
+}
 function _attendanceNeedsFreeName() { return !getAttendanceStaffList(storeTab).length; }
 function _attendanceActiveName() {
   if (_attendanceNeedsFreeName()) return (document.getElementById('attendance-name-free')?.value || '').trim();
@@ -5144,6 +5158,7 @@ async function loadAttendanceTabData(storeId) {
     const data = await gasGet('getAttendanceTabData', { storeId });
     ATTENDANCE_HISTORY_CACHE = data.history || [];
     LEAVE_REQUESTS_CACHE = data.leaveRequests || [];
+    _fillAttendanceFreeName(data.suggestedName);
   } catch(e) {
     console.error('getAttendanceTabData error:', e);
     ATTENDANCE_HISTORY_CACHE = [];
@@ -7529,7 +7544,9 @@ function renderOrderHistory() {
         rows: [row],
         statusHtml: `<span class="locked-status">✓ 依頼済み</span>${di === 0 ? photoHtml : ''}`,
         actionBtn: `<button class="btn-done" onclick="markDelivered('${row.id}')"
-            ${!row.orderDate ? 'disabled title="発注日が記載されてから押せます" style="opacity:0.4;cursor:not-allowed"' : ''}>納品済み</button>`,
+            ${!row.orderDate ? 'disabled title="発注日が記載されてから押せます" style="opacity:0.4;cursor:not-allowed"' : ''}>納品済み</button>
+          <button class="btn-mismatch" onclick="openDeliveryMismatch('${row.id}')"
+            ${!row.orderDate ? 'disabled title="発注日が記載されてから押せます" style="opacity:0.4;cursor:not-allowed"' : ''}>届いた数が違う</button>`,
       }));
     }
     deniedRows.forEach((row, di) => actionGroups.push({
@@ -7757,8 +7774,10 @@ async function markDelivered(id) {
   await _markDeliveredCore(id);
 }
 // 納品済みの処理そのもの(確認なし)。発注タブのボタンと「届きましたか？」の確認(askOverdueDeliveries)の両方から使う
-async function _markDeliveredCore(id) {
-  const row = storeRows.find(r=>r.id===id); if (!row) return;
+// override: 届いた数が違うとき(openDeliveryMismatch)に、届いた数(actualQty/actualUnitMode)と備考を差し替えて納品済みにする
+async function _markDeliveredCore(id, override) {
+  const row0 = storeRows.find(r=>r.id===id); if (!row0) return;
+  const row = override ? { ...row0, ...override } : row0;
   if (_markDeliveredInProgress.has(id)) return;
   _markDeliveredInProgress.add(id);
   try {
@@ -7778,6 +7797,73 @@ async function _markDeliveredCore(id) {
   } finally {
     _markDeliveredInProgress.delete(id);
   }
+}
+
+/* ===== 届いた数が違う(2026-11-06 塩川さん) =====
+   本部が依頼の数を直して発注することはよくある(そのときは履歴に「実際：」が出る)。比べるのは「実際：」の数(無ければ依頼の数)。
+   それと届いた数が違うのは確認が要るので、「納品済み」＋LINE で知らせてもらうのをやめ、このメニューで届いた数を送ってもらう。
+   送ると本部(塩川用Bot)へ知らせ、届いた数で納品済みにする(棚卸の当月納品も届いた数で入る)。足りない分は本部が業者に確かめる */
+function _orderedQtyOf(row) {
+  const p = prodByName(row.product) || {};
+  const useActual = row.actualQty !== '' && row.actualQty != null;
+  const mode = useActual ? (row.actualUnitMode || (p.caseOnly ? 'case' : 'piece')) : (p.caseOnly ? 'case' : (row.unitMode || 'piece'));
+  const qty = useActual ? row.actualQty : row.qty;
+  return { qty, mode, unit: mode === 'case' ? 'ケース' : (p.unit || row.unit || '個') };
+}
+// 届いた数を入れてもらう。送ったら true、やめたら false
+function openDeliveryMismatch(id) {
+  const row = storeRows.find(r => r.id === id); if (!row) return Promise.resolve(false);
+  if (!row.orderDate) { alert('発注日が記載されてから押せます。'); return Promise.resolve(false); }
+  const label = prodByName(row.product)?.label || row.label || row.product || '';
+  const o = _orderedQtyOf(row);
+  return new Promise(resolve => {
+    const ov = document.createElement('div');
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:10050;display:flex;align-items:center;justify-content:center;padding:16px';
+    ov.innerHTML = `<div style="background:white;border-radius:12px;max-width:440px;width:100%;padding:18px 16px;box-shadow:0 10px 30px rgba(0,0,0,.25)">
+      <div style="font-size:17px;font-weight:700;color:#b91c1c;margin-bottom:8px">届いた数が違う</div>
+      <div style="font-weight:700;font-size:15px;margin-bottom:4px">${esc(label)}</div>
+      <div style="font-size:14px;color:#334155;margin-bottom:12px">発注した数：<b>${esc(o.qty)} ${esc(o.unit)}</b></div>
+      <label style="font-size:14px;font-weight:700">届いた数</label>
+      <div style="display:flex;align-items:center;gap:8px;margin:4px 0 12px">
+        <input id="dm-qty" type="number" inputmode="decimal" min="0" step="any" style="width:120px;font-size:18px;padding:8px;border:1px solid #cbd5e1;border-radius:6px">
+        <span style="font-size:15px">${esc(o.unit)}</span></div>
+      <label style="font-size:14px;font-weight:700">メモ（あれば）</label>
+      <textarea id="dm-note" rows="2" placeholder="例：箱がつぶれていた／違う商品が入っていた" style="width:100%;box-sizing:border-box;font-size:14px;padding:8px;border:1px solid #cbd5e1;border-radius:6px;margin:4px 0 8px;font-family:inherit"></textarea>
+      <div id="dm-msg" style="font-size:13px;color:#dc2626;min-height:18px;margin-bottom:6px"></div>
+      <div style="font-size:12px;color:#64748b;margin-bottom:10px">送ると本部に知らせ、届いた数で「納品済み」になります。足りない分は本部が確認します。</div>
+      <div style="display:flex;gap:8px">
+        <button id="dm-send" style="flex:1;padding:11px;background:#b91c1c;color:white;border:none;border-radius:8px;font-weight:700;font-size:15px;cursor:pointer;font-family:inherit">本部に送る</button>
+        <button id="dm-cancel" style="flex:1;padding:11px;background:white;color:#334155;border:1px solid #cbd5e1;border-radius:8px;font-weight:700;font-size:15px;cursor:pointer;font-family:inherit">やめる</button>
+      </div></div>`;
+    document.body.appendChild(ov);
+    const close = ok => { ov.remove(); resolve(ok); };
+    const msg = ov.querySelector('#dm-msg');
+    ov.querySelector('#dm-cancel').onclick = () => close(false);
+    ov.querySelector('#dm-send').onclick = async () => {
+      const raw = ov.querySelector('#dm-qty').value.trim();
+      const n = Number(raw);
+      if (raw === '' || Number.isNaN(n) || n < 0) { msg.textContent = '届いた数を入れてください'; return; }
+      if (n === 0) { msg.textContent = '1つも届いていないときは「やめる」を押して、届くのを待ってください'; return; }
+      if (n === Number(o.qty)) { msg.textContent = '発注した数と同じです。「納品済み」を押してください'; return; }
+      const memo = ov.querySelector('#dm-note').value.trim();
+      const btn = ov.querySelector('#dm-send');
+      btn.disabled = true; btn.style.opacity = '.6'; msg.style.color = '#475569'; msg.textContent = '送っています…';
+      try {
+        const r = await gasPost('reportDeliveryMismatch', { storeId: storeTab, product: label,
+          ordered: `${o.qty} ${o.unit}`, delivered: `${n} ${o.unit}`, orderDate: row.orderDate || '', requestDate: row.requestDate || '', note: memo });
+        if (r && r.error) throw new Error(r.error);
+      } catch (e) {
+        btn.disabled = false; btn.style.opacity = ''; msg.style.color = '#dc2626';
+        msg.textContent = '送れませんでした。もう一度押してください（' + e.message + '）';
+        return;
+      }
+      const add = `【届いた数が違う】発注 ${o.qty}${o.unit}／届いた ${n}${o.unit}` + (memo ? `（${memo}）` : '');
+      await _markDeliveredCore(id, { actualQty: n, actualUnitMode: o.mode, note: (row.note ? row.note + '\n' : '') + add });
+      alert('本部に送りました。届いた数で「納品済み」にしました。');
+      close(true);
+    };
+    setTimeout(() => ov.querySelector('#dm-qty')?.focus(), 50);
+  });
 }
 
 /* ===== 納品済みの押し忘れ防止(2026-10-29 塩川さん「この作業の漏れを完全に防止したい」) =====
@@ -7836,13 +7922,14 @@ function askOverdueDeliveries(all) {
         <div style="font-size:13px;color:#475569;line-height:1.7;margin-bottom:12px">${all
           ? '棚卸の前に、発注済みでまだ「納品済み」になっていない品を確かめます。'
           : '納品予定日を過ぎても「納品済み」になっていない品があります。'}1つずつ答えてください（答えるまでほかの操作はできません）。<br>
-          <span style="font-size:12px">届いた数が依頼と違うときは、「届いた」を押したあと本部に連絡してください。</span></div>
+          <span style="font-size:12px">届いた数が発注した数と違うときは、「数が違う」を押して届いた数を入れてください。</span></div>
         ${left.map(r => `<div style="border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;margin-bottom:8px">
           <div style="font-weight:700;font-size:15px">${esc(prodByName(r.product)?.label || r.label || r.product)}　${esc(qtyText(r))}</div>
           <div style="font-size:12px;color:#64748b;margin:2px 0 8px">発注日 ${esc(r.orderDate)}／${r.deliveryDate ? '納品予定日 ' + esc(r.deliveryDate) : '納品予定日なし'}</div>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
             <button data-id="${esc(r.id)}" data-act="yes" style="flex:1;min-width:140px;padding:10px;background:#22703d;color:white;border:none;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;font-family:inherit">届いた（納品済みにする）</button>
             <button data-id="${esc(r.id)}" data-act="no" style="flex:1;min-width:140px;padding:10px;background:white;color:#334155;border:1px solid #cbd5e1;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;font-family:inherit">まだ届いていない</button>
+            <button data-id="${esc(r.id)}" data-act="diff" style="flex:1;min-width:140px;padding:10px;background:white;color:#b91c1c;border:1px solid #fca5a5;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;font-family:inherit">数が違う</button>
           </div></div>`).join('')}
       </div>`;
       ov.querySelectorAll('button[data-act]').forEach(b => b.onclick = async () => {
@@ -7850,6 +7937,11 @@ function askOverdueDeliveries(all) {
         ov.querySelectorAll(`button[data-id="${CSS.escape(id)}"]`).forEach(x => { x.disabled = true; x.style.opacity = '.6'; });
         if (b.dataset.act === 'yes') {
           await _markDeliveredCore(id);
+        } else if (b.dataset.act === 'diff') {
+          if (!(await openDeliveryMismatch(id))) {   // やめたら、この品はそのまま聞き続ける
+            ov.querySelectorAll(`button[data-id="${CSS.escape(id)}"]`).forEach(x => { x.disabled = false; x.style.opacity = ''; });
+            return;
+          }
         } else {
           const sz = _deliverySnooze(storeTab);
           const t = today();

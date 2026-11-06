@@ -457,7 +457,7 @@ const AUTH_STORE_ACTIONS = [
   'getAttendance', 'getLeaveRequests', 'getAttendanceTabData', 'getDeliveryHistory', 'getMachinePhotoHistory',
   'getBugReports', 'getAnnouncements', 'buildStoreInventorySheet', 'buildStockCheckMonthly', 'processMonthlyReorder',
   'saveOrders', 'upsertOrders', 'saveChecksheetData', 'saveInventorySnapshot', 'recordInventoryDelivery',
-  'checkWaterStockMismatch', 'saveAttendance', 'setAttendanceStartTime', 'saveLeaveRequest', 'saveDeliveryHistory', 'clearDeliveryHistory',
+  'checkWaterStockMismatch', 'saveAttendance', 'setAttendanceStartTime', 'saveLeaveRequest', 'saveDeliveryHistory', 'clearDeliveryHistory', 'reportDeliveryMismatch',
   'saveMachinePhotoSet', 'submitBugReport', 'addBugReportComment', 'saveLostItem',
   'recordInventoryTransfer', 'cancelInventoryTransfer', 'getMeterReadings', 'saveMeterReading', 'getMeterReportInfo',
   'getPricePhotoStatus', 'savePricePhotos',
@@ -898,6 +898,7 @@ function doPost(e) {
     else if (b.action === 'deleteLeaveRequest')  result = deleteLeaveRequest(b.id);
     else if (b.action === 'deleteAttendance')    result = deleteAttendance(b.id);
     else if (b.action === 'saveDeliveryHistory') result = saveDeliveryHistory(b.storeId, b.row);
+    else if (b.action === 'reportDeliveryMismatch') result = reportDeliveryMismatch(b.storeId, b);
     else if (b.action === 'clearDeliveryHistory') result = clearDeliveryHistory(b.storeId);
     else if (b.action === 'saveMachinePhotoSet') result = saveMachinePhotoSet(b.storeId, b.machineIndex, b.imagesByCategory, b.imageMime);
     else if (b.action === 'saveMeterReading')   result = saveMeterReading(b.storeId, b.date, b.values, b.note);
@@ -3687,7 +3688,20 @@ function getAttendanceTabData(storeId) {
   catch (e) { result.historyError = e.message; }
   try { result.leaveRequests = getLeaveRequests(storeId); }
   catch (e) { result.leaveRequestsError = e.message; }
+  try { result.suggestedName = _attendanceSuggestedName_(storeId, result.history); }
+  catch (e) { result.suggestedName = ''; }
   return result;
+}
+
+// 打刻の名前欄に最初から入れておく名前(2026-11-06 塩川さん「名前の入力は自動で。毎回入力するの手間だし、入れ忘れで打刻が残らない」)。
+// その店で最後に打刻した人の名前、無ければガイダンスの受講記録にあるその店の人(新しい順の最初)。端末に前回の名前があればそちらが先(画面側)
+function _attendanceSuggestedName_(storeId, history) {
+  const last = (history || []).find(r => String(r.name || '').trim());
+  if (last) return String(last.name).trim();
+  if (!storeId) return '';
+  const onb = getOnboardingProgress().filter(r => String(r.store_id) === String(storeId) && String(r.name || '').trim())
+    .sort((a, b) => String(b.completed_at).localeCompare(String(a.completed_at)));
+  return onb.length ? String(onb[0].name).trim() : '';
 }
 
 // 承認ステップなし、申請した瞬間に即時確定（2026-07-23確定仕様）。
@@ -3875,6 +3889,21 @@ function saveDeliveryHistory(storeId, row) {
     return (v === undefined || v === null) ? '' : v;
   }));
   _invalidateDeliveryHistoryCache_();
+  return { ok: true };
+}
+
+// 店舗の「届いた数が違う」(2026-11-06)。発注した数(本部が直した数を含む)と届いた数が違うと、本部(塩川用Bot)へ知らせる。
+// 納品済みにするのは画面側(届いた数で saveDeliveryHistory)。ここは知らせるだけ
+function reportDeliveryMismatch(storeId, b) {
+  if (!storeId || !b || !b.product || !b.delivered) return { error: '商品と届いた数は必須です' };
+  const clip = v => String(v == null ? '' : v).slice(0, 200);
+  const lines = ['【届いた数が違う】' + (_storeNames_()[storeId] || storeId),
+    '商品: ' + clip(b.product),
+    '発注した数: ' + clip(b.ordered) + '／届いた数: ' + clip(b.delivered),
+    '依頼日: ' + clip(b.requestDate) + '／発注日: ' + clip(b.orderDate)];
+  if (b.note) lines.push('メモ: ' + clip(b.note));
+  lines.push('業者に確かめて、足りない分の対応を決めてください（店舗では届いた数で納品済みになっています）');
+  sendBugReportToOwnerBot_(lines.join('\n'));
   return { ok: true };
 }
 
