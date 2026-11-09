@@ -7318,13 +7318,13 @@ function buildBranchReorder(branchKey, periodLabel, dryRun, opts) {
   const subject = `${mail.subject || '発注依頼'}（${b.label}支店 ${periodJa}分）`;
   const summary = { branch: b.label, subject, ordered: Object.keys(perStore).map(s => names[s] || s), notSubmitted: missing, held, onOrder };
   if (!dryRun && missing.length && !(opts && opts.force)) return _waitBranchReorder_(branchKey, periodLabel, summary);
-  // ケースでしか頼まない品（豆・カップ・蓋など）が1ケースに届かない数になった行（2026-11-09 梅田センタービルのブレンドが1袋で発注された）。
-  // 計算は袋・本でするので起きる。下書きは作るが、送る前に必ず確かめるよう【要確認】のメールの先頭に出す
+  // ケースのある品が「1袋（1本・1個）」の行（2026-11-09 梅田センタービルのブレンドが1袋で発注された。塩川さん「1袋で頼むことはない。
+  // 1ケースの間違いが多いので必ず確認」）。下書きは作るが、送る前に必ず確かめるよう【要確認】のメールの先頭に出す
   const subCase = {};
   const metaSub = _productMeta_();
   Object.keys(perStore).forEach(sid => perStore[sid].forEach(it => {
     const m = metaSub[it.product] || {};
-    if (m.caseOnly && m.casePieces && it.qty > 0 && it.qty < m.casePieces)
+    if (m.casePieces > 1 && Number(it.qty) === 1)
       (subCase[names[sid] || sid] = subCase[names[sid] || sid] || []).push({ product: it.product, qty: it.qty, casePieces: m.casePieces });
   }));
   summary.subCase = subCase;
@@ -7456,11 +7456,11 @@ function _notifyHeldReorder_(branchLabel, periodJa, held, onOrder, subCase) {
   if (!risky.length && !reduced.length && !small.length) return;
   const lines = [];
   if (small.length) {
-    lines.push('⚠⚠【送る前に必ず確認】ケースでしか頼まない品が、1ケースに届かない数で発注書に入っています。',
-      'ブレンド1袋のような発注は普通ありません。1ケースにするか、今月は外すかを決めて、発注書を直してから送ってください。', '');
+    lines.push('⚠⚠【送る前に必ず確認】「1袋（1本・1個）」で頼む行が発注書に入っています。',
+      '1袋で頼むことはありません。1ケースの間違いのことが多いので、1ケースにするか、今月は外すかを決めて、発注書を直してから送ってください。', '');
     small.forEach(st => {
       lines.push('■ ' + st);
-      subCase[st].forEach(it => lines.push(`  ⚠ ${it.product}  ${it.qty}（1ケース ${it.casePieces}）`));
+      subCase[st].forEach(it => lines.push(`  ⚠ ${it.product}  1（1ケースは ${it.casePieces}）`));
       lines.push('');
     });
   }
@@ -7488,7 +7488,7 @@ function _notifyHeldReorder_(branchLabel, periodJa, held, onOrder, subCase) {
   const key = 'HELD_NOTIFIED_' + Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, branchLabel + periodJa)).slice(0, 16);
   const digest = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, body));
   if (props.getProperty(key) === digest) return;
-  GmailApp.sendEmail(APEX_SENDER, `${small.length ? '【要確認・1ケース未満あり】' : '【確認】'}月初発注の確認（${branchLabel}支店 ${periodJa}分）`, body, { name: 'セルフカフェ社内ポータル' });
+  GmailApp.sendEmail(APEX_SENDER, `${small.length ? '【要確認・1袋の発注あり】' : '【確認】'}月初発注の確認（${branchLabel}支店 ${periodJa}分）`, body, { name: 'セルフカフェ社内ポータル' });
   props.setProperty(key, digest);
 }
 
@@ -7780,7 +7780,10 @@ function buildAdhocApexOrder(branchKey, spec, dryRun, opts) {
       if (info.casePieces && it.qty >= info.casePieces) hasCase = true;
       // ケースでしか頼まない品（ポータルの商品マスタ caseOnly）がケースの倍数でない＝ケースと本・袋の取り違えの疑い（2026-10-26 新瑞橋のカップM 2ケース→2本）
       const pp = _portalProductForSheetCode_(it.code);
-      if (pp && pp.caseOnly && info.casePieces && it.qty % info.casePieces !== 0)
+      // 1袋（1本・1個）はほぼ1ケースの間違い（2026-11-09 塩川さん「1袋で頼むことはない。必ず確認」）
+      if (info.casePieces > 1 && Number(it.qty) === 1)
+        warnings.push(`⚠${names[sid] || sid} ${info.name} が 1${info.unit}。1袋で頼むことはないので、1ケース（${info.casePieces}${info.unit}）の間違いではないか確かめてから送ってください`);
+      else if (pp && pp.caseOnly && info.casePieces && it.qty % info.casePieces !== 0)
         warnings.push(`⚠${names[sid] || sid} ${info.name} が ${it.qty}${info.unit}（1ケース${info.casePieces}${info.unit}の倍数でない）。ケースでしか頼まない品なので、ケースと${info.unit}の取り違えがないか確かめてから送ってください`);
       lines.push(`${names[sid] || sid}　${info.name}　${it.qty}${info.unit}${info.casePieces ? `（1ケース${info.casePieces}${info.unit}）` : ''}　${amount.toLocaleString()}円`);
       return { name: info.name, code: it.code, qty: it.qty, unit: info.unit, casePieces: info.casePieces, price: info.price, amount, col: ci + 1, row: info.row };
