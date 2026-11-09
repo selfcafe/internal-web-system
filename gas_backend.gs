@@ -7111,12 +7111,13 @@ function _apexDraftForOrderRows_(storeId, rows, onCarried) {
     // 1ケース以上の品が無い店（アペックスの最低条件。2026-10-30 御器所・桜山）は、目立つように先頭に出し、ケースに上げる候補を添える
     const NO_CASE = /^(.+) は1ケース以上の品が無い（アペックスの最低条件）$/;
     const noCase = out.warnings.map(w => (String(w).match(NO_CASE) || [])[1]).filter(Boolean);
-    const warns = out.warnings.filter(w => !NO_CASE.test(String(w)));
-    let alert = '';
+    const caseWarn = out.warnings.filter(w => /^⚠/.test(String(w)));
+    const warns = out.warnings.filter(w => !NO_CASE.test(String(w)) && !/^⚠/.test(String(w)));
+    let alert = caseWarn.length ? '⚠⚠ ' + caseWarn.map(w => String(w).replace(/^⚠/, '')).join('\n⚠⚠ ') + '\n' : '';
     if (noCase.length) {
       const sidOf = nm => Object.keys(bySid).find(sid => (names[sid] || sid) === nm) || '';
       const cand = noCase.map(nm => { const c = _caseCandidate_(sidOf(nm), meta); return c ? nm + ' ' + c : ''; }).filter(Boolean);
-      alert = '⚠⚠ 1ケース以上の品がありません：' + noCase.join('・') + '\nアペックスへは1回の発注で1品以上を1ケースにする決まりです。このまま送らず、店に確かめてケースにする品を足してください' +
+      alert += '⚠⚠ 1ケース以上の品がありません：' + noCase.join('・') + '\nアペックスへは1回の発注で1品以上を1ケースにする決まりです。このまま送らず、店に確かめてケースにする品を足してください' +
         (cand.length ? '（候補: ' + cand.join('、') + '）' : '') + '\n';
     }
     const mergedNote = carried.length ? '（今日まだ送っていない前の下書きの品（' +
@@ -7317,7 +7318,17 @@ function buildBranchReorder(branchKey, periodLabel, dryRun, opts) {
   const subject = `${mail.subject || '発注依頼'}（${b.label}支店 ${periodJa}分）`;
   const summary = { branch: b.label, subject, ordered: Object.keys(perStore).map(s => names[s] || s), notSubmitted: missing, held, onOrder };
   if (!dryRun && missing.length && !(opts && opts.force)) return _waitBranchReorder_(branchKey, periodLabel, summary);
-  if (!dryRun) { try { _notifyHeldReorder_(b.label, periodJa, held, onOrder); } catch (e) { console.error('_notifyHeldReorder_ error:', e.message); } }
+  // ケースでしか頼まない品（豆・カップ・蓋など）が1ケースに届かない数になった行（2026-11-09 梅田センタービルのブレンドが1袋で発注された）。
+  // 計算は袋・本でするので起きる。下書きは作るが、送る前に必ず確かめるよう【要確認】のメールの先頭に出す
+  const subCase = {};
+  const metaSub = _productMeta_();
+  Object.keys(perStore).forEach(sid => perStore[sid].forEach(it => {
+    const m = metaSub[it.product] || {};
+    if (m.caseOnly && m.casePieces && it.qty > 0 && it.qty < m.casePieces)
+      (subCase[names[sid] || sid] = subCase[names[sid] || sid] || []).push({ product: it.product, qty: it.qty, casePieces: m.casePieces });
+  }));
+  summary.subCase = subCase;
+  if (!dryRun) { try { _notifyHeldReorder_(b.label, periodJa, held, onOrder, subCase); } catch (e) { console.error('_notifyHeldReorder_ error:', e.message); } }
   if (dryRun) {
     const detail = {};
     Object.keys(perStore).forEach(s => {
@@ -7436,12 +7447,23 @@ function _waitBranchReorder_(branchKey, periodLabel, summary) {
 // selfcafe001 自身あてのメールで知らせる（2026-10-18 塩川さん「A」: 見送り、在庫切れが心配なときだけ知らせて手で判断）。
 // 棚卸が出るたびに支店の発注書を作り直すので、同じ内容は1回だけ送る（スクリプト プロパティに控え）
 // 2026-10-29〜: 届いていない発注を差し引いた品(onOrder)も同じメールで知らせる(納品済みの押し忘れで、実は届いている場合に気づけるように)
-function _notifyHeldReorder_(branchLabel, periodJa, held, onOrder) {
+function _notifyHeldReorder_(branchLabel, periodJa, held, onOrder, subCase) {
   onOrder = onOrder || {};
+  subCase = subCase || {};
   const risky = Object.keys(held).filter(st => held[st].some(it => it.risk));
   const reduced = Object.keys(onOrder);
-  if (!risky.length && !reduced.length) return;
+  const small = Object.keys(subCase);
+  if (!risky.length && !reduced.length && !small.length) return;
   const lines = [];
+  if (small.length) {
+    lines.push('⚠⚠【送る前に必ず確認】ケースでしか頼まない品が、1ケースに届かない数で発注書に入っています。',
+      'ブレンド1袋のような発注は普通ありません。1ケースにするか、今月は外すかを決めて、発注書を直してから送ってください。', '');
+    small.forEach(st => {
+      lines.push('■ ' + st);
+      subCase[st].forEach(it => lines.push(`  ⚠ ${it.product}  ${it.qty}（1ケース ${it.casePieces}）`));
+      lines.push('');
+    });
+  }
   if (risky.length) {
     lines.push(`${branchLabel}支店の月初発注（${periodJa}分）で、1ケースにできる品が無いため今月は見送った店のうち、`,
       '月末在庫が基準値の半分を切っている品がある店です。次の発注まで持つか確認し、必要なら都度発注してください。', '');
@@ -7466,7 +7488,7 @@ function _notifyHeldReorder_(branchLabel, periodJa, held, onOrder) {
   const key = 'HELD_NOTIFIED_' + Utilities.base64EncodeWebSafe(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, branchLabel + periodJa)).slice(0, 16);
   const digest = Utilities.base64Encode(Utilities.computeDigest(Utilities.DigestAlgorithm.MD5, body));
   if (props.getProperty(key) === digest) return;
-  GmailApp.sendEmail(APEX_SENDER, `【確認】月初発注の確認（${branchLabel}支店 ${periodJa}分）`, body, { name: 'セルフカフェ社内ポータル' });
+  GmailApp.sendEmail(APEX_SENDER, `${small.length ? '【要確認・1ケース未満あり】' : '【確認】'}月初発注の確認（${branchLabel}支店 ${periodJa}分）`, body, { name: 'セルフカフェ社内ポータル' });
   props.setProperty(key, digest);
 }
 
