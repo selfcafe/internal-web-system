@@ -5953,7 +5953,24 @@ function _settingJson_(key, fallback) {
   try { return JSON.parse(e.value); } catch (err) { return fallback; }
 }
 
-function _applyReorderRounding_(raw) {
+// ===== 長期休業前のまとめ発注（2026-11-09 塩川さん） =====
+// アペックスの年末年始・GW・お盆の休業前は、最終発注日までに棚卸を前倒しし、休業明けの納品まで持つよう多めに発注する（年2〜3回）。
+// 設定 reorder_cover = {"2026-11": {"months": 1.75, "label": "年末年始", "stores": {店舗ID: 月数}}}
+//   その月(periodLabel)の棚卸からの月初発注だけ、アペックス・CS3 の基準値を「months か月分」に広げる。
+//   基準値はふだん約35日分(月の使用数の最大×35/30)なので、広げた基準値 = 切り上げ(基準値 × months × 30/35)。
+//   stores は店ごとの月数(置き場所が狭い店など)。設定が無い月はふだんどおり。トーヨーは対象外(休業日が別)
+//   「どの品も1ケースに届かない店は見送り」はふだんどおり(消費の少ない品を1ケース頼むと何か月分にもなるため)。ただし見送った店の知らせは、
+//   広げた基準値の8割を切る品(休業明けの納品まで持たない見込み)を対象にする。人が最終発注日までに都度発注するか決める
+// PC からは selfcafe-automation の scripts/reorder_cover.py（設定・全支店の試算・作成）
+function _reorderCover_(periodLabel, storeId) {
+  const c = (_settingJson_('reorder_cover', {}) || {})[String(periodLabel)];
+  if (!c) return null;
+  const months = Number((c.stores || {})[storeId] || c.months);
+  if (!(months > 0)) return null;
+  return { months, label: String(c.label || '') };
+}
+
+function _applyReorderRounding_(raw, opts) {
   const all = raw.map(it => {
     const qty = it.vendor === 'toyo'
       ? _reorderQtyPieces_(it.target, it.endStock, it.casePieces, it.stockCapCases)
@@ -5979,7 +5996,9 @@ function _applyReorderRounding_(raw) {
     } else {
       // 上げられる品が無い店は、その月はアペックスの品を発注しない(翌月、消費の多い品が1ケースになるときに合わせて頼む。
       // 2026-10-18 塩川さん「A」)。月末在庫が基準値の半分未満の品は「次の発注まで持たないかも」として知らせる(risk)
-      apexOrdered.forEach(it => { it.held = true; it.risk = Number(it.endStock) < Number(it.target) / 2; });
+      // 休業前のまとめ発注の月は、次の発注が休業明けになるので、広げた基準値の8割（約6週＝休業明けの納品まで）を切る品を risk にする
+      const riskRatio = opts && opts.cover ? 0.8 : 0.5;
+      apexOrdered.forEach(it => { it.held = true; it.risk = Number(it.endStock) < Number(it.target) * riskRatio; });
     }
   }
   const out = all.filter(it => it.qty > 0 && !it.held);
@@ -6360,6 +6379,7 @@ function _storeReorderItems_(storeId, periodLabel) {
   INVENTORY_COLS.forEach((c, i) => { idx[c] = i; });
   const meta = _productMeta_();
   const onOrder = _onOrderPieces_(storeId, periodLabel);
+  const cover = _reorderCover_(periodLabel, storeId);
   const raw = [];
   let submitted = false;
   for (let i = 1; i < data.length; i++) {
@@ -6375,12 +6395,14 @@ function _storeReorderItems_(storeId, periodLabel) {
     if (APEX_ORDER_VENDORS.indexOf(info.vendor || '') < 0) continue;
     // endStock は「期末在庫＋届いていない分」。数えた在庫は counted、差し引いた分は onOrder
     const oo = (onOrder[r[idx.product]] || {}).pieces || 0;
-    raw.push({ code, product: r[idx.product], target: Number(targets[code]), endStock: Number(endStock) + oo,
+    const baseTarget = Number(targets[code]);
+    const target = cover ? Math.ceil(baseTarget * cover.months * 30 / 35) : baseTarget;   // 休業前のまとめ発注（_reorderCover_）
+    raw.push({ code, product: r[idx.product], target, baseTarget, endStock: Number(endStock) + oo,
       counted: Number(endStock), onOrder: oo,
       vendor: info.vendor || '', casePieces: info.casePieces || null, stockCapCases: info.stockCapCases || null });
   }
-  const items = _applyReorderRounding_(raw);
-  return { submitted, items, held: items.held || [], onOrder: raw.filter(it => it.onOrder > 0) };
+  const items = _applyReorderRounding_(raw, { cover: !!cover });
+  return { submitted, items, held: items.held || [], onOrder: raw.filter(it => it.onOrder > 0), cover, checked: raw };
 }
 
 // 発注数は単位を必ず明記する(数字だけだとケース注文の商品で先方がケース数と読み、何十倍も
@@ -7303,11 +7325,13 @@ function buildBranchReorder(branchKey, periodLabel, dryRun, opts) {
   const missing = [];
   const held = {};   // 1ケースにできる品が無く、今月は見送った店 {店名: [品…]}（2026-10-18〜）
   const onOrder = {};   // 届いていない発注を差し引いた品 {店名: [品…]}（2026-10-29〜、_onOrderPieces_）
+  const checked = {};   // 試算(dryRun)用: 店ごとの在庫・基準値（休業前のまとめ発注の確認に使う）
   Object.keys(b.stores || {}).forEach(sid => {
     if (_storeIsFullOp_(sid)) return;   // フルオペ(メーカー管理)の店は発注書に入れない
     const r = _storeReorderItems_(sid, periodLabel);
     if (!r.submitted) { missing.push(names[sid] || sid); return; }
     if (r.items.length) perStore[sid] = r.items;
+    if (dryRun) checked[names[sid] || sid] = (r.checked || []).map(it => ({ product: it.product, counted: it.counted, onOrder: it.onOrder, baseTarget: it.baseTarget, target: it.target, months: r.cover ? r.cover.months : null }));
     if (r.held && r.held.length) held[names[sid] || sid] = r.held.map(it => ({ product: it.product, qty: it.qty, endStock: it.counted, target: it.target, risk: !!it.risk }));
     if (r.onOrder && r.onOrder.length) onOrder[names[sid] || sid] = r.onOrder.map(it => {
       const ord = r.items.find(x => x.code === it.code);
@@ -7315,8 +7339,9 @@ function buildBranchReorder(branchKey, periodLabel, dryRun, opts) {
     });
   });
   const periodJa = _periodLabelJa_(periodLabel);
-  const subject = `${mail.subject || '発注依頼'}（${b.label}支店 ${periodJa}分）`;
-  const summary = { branch: b.label, subject, ordered: Object.keys(perStore).map(s => names[s] || s), notSubmitted: missing, held, onOrder };
+  const cover = _reorderCover_(periodLabel, '');
+  const subject = `${mail.subject || '発注依頼'}（${b.label}支店 ${periodJa}分${cover && cover.label ? '・' + cover.label : ''}）`;
+  const summary = { branch: b.label, subject, ordered: Object.keys(perStore).map(s => names[s] || s), notSubmitted: missing, held, onOrder, cover };
   if (!dryRun && missing.length && !(opts && opts.force)) return _waitBranchReorder_(branchKey, periodLabel, summary);
   // ケースのある品が「1袋（1本・1個）」の行（2026-11-09 梅田センタービルのブレンドが1袋で発注された。塩川さん「1袋で頼むことはない。
   // 1ケースの間違いが多いので必ず確認」）。下書きは作るが、送る前に必ず確かめるよう【要確認】のメールの先頭に出す
@@ -7332,9 +7357,10 @@ function buildBranchReorder(branchKey, periodLabel, dryRun, opts) {
   if (dryRun) {
     const detail = {};
     Object.keys(perStore).forEach(s => {
-      detail[names[s] || s] = perStore[s].map(it => ({ code: codeMap[it.code] || it.code, product: it.product, qty: it.qty, bumped: !!it.bumped, onOrder: it.onOrder || 0 }));
+      detail[names[s] || s] = perStore[s].map(it => ({ code: codeMap[it.code] || it.code, product: it.product, qty: it.qty, bumped: !!it.bumped, onOrder: it.onOrder || 0,
+        counted: it.counted, target: it.target, baseTarget: it.baseTarget }));
     });
-    return Object.assign({ ok: true, dryRun: true, detail }, summary);
+    return Object.assign({ ok: true, dryRun: true, detail, checked }, summary);
   }
 
   const lock = LockService.getScriptLock();
