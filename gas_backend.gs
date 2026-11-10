@@ -2244,13 +2244,18 @@ function _invalidateAnnouncementsCache_() {
 }
 
 // storeId指定時はパートナー側:「公開」状態かつ対象範囲(全店舗、または_areaForStore_()が
-// 返す自店舗のエリア)に一致するものだけを返す。省略時は管理者側:下書き含む全件を返す
+// 返す自店舗のエリア、または店舗ID＝その店だけへの連絡)に一致するものだけを返す。省略時は管理者側:下書き含む全件を返す。
+// 店舗IDあての連絡は、店の画面を開いたときに未読なら画面いっぱいに出す(index.html の showStoreNotices、2026-11-10)
 function getAnnouncements(storeId) {
   let rows = _announcementsRowsCached_();
   if (storeId) {
     const area = _areaForStore_(storeId);
-    rows = rows.filter(r => r.status === 'published' &&
-      (!r.scope || r.scope === 'all' || String(r.scope).split(',').indexOf(area) >= 0));
+    rows = rows.filter(r => {
+      if (r.status !== 'published') return false;
+      if (!r.scope || r.scope === 'all') return true;
+      const scopes = String(r.scope).split(',');
+      return scopes.indexOf(area) >= 0 || scopes.indexOf(String(storeId)) >= 0;
+    });
   }
   return rows.sort((a, b) => String(b.publish_date || '').localeCompare(String(a.publish_date || '')));
 }

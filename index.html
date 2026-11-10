@@ -8039,7 +8039,8 @@ function _announceScopeToAreas(scopeStr) {
 function _announceScopeLabel(scopeStr) {
   if (!scopeStr || scopeStr === 'all') return '全店舗';
   if (scopeStr === 'admin') return '管理者のみ';
-  return _announceScopeToAreas(scopeStr).join('・');
+  // 店舗IDあて(その店だけへの連絡、2026-11-10)は店名で出す
+  return _announceScopeToAreas(scopeStr).map(t => ANNOUNCE_AREAS.includes(t) ? t : (STORES[t] ? STORES[t] + '（店舗あて）' : t)).join('・');
 }
 
 // 枠(ウィジェット)に出すのは、公開日から ANNOUNCE_WIDGET_DAYS 日以内の新しいもの ANNOUNCE_WIDGET_MAX 件だけ(2026-10-29 塩川さん
@@ -8107,10 +8108,45 @@ async function ensureAnnounceWidgetLoaded(storeId) {
     renderAnnounceWidget(true);
     try { announceItems = _asList(await gasGet('getAnnouncements', { storeId })); }
     catch (e) { console.error('getAnnouncements error:', e); announceItems = []; }
+    showStoreNotices(storeId);
   }
   if (!document.getElementById('announce-drill-wrap') || document.getElementById('announce-drill-wrap').style.display === 'none') {
     renderAnnounceWidget();
   }
+}
+
+// 店舗あての業務連絡(宛先が店舗ID。2026-11-10 塩川さん: 野並店に「実際に届いてから納品済みを押して」を次のログインで必ず見せる)。
+// 未読なら、店の画面を開いたときに画面いっぱいに出し、「確認しました」で既読にする(既読は端末ごと。ほかの業務連絡と同じ)。
+// 「届きましたか？」(askOverdueDeliveries)より手前に出す。管理者が店の画面を見ているときは出さない
+let _storeNoticeOpen = false;
+function showStoreNotices(storeId) {
+  if (_storeNoticeOpen || storeId !== storeTab || sessionStorage.getItem('admin_authed') === '1') return;
+  const read = _announceReadSet();
+  const items = announceItems.filter(it => String(it.scope || '').split(',').indexOf(String(storeId)) >= 0 && !read.has(String(it.id)));
+  if (!items.length) return;
+  _storeNoticeOpen = true;
+  const ov = document.createElement('div');
+  ov.id = 'store-notice-overlay';
+  ov.style.cssText = 'position:fixed;inset:0;z-index:10060;background:rgba(15,23,42,.6);display:flex;align-items:flex-start;justify-content:center;overflow-y:auto;padding:24px 12px';
+  document.body.appendChild(ov);
+  let i = 0;
+  const draw = () => {
+    const it = items[i];
+    ov.innerHTML = `<div style="background:white;border-radius:12px;max-width:520px;width:100%;padding:18px 16px;box-shadow:0 10px 30px rgba(0,0,0,.25)">
+      <div style="font-size:12px;color:#b91c1c;font-weight:700;margin-bottom:6px">⚠ ${esc(STORES[storeId] || '')}へのお知らせ${items.length > 1 ? `（${i + 1}/${items.length}）` : ''}</div>
+      <div style="font-size:17px;font-weight:700;color:#333;line-height:1.5;margin-bottom:10px">${esc(it.title)}</div>
+      <div style="font-size:14px;color:#334155;line-height:1.85;white-space:pre-wrap;margin-bottom:16px">${esc(it.body || '')}</div>
+      <button type="button" style="width:100%;padding:12px;background:#22703d;color:white;border:none;border-radius:8px;font-weight:700;font-size:15px;cursor:pointer;font-family:inherit">確認しました</button>
+    </div>`;
+    ov.querySelector('button').onclick = () => {
+      _markAnnounceRead(it.id);
+      i++;
+      if (i < items.length) { draw(); return; }
+      ov.remove(); _storeNoticeOpen = false;
+      if (!document.getElementById('announce-drill-wrap') || document.getElementById('announce-drill-wrap').style.display === 'none') renderAnnounceWidget();
+    };
+  };
+  draw();
 }
 
 function renderAnnounceWidget(loading) {
