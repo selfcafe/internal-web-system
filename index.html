@@ -8404,6 +8404,9 @@ function openAnnounceForm(id) {
   const areas = item ? _announceScopeToAreas(item.scope) : [];
   const isAll = !item || !item.scope || item.scope === 'all';
   const isAdminOnly = !!item && item.scope === 'admin';
+  // 店舗指定(宛先が店舗ID。2026-11-10): その店の画面を開いたときに未読なら画面いっぱいに出る(showStoreNotices)
+  const scopeStores = areas.filter(t => !ANNOUNCE_AREAS.includes(t));
+  const isStores = !isAll && !isAdminOnly && scopeStores.length > 0;
   const today = new Date().toLocaleDateString('sv');
   const isDraft = item && item.status !== 'published';
   document.getElementById('admin-announce-form-root').innerHTML = `
@@ -8429,10 +8432,20 @@ function openAnnounceForm(id) {
             <div style="font-size:11px;color:#888;margin-bottom:4px">公開範囲</div>
             <select id="announce-form-scope-mode" onchange="_toggleAnnounceScopeAreas()" style="width:100%;border:1px solid #ddd;border-radius:6px;padding:8px 9px;font-size:13px;font-family:inherit;box-sizing:border-box">
               <option value="all" ${isAll ? 'selected' : ''}>全店舗</option>
-              <option value="areas" ${isAll || isAdminOnly ? '' : 'selected'}>エリア指定</option>
+              <option value="areas" ${isAll || isAdminOnly || isStores ? '' : 'selected'}>エリア指定</option>
+              <option value="stores" ${isStores ? 'selected' : ''}>店舗指定（ログイン時に画面いっぱいで知らせる）</option>
               <option value="admin" ${isAdminOnly ? 'selected' : ''}>管理者のみ（店舗には表示しない）</option>
             </select>
           </div>
+        </div>
+
+        <div id="announce-form-stores-wrap" style="display:${isStores ? 'block' : 'none'};margin-bottom:14px">
+          <div style="font-size:12px;color:#b45309;background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:7px 10px;line-height:1.6;margin-bottom:8px">
+            選んだ店だけに届きます。その店の画面を開いたとき、まだ読んでいなければ画面いっぱいに出て、「確認しました」を押すまで閉じません（端末ごとに1回）。
+          </div>
+          <input type="text" placeholder="店舗名で検索..." oninput="filterStorePickerCheckboxes('announce-store', this.value)"
+            style="width:100%;border:1px solid #ddd;border-radius:6px;padding:7px 9px;font-size:13px;font-family:inherit;box-sizing:border-box;margin-bottom:6px">
+          <div style="max-height:220px;overflow-y:auto;border:1px solid #eee;border-radius:6px;padding:4px 10px">${buildStorePickerCheckboxes('announce-store')}</div>
         </div>
 
         <div id="announce-form-areas-wrap" style="display:${isAll || isAdminOnly ? 'none' : 'flex'};flex-wrap:wrap;gap:6px 14px;margin-bottom:14px">
@@ -8458,11 +8471,13 @@ function openAnnounceForm(id) {
         </div>
       </div>
     </div>`;
+  document.querySelectorAll('[data-store-pick="announce-store"]').forEach(cb => { cb.checked = scopeStores.includes(cb.value); });
 }
 
 function _toggleAnnounceScopeAreas() {
   const mode = document.getElementById('announce-form-scope-mode').value;
   document.getElementById('announce-form-areas-wrap').style.display = mode === 'areas' ? 'flex' : 'none';
+  document.getElementById('announce-form-stores-wrap').style.display = mode === 'stores' ? 'block' : 'none';
 }
 
 function _setAnnounceFormStatus(status) {
@@ -8493,7 +8508,9 @@ async function saveAnnounceForm() {
   const status = document.getElementById('announce-form-status').value;
   const scopeMode = document.getElementById('announce-form-scope-mode').value;
   const scope = scopeMode === 'all' ? ['all'] : scopeMode === 'admin' ? ['admin']
+    : scopeMode === 'stores' ? getStorePickerSelected('announce-store')
     : Array.from(document.querySelectorAll('.announce-form-area-cb:checked')).map(cb => cb.value);
+  if (scopeMode === 'stores' && !scope.length) { alert('知らせる店舗を選んでください'); return; }
   if (btn) { btn.disabled = true; btn.textContent = '保存中…'; }
   try {
     const r = await gasPost('saveAnnouncement', { id, title, body, publishDate, scope, status, adminName: '' });
