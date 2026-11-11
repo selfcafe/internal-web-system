@@ -9305,9 +9305,11 @@ async function renderHistory() {
   const statusRows = adminHistStatus === 'pending' ? pending : adminHistStatus === 'done' ? done : [...pending, ...done];
   const stBtn = (st, label, cnt) => {
     const on = adminHistStatus === st;
-    return `<button onclick="adminHistStatus='${st}';renderHistory()" style="border:1px solid #9ca3af;border-radius:16px;padding:5px 14px;font-size:13px;font-family:inherit;cursor:pointer;${on ? 'background:#374151;color:#fff;border-color:#374151' : 'background:#fff;color:#374151'}">${label}（${cnt}品）</button>`;
+    return `<button onclick="adminHistStatus='${st}';renderHistory()" style="border:1px solid #9ca3af;border-radius:16px;padding:5px 14px;font-size:13px;font-family:inherit;cursor:pointer;${on ? 'background:#374151;color:#fff;border-color:#374151' : 'background:#fff;color:#374151'}">${label}${cnt == null ? '' : `（${cnt}品）`}</button>`;
   };
-  const statusBar = `<div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">${stBtn('all', 'すべて', pending.length + done.length)}${stBtn('pending', '未納品だけ', pending.length)}${stBtn('done', '納品済みだけ', done.length)}</div>`;
+  // 店舗別で店を選ぶ前も絞り込みボタンは出す(どこにあるか分からないとの声。件数は店を選んでから)
+  const noStore = adminHistMode !== 'time' && !adminHistDropdownStore;
+  const statusBar = `<div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">${stBtn('all', 'すべて', noStore ? null : pending.length + done.length)}${stBtn('pending', '未納品だけ', noStore ? null : pending.length)}${stBtn('done', '納品済みだけ', noStore ? null : done.length)}</div>`;
   const statusNote = '未納品＝発注済みで、店がまだ「納品済み」を押していない品です（納品済みは納品確認日から1ヶ月で消えます）。';
 
   if (adminHistMode === 'time') {
@@ -9318,10 +9320,10 @@ async function renderHistory() {
   }
 
   const detail = adminHistDropdownStore
-    ? statusBar + `<div style="font-size:12px;color:#666;margin-bottom:10px">依頼日の新しい順です。${statusNote}</div>` + buildHistTable(null, statusRows, 'status')
-    : '';
+    ? `<div style="font-size:12px;color:#666;margin-bottom:10px">依頼日の新しい順です。${statusNote}</div>` + buildHistTable(null, statusRows, 'status')
+    : `<div style="font-size:13px;color:#888;padding:4px 0">店を選ぶと、その店の発注（未納品・納品済み）が出ます。</div>`;
 
-  container.innerHTML = modeBar + `
+  container.innerHTML = modeBar + statusBar + `
     <div style="display:flex;gap:8px;align-items:center;margin-bottom:14px;flex-wrap:wrap">
       <input type="text" placeholder="店舗名で検索..." oninput="filterStoreOptions('admin-hist-store-select', this.value)"
         style="border:1px solid #ddd;border-radius:6px;padding:8px 12px;font-size:13px;font-family:inherit;min-width:140px">
