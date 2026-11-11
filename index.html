@@ -9175,6 +9175,8 @@ function buildStoreOrderDetail(sid, groups) {
 let adminHistDropdownStore = '';
 // 履歴の見方: 'store'=店舗別に確認(プルダウンで1店舗) / 'time'=時系列順に確認(地域の全店舗を新しい順に1つの表で。2026-11-11)
 let adminHistMode = 'store';
+// 時系列順の絞り込み: 'all'=すべて / 'pending'=未納品だけ / 'done'=納品済みだけ
+let adminHistStatus = 'all';
 
 // showStore: 地域の全店舗を時系列で並べるときに店舗名の列を出す(各行に _sid を持たせる。2026-11-11)
 function buildHistTable(sid, rowsOverride, showStore) {
@@ -9182,13 +9184,21 @@ function buildHistTable(sid, rowsOverride, showStore) {
   if (!rows.length) return `<div style="color:#aaa;font-size:13px;padding:12px 0">履歴がありません</div>`;
 
   const sorted = [...rows].sort((a,b) => (b.deliveredAt||0)-(a.deliveredAt||0));
-  const groups = buildGroups(sorted.map(r => ({...r, isNew:false})));
+  let groups;
+  if (showStore) {
+    // 時系列順: 店舗×依頼日×納品済みかどうか でまとめ、依頼日の新しい順(同じ日は発注日の新しい順)
+    const m = new Map();
+    sorted.forEach(r => { const k = r._sid + '|' + (r.requestDate||'') + '|' + (r._pending ? 1 : 0); if (!m.has(k)) m.set(k, []); m.get(k).push(r); });
+    groups = [...m.values()].sort((a,b) => (b[0].requestDate||'').localeCompare(a[0].requestDate||'') || (b[0].orderDate||'').localeCompare(a[0].orderDate||''));
+  } else {
+    groups = buildGroups(sorted.map(r => ({...r, isNew:false})));
+  }
 
   let html = `<div style="overflow-x:auto">
   <table style="width:100%;border-collapse:collapse;font-size:13px">
     <thead>
       <tr style="background:#f3f4f6;font-size:12px;text-align:left">
-        ${showStore ? '<th style="padding:8px 10px">店舗</th>' : ''}
+        ${showStore ? '<th style="padding:8px 10px">状態</th><th style="padding:8px 10px">店舗</th>' : ''}
         <th style="padding:8px 10px">依頼日</th>
         <th style="padding:8px 10px">発注日</th>
         <th style="padding:8px 10px">納品予定日</th>
@@ -9208,14 +9218,17 @@ function buildHistTable(sid, rowsOverride, showStore) {
       const sep = gi > 0 && i === 0 ? 'border-top:2px solid #e5e7eb' : '';
       if (i === 0) {
         html += `<tr style="${sep}">
-          ${showStore ? `<td rowspan="${N}" style="padding:8px 10px;vertical-align:middle;font-weight:700;white-space:nowrap">${esc(storeLabel(first._sid))}</td>` : ''}
+          ${showStore ? `<td rowspan="${N}" style="padding:8px 10px;vertical-align:middle;white-space:nowrap">${first._pending
+              ? '<span style="background:#fff7ed;color:#c2410c;border:1px solid #fdba74;border-radius:10px;padding:2px 8px;font-size:12px;font-weight:700">未納品</span>'
+              : '<span style="background:#ecfdf5;color:#15803d;border:1px solid #86efac;border-radius:10px;padding:2px 8px;font-size:12px;font-weight:700">納品済み</span>'}</td>
+            <td rowspan="${N}" style="padding:8px 10px;vertical-align:middle;font-weight:700;white-space:nowrap">${esc(storeLabel(first._sid))}</td>` : ''}
           <td rowspan="${N}" style="padding:8px 10px;vertical-align:middle">${esc(first.requestDate)||'—'}</td>
           <td rowspan="${N}" style="padding:8px 10px;vertical-align:middle">${esc(first.orderDate)||'—'}</td>
           <td rowspan="${N}" style="padding:8px 10px;vertical-align:middle">${esc(first.deliveryDate)||'—'}</td>
           <td style="padding:8px 10px">${esc(pLabel)}</td>
           <td style="padding:8px 10px;white-space:nowrap">${esc(row.qty)||'—'} <span style="font-size:11px;color:#aaa">${esc(unitTxt)}</span>${row.actualQty !== '' && row.actualQty != null ? `<div style="font-size:11px;color:#888">実際：${esc(row.actualQty)}${esc(prodByName(row.product)?.unit||'')}</div>` : ''}</td>
           <td rowspan="${N}" style="padding:8px 10px;white-space:pre-wrap;font-size:12px;vertical-align:middle;min-width:200px">${esc(first.note)}</td>
-          <td rowspan="${N}" style="padding:8px 10px;vertical-align:middle">${fmtDate(first.deliveredAt)}</td>
+          <td rowspan="${N}" style="padding:8px 10px;vertical-align:middle">${first._pending ? '—' : fmtDate(first.deliveredAt)}</td>
         </tr>`;
       } else {
         html += `<tr>
@@ -9282,9 +9295,20 @@ async function renderHistory() {
   const modeBar = `<div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">${modeBtn('store', '店舗別に確認')}${modeBtn('time', '時系列順に確認')}</div>`;
 
   if (adminHistMode === 'time') {
+    // 納品済み(履歴) + 未納品(発注済みでまだ納品済みになっていない品。否認・未発注は除く)を1つの表に
+    const done = region.stores.flatMap(sid => loadH(sid).map(r => ({...r, _sid: sid})));
+    const pending = region.stores.flatMap(sid => loadA(sid)
+      .filter(r => r.locked && !r.denied && r.orderDate && r.product)
+      .map(r => ({...r, _sid: sid, _pending: true})));
+    const rows = adminHistStatus === 'pending' ? pending : adminHistStatus === 'done' ? done : [...pending, ...done];
+    const stBtn = (st, label, cnt) => {
+      const on = adminHistStatus === st;
+      return `<button onclick="adminHistStatus='${st}';renderHistory()" style="border:1px solid #9ca3af;border-radius:16px;padding:5px 14px;font-size:13px;font-family:inherit;cursor:pointer;${on ? 'background:#374151;color:#fff;border-color:#374151' : 'background:#fff;color:#374151'}">${label}（${cnt}品）</button>`;
+    };
     container.innerHTML = modeBar
-      + `<div style="font-size:12px;color:#666;margin-bottom:10px">${esc(region.label)}の全店舗の履歴を、依頼日の新しい順に並べています。</div>`
-      + buildHistTable(null, region.stores.flatMap(sid => loadH(sid).map(r => ({...r, _sid: sid}))), true);
+      + `<div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">${stBtn('all', 'すべて', pending.length + done.length)}${stBtn('pending', '未納品だけ', pending.length)}${stBtn('done', '納品済みだけ', done.length)}</div>`
+      + `<div style="font-size:12px;color:#666;margin-bottom:10px">${esc(region.label)}の全店舗の発注を、依頼日の新しい順に並べています。未納品＝発注済みで、店がまだ「納品済み」を押していない品です（納品済みは納品確認日から1ヶ月で消えます）。</div>`
+      + buildHistTable(null, rows, true);
     return;
   }
 
