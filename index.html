@@ -8905,12 +8905,45 @@ function _buildNewCardDetail(sid) {
         style="background:none;border:none;padding:6px 0;color:#22703d;font-size:13px;font-weight:600;cursor:pointer;font-family:inherit">
         ${showDone ? '▲ 対応済みの依頼を隠す' : `▼ 対応済み（発注済み・否認済み）の依頼も表示（${doneCnt}件）`}</button></div>`
     : '';
-  return body + toggle;
+  return body + toggle + `<div style="padding:0 16px 14px">${_overviewHistSection(sid)}</div>`;
 }
 function toggleOverviewShowDone(sid) {
   if (adminOverviewShowDone.has(sid)) adminOverviewShowDone.delete(sid); else adminOverviewShowDone.add(sid);
   const detail = document.getElementById('store-detail-' + sid);
-  if (detail) detail.innerHTML = _buildNewCardDetail(sid); else renderOverview();
+  if (detail) { detail.innerHTML = _buildNewCardDetail(sid); _loadOverviewHists(); } else renderOverview();
+}
+
+// 発注依頼一覧の店ごとの表の下に、その店の直近30日の発注履歴(「納品済み」になって履歴へ移ったもの)も出す
+// (2026-11-11 塩川さん「前月以前の発注履歴が見られないと困る。直近30日間は見られるように」)。
+// 発注日・依頼日・納品確認日のどれかが30日以内のもの。中身は「履歴」タブと同じ表(buildHistTable)。
+// 履歴はGASから店ごとに取り、60秒の間は取り直さない
+const OVERVIEW_HIST_DAYS = 30;
+const _ovHistFetchedAt = {};
+function _overviewHistRows(sid) {
+  const d = new Date(); d.setDate(d.getDate() - OVERVIEW_HIST_DAYS);
+  const since = d.toLocaleDateString('sv'), sinceTs = d.getTime();
+  return loadH(sid).filter(r => String(r.orderDate || r.requestDate || '') >= since || (r.deliveredAt || 0) >= sinceTs);
+}
+function _overviewHistInner(sid) {
+  const head = `<div style="font-size:12px;font-weight:700;color:#555;margin:14px 0 8px">直近${OVERVIEW_HIST_DAYS}日の発注履歴（納品済みになったもの）</div>`;
+  const fresh = _ovHistFetchedAt[sid] && Date.now() - _ovHistFetchedAt[sid] < 60000;
+  if (!fresh) return head + '<div style="color:#aaa;font-size:13px;padding:6px 0">読み込み中…</div>';
+  const rows = _overviewHistRows(sid);
+  return head + (rows.length ? buildHistTable(sid, rows)
+    : `<div style="color:#aaa;font-size:13px;padding:6px 0">直近${OVERVIEW_HIST_DAYS}日に納品済みになった発注はありません</div>`);
+}
+function _overviewHistSection(sid) {
+  return `<div data-ovhist="${esc(sid)}">${_overviewHistInner(sid)}</div>`;
+}
+async function _loadOverviewHists() {
+  const sids = [...new Set([...document.querySelectorAll('[data-ovhist]')].map(el => el.dataset.ovhist))];
+  await Promise.all(sids.map(async sid => {
+    if (!(_ovHistFetchedAt[sid] && Date.now() - _ovHistFetchedAt[sid] < 60000)) {
+      await fetchDeliveryHistory(sid);
+      _ovHistFetchedAt[sid] = Date.now();
+    }
+    document.querySelectorAll(`[data-ovhist="${CSS.escape(sid)}"]`).forEach(el => { el.innerHTML = _overviewHistInner(sid); });
+  }));
 }
 let adminOverviewDropdownStore = '';
 let _overviewStoreDataCache = [];
@@ -8971,9 +9004,9 @@ function renderOverview() {
     : null;
   const ddDetail = !adminOverviewDropdownStore
     ? ''
-    : ddStore?.groups.length
+    : (ddStore?.groups.length
       ? buildStoreOrderDetail(ddStore.sid, ddStore.groups)
-      : `<div style="color:#aaa;font-size:13px;padding:12px 0">依頼はありません</div>`;
+      : `<div style="color:#aaa;font-size:13px;padding:12px 0">依頼はありません</div>`) + _overviewHistSection(adminOverviewDropdownStore);
 
   _overviewStoreDataCache = storeData;
   const ddOptions =
@@ -8998,6 +9031,7 @@ function renderOverview() {
     ${ddDetail}`;
 
   updateBadges();
+  _loadOverviewHists();
 }
 
 function filterOverviewStoreSelect() {
@@ -9023,6 +9057,7 @@ function toggleOverviewStore(sid) {
     adminOverviewOpen.add(sid);
     detail.innerHTML = _buildNewCardDetail(sid);
     detail.style.display = '';
+    _loadOverviewHists();
   } else {
     adminOverviewOpen.delete(sid);
     detail.style.display = 'none';
@@ -9139,8 +9174,8 @@ function buildStoreOrderDetail(sid, groups) {
 
 let adminHistDropdownStore = '';
 
-function buildHistTable(sid) {
-  const rows = loadH(sid);
+function buildHistTable(sid, rowsOverride) {
+  const rows = rowsOverride || loadH(sid);
   if (!rows.length) return `<div style="color:#aaa;font-size:13px;padding:12px 0">履歴がありません</div>`;
 
   const sorted = [...rows].sort((a,b) => (b.deliveredAt||0)-(a.deliveredAt||0));
