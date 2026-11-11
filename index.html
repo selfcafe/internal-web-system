@@ -9174,7 +9174,8 @@ function buildStoreOrderDetail(sid, groups) {
 
 let adminHistDropdownStore = '';
 
-function buildHistTable(sid, rowsOverride) {
+// showStore: 地域の全店舗を時系列で並べるときに店舗名の列を出す(各行に _sid を持たせる。2026-11-11)
+function buildHistTable(sid, rowsOverride, showStore) {
   const rows = rowsOverride || loadH(sid);
   if (!rows.length) return `<div style="color:#aaa;font-size:13px;padding:12px 0">履歴がありません</div>`;
 
@@ -9185,6 +9186,7 @@ function buildHistTable(sid, rowsOverride) {
   <table style="width:100%;border-collapse:collapse;font-size:13px">
     <thead>
       <tr style="background:#f3f4f6;font-size:12px;text-align:left">
+        ${showStore ? '<th style="padding:8px 10px">店舗</th>' : ''}
         <th style="padding:8px 10px">依頼日</th>
         <th style="padding:8px 10px">発注日</th>
         <th style="padding:8px 10px">納品予定日</th>
@@ -9204,6 +9206,7 @@ function buildHistTable(sid, rowsOverride) {
       const sep = gi > 0 && i === 0 ? 'border-top:2px solid #e5e7eb' : '';
       if (i === 0) {
         html += `<tr style="${sep}">
+          ${showStore ? `<td rowspan="${N}" style="padding:8px 10px;vertical-align:middle;font-weight:700;white-space:nowrap">${esc(storeLabel(first._sid))}</td>` : ''}
           <td rowspan="${N}" style="padding:8px 10px;vertical-align:middle">${esc(first.requestDate)||'—'}</td>
           <td rowspan="${N}" style="padding:8px 10px;vertical-align:middle">${esc(first.orderDate)||'—'}</td>
           <td rowspan="${N}" style="padding:8px 10px;vertical-align:middle">${esc(first.deliveryDate)||'—'}</td>
@@ -9264,13 +9267,18 @@ async function renderHistory() {
   document.getElementById('admin-summary').innerHTML = `【${region.label}】履歴 ${totalCnt} 件（納品確認日から1ヶ月で自動削除）`;
 
   // 最初は何も選ばない(発注依頼一覧と同じ。以前は先頭の店を自動で開いていた。2026-11-05)
-  if (adminHistDropdownStore && !STORES[adminHistDropdownStore]) adminHistDropdownStore = '';
+  if (adminHistDropdownStore && adminHistDropdownStore !== '__all__' && !STORES[adminHistDropdownStore]) adminHistDropdownStore = '';
 
-  const options = `<option value="" ${!adminHistDropdownStore ? 'selected' : ''}>――――</option>` + storeData.map(({sid, sname, cnt}) =>
+  // 「すべての店舗（新しい順）」= 地域の全店舗の履歴を納品確認日の新しい順に1つの表で出す(2026-11-11)
+  const ALL = '__all__';
+  const options = `<option value="" ${!adminHistDropdownStore ? 'selected' : ''}>――――</option>`
+    + `<option value="${ALL}" ${adminHistDropdownStore === ALL ? 'selected' : ''}>すべての店舗（新しい順）（${totalCnt}件）</option>` + storeData.map(({sid, sname, cnt}) =>
     `<option value="${esc(sid)}" ${sid === adminHistDropdownStore ? 'selected' : ''}>${esc(sname)}（${cnt}件）</option>`
   ).join('');
 
-  const detail = adminHistDropdownStore ? buildHistTable(adminHistDropdownStore) : '';
+  const detail = adminHistDropdownStore === ALL
+    ? buildHistTable(null, region.stores.flatMap(sid => loadH(sid).map(r => ({...r, _sid: sid}))), true)
+    : adminHistDropdownStore ? buildHistTable(adminHistDropdownStore) : '';
 
   container.innerHTML = `
     <div style="font-size:12px;font-weight:700;color:#555;margin-bottom:10px;letter-spacing:.5px">店舗別に確認</div>
