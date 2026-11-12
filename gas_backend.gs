@@ -973,6 +973,8 @@ function _dispatchNotifies_(result) {
         if (n.isNew && n.no) dispatchBugTriage_(n.no);
       }
       else if (n.type === 'bugReportLineWorksAck') sendBugReportBotNotification_(n.message, n.userId);
+      // 店の画面からの依頼は、続けて来る依頼とまとめて1通にする(2026-11-12、_queueOrderNotify_)。Bot からの登録・送り直しはすぐ送る
+      else if (n.type === 'amazonOrderNew' && n.batch) _queueOrderNotify_(n);
       else if (n.type === 'amazonOrderNew')        sendAmazonOrderToBot_(n.storeId, n.items, n.toyo);
       else if (n.type === 'pricePhotoNew')         dispatchPricePhotoRead_(n.id);
     } catch (e) {
@@ -6481,7 +6483,7 @@ function _withAmazonOrderNotify_(result, storeId, rows, opts) {
     const ids = items.map(it => it.id);
     const toyo = _toyoCartForRows_(storeId, (rows || []).filter(r => r && ids.indexOf(String(r.id)) >= 0));
     if (items.length && opts && opts.dedupe && _orderNotifySent_(storeId, items)) return result;
-    if (items.length) result._notify = { type: 'amazonOrderNew', storeId: String(storeId), items, toyo };
+    if (items.length) result._notify = { type: 'amazonOrderNew', storeId: String(storeId), items, toyo, batch: !!(opts && opts.dedupe) };
   } catch (e) { console.error('_withAmazonOrderNotify_ error:', e.message); }
   return result;
 }
@@ -6549,6 +6551,76 @@ function notifyOwnerBugTriage(text) {
   if (!text) return { error: '本文がありません' };
   sendBugReportToOwnerBot_(String(text).slice(0, 2000));
   return { ok: true };
+}
+
+// 店の発注依頼の通知をまとめる(2026-11-12 塩川さん「LINE で来る発注依頼が商品ごとになる」)。
+// 店は品を1つ入れて「依頼」→次の品を入れて「依頼」…と押すことが多く(11月の初め12日で9回、天満・名駅西は4通ずつ)、
+// 押すたびに通知が1通・アペックスの発注書の下書きが1つできていた。そこで、店の画面からの依頼はすぐ送らずに品の id を控え、
+// 同じ店から ORDER_NOTIFY_QUIET_MS のあいだ次の依頼が来なければ(最初の依頼から ORDER_NOTIFY_MAX_MS たてば続いていても)
+// 控えた品をまとめて1通送る(アペックスの下書きも1つ)。送るときに行を読み直すので、その間に取り消した・否認した・発注した品は送らない。
+// 控えはスクリプト プロパティ1個(ORDER_NOTIFY_QUEUE、店ごとの id の一覧)。送るのは1回だけのトリガー(flushOrderNotifyQueue)
+const ORDER_NOTIFY_QUEUE_KEY = 'ORDER_NOTIFY_QUEUE';
+const ORDER_NOTIFY_QUIET_MS = 3 * 60 * 1000;
+const ORDER_NOTIFY_MAX_MS = 10 * 60 * 1000;
+// 控え(ORDER_NOTIFY_QUEUE)を書き換え、同じロックの中でトリガーも作り直す(次に待ち終わる店に合わせて1つだけ。
+// 控えが空ならトリガーは消す)。毎回作り直すので、一度動いて残ったトリガーで止まることはない
+function _orderNotifyQueueEdit_(fn) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(20000)) throw new Error('ロックが取れません');
+  try {
+    const props = PropertiesService.getScriptProperties();
+    let q = {};
+    try { q = JSON.parse(props.getProperty(ORDER_NOTIFY_QUEUE_KEY) || '{}') || {}; } catch (e) { q = {}; }
+    const now = Date.now();
+    const out = fn(q, now);
+    const sids = Object.keys(q);
+    if (sids.length) props.setProperty(ORDER_NOTIFY_QUEUE_KEY, JSON.stringify(q));
+    else props.deleteProperty(ORDER_NOTIFY_QUEUE_KEY);
+    ScriptApp.getProjectTriggers().filter(t => t.getHandlerFunction() === 'flushOrderNotifyQueue').forEach(t => ScriptApp.deleteTrigger(t));
+    if (sids.length) {
+      const wait = Math.min.apply(null, sids.map(s => _orderNotifyDueAt_(q[s]) - now));
+      ScriptApp.newTrigger('flushOrderNotifyQueue').timeBased().after(Math.max(60 * 1000, wait + 20 * 1000)).create();
+    }
+    return out;
+  } finally { lock.releaseLock(); }
+}
+function _orderNotifyDueAt_(e) { return Math.min((e.last || 0) + ORDER_NOTIFY_QUIET_MS, (e.first || 0) + ORDER_NOTIFY_MAX_MS); }
+function _queueOrderNotify_(n) {
+  try {
+    _orderNotifyQueueEdit_((q, now) => {
+      const e = q[n.storeId] || { ids: [], first: now };
+      n.items.forEach(it => { if (e.ids.indexOf(String(it.id)) < 0) e.ids.push(String(it.id)); });
+      e.last = now;
+      q[n.storeId] = e;
+    });
+  } catch (e) {
+    // 控えられない・トリガーを作れないときは、今までどおりすぐ送る(通知が来ないよりよい)
+    console.error('発注依頼の通知をまとめられませんでした。すぐ送ります: ' + e.message);
+    sendAmazonOrderToBot_(n.storeId, n.items, n.toyo);
+  }
+}
+// トリガーから: 待ち終わった店の依頼をまとめて送る。まだ待つ店は控えに残し、次のトリガーは _orderNotifyQueueEdit_ が作る
+function flushOrderNotifyQueue() {
+  const due = _orderNotifyQueueEdit_((q, now) => {
+    const out = {};
+    Object.keys(q).forEach(sid => { if (_orderNotifyDueAt_(q[sid]) - now <= 15 * 1000) { out[sid] = q[sid].ids || []; delete q[sid]; } });
+    return out;
+  });
+  const sids = Object.keys(due);
+  if (!sids.length) return { ok: true, sent: 0 };
+  const isTrue = v => v === true || String(v) === 'TRUE';
+  const all = getOrders();
+  let sent = 0;
+  sids.forEach(sid => {
+    try {
+      const ids = due[sid].map(String);
+      const rows = all.filter(r => String(r.store_id) === String(sid) && ids.indexOf(String(r.id)) >= 0 &&
+        isTrue(r.is_new) && !isTrue(r.denied) && !_dateStr(r.order_date));
+      const n = _withAmazonOrderNotify_({}, sid, rows)._notify;
+      if (n) { sendAmazonOrderToBot_(n.storeId, n.items, n.toyo); sent++; }
+    } catch (e) { console.error('発注依頼の通知(まとめ)の送信に失敗 ' + sid + ': ' + e.message); }
+  });
+  return { ok: true, sent };
 }
 
 function sendAmazonOrderToBot_(storeId, items, toyo) {
