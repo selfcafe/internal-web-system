@@ -2576,7 +2576,23 @@ function computeInventoryAnomaly(p, period, periodData) {
 
 let inventoryStep = 'input'; // 'input'（数字入力） | 'confirm'（確認・棚卸完了）
 // 確認画面へ進む前に、発注済みで納品済みになっていない品を聞く(当月納品の数が合わないまま送らないように。2026-10-29)
-async function goToInventoryConfirm() { await askOverdueDeliveries(true); inventoryStep = 'confirm'; renderInventory(); }
+async function goToInventoryConfirm() {
+  // 期末在庫が空の品があれば確認画面へ進まない(2026-11-12。送信時(_submitInventoryInner)と同じ判定)
+  const period = getInventoryCountPeriod();
+  if (!_alertInventoryBlanks(period, getInventoryPeriodData(storeTab, period.label))) return;
+  await askOverdueDeliveries(true); inventoryStep = 'confirm'; renderInventory();
+}
+// 期末在庫が空欄の品があれば知らせて false を返す。空欄は月初発注の計算から外れ、本当は0の品が発注されなくなるため
+function _alertInventoryBlanks(period, periodData) {
+  const blankProducts = _inventoryProductList()
+    .filter(p => computeInventoryConfirmInfo(p, period, periodData).endStock === '')
+    .map(p => p.label || p.name);
+  if (!blankProducts.length) return true;
+  const shown = blankProducts.slice(0, 10).join('、') + (blankProducts.length > 10 ? ` ほか${blankProducts.length - 10}品` : '');
+  alert(`期末在庫を入力していない品があります（${shown}）。
+赤い枠の欄に数を入れてください。在庫が無い品は 0 を入れてください。`);
+  return false;
+}
 function goToInventoryInput() { inventoryStep = 'input'; renderInventory(); }
 
 // 先月分の棚卸表を読み取り専用で表示するトグル（2026-07-15追加）。データは既に
@@ -2738,8 +2754,8 @@ function renderInventoryInputScreen(wrap, allProducts, period, periodData) {
         <td data-label="${COLS[0]}" style="padding:5px 6px;font-size:12px;position:sticky;left:0;z-index:1;background:${rowBg};border-right:1px solid #e5e7eb">${esc(p.label)}${isExpired ? ' <span style="color:#ef4444;font-size:11px" title="消費期限切れの商品があります">⏰期限切れ</span>' : (isNearing ? ' <span style="color:#b45309;font-size:11px" title="消費期限が近付いています">⚠まもなく期限</span>' : '')}</td>
         <td data-label="${COLS[1]}" style="padding:5px 6px;font-size:11px;color:#666;white-space:nowrap">${esc(caseLabel)}</td>
         <td data-label="${COLS[2]}" style="padding:5px 6px;text-align:center">
-          <input type="number" min="0" step="1" value="${esc(endStockRaw||'')}" placeholder="0"
-            style="${INV_INPUT_STYLE};width:52px;text-align:right"
+          <input type="number" min="0" step="1" value="${esc(endStockRaw ?? '')}" placeholder="未入力"
+            style="${INV_INPUT_STYLE};width:52px;text-align:right${(endStockRaw === undefined || endStockRaw === null || endStockRaw === '') ? ';border:2px solid #f87171;background:#fef2f2' : ''}"
             onchange="updateInventoryPeriodField('endStock','${esc(p.name)}',this.value)"
             title="消費期限①〜③に個数を入力すると自動で合計を反映します。直接入力もできます">
         </td>
@@ -2973,15 +2989,7 @@ async function _submitInventoryInner() {
   }
   // 月末在庫が空欄の品が残っていたら送らない(2026-10-18 塩川さん)。空欄は月初発注の計算から外れ、本当は0の品が
   // 発注されなくなるため。在庫が無い品は 0 を入れてもらう
-  const blankProducts = allProducts
-    .filter(p => computeInventoryConfirmInfo(p, period, periodData).endStock === '')
-    .map(p => p.label || p.name);
-  if (blankProducts.length) {
-    const shown = blankProducts.slice(0, 10).join('、') + (blankProducts.length > 10 ? ` ほか${blankProducts.length - 10}品` : '');
-    alert(`入力していない品があります（${shown}）。
-在庫が無い品は 0 を入れてください。`);
-    return false;
-  }
+  if (!_alertInventoryBlanks(period, periodData)) return false;
   const rows = allProducts.map(p => {
     const { openStock, delivery, endStock, consumption, disposedQty, tracked, dailyCount, mismatch } = computeInventoryConfirmInfo(p, period, periodData);
     const anomaly = computeInventoryAnomaly(p, period, periodData);
@@ -7378,7 +7386,7 @@ function renderStore() {
         ? `<td class="c-qty" data-label="数量">${qtyTableCellHTML(row)}</td>`
         : `<td class="c-qty" data-label="数量"><div class="qty-wrap">
             <button class="qty-btn" onclick="stepQty('${row.id}',-1)">－</button>
-            <input type="number" min="0" id="qty-${row.id}" ${row.qty !== null && row.qty !== '' ? `value="${esc(row.qty)}"` : ''} onchange="updStore('${row.id}','qty',this.value)">
+            <input type="number" min="0" id="qty-${row.id}" ${row.qty !== null && row.qty !== '' ? `value="${esc(row.qty)}"` : ''} placeholder="数"${row.product && !(Number(row.qty) > 0) ? ' style="border:2px solid #f87171;background:#fef2f2" title="数量を入れてください"' : ''} onchange="updStore('${row.id}','qty',this.value);this.style.cssText=Number(this.value)>0?'':'border:2px solid #f87171;background:#fef2f2'">
             <button class="qty-btn" onclick="stepQty('${row.id}',1)">＋</button>
             <span class="unit-label" id="unit-${row.id}">${esc(unitLabelText(row.product, row.unitMode))}</span>
             ${unitToggleHTML(row)}
@@ -7673,6 +7681,18 @@ function lockGroup(groupId) {
   // 「新着の依頼」に戻り、もう一度発注された)
   const group = storeRows.filter(r => inGroup(r) && !r.locked);
   if (group.some(r => !r.requestDate)) { alert('依頼日を入力してください。'); return; }
+  // 数量が空・0 の品は依頼しない(2026-11-12)。数を入れないまま依頼され、本部への通知が「？ケース」になり、
+  // そのたびに店へ聞き直していた。入力欄に打ったまま押したときのために、欄の数字も読み直す
+  group.forEach(r => { const inp = document.getElementById('qty-' + r.id); if (inp) r.qty = inp.value; });
+  const noQty = group.filter(r => !(Number(r.qty) > 0));
+  if (noQty.length) {
+    const names = noQty.map(r => { const p = prodByName(r.product); return (p && (p.label || p.name)) || r.product; }).join('、');
+    saveA(storeTab, storeRows);
+    renderStore();
+    alert(`数量が入っていない品があります（${names}）。
+数を入れてから依頼してください。`);
+    return;
+  }
   // バラ・ケースを選べる品で「バラ 1」の依頼は、ほとんどがケースに切り替え忘れ（2026-10-29 心斎橋のココア 1袋。本当は1ケース）。
   // 1品ずつ「1ケースにしますか？」と聞き、OK ならケースにして依頼する
   group.forEach(r => {
