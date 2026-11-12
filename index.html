@@ -714,6 +714,7 @@
 
   <!-- 発注タブ -->
   <div id="partner-tab-order" class="partner-tab-content active">
+    <div id="store-transfer-entry"></div>
     <div id="order-new-msg" style="display:none;font-size:13px;font-weight:700;color:#dc2626;background:#fee2e2;border:1px solid #fca5a5;border-radius:8px;padding:8px 12px;margin-bottom:10px">依頼済み履歴に新着があります</div>
     <div id="delivery-new-msg" style="display:none;font-size:13px;font-weight:700;color:#c2410c;background:#ffedd5;border:1px solid #fdba74;border-radius:8px;padding:8px 12px;margin-bottom:10px">届いたら「納品済み」を押す商品があります。</div>
     <div class="toolbar">
@@ -6908,6 +6909,300 @@ async function cancelInventoryTransferUI(transferId) {
   }
 }
 
+/* ===== 店舗間の在庫移動（どの店からでも送り、受け取る店が確定する。2026-11-12 塩川さん） =====
+   送る: 発注タブの上の「在庫移動（ほかの店へ送る）」→ 商品・数量(バラ)・送り先の店・メモ → 送る(sendInventoryTransfer)。
+         送った店の当月納品に −数量。受け取られる前なら「取り消す」(cancelSentInventoryTransfer)。
+   受け取る: 店の画面を開いたとき「在庫移動が届いています」(askIncomingTransfers)。「受け取った」で受け取った店の当月納品に ＋数量
+         (receiveInventoryTransfer)。「まだ届いていない」はその日は聞かない(端末ごと)。
+   直営どうしだけ(FC店は原料に値段を付けないため)。複数店舗の担当者の「在庫移動」(上の recordInventoryTransfer)はその場で確定のまま。 */
+const _FC_STORE_IDS = () => new Set((REGIONS.fc && REGIONS.fc.stores) || []);
+function _canStoreTransfer(sid) {
+  return !!sid && sessionStorage.getItem('onboarding') !== '1' && !_FC_STORE_IDS().has(sid);
+}
+function renderStoreTransferEntry() {
+  const el = document.getElementById('store-transfer-entry');
+  if (!el) return;
+  if (!_canStoreTransfer(storeTab)) { el.innerHTML = ''; return; }
+  el.innerHTML = `<div style="display:flex;justify-content:flex-end;margin-bottom:8px">
+    <button onclick="openStoreTransfer()" style="background:#b6952f;color:white;border:none;border-radius:16px;padding:7px 14px;font-size:13px;font-weight:700;cursor:pointer;font-family:inherit">🔁 在庫移動（ほかの店へ送る）</button></div>`;
+}
+let _storeTransferRows = [];
+function openStoreTransfer() {
+  if (!_canStoreTransfer(storeTab)) return;
+  let ov = document.getElementById('store-transfer-overlay');
+  if (!ov) {
+    ov = document.createElement('div');
+    ov.id = 'store-transfer-overlay';
+    ov.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,.55);z-index:1500;display:flex;align-items:flex-start;justify-content:center;overflow-y:auto;padding:24px 12px';
+    ov.addEventListener('click', e => { if (e.target === ov) closeStoreTransfer(); });
+    document.body.appendChild(ov);
+  }
+  const fc = _FC_STORE_IDS();
+  const storeOpts = Object.entries(REGIONS).filter(([k]) => k !== 'fc').map(([, r]) => {
+    const items = r.stores.filter(sid => sid !== storeTab && STORES[sid] && !fc.has(sid));
+    return items.length ? `<optgroup label="${esc(r.label)}">${items.map(sid => `<option value="${esc(sid)}">${esc(storeLabel(sid))}</option>`).join('')}</optgroup>` : '';
+  }).join('');
+  const VENDOR_LABELS = Object.fromEntries(VENDOR_CONFIG.map(v => [v.key, v.label]));
+  const prods = _transferProducts();
+  const prodOpts = VENDOR_CONFIG.map(v => {
+    const items = prods.filter(p => p.vendor === v.key);
+    if (!items.length) return '';
+    return `<optgroup label="${esc(vendorPartnerLabel(v.key, VENDOR_LABELS[v.key]))}">${items.map(p =>
+      `<option value="${esc(p.name)}">${esc(p.label || p.name)}${p.caseUnit ? '（' + esc(p.caseUnit) + '）' : ''}</option>`).join('')}</optgroup>`;
+  }).join('');
+  const field = 'width:100%;box-sizing:border-box;border:1px solid #d1d5db;border-radius:8px;padding:10px;font-size:16px;font-family:inherit;background:white';
+  const lbl = 'display:block;font-size:12px;font-weight:700;color:#555;margin:12px 0 4px';
+  ov.innerHTML = `
+    <div style="background:white;border-radius:12px;max-width:520px;width:100%;padding:18px 16px;box-shadow:0 10px 30px rgba(0,0,0,.25)">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px">
+        <div style="font-size:16px;font-weight:700;color:#22703d">在庫移動（ほかの店へ送る）</div>
+        <button onclick="closeStoreTransfer()" style="background:#f3f4f6;border:none;border-radius:6px;padding:6px 12px;font-size:13px;cursor:pointer;font-family:inherit">閉じる</button>
+      </div>
+      <div style="font-size:12px;color:#666;margin-top:6px;line-height:1.6">${esc(STORES[storeTab])}の在庫を、ほかの店へ送ります。送り先の店で「受け取った」を押すと移動が確定します。受け取られる前なら取り消せます。</div>
+      <label style="${lbl}" for="st-product">商品（${esc(STORES[storeTab])}の取扱商品）</label>
+      <select id="st-product" style="${field}" onchange="_updateStoreTransferPreview()"><option value="">選んでください</option>${prodOpts}</select>
+      <label style="${lbl}" for="st-qty">数量（個・袋などバラの数）</label>
+      <input id="st-qty" type="number" inputmode="numeric" min="1" step="1" style="${field}" oninput="_updateStoreTransferPreview()">
+      <label style="${lbl}" for="st-search">送り先の店</label>
+      <input id="st-search" type="text" placeholder="店舗名で検索…" oninput="filterStoreOptions('st-to', this.value)" style="${field};margin-bottom:6px">
+      <select id="st-to" style="${field}" onchange="_updateStoreTransferPreview()"><option value="">選んでください</option>${storeOpts}</select>
+      <label style="${lbl}" for="st-note">メモ（任意）</label>
+      <input id="st-note" type="text" maxlength="200" style="${field}" placeholder="例：在庫切れのため">
+      <div id="st-preview" style="margin-top:12px;font-size:13px;color:#22703d;font-weight:700;min-height:18px"></div>
+      <div id="st-msg" style="font-size:13px;min-height:18px;margin-top:4px"></div>
+      <button id="st-submit" onclick="submitStoreTransfer()" style="width:100%;margin-top:8px;background:#22703d;color:white;border:none;border-radius:8px;padding:12px;font-size:15px;font-weight:700;cursor:pointer;font-family:inherit">送る</button>
+      <div style="margin-top:18px;border-top:1px solid #e5e7eb;padding-top:12px">
+        <div style="font-size:14px;font-weight:700;color:#333;margin-bottom:6px">この店の今月の在庫移動</div>
+        <div id="st-history"></div>
+      </div>
+    </div>`;
+  ov.style.display = 'flex';
+  _updateStoreTransferPreview();
+  loadStoreTransfers();
+}
+function closeStoreTransfer() {
+  const ov = document.getElementById('store-transfer-overlay');
+  if (ov) ov.style.display = 'none';
+}
+function _readStoreTransferForm() {
+  return {
+    product: document.getElementById('st-product')?.value || '',
+    qty: Number(document.getElementById('st-qty')?.value || ''),
+    to: document.getElementById('st-to')?.value || '',
+    note: (document.getElementById('st-note')?.value || '').trim(),
+  };
+}
+function _updateStoreTransferPreview() {
+  const el = document.getElementById('st-preview');
+  if (!el) return;
+  const f = _readStoreTransferForm();
+  el.textContent = (f.to && f.product && f.qty > 0) ? `${STORES[storeTab]} → ${storeLabel(f.to)}　${_transferProductLabel(f.product)} ${f.qty}個` : '';
+}
+async function submitStoreTransfer() {
+  const msg = document.getElementById('st-msg');
+  const btn = document.getElementById('st-submit');
+  const showErr = t => { if (msg) { msg.style.color = '#ef4444'; msg.textContent = t; } };
+  const f = _readStoreTransferForm();
+  if (!f.product) { showErr('商品を選んでください'); return; }
+  if (!(f.qty > 0) || Math.floor(f.qty) !== f.qty) { showErr('数量は1以上の整数で入力してください'); return; }
+  if (!f.to) { showErr('送り先の店を選んでください'); return; }
+  if (!confirm(`次の在庫移動を送ります。\n\n${STORES[storeTab]} → ${storeLabel(f.to)}\n${_transferProductLabel(f.product)}　${f.qty}個\n\n送り先の店で「受け取った」を押すと確定します。`)) return;
+  if (btn) { btn.disabled = true; btn.textContent = '送信中…'; }
+  if (msg) msg.textContent = '';
+  const from = storeTab;
+  try {
+    const m = currentMultiStoreManager();
+    const r = await gasPost('sendInventoryTransfer', { storeId: from, toStore: f.to, product: f.product, qty: f.qty, note: f.note, sentBy: m ? (m.name || '') : '' });
+    if (!r || r.error) { showErr(r && r.error ? r.error : '送れませんでした'); return; }
+    if (msg) { msg.style.color = '#22703d'; msg.textContent = '✓ 送りました。送り先の店で受け取りを確認します'; setTimeout(() => { if (msg) msg.textContent = ''; }, 4000); }
+    ['st-qty', 'st-note'].forEach(id => { const x = document.getElementById(id); if (x) x.value = ''; });
+    _updateStoreTransferPreview();
+    _afterStoreTransferChanged(from);
+  } catch (e) {
+    console.error('sendInventoryTransfer:', e);
+    showErr('通信できませんでした。送れたか下の一覧で確かめてから、もう一度お試しください');
+    loadStoreTransfers();
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = '送る'; }
+  }
+}
+function _afterStoreTransferChanged(sid) {
+  const label = getInventoryPeriod().label;
+  if (_inventoryDeliveryCache[sid]) delete _inventoryDeliveryCache[sid][label];
+  if (partnerTabCurrent === 'inventory' && storeTab === sid) loadInventoryTabData(storeTab, label);
+  loadStoreTransfers();
+}
+async function loadStoreTransfers() {
+  const wrap = document.getElementById('st-history');
+  if (!wrap) return;
+  wrap.innerHTML = '<div style="color:#aaa;font-size:13px;padding:6px 0">読み込み中…</div>';
+  try {
+    const rows = await gasGet('getInventoryTransfers', { storeIds: storeTab, periodLabel: getInventoryPeriod().label });
+    _storeTransferRows = Array.isArray(rows) ? rows : null;
+  } catch (e) { console.error('getInventoryTransfers:', e); _storeTransferRows = null; }
+  if (_storeTransferRows === null) { wrap.innerHTML = '<div style="color:#ef4444;font-size:13px;padding:6px 0">読み込めませんでした</div>'; return; }
+  if (!_storeTransferRows.length) { wrap.innerHTML = '<div style="color:#aaa;font-size:13px;padding:6px 0">今月の在庫移動はまだありません</div>'; return; }
+  wrap.innerHTML = _storeTransferRows.map(r => {
+    const out = r.from_store === storeTab;
+    const st = _transferStatus(r);
+    const canCancel = out && r.status === '移動中';
+    return `<div style="display:flex;gap:8px;align-items:center;padding:8px 0;border-bottom:1px solid #f0f0f0;${st.dim ? 'opacity:.55' : ''}">
+      <div style="flex:1;min-width:0;font-size:13px;line-height:1.5">
+        <div style="font-weight:700">${out ? '送った' : '受け取った'}：${esc(storeLabel(r.from_store))} → ${esc(storeLabel(r.to_store))}　${esc(_transferProductLabel(r.product))} ${esc(r.qty)}個</div>
+        <div style="font-size:11px;color:#888">${esc(_transferWhen(r.created_at))}　${st.badge}${r.note ? '　' + esc(r.note) : ''}</div>
+      </div>
+      ${canCancel ? `<button onclick="cancelStoreTransferUI('${esc(r.transfer_id)}')" style="background:white;color:#b91c1c;border:1px solid #fca5a5;border-radius:6px;padding:6px 10px;font-size:12px;cursor:pointer;font-family:inherit;white-space:nowrap">取り消す</button>` : ''}
+    </div>`;
+  }).join('');
+}
+function _transferWhen(iso) {
+  const d = iso ? new Date(iso) : null;
+  return d && !isNaN(d) ? `${d.getMonth() + 1}/${d.getDate()} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}` : '';
+}
+// 状態の表示。status が空の古い記録(担当者の移動)は、取り消していなければその場で確定した移動
+function _transferStatus(r) {
+  const pill = (t, bg, fg, bd) => `<span style="background:${bg};color:${fg};border:1px solid ${bd};border-radius:10px;padding:1px 8px;font-size:11px;font-weight:700">${t}</span>`;
+  if (r.cancelled_at || r.status === '取り消し') return { key: 'cancelled', dim: true, badge: pill('取り消し', '#f3f4f6', '#6b7280', '#d1d5db') };
+  if (r.status === '移動中') return { key: 'moving', badge: pill('移動中（受け取り待ち）', '#fff7ed', '#c2410c', '#fdba74') };
+  return { key: 'done', badge: pill('受け取り済み', '#ecfdf5', '#15803d', '#86efac') };
+}
+async function cancelStoreTransferUI(transferId) {
+  const r = (_storeTransferRows || []).find(x => x.transfer_id === transferId);
+  if (!r) return;
+  if (!confirm(`この在庫移動を取り消しますか？\n\n${storeLabel(r.from_store)} → ${storeLabel(r.to_store)}\n${_transferProductLabel(r.product)}　${r.qty}個`)) return;
+  try {
+    const res = await gasPost('cancelSentInventoryTransfer', { storeId: r.from_store, transferId });
+    if (!res || res.error) { alert(res && res.error ? res.error : '取り消せませんでした'); loadStoreTransfers(); return; }
+    _afterStoreTransferChanged(r.from_store);
+  } catch (e) {
+    console.error('cancelSentInventoryTransfer:', e);
+    alert('通信できませんでした。もう一度お試しください');
+    loadStoreTransfers();
+  }
+}
+
+// 受け取る店: 店の画面を開いたときに、届いている在庫移動を1件ずつ聞く
+let _incomingAskOpen = null;
+const _transferSnoozeKey = sid => 'transfer_snooze_' + sid;
+async function askIncomingTransfers() {
+  const sid = storeTab;
+  if (!_canStoreTransfer(sid) || _incomingAskOpen || sessionStorage.getItem('admin_authed') === '1') return;
+  let rows;
+  try { rows = await gasGet('getIncomingTransfers', { storeId: sid }); } catch (e) { console.error('getIncomingTransfers:', e); return; }
+  if (!Array.isArray(rows) || !rows.length || storeTab !== sid) return;
+  const todayStr = new Date().toLocaleDateString('sv');
+  let sz = {};
+  try { sz = JSON.parse(localStorage.getItem(_transferSnoozeKey(sid)) || '{}') || {}; } catch (e) {}
+  rows = rows.filter(r => sz[r.transfer_id] !== todayStr);
+  if (!rows.length) return;
+  _incomingAskOpen = new Promise(resolve => {
+    const ov = document.createElement('div');
+    ov.id = 'incoming-transfer-overlay';
+    ov.style.cssText = 'position:fixed;inset:0;z-index:10050;background:rgba(15,23,42,.55);display:flex;align-items:flex-start;justify-content:center;overflow-y:auto;padding:24px 12px';
+    document.body.appendChild(ov);
+    const pending = new Set(rows.map(r => r.transfer_id));
+    const done = () => { ov.remove(); _incomingAskOpen = null; resolve(); };
+    const draw = () => {
+      const left = rows.filter(r => pending.has(r.transfer_id));
+      if (!left.length) { done(); return; }
+      ov.innerHTML = `<div style="background:white;border-radius:12px;max-width:520px;width:100%;padding:18px 16px;box-shadow:0 10px 30px rgba(0,0,0,.25)">
+        <div style="font-size:17px;font-weight:700;color:#b6952f;margin-bottom:6px">🔁 在庫移動が届いています</div>
+        <div style="font-size:13px;color:#475569;line-height:1.7;margin-bottom:12px">ほかの店から${esc(STORES[sid])}へ在庫が送られています。届いていたら「受け取った」を押してください（棚卸の当月納品に入ります）。</div>
+        ${left.map(r => `<div style="border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;margin-bottom:8px">
+          <div style="font-weight:700;font-size:15px">${esc(storeLabel(r.from_store))}から：${esc(_transferProductLabel(r.product))}　${esc(r.qty)}個</div>
+          <div style="font-size:12px;color:#64748b;margin:2px 0 8px">${esc(_transferWhen(r.created_at))} に送信${r.note ? '／メモ：' + esc(r.note) : ''}</div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <button data-id="${esc(r.transfer_id)}" data-act="yes" style="flex:1;min-width:140px;padding:10px;background:#22703d;color:white;border:none;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;font-family:inherit">受け取った</button>
+            <button data-id="${esc(r.transfer_id)}" data-act="no" style="flex:1;min-width:140px;padding:10px;background:white;color:#334155;border:1px solid #cbd5e1;border-radius:8px;font-weight:700;font-size:14px;cursor:pointer;font-family:inherit">まだ届いていない</button>
+          </div></div>`).join('')}
+      </div>`;
+      ov.querySelectorAll('button[data-act]').forEach(b => b.onclick = async () => {
+        const id = b.dataset.id;
+        const btns = ov.querySelectorAll(`button[data-id="${CSS.escape(id)}"]`);
+        btns.forEach(x => { x.disabled = true; x.style.opacity = '.6'; });
+        if (b.dataset.act === 'yes') {
+          try {
+            const res = await gasPost('receiveInventoryTransfer', { storeId: sid, transferId: id });
+            if (!res || res.error) { alert(res && res.error ? res.error : '記録できませんでした'); if (!(res && res.error)) { btns.forEach(x => { x.disabled = false; x.style.opacity = ''; }); return; } }
+            const label = getInventoryPeriod().label;
+            if (_inventoryDeliveryCache[sid]) delete _inventoryDeliveryCache[sid][label];
+          } catch (e) {
+            console.error('receiveInventoryTransfer:', e);
+            alert('通信できませんでした。通信環境の良い場所でもう一度押してください');
+            btns.forEach(x => { x.disabled = false; x.style.opacity = ''; });
+            return;
+          }
+        } else {
+          Object.keys(sz).forEach(k => { if (sz[k] !== todayStr) delete sz[k]; });
+          sz[id] = todayStr;
+          try { localStorage.setItem(_transferSnoozeKey(sid), JSON.stringify(sz)); } catch (e) {}
+        }
+        pending.delete(id);
+        draw();
+      });
+    };
+    draw();
+  });
+  return _incomingAskOpen;
+}
+
+// 管理画面(履歴 › 在庫移動): 地域の今月・先月の在庫移動。移動中は本部が代わりに受け取り済みにしたり、取り消したりできる
+let _adminTransferRows = null;
+async function loadAdminTransfers(region) {
+  const ids = region.stores.join(',');
+  const cur = getInventoryPeriod().label;
+  const [y, m] = cur.split('-').map(Number);
+  const prev = m === 1 ? `${y - 1}-12` : `${y}-${String(m - 1).padStart(2, '0')}`;
+  const got = await Promise.all([cur, prev].map(l => gasGet('getInventoryTransfers', { storeIds: ids, periodLabel: l }).catch(() => null)));
+  if (got.some(x => !Array.isArray(x))) return null;
+  return got.flat().sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+}
+function buildAdminTransferTable(rows) {
+  if (rows === null) return '<div style="color:#ef4444;font-size:13px;padding:12px 0">読み込めませんでした。「🔄 最新に更新」でもう一度お試しください</div>';
+  if (!rows.length) return '<div style="color:#aaa;font-size:13px;padding:12px 0">今月・先月の在庫移動はありません</div>';
+  const td = 'padding:8px 10px;vertical-align:middle';
+  const body = rows.map(r => {
+    const st = _transferStatus(r);
+    const p = prodByName(r.product) || {};
+    const price = Number(p.price);
+    const amount = price > 0 ? '¥' + Math.round(price * r.qty).toLocaleString() : '—';
+    const ops = r.status === '移動中'
+      ? `<button onclick="adminTransferAction('receive','${esc(r.transfer_id)}','${esc(r.to_store)}')" style="background:#22703d;color:white;border:none;border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;font-family:inherit;margin:2px">受け取り済みにする</button>
+         <button onclick="adminTransferAction('cancel','${esc(r.transfer_id)}','${esc(r.from_store)}')" style="background:white;color:#b91c1c;border:1px solid #fca5a5;border-radius:6px;padding:5px 10px;font-size:12px;cursor:pointer;font-family:inherit;margin:2px">取り消す</button>` : '';
+    return `<tr style="border-top:1px solid #e5e7eb;${st.dim ? 'opacity:.55' : ''}">
+      <td style="${td};white-space:nowrap">${esc(_transferWhen(r.created_at))}</td>
+      <td style="${td};white-space:nowrap">${st.badge}</td>
+      <td style="${td};font-weight:700">${esc(storeLabel(r.from_store))} → ${esc(storeLabel(r.to_store))}</td>
+      <td style="${td}">${esc(_transferProductLabel(r.product))}</td>
+      <td style="${td};white-space:nowrap">${esc(r.qty)}個</td>
+      <td style="${td};white-space:nowrap">${amount}</td>
+      <td style="${td};font-size:12px">${esc(r.note || '')}${r.manager_name ? `<div style="color:#888">担当者：${esc(r.manager_name)}</div>` : ''}</td>
+      <td style="${td};white-space:nowrap">${r.received_at ? esc(_transferWhen(r.received_at)) : '—'}</td>
+      <td style="${td}">${ops}</td></tr>`;
+  }).join('');
+  return `<div style="overflow-x:auto"><table style="width:100%;border-collapse:collapse;font-size:13px">
+    <thead><tr style="background:#f3f4f6;font-size:12px;text-align:left">
+      <th style="padding:8px 10px">送った日時</th><th style="padding:8px 10px">状態</th><th style="padding:8px 10px">送った店 → 受け取る店</th>
+      <th style="padding:8px 10px">商品</th><th style="padding:8px 10px">数</th><th style="padding:8px 10px">金額（単価×数）</th>
+      <th style="padding:8px 10px">メモ</th><th style="padding:8px 10px">受け取った日時</th><th style="padding:8px 10px"></th></tr></thead>
+    <tbody>${body}</tbody></table></div>`;
+}
+async function adminTransferAction(act, transferId, storeId) {
+  const r = (_adminTransferRows || []).find(x => x.transfer_id === transferId);
+  const what = r ? `\n\n${storeLabel(r.from_store)} → ${storeLabel(r.to_store)}\n${_transferProductLabel(r.product)}　${r.qty}個` : '';
+  if (!confirm((act === 'receive' ? '受け取る店の代わりに「受け取り済み」にしますか？' : 'この在庫移動を取り消しますか？（送った店の−を戻します）') + what)) return;
+  try {
+    const res = act === 'receive'
+      ? await gasPost('receiveInventoryTransfer', { storeId, transferId, receivedBy: '本部' })
+      : await gasPost('cancelSentInventoryTransfer', { storeId, transferId });
+    if (!res || res.error) alert(res && res.error ? res.error : 'できませんでした');
+  } catch (e) {
+    console.error('adminTransferAction:', e);
+    alert('通信できませんでした。もう一度お試しください');
+  }
+  renderHistory();
+}
+
 /* --- 管理画面: 複数店舗の担当者の登録 --- */
 let _mgrEditId = null;
 function _saveMultiStoreManagers(list) {
@@ -7063,7 +7358,7 @@ async function showPage(p) {
   }
   document.getElementById('page-store').classList.toggle('active', p==='store');
   document.getElementById('page-admin').classList.toggle('active', p==='admin');
-  if (p==='store') { renderStore(); maybeShowAttendanceReminder(); askOverdueDeliveries(false); }
+  if (p==='store') { renderStore(); maybeShowAttendanceReminder(); askOverdueDeliveries(false).then(() => askIncomingTransfers()); }
   if (p==='admin') { renderAdmin(); refreshBugReportBadge(); }
   updateBadges();
 }
@@ -7332,6 +7627,7 @@ function renderOrderMachineNote() {
 function renderStore() {
   ensureAnnounceWidgetLoaded(storeTab);
   renderOrderMachineNote();
+  renderStoreTransferEntry();
   const isMobile = window.innerWidth < 640;
   const table = document.getElementById('store-table');
   isMobile ? table.classList.add('card-mode') : table.classList.remove('card-mode');
@@ -8274,7 +8570,7 @@ function goPartnerHome() {
   announceGoHome();
   switchPartnerTab('order');
   window.scrollTo(0, 0);
-  askOverdueDeliveries(false); // 納品予定日を過ぎた品の「届きましたか？」
+  askOverdueDeliveries(false).then(() => askIncomingTransfers()); // 納品予定日を過ぎた品の「届きましたか？」→ 届いている在庫移動の確認
 }
 function announceGoHome() {
   document.getElementById('announce-drill-wrap').style.display = 'none';
@@ -9313,7 +9609,18 @@ async function renderHistory() {
     const on = adminHistMode === mode;
     return `<button onclick="adminHistMode='${mode}';renderHistory()" style="border:1.5px solid #22703d;border-radius:8px;padding:8px 16px;font-size:14px;font-weight:700;font-family:inherit;cursor:pointer;${on ? 'background:#22703d;color:#fff' : 'background:#fff;color:#22703d'}">${label}</button>`;
   };
-  const modeBar = `<div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">${modeBtn('store', '店舗別に確認')}${modeBtn('time', '時系列順に確認')}</div>`;
+  const modeBar = `<div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap">${modeBtn('store', '店舗別に確認')}${modeBtn('time', '時系列順に確認')}${modeBtn('transfer', '店舗間の在庫移動')}</div>`;
+
+  if (adminHistMode === 'transfer') {
+    container.innerHTML = modeBar + '<div style="color:#aaa;font-size:13px;padding:12px 0">読み込み中…</div>';
+    const rows = await loadAdminTransfers(region);
+    if (adminView !== 'history' || adminHistMode !== 'transfer') return;
+    _adminTransferRows = rows;
+    container.innerHTML = modeBar
+      + `<div style="font-size:12px;color:#666;margin-bottom:10px;line-height:1.7">${esc(region.label)}の店が送った・受け取った在庫移動（今月・先月）です。送った店の当月納品に−、受け取った店に＋として棚卸に入ります。「移動中」は受け取る店がまだ「受け取った」を押していないもので、本部が代わりに確定・取り消しできます。</div>`
+      + buildAdminTransferTable(rows);
+    return;
+  }
 
   // 納品済み(履歴) + 未納品(発注済みでまだ納品済みになっていない品。否認・未発注は除く)を1つの表に。
   // 時系列順は地域の全店舗、店舗別は選んだ店だけ
