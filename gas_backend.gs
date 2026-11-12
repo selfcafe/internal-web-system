@@ -459,7 +459,7 @@ const AUTH_STORE_ACTIONS = [
   'saveOrders', 'upsertOrders', 'saveChecksheetData', 'saveInventorySnapshot', 'recordInventoryDelivery',
   'checkWaterStockMismatch', 'saveAttendance', 'setAttendanceStartTime', 'saveLeaveRequest', 'saveDeliveryHistory', 'clearDeliveryHistory', 'reportDeliveryMismatch',
   'saveMachinePhotoSet', 'submitBugReport', 'addBugReportComment', 'saveLostItem',
-  'recordInventoryTransfer', 'cancelInventoryTransfer', 'getMeterReadings', 'saveMeterReading', 'getMeterReportInfo',
+  'recordInventoryTransfer', 'cancelInventoryTransfer', 'sendInventoryTransfer', 'receiveInventoryTransfer', 'cancelSentInventoryTransfer', 'getIncomingTransfers', 'getMeterReadings', 'saveMeterReading', 'getMeterReportInfo',
   'getPricePhotoStatus', 'savePricePhotos',
 ];
 // 店舗の通行証なら店舗を問わず呼べるもの(IDで指す削除・画像保存など。getOrdersは自分の範囲の行だけ返す)
@@ -715,6 +715,7 @@ function doGet(e) {
     else if (a === 'getInventoryDeliveryManual') result = getInventoryDeliveryManual(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'getInventoryTabData')       result = getInventoryTabData(e.parameter.storeId, e.parameter.periodLabel, e.parameter.prevPeriodLabel);
     else if (a === 'getInventoryTransfers')     result = getInventoryTransfers(e.parameter.storeIds, e.parameter.periodLabel);
+    else if (a === 'getIncomingTransfers')      result = getIncomingTransfers(e.parameter.storeId);
     else if (a === 'geocodeStoreAddress')       result = geocodeStoreAddress(e.parameter.query);
     else if (a === 'migrateOrderColumns')       result = migrateOrderColumns();
     else if (a === 'migrateInventoryColumns')   result = migrateInventoryColumns();
@@ -883,6 +884,9 @@ function doPost(e) {
     else if (b.action === 'recordInventoryDelivery') result = recordInventoryDelivery(b.storeId, b.periodLabel, b.product, b.qty);
     else if (b.action === 'recordInventoryTransfer') result = recordInventoryTransfer(b.managerId, b.fromStore, b.toStore, b.product, b.qty, b.note);
     else if (b.action === 'cancelInventoryTransfer') result = cancelInventoryTransfer(b.managerId, b.transferId);
+    else if (b.action === 'sendInventoryTransfer') result = sendInventoryTransfer(b.storeId, b.toStore, b.product, b.qty, b.note, b.sentBy);
+    else if (b.action === 'receiveInventoryTransfer') result = receiveInventoryTransfer(b.storeId, b.transferId, b.receivedBy);
+    else if (b.action === 'cancelSentInventoryTransfer') result = cancelSentInventoryTransfer(b.storeId, b.transferId);
     else if (b.action === 'importSteraOrdersCsv') result = importSteraOrdersCsv(b.csvText);
     else if (b.action === 'importSteraDailySales') result = importSteraDailySales(b.dateStr, b.csvText);
     else if (b.action === 'importSteraDailySalesBulk') result = importSteraDailySalesBulk(b.csvText);
@@ -4413,12 +4417,29 @@ function getInventoryDeliveryAuto(storeId, periodLabel) {
 // 取り消しは①にcancelled_atを入れ、②に逆の2行を追記する(追記だけのログなので行は消さない)。
 // ⚠ GAS側には今もログイン確認が無い(担当者IDを信じるだけ)。担当店舗の確認は入力ミス防止のためのもの。
 const SHEET_INV_TRANSFER = 'inventory_transfer';
+// 2026-11-12: 末尾に status/sent_by/received_at/received_by を追加(どの店からでも送り、受け取る店が確定する形)。
+// status: ''=担当者の移動(その場で確定、従来どおり) / '移動中' / '受け取り済み' / '取り消し'
 const INV_TRANSFER_COLS  = ['transfer_id', 'period_label', 'from_store', 'to_store', 'product', 'qty',
-                            'manager_id', 'manager_name', 'note', 'created_at', 'cancelled_at'];
+                            'manager_id', 'manager_name', 'note', 'created_at', 'cancelled_at',
+                            'status', 'sent_by', 'received_at', 'received_by'];
 
 function getInventoryTransferSheet(sheetId) {
   const ss = SpreadsheetApp.openById(sheetId || INVENTORY_SHEET_ID);
-  return ss.getSheetByName(SHEET_INV_TRANSFER) || ss.insertSheet(SHEET_INV_TRANSFER);
+  const sheet = ss.getSheetByName(SHEET_INV_TRANSFER) || ss.insertSheet(SHEET_INV_TRANSFER);
+  _ensureTransferCols_(sheet);
+  return sheet;
+}
+// 書き込みは INV_TRANSFER_COLS の並び(位置)、読み取りは見出し名なので、運用中のシートに後から足した列の見出しを
+// 宣言した位置に書いておく(ensureHeaders は空のシートにしか見出しを書かないため。CLAUDE.md「列追加の罠」)
+function _ensureTransferCols_(sheet) {
+  if (sheet.getLastRow() === 0) { sheet.appendRow(INV_TRANSFER_COLS); return; }
+  const width = Math.max(sheet.getLastColumn(), INV_TRANSFER_COLS.length);
+  const hdrs = sheet.getRange(1, 1, 1, width).getValues()[0].map(String);
+  INV_TRANSFER_COLS.forEach((c, i) => {
+    if (hdrs[i] === c) return;
+    if (hdrs[i]) throw new Error('inventory_transfer の' + (i + 1) + '列目の見出しが想定と違います: ' + hdrs[i]);
+    sheet.getRange(1, i + 1).setValue(c);
+  });
 }
 
 function _multiStoreManager_(managerId) {
@@ -4482,7 +4503,8 @@ function getInventoryTransfers(storeIdsCsv, periodLabel) {
     INV_TRANSFER_COLS.forEach(c => { const i = hdrs.indexOf(c); r[c] = i < 0 ? '' : row[i]; });
     r.period_label = _invMonthLabelStr(r.period_label, sheetId);
     r.qty = Number(r.qty || 0);
-    ['transfer_id', 'from_store', 'to_store', 'product', 'manager_id', 'manager_name', 'note', 'created_at', 'cancelled_at']
+    ['transfer_id', 'from_store', 'to_store', 'product', 'manager_id', 'manager_name', 'note', 'created_at', 'cancelled_at',
+     'status', 'sent_by', 'received_at', 'received_by']
       .forEach(c => { r[c] = r[c] instanceof Date ? r[c].toISOString() : String(r[c] === undefined || r[c] === null ? '' : r[c]); });
     return r;
   }).filter(r => r.period_label === label && (!ids.length || ids.indexOf(r.from_store) >= 0 || ids.indexOf(r.to_store) >= 0))
@@ -4516,6 +4538,137 @@ function cancelInventoryTransfer(managerId, transferId) {
     return { ok: true };
   }
   return { error: '移動の記録が見つかりません' };
+}
+
+// ===== どの店からでも送れる在庫移動(2026-11-12 塩川さん「同一担当者じゃなくていい」) =====
+// 送る店が送った時点で、送った店の当月納品に −数量。受け取る店が「受け取った」を押した時点で、受け取った店の
+// (押した月の)当月納品に ＋数量。受け取られる前なら送った店(か本部)が取り消せる(−を戻す)。直営どうしだけ
+// (FC店は原料に値段を付けないため、原価の行き先がずれる)。担当者の移動(recordInventoryTransfer)はその場で確定のまま。
+const TRANSFER_OVERDUE_NOTIFY_DAYS = 3;
+
+function _prevPeriodLabel_(label) {
+  const parts = String(label).split('-').map(Number);
+  return parts[1] === 1 ? (parts[0] - 1) + '-12' : parts[0] + '-' + String(parts[1] - 1).padStart(2, '0');
+}
+// 移動中の記録は月をまたいでも残るので、今月と先月のファイルを探す(年またぎで別ファイルになる)
+function _transferSheetIds_() {
+  const cur = _currentPeriodLabel_();
+  return [...new Set([_inventorySheetIdForPeriod_(cur), _inventorySheetIdForPeriod_(_prevPeriodLabel_(cur))])];
+}
+function _readTransfers_(sheetId) {
+  const sheet = getInventoryTransferSheet(sheetId);
+  if (sheet.getLastRow() <= 1) return { sheet: sheet, rows: [] };
+  const data = sheet.getDataRange().getValues();
+  const hdrs = data[0].map(String);
+  const rows = data.slice(1).map((row, i) => {
+    const r = { _row: i + 2 };
+    INV_TRANSFER_COLS.forEach(c => {
+      const k = hdrs.indexOf(c);
+      const v = k < 0 ? '' : row[k];
+      r[c] = v instanceof Date ? v.toISOString() : String(v === undefined || v === null ? '' : v);
+    });
+    const pk = hdrs.indexOf('period_label');
+    r.period_label = _invMonthLabelStr(pk < 0 ? '' : row[pk], sheetId);
+    r.qty = Number(r.qty || 0);
+    return r;
+  });
+  return { sheet: sheet, rows: rows };
+}
+function _findTransfer_(transferId) {
+  const ids = _transferSheetIds_();
+  for (let i = 0; i < ids.length; i++) {
+    const got = _readTransfers_(ids[i]);
+    const r = got.rows.find(x => x.transfer_id === String(transferId));
+    if (r) return { sheet: got.sheet, r: r };
+  }
+  return null;
+}
+function _setTransferCells_(sheet, row, vals) {
+  Object.keys(vals).forEach(c => {
+    const cell = sheet.getRange(row, INV_TRANSFER_COLS.indexOf(c) + 1);
+    cell.setNumberFormat('@');
+    cell.setValue(vals[c]);
+  });
+}
+
+function sendInventoryTransfer(fromStore, toStore, product, qty, note, sentBy) {
+  fromStore = _normalizeStoreId_(String(fromStore || ''));
+  toStore   = _normalizeStoreId_(String(toStore || ''));
+  if (!fromStore || !toStore || fromStore === toStore) return { error: '送り先に別の店舗を選んでください' };
+  if (!_storeNames_()[toStore]) return { error: '送り先の店舗が見つかりません' };
+  if (_isFcStore_(fromStore) || _isFcStore_(toStore)) return { error: 'FC店とは在庫移動できません（直営店どうしだけ）' };
+  product = String(product || '').trim();
+  if (!product) return { error: '商品を選んでください' };
+  const n = Number(qty);
+  if (!(n > 0) || Math.floor(n) !== n) return { error: '数量は1以上の整数で入力してください' };
+  const periodLabel = _currentPeriodLabel_();
+  const sheet = getInventoryTransferSheet(_inventorySheetIdForPeriod_(periodLabel));
+  const rec = {
+    transfer_id: 'tr_' + Date.now() + '_' + Math.floor(Math.random() * 1000),
+    period_label: periodLabel, from_store: fromStore, to_store: toStore, product: product, qty: n,
+    manager_id: '', manager_name: '', note: String(note || '').slice(0, 200),
+    created_at: new Date().toISOString(), cancelled_at: '',
+    status: '移動中', sent_by: String(sentBy || '').slice(0, 50), received_at: '', received_by: '',
+  };
+  const startRow = sheet.getLastRow() + 1;
+  sheet.getRange(startRow, 1, 1, INV_TRANSFER_COLS.length).setNumberFormat('@');
+  sheet.getRange(startRow, INV_TRANSFER_COLS.indexOf('qty') + 1).setNumberFormat('0');
+  sheet.getRange(startRow, 1, 1, INV_TRANSFER_COLS.length).setValues([INV_TRANSFER_COLS.map(c => rec[c])]);
+  recordInventoryDelivery(fromStore, periodLabel, product, -n);
+  return { ok: true, transfer: rec };
+}
+
+// 受け取る店(storeId)の「受け取った」。本部も代わりに押せる(通行証の確認で範囲外の店は止まる)
+function receiveInventoryTransfer(storeId, transferId, receivedBy) {
+  storeId = _normalizeStoreId_(String(storeId || ''));
+  const f = _findTransfer_(transferId);
+  if (!f) return { error: '移動の記録が見つかりません' };
+  const r = f.r;
+  if (r.to_store !== storeId) return { error: 'この店舗あての移動ではありません' };
+  if (r.status === '受け取り済み') return { ok: true, already: true };
+  if (r.status !== '移動中') return { error: r.status === '取り消し' ? '送った店が取り消した移動です' : '受け取りの確認が要らない移動です' };
+  _setTransferCells_(f.sheet, r._row, { status: '受け取り済み', received_at: new Date().toISOString(), received_by: String(receivedBy || '').slice(0, 50) });
+  recordInventoryDelivery(r.to_store, _currentPeriodLabel_(), r.product, r.qty);
+  return { ok: true };
+}
+
+// 送った店(storeId)の取り消し。受け取られる前だけ(−を、送った月の当月納品に戻す)
+function cancelSentInventoryTransfer(storeId, transferId) {
+  storeId = _normalizeStoreId_(String(storeId || ''));
+  const f = _findTransfer_(transferId);
+  if (!f) return { error: '移動の記録が見つかりません' };
+  const r = f.r;
+  if (r.from_store !== storeId) return { error: 'この店舗が送った移動ではありません' };
+  if (r.status !== '移動中') return { error: r.status === '受け取り済み' ? 'もう受け取られたので取り消せません。本部に連絡してください' : '取り消せない移動です' };
+  _setTransferCells_(f.sheet, r._row, { status: '取り消し', cancelled_at: new Date().toISOString() });
+  recordInventoryDelivery(r.from_store, r.period_label, r.product, r.qty);
+  return { ok: true };
+}
+
+// 受け取る店あての移動中の移動(今月・先月のファイル)
+function getIncomingTransfers(storeId) {
+  storeId = _normalizeStoreId_(String(storeId || ''));
+  const out = [];
+  _transferSheetIds_().forEach(sid => _readTransfers_(sid).rows.forEach(r => {
+    if (r.status === '移動中' && r.to_store === storeId) { delete r._row; out.push(r); }
+  }));
+  return out.sort((a, b) => (a.created_at < b.created_at ? -1 : 1));
+}
+
+// 送ってから TRANSFER_OVERDUE_NOTIFY_DAYS 日たっても受け取られていない移動を塩川用Botへ(毎朝 sendDailyOrderNotification)
+function notifyOverdueTransfers_() {
+  const limit = Date.now() - TRANSFER_OVERDUE_NOTIFY_DAYS * 86400000;
+  const rows = [];
+  _transferSheetIds_().forEach(sid => _readTransfers_(sid).rows.forEach(r => {
+    if (r.status === '移動中' && new Date(r.created_at).getTime() <= limit) rows.push(r);
+  }));
+  if (!rows.length) return { ok: true, count: 0 };
+  const names = _storeNames_();
+  const lines = ['【受け取られていない在庫移動】送ってから' + TRANSFER_OVERDUE_NOTIFY_DAYS + '日以上たっても、受け取る店で「受け取った」が押されていません。', ''];
+  rows.sort((a, b) => (a.created_at < b.created_at ? -1 : 1)).forEach(r => lines.push('・' + (names[r.from_store] || r.from_store) + ' → ' +
+    (names[r.to_store] || r.to_store) + '　' + r.product + ' ' + r.qty + '個（' + Utilities.formatDate(new Date(r.created_at), 'Asia/Tokyo', 'M/d') + ' 送信）'));
+  sendBugReportToOwnerBot_(lines.join('\n').slice(0, 1900));
+  return { ok: true, count: rows.length };
 }
 
 // ----------------------------------------------------------------
@@ -10139,6 +10292,7 @@ function sendDailyOrderNotification() {
   try { purgeOldMachinePhotos(); } catch (e) { console.error('purgeOldMachinePhotos error:', e.message); }
   try { sendMachinePhotoReminder(); } catch (e) { console.error('sendMachinePhotoReminder error:', e.message); }
   try { notifyOverdueDeliveries_(); } catch (e) { console.error('notifyOverdueDeliveries_ error:', e.message); }
+  try { notifyOverdueTransfers_(); } catch (e) { console.error('notifyOverdueTransfers_ error:', e.message); }
   // 「◯◯エリアにて発注依頼があります。」の毎朝のチャンネル通知は 2026-10-14 にやめた（全体の会話には不要）。
   // 発注依頼は入った時点で塩川用Botへ1:1で届く（_withAmazonOrderNotify_）
 }
