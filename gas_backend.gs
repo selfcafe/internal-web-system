@@ -127,6 +127,9 @@ const ATTENDANCE_COLS = ['id','store_id','name','clocked_at','lat','lng','within
 const ATTENDANCE_GPS_NOTIFY_ENABLED = false;
 // 基準座標からこの距離(m)以内なら出勤OKと判定する（全店舗共通の固定値、2026-07-15確定）
 const ATTENDANCE_THRESHOLD_M = 300;
+// 店ごとの例外(m)。赤塚: スタッフのスマホが「おおよその位置」(約1km単位)しか渡さず、店内でも1.1〜1.4km離れた
+// 場所として記録され毎回「要確認」になっていた。設定変更をお願いするのが難しいため、この店だけ範囲を広げる(2026-11-13 塩川さん指示)
+const ATTENDANCE_THRESHOLD_BY_STORE = { akatsuka: 2000 };
 // 休み申請ログ。1回の申請で1行追加（append-only、承認ステップなしで即時確定）
 const SHEET_ATTENDANCE_LEAVE = 'attendance_leave';
 const ATTENDANCE_LEAVE_COLS = ['id','store_id','name','leave_date','submitted_at'];
@@ -3343,7 +3346,7 @@ function saveAttendance(storeId, name, lat, lng) {
   let withinRange = '';
   if (base && base.lat != null && base.lng != null && lat != null && lng != null) {
     const dist = _haversineMeters(Number(lat), Number(lng), Number(base.lat), Number(base.lng));
-    withinRange = dist <= ATTENDANCE_THRESHOLD_M;
+    withinRange = dist <= (ATTENDANCE_THRESHOLD_BY_STORE[storeId] || ATTENDANCE_THRESHOLD_M);
   }
 
   const now = new Date();

@@ -355,7 +355,7 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 ### 業務開始(出勤)・休み申請
 - **基本仕様**:
   - コード上の名前は`attendance`のまま。
-  - 判定は300m固定で、店舗座標は管理者が手入力する。
+  - 判定は300mで、店舗座標は管理者が手入力する。例外は`ATTENDANCE_THRESHOLD_BY_STORE`(赤塚だけ2km。スタッフのスマホが「おおよその位置」しか渡さないため、2026-11-13)。
   - **外部サービスはGoogle内で完結させる、という会社の指示がある**(OSM等は却下)。Wi-Fiによる出勤判定も却下済み。
 - **未打刻リマインド**: ログイン時に「登録スタッフ全員が当日打刻済みか」で判定する。端末ごとに1日1回だけ出し、共有端末には対応しない(オーナー確認済み)。
 - **スケジュール**: weekday型は毎日8:30に判定、interval型は毎月1日9時の`sendMonthlyAttendanceCheck`。スタッフ0名の店舗は店舗デフォルト(`attendance_store_default_schedule`)を使う。
