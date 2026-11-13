@@ -166,6 +166,7 @@
 
     .btn-request { background:#22703d; color:white; padding:9px 18px; font-size:14px; font-weight:600; border-radius:6px; }
     .btn-request:hover { background:#22703d; }
+    .order-group-actions .btn-add-item { background:#fff; color:#22703d; border:1.5px solid #22703d; padding:8px 16px; font-size:14px; font-weight:600; border-radius:6px; }
     .btn-cancel-lock { background:#6b7280; color:white; padding:6px 12px; font-size:12px; border-radius:6px; }
     .locked-status { color:#22703d; font-size:12px; font-weight:700; display:inline-flex; align-items:center; gap:4px; }
 
@@ -403,6 +404,14 @@
       .table-wrap { border-radius:10px; }
       table.card-mode td.c-note textarea { min-height:72px; }
       table.card-mode td.c-req { width:auto; }
+      /* 発注依頼(依頼前)のカードを短くする(2026-11-13)。依頼日は「依頼する」を押した日に書き換わり、発注日・納品予定日は
+         まだ空なので、スマホでは出さない。1品で画面が埋まり、品ごとに「依頼する」を押す原因になっていた */
+      #store-table.card-mode td.c-req, #store-table.card-mode td.c-order, #store-table.card-mode td.c-delivery { display:none; }
+      #store-table.card-mode td.c-note textarea { min-height:40px; }
+      #store-table.card-mode td.c-action { width:auto; justify-content:flex-end; margin-top:0; padding-top:4px; border-top:none !important; }
+      #store-table.card-mode td.c-action .btn-del { flex:none; width:auto; padding:6px 14px; font-size:13px; background:#fff; color:#dc2626; border:1px solid #fca5a5; }
+      #store-table.card-mode .order-group-actions { flex-direction:column; align-items:stretch; }
+      #store-table.card-mode .order-group-actions .btn-add-item, #store-table.card-mode .order-group-actions .btn-request { width:100%; padding:12px; font-size:15px; }
       /* iPhoneのSafariは16px未満の入力欄を押すと画面を拡大してしまうため、スマホでは入力欄を16pxにそろえる。
          2026-10-16に1行の文字入力・選択欄も追加(棚卸の「理由」欄で拡大され、ガイダンスの説明に隠れて見えなかった) */
       input[type="date"], input[type="number"], input[type="text"], input[type="search"], input:not([type]), select, .prod-input, textarea { font-size:16px !important; }
@@ -7504,6 +7513,17 @@ function selectProd(rowId, name, label) {
   // このタブは随時発注で、月初発注(基準値ベース、processMonthlyReorder)とは別物のため廃止した。
   // ケース注文のみの商品に袋数のまま入り、ケース数として20倍で依頼される事故があった(渋谷神南)
   updStore(rowId, 'product', name);
+  // 次の品をすぐ入れられるよう、この依頼に空の欄が無ければ1つ足す(2026-11-13。「＋ 商品を追加」を押さずに
+  // 「依頼する」を押し、1品ずつ依頼されていた)。空の欄は依頼するときに消える(lockGroup)
+  const row = storeRows.find(r => r.id === rowId);
+  if (row && !row.locked) {
+    const gid = row.groupId || row.id;
+    if (!storeRows.some(r => (r.groupId || r.id) === gid && !r.locked && !String(r.product || '').trim())) {
+      storeRows.push(newRow(gid, row.requestDate));
+      saveA(storeTab, storeRows);
+      renderStore();
+    }
+  }
 }
 
 function prodKeydown(e, rowId) { if (e.key==='Enter'||e.key===' ') { e.preventDefault(); openProd(rowId); } }
@@ -7738,10 +7758,16 @@ function renderStore() {
       }
     } else {
       const gPhotos = orderPhotoUrls(group[0]);
+      const nItems = group.filter(r => String(r.product || '').trim()).length;
       addTr.innerHTML = `<td colspan="7" style="padding:4px 10px 8px;border-bottom:none">
-        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
-          <button class="btn-add-item" onclick="addItemToGroup('${gid}','${esc(group[0].requestDate)}')">＋ 商品を追加</button>
-          <button class="btn-request" onclick="lockGroup('${gid}')">依頼する →</button>
+        <div style="font-size:12.5px;color:#22703d;background:#eef6ee;border-radius:6px;padding:7px 10px;margin-bottom:8px;line-height:1.5">
+          頼む品を<b>全部入れてから</b>、最後に1回だけ「まとめて依頼する」を押してください（本部に1回の依頼として届きます）。
+        </div>
+        <div class="order-group-actions" style="display:flex;gap:8px;align-items:center;flex-wrap:wrap">
+          <button class="btn-add-item" onclick="addItemToGroup('${gid}','${esc(group[0].requestDate)}')">＋ 品を追加</button>
+          <button class="btn-request" onclick="lockGroup('${gid}')">まとめて依頼する${nItems ? `（${nItems}品）` : ''} →</button>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-top:8px">
           <label style="cursor:pointer;font-size:12px;color:#6b7280;background:#f3f4f6;border:1px solid #d1d5db;border-radius:6px;padding:5px 10px;display:inline-flex;align-items:center;gap:4px">
             📁 写真を添付
             <input type="file" accept="image/*" multiple style="display:none" onchange="handleOrderPhotoUpload('${gid}',this)">
@@ -7977,18 +8003,30 @@ function lockGroup(groupId) {
   // 「新着の依頼」に戻り、もう一度発注された)
   const group = storeRows.filter(r => inGroup(r) && !r.locked);
   if (group.some(r => !r.requestDate)) { alert('依頼日を入力してください。'); return; }
+  // 依頼をやめて入力に戻るとき: 上で消した空の欄を1つ戻して描き直す(戻らないと「品を足す」欄が無い・画面と中身がずれる)
+  const backToEdit = () => {
+    if (!storeRows.some(r => inGroup(r) && !r.locked && !String(r.product || '').trim())) storeRows.push(newRow(groupId, group[0].requestDate));
+    saveA(storeTab, storeRows);
+    renderStore();
+  };
   // 数量が空・0 の品は依頼しない(2026-11-12)。数を入れないまま依頼され、本部への通知が「？ケース」になり、
   // そのたびに店へ聞き直していた。入力欄に打ったまま押したときのために、欄の数字も読み直す
   group.forEach(r => { const inp = document.getElementById('qty-' + r.id); if (inp) r.qty = inp.value; });
   const noQty = group.filter(r => !(Number(r.qty) > 0));
   if (noQty.length) {
     const names = noQty.map(r => { const p = prodByName(r.product); return (p && (p.label || p.name)) || r.product; }).join('、');
-    saveA(storeTab, storeRows);
-    renderStore();
+    backToEdit();
     alert(`数量が入っていない品があります（${names}）。
 数を入れてから依頼してください。`);
     return;
   }
+  // 1品だけの依頼は、ほかに頼む品がないか一度聞く(2026-11-13。品ごとに依頼され、本部への連絡・アペックスの発注書が分かれていた)
+  if (group.length === 1 && !confirm(`依頼する品は「${(prodByName(group[0].product) || {}).label || group[0].product}」の1品だけです。
+
+ほかにも頼む品があれば、先に下の空いている欄に入れてから、まとめて依頼してください。
+
+OK：この1品だけ依頼する
+キャンセル：戻って品を足す`)) { backToEdit(); return; }
   // バラ・ケースを選べる品で「バラ 1」の依頼は、ほとんどがケースに切り替え忘れ（2026-10-29 心斎橋のココア 1袋。本当は1ケース）。
   // 1品ずつ「1ケースにしますか？」と聞き、OK ならケースにして依頼する
   group.forEach(r => {
@@ -8010,7 +8048,7 @@ function lockGroup(groupId) {
   const pendingCase = storeRows.some(r => !inGroup(r) && r.locked && r.isNew && !r.orderDate && !r.denied && isApex(r) && reachesCase(r));
   if (apexNew.length && !apexNew.some(reachesCase) && !pendingCase) {
     const names = apexNew.map(r => { const p = prodByName(r.product); return p.label || p.name; }).join('、');
-    if (!confirm(`アペックスの品（${names}）が、どれも1ケースに届いていません。\nアペックスへは、1回の発注で1品以上を1ケース以上にする決まりです。\nケースで頼める品（コーヒー豆・カップなど）が必要なら、一緒に足してください。\n\nOK：このまま依頼する\nキャンセル：戻って品を足す・数を直す`)) return;
+    if (!confirm(`アペックスの品（${names}）が、どれも1ケースに届いていません。\nアペックスへは、1回の発注で1品以上を1ケース以上にする決まりです。\nケースで頼める品（コーヒー豆・カップなど）が必要なら、一緒に足してください。\n\nOK：このまま依頼する\nキャンセル：戻って品を足す・数を直す`)) { backToEdit(); return; }
   }
   group.forEach(r => { r.locked = true; r.isNew = true; r.requestDate = today(); });
   // 続けて次の依頼を入れられるよう、空の下書きを用意する(以前はログイン時にしか作らず、依頼のあと
