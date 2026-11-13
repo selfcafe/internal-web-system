@@ -6713,8 +6713,9 @@ function notifyOwnerBugTriage(text) {
 // 控えた品をまとめて1通送る(アペックスの下書きも1つ)。送るときに行を読み直すので、その間に取り消した・否認した・発注した品は送らない。
 // 控えはスクリプト プロパティ1個(ORDER_NOTIFY_QUEUE、店ごとの id の一覧)。送るのは1回だけのトリガー(flushOrderNotifyQueue)
 const ORDER_NOTIFY_QUEUE_KEY = 'ORDER_NOTIFY_QUEUE';
-const ORDER_NOTIFY_QUIET_MS = 3 * 60 * 1000;
-const ORDER_NOTIFY_MAX_MS = 10 * 60 * 1000;
+// 3分・10分で始めたが、2026-11-13 布袋は品を選ぶのに約6分ずつかかり、4通に分かれた(1:02〜1:21)。10分・30分に延ばす
+const ORDER_NOTIFY_QUIET_MS = 10 * 60 * 1000;
+const ORDER_NOTIFY_MAX_MS = 30 * 60 * 1000;
 // 控え(ORDER_NOTIFY_QUEUE)を書き換え、同じロックの中でトリガーも作り直す(次に待ち終わる店に合わせて1つだけ。
 // 控えが空ならトリガーは消す)。毎回作り直すので、一度動いて残ったトリガーで止まることはない
 function _orderNotifyQueueEdit_(fn) {
