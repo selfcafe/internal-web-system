@@ -7338,6 +7338,33 @@ function _apexDraftForOrderRows_(storeId, rows, onCarried) {
         replacePrev = carried.length > 0 || ids.every(id => newIds.indexOf(id) >= 0 || carriedIds.indexOf(id) >= 0);
       }
     }
+    // 前の日に作ってまだ送っていない下書きも1通にまとめる（2026-11-16 原: 11/14 の下書き（抹茶10袋・ココア20袋）が残ったまま、
+    // 数を直した抹茶だけで 11/16 の下書きを作り、2通とも中身が違った。前の下書きを消すのは「今日作った下書き」だけだったため）。
+    // 今回の品の備考にある発注書の名前（_registerOrderedRows_ が入れる）で Gmail の下書きを探し、残っていれば、その下書きに入っていた
+    // まだ発注していない品も今回に入れ、作れたら前の下書き・PDF・写しを片づける
+    const PDF_RE = /\d{4}-\d{2}-\d{2}_[^\n／]*?\.pdf/g;
+    const isT = v => v === true || String(v) === 'TRUE';
+    const olderDrafts = [], olderCarried = [];
+    const prevCarriedCount = carried.length;   // 今日の前の下書き（APEX_BOT_DRAFT_）から入れた品の数（作り直しの判定に使う）
+    try {
+      const ordersNow = getOrders();
+      const idsIn = () => new Set([].concat.apply([], Object.keys(bySid).map(s => bySid[s].map(r => String(r.id)))));
+      const noteOf = r => { const cur = ordersNow.find(o => String(o.id) === String(r.id)); return String((cur || r).note || ''); };
+      const oldDocs = new Set();
+      Object.keys(bySid).forEach(s => bySid[s].forEach(r => (noteOf(r).match(PDF_RE) || []).forEach(d => oldDocs.add(d))));
+      if (oldDocs.size) {
+        const drafts = GmailApp.getDrafts().filter(d => /発注/.test(d.getMessage().getSubject()));
+        oldDocs.forEach(doc => {
+          const dr = drafts.find(d => d.getMessage().getAttachments().some(a => a.getName() === doc));
+          if (!dr || (replacePrev && prev && dr.getId() === prev.draftId) || olderDrafts.some(o => o.draft.getId() === dr.getId())) return;
+          olderDrafts.push({ draft: dr, doc: doc, subject: dr.getMessage().getSubject() });
+          const ids = idsIn();
+          ordersNow.filter(r => String(r.note || '').indexOf(doc) >= 0 && !ids.has(String(r.id)) &&
+            isT(r.is_new) && !isT(r.denied) && !_dateStr(r.order_date) && APEX_ORDER_VENDORS.indexOf((meta[r.product] || {}).vendor || '') >= 0)
+            .forEach(r => { (bySid[r.store_id] = bySid[r.store_id] || []).push(r); carried.push(r); olderCarried.push(r); });
+        });
+      }
+    } catch (e) { console.error('前の下書きの確認に失敗:', e.message); }
     // 店ごとに、同じ品はまとめる（単位がそろっていれば足す。ケースとバラが混ざるときはバラに直して足す）
     const specOf = (sid, list) => {
       const byP = {};
@@ -7357,16 +7384,18 @@ function _apexDraftForOrderRows_(storeId, rows, onCarried) {
     let out = buildAdhocApexOrder(bk, spec, false, { source: 'アペックス 追加発注（Bot）', rowsBySid: bySid, pending: true });
     // 作っている間に前の下書きが送られていたら、前の品を入れずに作り直す（2026-10-29 太閤通: 送ったのと同じ 13:16 に鳥居通の依頼が来て、
     // 送った太閤通の品まで入った下書きができた）
-    if (out && out.ok && carried.length) {
+    if (out && out.ok && prevCarriedCount && prev && prev.draftId) {
       let still = false;
       try { Gmail.Users.Drafts.get('me', prev.draftId); still = true; } catch (e) { still = false; }
       if (!still) {
         try { Gmail.Users.Drafts.remove('me', out.draftId); } catch (e) {}
         [out.pdfId, out.sheetId].filter(Boolean).forEach(id => { try { DriveApp.getFileById(id).setTrashed(true); } catch (e) {} });
-        Object.keys(bySid).forEach(sid => { if (sid !== storeId) delete bySid[sid]; });
+        // 今回の品と、前の日の下書きから入れた品（その下書きはこのあと消すので落とさない）で作り直す
+        Object.keys(bySid).forEach(sid => delete bySid[sid]);
         bySid[storeId] = apexRows.slice();
-        carried = []; replacePrev = false;
-        out = buildAdhocApexOrder(bk, specOf(storeId, bySid[storeId]), false, { source: 'アペックス 追加発注（Bot）', rowsBySid: bySid, pending: true });
+        olderCarried.forEach(r => { (bySid[r.store_id] = bySid[r.store_id] || []).push(r); });
+        carried = olderCarried.slice(); replacePrev = false;
+        out = buildAdhocApexOrder(bk, Object.keys(bySid).map(sid => specOf(sid, bySid[sid])).join(';'), false, { source: 'アペックス 追加発注（Bot）', rowsBySid: bySid, pending: true });
       }
     }
     if (!out || !out.ok) return '【アペックス】発注メールの下書きを作れませんでした（' + ((out && (out.error + ' ' + (out.details || []).join(' '))) || '不明') + '）。PC から作り直してください';
@@ -7375,6 +7404,22 @@ function _apexDraftForOrderRows_(storeId, rows, onCarried) {
       try { Gmail.Users.Drafts.remove('me', prev.draftId); } catch (e) { console.error('前の下書きを消せませんでした:', e.message); }
       [prev.pdfId, prev.sheetId].filter(Boolean).forEach(id => { try { DriveApp.getFileById(id).setTrashed(true); } catch (e) {} });
     }
+    // 前の日の下書き（上で見つけたもの）を片づける。作っている間に送られていたら消さずに知らせる
+    const olderGone = [], olderSent = [];
+    olderDrafts.forEach(o => {
+      let alive = false;
+      try { Gmail.Users.Drafts.get('me', o.draft.getId()); alive = true; } catch (e) { alive = false; }
+      if (!alive) { olderSent.push(o.subject); return; }
+      try { Gmail.Users.Drafts.remove('me', o.draft.getId()); } catch (e) { console.error('前の下書きを消せませんでした:', e.message); return; }
+      const pdfs = DriveApp.getFilesByName(o.doc);
+      while (pdfs.hasNext()) { const f = pdfs.next(); if (f.getId() !== out.pdfId && f.getMimeType() === MimeType.PDF) f.setTrashed(true); }
+      Object.keys(props.getProperties()).filter(k => k.indexOf('APEX_BOT_DRAFT_') === 0).forEach(k => {
+        let pp = null;
+        try { pp = JSON.parse(props.getProperty(k) || 'null'); } catch (e) { pp = null; }
+        if (pp && pp.draftId === o.draft.getId() && pp.sheetId && pp.sheetId !== out.sheetId) { try { DriveApp.getFileById(pp.sheetId).setTrashed(true); } catch (e) {} }
+      });
+      olderGone.push(o.doc.replace(/\.pdf$/, ''));
+    });
     const allIds = [].concat.apply([], Object.keys(bySid).map(sid => bySid[sid].map(r => String(r.id))));
     props.setProperty(pk, JSON.stringify({ date: today, draftId: out.draftId, pdfId: out.pdfId, sheetId: out.sheetId, rowIds: allIds }));
     const same = carried.filter(r => r.store_id === storeId);
@@ -7395,8 +7440,10 @@ function _apexDraftForOrderRows_(storeId, rows, onCarried) {
     const mergedNote = carried.length ? '（今日まだ送っていない前の下書きの品（' +
       carried.map(r => (r.store_id !== storeId ? (names[r.store_id] || r.store_id) + ' ' : '') + (r.label || r.product)).join('、') +
       '）とまとめて1通にしました。前の下書きは消しました）' : (replacePrev ? '（同じ品の前の下書きは作り直して消しました）' : '');
+    const olderNote = (olderGone.length ? '（前の下書き（' + olderGone.join('、') + '）の品も入れて作り直し、前の下書きは消しました）' : '') +
+      (olderSent.length ? '⚠ 前の下書き（' + olderSent.join('、') + '）が作っている間に送られました。同じ品が二重にならないか確かめてください' : '');
     return alert + '【アペックス】' + out.branch + '支店の発注メールの下書きを作りました（' + out.lines.map(l => l.split('　').slice(1, 3).join(' ')).join('・') +
-      '、税抜' + Number(out.total).toLocaleString() + '円）' + mergedNote + '。Gmail の下書きを確認して送り、通知の［アペックス 発注した］を押してください' + (warns.length ? '。注意: ' + warns.join(' / ') : '');
+      '、税抜' + Number(out.total).toLocaleString() + '円）' + mergedNote + olderNote + '。Gmail の下書きを確認して送り、通知の［アペックス 発注した］を押してください' + (warns.length ? '。注意: ' + warns.join(' / ') : '');
   } catch (e) {
     console.error('_apexDraftForOrderRows_ error:', e.message);
     return '【アペックス】発注メールの下書きを作れませんでした（' + e.message + '）。PC から作り直してください';
