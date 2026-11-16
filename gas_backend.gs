@@ -7114,7 +7114,9 @@ function _matchProductsText_(storeId, body) {
   // 品名のすぐ後ろの数（「ブレンドA 8袋」「ココア×3」「カップM 2ケース」）。「残り5本」のように間に言葉があるものは読まない（残りの数）
   const qtys = {};
   Object.keys(ends).forEach(n => {
-    const q = text.slice(ends[n]).match(/^[×x*:=＝・\-]*(ダンボール|段ボール)?(\d+)(ケース|cs|kg|キロ|箱|袋|個|本|枚|ロール|パック|つ)?/i);
+    // 「抹茶の発注数を1ケースに変更」「ココアは2ケース」のように、品名と数の間の「の発注数を」「は」なども読む
+    // (2026-11-16 原: 数を読めずに 1袋 で確認が出た)。「残り」などほかの言葉が入るものは今までどおり読まない
+    const q = text.slice(ends[n]).match(/^(?:の)?(?:発注数|発注の数|注文数|発注|数量|個数|数)?(?:を|は|が|も)?[×x*:=＝・\-]*(ダンボール|段ボール)?(\d+)(ケース|cs|kg|キロ|箱|袋|個|本|枚|ロール|パック|つ)?/i);
     if (q && Number(q[2]) > 0) qtys[n] = { n: Number(q[2]), unit: (q[3] || '').toLowerCase(), danbo: !!q[1] };
   });
   return { items: Object.keys(found).map(n => found[n]), ambiguous, qtys };
@@ -7127,7 +7129,9 @@ const TOYO_DANBO_BAGS = 12;
 
 function _orderItemFromText_(p, q) {
   const cu = Number((String(p.caseUnit || '').match(/\d+/) || [0])[0]) || 0;
-  if (!q) return p.caseOnly && cu ? _orderItemOut_(p, 1, 'case') : _orderItemOut_(p, 1, 'piece');
+  // 数が書いていないときは、ケースのある アペックスの品も 1ケース にする(2026-11-16 塩川さん「1袋はしない約束」。
+  // ポータルの画面でも「バラ 1」は1ケースにするか聞いている)。数は確認画面で「品名 3」のように直せる
+  if (!q) return cu && (p.caseOnly || APEX_ORDER_VENDORS.indexOf(p.vendor || '') >= 0) ? _orderItemOut_(p, 1, 'case') : _orderItemOut_(p, 1, 'piece');
   const n = q.n, u = q.unit;
   if (q.danbo && p.vendor === 'toyo' && !/本|個|箱/.test(String(p.unit || ''))) {   // 袋の品だけ（カップ・なっちゃんは今までどおりケース）
     const bags = n * TOYO_DANBO_BAGS;
@@ -7155,8 +7159,23 @@ function previewOrderText(apiKey, storeText, body) {
     return { ok: true, store: null, storeCandidates: store.candidates || [], productCount: m0.items.length + m0.ambiguous.length };
   }
   const m = _matchProductsText_(store.id, body);
+  const items = m.items.map(p => _orderItemFromText_(p, m.qtys[p.name]));
+  // まだ発注していない依頼中の品は、登録すると数を直す(createOrderRequest)。確認画面でそれと分かるよう、単位の後ろに今の数を出す
+  // (2026-11-16 原「抹茶の発注数を1ケースに変更」が新しい依頼のように見えた)。Bot は unitText をそのまま表示する
+  try {
+    const meta = _productMeta_();
+    const pend = getOrders().filter(r => r.store_id === store.id && (r.is_new === true || String(r.is_new) === 'TRUE') &&
+      !(r.denied === true || String(r.denied) === 'TRUE') && !_dateStr(r.order_date));
+    items.forEach(it => {
+      const same = pend.filter(r => r.product === it.product);
+      if (same.length !== 1) return;
+      const r = same[0], isCase = r.unit_mode === 'case' || !!(meta[r.product] || {}).caseOnly;
+      const now = r.qty + (isCase ? 'ケース' : String(r.unit || ''));
+      it.unitText += (Number(r.qty) === Number(it.qty) && isCase === (it.unitMode === 'case')) ? '（依頼中と同じ）' : '（依頼中の ' + now + ' から変更）';
+    });
+  } catch (e) { console.error('previewOrderText 依頼中の品の確認に失敗: ' + e.message); }
   return { ok: true, store: { id: store.id, name: store.name }, ambiguous: m.ambiguous,
-    items: m.items.map(p => _orderItemFromText_(p, m.qtys[p.name])), unread: _unreadLines_(store.id, body, store.name) };
+    items, unread: _unreadLines_(store.id, body, store.name) };
 }
 
 // 連絡文の行のうち、どの商品にも当たらなかった行（店名だけの行は除く。2026-10-22 新守山の「コーヒー豆1ケース」が黙って消えた対策）
