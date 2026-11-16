@@ -1061,8 +1061,11 @@ function _asList(x) {
   if (x && x.error) console.error('GAS error:', x.error);
   return [];
 }
-function _checkAuthError(data) {
-  if (data && data.authError && data.authCode === 'token' && (sessionStorage.getItem('site_authed') === '1' || sessionStorage.getItem('admin_authed') === '1')) {
+// sentToken: その通信に付けた通行証。ログイン画面で出た通行証なしの通信(料金の写真など)の返事が、ログインした直後に
+// 届いてログアウトさせていた(2026-11-15 星が丘 No.24「ログインしてもホームへ行かず何回もログインし直す」)。
+// いまの通行証を付けて送った通信が断られたときだけログイン画面へ戻す
+function _checkAuthError(data, sentToken) {
+  if (data && data.authError && data.authCode === 'token' && sentToken && sentToken === _authToken() && (sessionStorage.getItem('site_authed') === '1' || sessionStorage.getItem('admin_authed') === '1')) {
     setTimeout(() => autoLogout('ログインの期限が切れました。もう一度ログインしてください。'), 0);
   }
   return data;
@@ -1072,7 +1075,7 @@ async function gasGet(action, params) {
   const t = _authToken();
   if (t) q.set('t', t);
   const res = await fetch(GAS_URL + '?' + q);
-  return _checkAuthError(await res.json());
+  return _checkAuthError(await res.json(), t);
 }
 async function gasPost(action, body) {
   const t = _authToken();
@@ -1081,7 +1084,7 @@ async function gasPost(action, body) {
     headers: { 'Content-Type': 'text/plain' },
     body: JSON.stringify({ action, ...body, ...(t ? { t } : {}) }),
   });
-  return _checkAuthError(await res.json());
+  return _checkAuthError(await res.json(), t);
 }
 let _adminPin = '0000';
 
@@ -1294,7 +1297,7 @@ function _fetchSettings(scope) {
   if (t) q.set('t', t); // gasGetと同じく通行証を付ける(管理者の通行証なら設定が全部返る)
   const ctl = window.AbortController ? new AbortController() : null;
   const timer = ctl ? setTimeout(() => ctl.abort(), 12000) : null;
-  return fetch(GAS_URL + '?' + q, ctl ? { signal: ctl.signal } : {}).then(r => r.json()).then(_checkAuthError)
+  return fetch(GAS_URL + '?' + q, ctl ? { signal: ctl.signal } : {}).then(r => r.json()).then(d => _checkAuthError(d, t))
     .catch(() => null)
     .finally(() => { if (timer) clearTimeout(timer); });
 }
@@ -10840,6 +10843,7 @@ async function loadPricePhotoCard(force) {
   const card = document.getElementById('price-photo-card');
   if (!card) return;
   const sid = storeTab;
+  if (!_authToken()) return; // ログイン前(ログイン画面の裏)では聞かない
   if (!force && _pricePhotoState && _pricePhotoState.storeId === sid && Date.now() - _pricePhotoState.at < 60000) { renderPricePhotoCard(); return; }
   try {
     const r = await gasGet('getPricePhotoStatus', { storeId: sid });
