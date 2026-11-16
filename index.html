@@ -1070,7 +1070,18 @@ function _checkAuthError(data, sentToken) {
   }
   return data;
 }
+// 通行証なしで呼べるもの(gas_backend.gs の AUTH_PUBLIC_ACTIONS と揃える)
+const GAS_PUBLIC_ACTIONS = ['login', 'authStatus', 'getSettings', 'getStoreSettings',
+  'markAmazonOrdered', 'markAmazonDenied', 'previewOrderText', 'createOrderRequest', 'getProductAlternatives'];
+// 通行証が無い(ログイン前・ログアウト後)ときは、どうせ断られる通信を送らない(2026-11-16)。ログイン画面の裏や、
+// ログアウトした後に残っていた読み込み・定期の確認が通行証なしで送られ、返事が次のログインの直後に届くと
+// 「期限切れ」と取り違えてログイン画面へ戻していた(星が丘 No.24)。GASが断るときと同じ形で返す
+function _noTokenResult(action) {
+  if (window.__ONB || _authToken() || GAS_PUBLIC_ACTIONS.includes(action)) return null;
+  return { error: 'ログインしていません', authError: true, authCode: 'notoken' };
+}
 async function gasGet(action, params) {
+  const nt = _noTokenResult(action); if (nt) return nt;
   const q = new URLSearchParams({ action, ...(params||{}) });
   const t = _authToken();
   if (t) q.set('t', t);
@@ -1078,6 +1089,7 @@ async function gasGet(action, params) {
   return _checkAuthError(await res.json(), t);
 }
 async function gasPost(action, body) {
+  const nt = _noTokenResult(action); if (nt) return nt;
   const t = _authToken();
   const res = await fetch(GAS_URL, {
     method: 'POST',
@@ -6505,8 +6517,17 @@ function autoLogout(message) {
 }
 
 /* 1分ごとにセッション期限を確認 */
-setInterval(() => {
-  if (sessionStorage.getItem('site_authed') === '1' && !isSiteAuthed()) autoLogout();
+let _idleLogoutBusy = false;
+setInterval(async () => {
+  if (_idleLogoutBusy || sessionStorage.getItem('site_authed') !== '1' || isSiteAuthed()) return;
+  _idleLogoutBusy = true;
+  try {
+    // 通行証(12時間)はまだ使えるので、未保存の分を送ってからログアウトする。最大8秒待つ
+    if (_authToken() && storeTab && _checksheetUnsavedCount(storeTab) > 0) {
+      try { await Promise.race([saveChecksheetNow(storeTab), new Promise(r => setTimeout(r, 8000))]); } catch (_) {}
+    }
+    if (sessionStorage.getItem('site_authed') === '1' && !isSiteAuthed()) autoLogout();
+  } finally { _idleLogoutBusy = false; }
 }, 60 * 1000);
 
 
@@ -7345,6 +7366,8 @@ async function ensureAdminSecrets() {
 
 async function showPage(p) {
   if (p === 'admin' && !isAuthed()) { showLock(); return; }
+  // ログインしていないのに店の画面を描くと、ログイン画面の裏で読み込みが走る(2026-11-16)
+  if (p === 'store' && !window.__ONB && !isSiteAuthed() && !isAuthed()) { showLock(); return; }
   if (p === 'admin') await ensureAdminSecrets();
   // 管理画面は全店舗分の設定が前提(店舗分だけのまま開くと他店舗の設定が空に見え、保存で消える恐れ)
   if (p === 'admin' && _cachedSettingsScope() !== 'all') {
@@ -10843,7 +10866,8 @@ async function loadPricePhotoCard(force) {
   const card = document.getElementById('price-photo-card');
   if (!card) return;
   const sid = storeTab;
-  if (!_authToken()) return; // ログイン前(ログイン画面の裏)では聞かない
+  // ログイン前(ログイン画面の裏)や、ログインした店に切り替わる前(前の店のIDのまま)には聞かない
+  if (!_authToken() || (!isAuthed() && sid !== sessionStorage.getItem('site_authed_store'))) return;
   if (!force && _pricePhotoState && _pricePhotoState.storeId === sid && Date.now() - _pricePhotoState.at < 60000) { renderPricePhotoCard(); return; }
   try {
     const r = await gasGet('getPricePhotoStatus', { storeId: sid });
