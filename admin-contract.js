@@ -12,7 +12,7 @@
   };
   var BTN = 'border:none;border-radius:6px;cursor:pointer;font-family:inherit;font-weight:600;';
   var INPUT = 'box-sizing:border-box;border:1px solid #ddd;border-radius:6px;padding:8px 10px;font-size:14px;font-family:inherit;width:100%;';
-  var C = { list: [] };
+  var C = { list: [], filter: 'all', q: '', showNew: false };
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function $(id) { return document.getElementById(id); }
@@ -53,7 +53,16 @@
     var storeOpts = '<option value="">（店を選ばない）</option>' + (typeof STORES !== 'undefined' ? Object.keys(STORES).map(function (id) { return '<option value="' + esc(id) + '">' + esc(STORES[id]) + '</option>'; }).join('') : '');
     var html = '';
     if (!C.ready) html += '<div style="background:#fee2e2;border-radius:8px;padding:10px;font-size:13px;margin-bottom:12px">保存先がまだ設定されていません（' + esc(C.message || '') + '）。</div>';
-    html += '<div style="background:white;border-radius:10px;padding:14px;margin-bottom:14px">'
+    // 上の帯：状態ごとの件数で絞り込み・名前で検索・新しく登録
+    var counts = { all: 0 };
+    C.list.forEach(function (c) { if (c.status !== 'creating') { counts.all++; counts[c.status] = (counts[c.status] || 0) + 1; } });
+    var tabs = [['all', 'すべて'], ['sent', '相手の同意待ち'], ['agreed', '承認待ち'], ['signed', '締結済み'], ['canceled', '取り消し']];
+    html += '<div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-bottom:10px">'
+      + tabs.map(function (t) { var on = C.filter === t[0]; return '<button onclick="actrFilter(\'' + t[0] + '\')" style="' + BTN + 'padding:6px 10px;font-size:12px;background:' + (on ? '#22703d' : 'white') + ';color:' + (on ? 'white' : '#333') + ';border:1px solid ' + (on ? '#22703d' : '#ddd') + '">' + t[1] + ' ' + (counts[t[0]] || 0) + '</button>'; }).join('')
+      + '<input value="' + esc(C.q) + '" oninput="actrSearch(this.value)" placeholder="名前・店・契約番号で探す" style="' + INPUT + 'width:200px;padding:6px 10px;font-size:13px">'
+      + '<span style="flex:1"></span>'
+      + (C.showNew ? '' : '<button onclick="actrToggleNew()" style="' + BTN + 'background:#22703d;color:white;padding:8px 12px;font-size:13px">＋ 新しい契約書を登録</button>') + '</div>';
+    if (C.showNew) html += '<div style="background:white;border:2px solid #22703d;border-radius:10px;padding:14px;margin-bottom:14px">'
       + '<div style="font-weight:700;margin-bottom:4px">新しい契約書を登録する</div>'
       + '<div style="font-size:12px;color:#666;line-height:1.6;margin-bottom:8px">相手の名前・報酬などを書き込んだ契約書（Google ドキュメントか、Drive に置いた Word）の URL を入れます。登録すると、その時点の内容が写しとして固定されます（あとで元の文書を直しても変わりません）。</div>'
       + '<div style="display:grid;grid-template-columns:130px 1fr;gap:8px;align-items:center;font-size:13px">'
@@ -65,10 +74,23 @@
       + '<span>メモ（社内用）</span><input id="actr-note" style="' + INPUT + '">'
       + '<span>作成する人</span><input id="actr-by" value="' + esc(who()) + '" placeholder="あなたの名前（記録に残ります）" style="' + INPUT + '">'
       + '</div><div id="actr-new-msg" style="font-size:13px;min-height:18px;margin:8px 0"></div>'
-      + '<button id="actr-new-btn" onclick="actrCreate()" style="' + BTN + 'background:#22703d;color:white;padding:9px 16px;font-size:14px">登録して、相手用のリンクを作る</button></div>';
-    if (!C.list.length) html += '<div style="background:white;border-radius:10px;padding:14px;font-size:13px;color:#666">契約書はまだありません。</div>';
-    C.list.forEach(function (c) {
-      if (c.status === 'creating') return;
+      + '<button id="actr-new-btn" onclick="actrCreate()" style="' + BTN + 'background:#22703d;color:white;padding:9px 16px;font-size:14px">登録して、相手用のリンクを作る</button> '
+      + '<button onclick="actrToggleNew()" style="' + BTN + 'background:#e5e7eb;color:#333;padding:9px 16px;font-size:14px">やめる</button></div>';
+    html += '<div id="actr-list">' + listHtml() + '</div>'
+      + '<button onclick="actrReload()" style="' + BTN + 'background:#e5e7eb;color:#333;padding:8px 12px;font-size:13px;margin-top:6px">読み込み直す</button>';
+    $('actr-body').innerHTML = html;
+  }
+
+  // 一覧（絞り込み・検索を反映）。締結済みの契約書は、ここからいつでも開ける
+  function listHtml() {
+    var html = '', q = C.q.replace(/\s/g, '');
+    var rows = C.list.filter(function (c) {
+      if (c.status === 'creating') return false;
+      if (C.filter !== 'all' && c.status !== C.filter) return false;
+      return !q || (c.partner_name + storeName(c.store_id) + c.id + c.title).replace(/\s/g, '').indexOf(q) >= 0;
+    });
+    if (!rows.length) return '<div style="background:white;border-radius:10px;padding:14px;font-size:13px;color:#666">' + (C.list.length ? '当てはまる契約書はありません。' : '契約書はまだありません。「＋ 新しい契約書を登録」から始めてください。') + '</div>';
+    rows.forEach(function (c) {
       html += '<div style="background:white;border-radius:10px;padding:12px 14px;margin-bottom:8px;box-shadow:0 1px 3px rgba(0,0,0,.06);font-size:13px">'
         + '<div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">' + badge(c.status)
         + '<b style="font-size:14px">' + esc(c.partner_name) + '</b><span style="color:#666">' + esc(c.title) + (c.store_id ? '・' + esc(storeName(c.store_id)) : '') + '</span>'
@@ -80,18 +102,35 @@
         + (c.note ? '<br>メモ: ' + esc(c.note) : '') + '</div>'
         + '<div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:8px">';
       if (c.pdf_url) html += '<a href="' + esc(c.pdf_url) + '" target="_blank" rel="noopener" style="' + BTN + 'background:#f3f4f6;color:#111;padding:6px 10px;font-size:12px;text-decoration:none">送付版 PDF</a>';
-      if (c.signed_pdf_url) html += '<a href="' + esc(c.signed_pdf_url) + '" target="_blank" rel="noopener" style="' + BTN + 'background:#dcfce7;color:#166534;padding:6px 10px;font-size:12px;text-decoration:none">締結済み PDF</a>';
+      if (c.signed_pdf_url) html += '<a href="' + esc(c.signed_pdf_url) + '" target="_blank" rel="noopener" style="' + BTN + 'background:#22703d;color:white;padding:6px 12px;font-size:13px;text-decoration:none">締結済みの契約書を開く</a>';
       if (c.status === 'sent') {
         html += '<button onclick="actrCopy(\'' + esc(c.id) + '\')" style="' + BTN + 'background:#22703d;color:white;padding:6px 10px;font-size:12px">相手用のリンクをコピー</button>'
           + '<button onclick="actrSend(\'' + esc(c.id) + '\')" style="' + BTN + 'background:#f3f4f6;color:#111;padding:6px 10px;font-size:12px">リンクをメールで送る</button>';
       }
       if (c.status === 'agreed') html += '<button onclick="actrApprove(\'' + esc(c.id) + '\')" style="' + BTN + 'background:#22703d;color:white;padding:6px 12px;font-size:13px">承認して締結する</button>';
       if (c.status === 'sent' || c.status === 'agreed') html += '<button onclick="actrCancel(\'' + esc(c.id) + '\')" style="' + BTN + 'background:#fee2e2;color:#991b1b;padding:6px 10px;font-size:12px">取り消す</button>';
-      html += '</div><div id="actr-msg-' + esc(c.id) + '" style="font-size:12px;min-height:16px;margin-top:4px"></div></div>';
+      html += '<button onclick="actrEvents(\'' + esc(c.id) + '\')" style="' + BTN + 'background:#f3f4f6;color:#111;padding:6px 10px;font-size:12px">記録を見る</button>';
+      html += '</div><div id="actr-msg-' + esc(c.id) + '" style="font-size:12px;min-height:16px;margin-top:4px"></div><div id="actr-ev-' + esc(c.id) + '"></div></div>';
     });
-    html += '<button onclick="actrReload()" style="' + BTN + 'background:#e5e7eb;color:#333;padding:8px 12px;font-size:13px;margin-top:6px">読み込み直す</button>';
-    $('actr-body').innerHTML = html;
+    return html;
   }
+
+  window.actrFilter = function (f) { C.filter = f; render(); };
+  window.actrSearch = function (v) { C.q = v; var l = $('actr-list'); if (l) l.innerHTML = listHtml(); };
+  window.actrToggleNew = function () { C.showNew = !C.showNew; render(); };
+  // 記録（いつ・だれが・何をしたか）を開く・閉じる
+  window.actrEvents = async function (id) {
+    var box = $('actr-ev-' + id);
+    if (box.innerHTML) { box.innerHTML = ''; return; }
+    box.innerHTML = '<div style="font-size:12px;color:#888;margin-top:6px">読み込んでいます…</div>';
+    try {
+      var res = await gasPost('contractEvents', { id: id }), c = find(id);
+      if (!res || !res.ok) { box.innerHTML = '<div style="font-size:12px;color:#dc2626">' + esc((res && res.error) || '読み込めませんでした') + '</div>'; return; }
+      box.innerHTML = '<table style="width:100%;border-collapse:collapse;font-size:12px;margin-top:8px"><tr style="background:#f3f4f6"><th style="text-align:left;padding:4px">日時</th><th style="text-align:left;padding:4px">できごと</th><th style="text-align:left;padding:4px">した人</th><th style="text-align:left;padding:4px">内容</th></tr>'
+        + res.events.map(function (e) { return '<tr style="border-top:1px solid #eee"><td style="padding:4px;white-space:nowrap">' + esc(e.at) + '</td><td style="padding:4px">' + esc(e.event) + '</td><td style="padding:4px">' + esc(e.actor) + '</td><td style="padding:4px;word-break:break-all;color:#666">' + esc(e.detail) + '</td></tr>'; }).join('') + '</table>'
+        + (c && c.signed_sha256 ? '<div style="font-size:11px;color:#666;margin-top:6px;word-break:break-all">締結済み PDF の指紋（SHA-256）: ' + esc(c.signed_sha256) + '</div>' : '');
+    } catch (e) { box.innerHTML = '<div style="font-size:12px;color:#dc2626">通信に失敗しました</div>'; }
+  };
 
   function find(id) { return C.list.find(function (x) { return x.id === id; }); }
   function needWho() {
@@ -109,6 +148,7 @@
       var res = await gasPost('contractCreate', p);
       if (res && res.errors) { note('actr-new-msg', res.errors.map(esc).join('<br>')); $('actr-new-btn').disabled = false; return; }
       if (!res || !res.ok) { note('actr-new-msg', esc((res && res.error) || '登録できませんでした')); $('actr-new-btn').disabled = false; return; }
+      C.showNew = false; C.filter = 'all'; C.q = '';
       await load();
       note('actr-msg-' + res.contract.id, '登録しました。「相手用のリンクをコピー」で LINE などに貼るか、「リンクをメールで送る」を押してください。', true);
     } catch (e) { note('actr-new-msg', '通信に失敗しました。「読み込み直す」で登録できたか確かめてください'); $('actr-new-btn').disabled = false; }

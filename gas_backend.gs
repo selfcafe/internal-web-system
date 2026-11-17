@@ -11024,7 +11024,7 @@ function setNewStoreCheckTrigger() {
 // 相手の画面（contract.html）はポータルのログインなしで開くので、相手用の action はリンクの合言葉（token）で確かめる。
 // PDF づくりに時間がかかるので、doPost 全体のロックは取らずに処理する（シートへの書き込みのときだけロック）。
 // ================================================================
-const CONTRACT_ADMIN_ACTIONS = ['contractSetup', 'contractList', 'contractCreate', 'contractSendLink', 'contractApprove', 'contractCancel'];
+const CONTRACT_ADMIN_ACTIONS = ['contractSetup', 'contractList', 'contractCreate', 'contractSendLink', 'contractApprove', 'contractCancel', 'contractEvents'];
 const CONTRACT_PUBLIC_ACTIONS = ['contractOpen', 'contractSendCode', 'contractAgree', 'contractPdf'];
 const SHEET_CONTRACTS = 'contracts';
 const CONTRACT_COLS = ['id', 'status', 'title', 'partner_name', 'email', 'store_id', 'doc_id', 'pdf_id', 'pdf_sha256', 'token',
@@ -11132,6 +11132,7 @@ function contractSetup_(p) {
 function _contractPublicRow_(c) {
   return { id: c.id, status: c.status, title: c.title, partner_name: c.partner_name, email: c.email, store_id: c.store_id,
     link: CONTRACT_PAGE_URL + '?k=' + c.token, created_at: _contractTime_(c.created_at), created_by: c.created_by, sent_at: _contractTime_(c.sent_at),
+    pdf_sha256: c.pdf_sha256 || '', signed_sha256: c.signed_sha256 || '',
     opened_at: _contractTime_(c.opened_at), agreed_at: _contractTime_(c.agreed_at), agreed_name: c.agreed_name,
     approved_at: _contractTime_(c.approved_at), approved_by: c.approved_by, note: c.note,
     pdf_url: c.pdf_id ? 'https://drive.google.com/file/d/' + c.pdf_id + '/view' : '',
@@ -11242,6 +11243,12 @@ function contractApprove_(p) {
   return { ok: true, mailed: mailed, signed_pdf_url: 'https://drive.google.com/file/d/' + signed.getId() + '/view' };
 }
 
+// その契約書の記録（いつ・だれが・何をしたか）を古い順に返す
+function contractEvents_(p) {
+  const v = _contractSheet_(SHEET_CONTRACT_EVENTS, CONTRACT_EVENT_COLS).getDataRange().getValues().slice(1);
+  return { ok: true, events: v.filter(r => String(r[1]) === String(p.id)).map(r => ({ at: _contractTime_(r[0]), event: r[2], actor: r[3], detail: r[4] })) };
+}
+
 function contractCancel_(p) {
   return _contractLock_(() => {
     const c = _contractRows_().find(r => r.id === p.id);
@@ -11340,6 +11347,7 @@ function _contractRoutePost_(b) {
       else if (b.action === 'contractCreate')   return contractCreate_(b);
       else if (b.action === 'contractSendLink') return contractSendLink_(b);
       else if (b.action === 'contractApprove')  return contractApprove_(b);
+      else if (b.action === 'contractEvents')   return contractEvents_(b);
       else                                      return contractCancel_(b);
     }
     if      (b.action === 'contractOpen')     return contractOpen_(b);

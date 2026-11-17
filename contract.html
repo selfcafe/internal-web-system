@@ -116,7 +116,8 @@ async function load() {
   $('title').textContent = d.title; $('partner').textContent = d.partner_name; $('cid').textContent = d.id; $('email-masked').textContent = d.email_masked;
   renderStatus(d);
   // 本文はスクリプトの動かない枠の中に入れる。スマホの幅に合わせ、枠の高さを本文に合わせる
-  const fit = '<style>html,body{max-width:100%!important;margin:0!important}body{padding:14px!important;font-size:15px!important}img,table{max-width:100%!important}</style>';
+  const fit = '<style>html,body{max-width:100%!important;margin:0!important}body{padding:14px!important;font-size:15px!important}img,table{max-width:100%!important}'
+    + 'h1{font-size:21px!important}h2,h3{font-size:16px!important}ol,ul{padding-left:1.4em!important;margin-left:0!important}li{margin-left:0!important}</style>';
   const html = String(d.html || '').replace(/<\/head>/i, fit + '</head>');
   const f = $('doc-frame');
   f.onload = () => { try { f.style.height = (f.contentDocument.documentElement.scrollHeight + 20) + 'px'; } catch (e) { f.style.height = '70vh'; } };
