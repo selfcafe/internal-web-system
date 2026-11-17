@@ -10741,6 +10741,7 @@ const SETTINGS_MENU = [
     { key:'operation',  label:'運用方式',         build:() => _spStoreCfg(_spOperationBlock()) },
     { key:'reorder',    label:'発注基準値',       build:() => _spStoreCfg(_spReorderBlock()) },
     { key:'checksheet', label:'チェック項目',     build:() => _spStoreCfg(_spChecksheetCfgBlock()) },
+    { key:'menu',       label:'ドリンクメニュー', build:() => _spStoreCfg(_spMenuBlock()) },
   ]},
   { key:'store', label:'店舗', pages:[
     { key:'add',    label:'店舗の追加',   build:_spStoreAdd },
@@ -10761,6 +10762,7 @@ const SETTINGS_MENU = [
   ]},
   { key:'price', label:'ドリンク料金', pages:[
     { key:'photos', label:'写真の提出状況', build:_spPricePhotos },
+    { key:'menus',  label:'全店のメニュー', build:_spMenuList },
   ]},
   { key:'onboarding', label:'ガイダンス', pages:[
     { key:'progress', label:'受講状況',         build:_spOnboardingProgress },
@@ -11009,11 +11011,257 @@ async function onPricePhotoPicked(input) {
   }
 }
 
+/* --- 店舗別のドリンクメニュー(2026-11-17〜)。仕組みは gas_backend.gs の「店舗別のドリンクメニュー」 ---
+   店×機械ごとのメニュー(ボタン・値段)を「いつから」付きの版で持つ。マスターは「ドリンクメニュー・料金の台帳」の
+   「店舗別メニュー」タブ。ここでは版を選んで直し、保存すると、その店×機械×いつからの行がまるごと入れ替わる。 */
+function _spMenuBlock() {
+  return `
+    <div style="${_SP_NOTE}">ドリンクマシンのボタンと値段を、機械ごとに登録します。メニューが変わるときは「いつから」を変えて保存すると、その日から新しいメニューになります（前のメニューは履歴に残ります）。同じ内容はスプレッドシート「ドリンクメニュー・料金の台帳」の「店舗別メニュー」タブにも入っていて、どちらで直しても同じです。</div>
+    <div id="store-menu-cfg-body"><div style="color:#aaa;font-size:13px">読み込み中…</div></div>`;
+}
+let _menuEd = null;   // {storeId, data, mi, from, items, mode:'edit'|'new'}
+const _MENU_TEMPS = ['', 'HOT', 'ICE', 'HOT/ICE'];
+function renderStoreMenuCfg(force) {
+  const body = document.getElementById('store-menu-cfg-body');
+  const sel = document.getElementById('store-prod-cfg-sel');
+  if (!body || !sel || !sel.value) return;
+  const sid = sel.value;
+  if (!force && _menuEd && _menuEd.storeId === sid && _menuEd.data) { _drawStoreMenu(); return; }
+  _menuEd = { storeId: sid, data: null, mi: 0, from: '', items: [], mode: 'edit' };
+  body.innerHTML = '<div style="color:#aaa;font-size:13px">読み込み中…</div>';
+  gasGet('getStoreMenu', { storeId: sid }).then(r => {
+    if (!_menuEd || _menuEd.storeId !== sid) return;
+    if (!r || !r.ok) { body.innerHTML = `<div style="color:#c0392b;font-size:13px">読み込めませんでした（${esc(r && r.error || '')}）</div>`; return; }
+    _menuEd.data = r;
+    _menuSelectVersion(_menuEd.mi, null);
+  }).catch(e => { body.innerHTML = `<div style="color:#c0392b;font-size:13px">読み込めませんでした（${esc(e.message)}）</div>`; });
+}
+function _menuMachine(mi) { return (_menuEd.data.machines || []).find(m => m.machineIndex === mi) || null; }
+function _menuReading(mi) { return (_menuEd.data.readings || []).find(m => m.machineIndex === mi) || null; }
+function _menuVersions(mi) {
+  const m = _menuMachine(mi);
+  if (!m) return [];
+  return [].concat(m.upcoming.map(v => Object.assign({ kind: '予定' }, v)).reverse(),
+    m.current ? [Object.assign({ kind: '適用中' }, m.current)] : [], m.past.map(v => Object.assign({ kind: '過去' }, v)));
+}
+function _menuClone(items) { return (items || []).map(it => Object.assign({}, it)); }
+// from=null なら適用中(無ければ一番新しい予定)を開く
+function _menuSelectVersion(mi, from) {
+  _menuEd.mi = mi;
+  const vs = _menuVersions(mi);
+  const v = from ? vs.find(x => x.from === from) : (vs.find(x => x.kind === '適用中') || vs[0]);
+  if (v) { _menuEd.mode = 'edit'; _menuEd.from = v.from; _menuEd.origFrom = v.from; _menuEd.items = _menuClone(v.items); }
+  else { _menuEd.mode = 'new'; _menuEd.from = _menuEd.data.today; _menuEd.origFrom = ''; _menuEd.items = []; }
+  _drawStoreMenu();
+}
+function menuNewVersion() {
+  const m = _menuMachine(_menuEd.mi);
+  const base = m && (m.upcoming.length ? m.upcoming[m.upcoming.length - 1] : m.current);
+  _menuEd.mode = 'new'; _menuEd.origFrom = '';
+  _menuEd.items = _menuClone(base ? base.items : _menuEd.items);
+  const d = new Date(Date.now() + 9 * 3600e3 + 86400e3);   // 明日(日本時間)
+  _menuEd.from = d.toISOString().slice(0, 10);
+  _drawStoreMenu();
+}
+function _drawStoreMenu() {
+  const body = document.getElementById('store-menu-cfg-body');
+  if (!body || !_menuEd || !_menuEd.data) return;
+  const d = _menuEd.data, mi = _menuEd.mi;
+  const idxs = new Set([0]);
+  (d.machines || []).forEach(m => idxs.add(m.machineIndex));
+  (d.readings || []).forEach(m => idxs.add(m.machineIndex));
+  if (_menuEd.extraMachine != null) idxs.add(_menuEd.extraMachine);
+  idxs.add(mi);
+  const tab = (on) => `padding:6px 14px;font-size:13px;border-radius:6px;cursor:pointer;font-family:inherit;border:1px solid ${on ? '#22703d' : '#cbd5e1'};background:${on ? '#22703d' : 'white'};color:${on ? 'white' : '#334155'};font-weight:${on ? 700 : 400}`;
+  const machTabs = [...idxs].sort((a, b) => a - b).map(i => `<button style="${tab(i === mi)}" onclick="_menuSelectVersion(${i}, null)">${i + 1}台目</button>`).join(' ')
+    + ` <button style="${tab(false)}" onclick="_menuEd.extraMachine=${Math.max(...idxs) + 1};_menuSelectVersion(${Math.max(...idxs) + 1}, null)">＋ 機械を足す</button>`;
+  const vs = _menuVersions(mi);
+  const kindColor = { '適用中': '#16a34a', '予定': '#2563eb', '過去': '#888' };
+  const verBtns = vs.map(v => `<button style="${tab(_menuEd.mode === 'edit' && v.from === _menuEd.origFrom)}" onclick="_menuSelectVersion(${mi}, '${v.from}')">
+      <span style="color:${_menuEd.mode === 'edit' && v.from === _menuEd.origFrom ? 'white' : kindColor[v.kind]};font-weight:700">${v.kind}</span> ${esc(v.from)}〜（${v.items.length}）</button>`).join(' ')
+    + ` <button style="${tab(_menuEd.mode === 'new')}" onclick="menuNewVersion()">＋ メニューが変わる（新しい版）</button>`;
+  const rd = _menuReading(mi);
+  const inp = 'border:1px solid #ddd;border-radius:4px;padding:4px 6px;font-size:13px;font-family:inherit;box-sizing:border-box;width:100%';
+  const th = 'padding:5px 6px;font-size:12px;background:#22703d;color:white;white-space:nowrap;text-align:left';
+  const td = 'padding:3px 4px;border-bottom:1px solid #eee';
+  const rows = _menuEd.items.map((it, i) => `<tr>
+      <td style="${td};width:46px"><input style="${inp}" type="number" min="1" value="${esc(it.row ?? '')}" onchange="_menuSet(${i},'row',this.value)"></td>
+      <td style="${td};width:46px"><input style="${inp}" type="number" min="1" value="${esc(it.position ?? '')}" onchange="_menuSet(${i},'position',this.value)"></td>
+      <td style="${td};min-width:150px"><input style="${inp}" value="${esc(it.menu || '')}" onchange="_menuSet(${i},'menu',this.value)"></td>
+      <td style="${td};width:90px"><select style="${inp}" onchange="_menuSet(${i},'temp',this.value)">${_MENU_TEMPS.concat(_MENU_TEMPS.includes(it.temp || '') ? [] : [it.temp]).map(t => `<option ${t === (it.temp || '') ? 'selected' : ''}>${esc(t)}</option>`).join('')}</select></td>
+      <td style="${td};width:60px"><input style="${inp}" value="${esc(it.size || '')}" onchange="_menuSet(${i},'size',this.value)"></td>
+      <td style="${td};width:72px"><input style="${inp}" type="number" min="0" value="${esc(it.price ?? '')}" onchange="_menuSet(${i},'price',this.value)"></td>
+      <td style="${td};min-width:110px"><input style="${inp}" value="${esc(it.memo || '')}" onchange="_menuSet(${i},'memo',this.value)"></td>
+      <td style="${td};width:30px"><button onclick="_menuEd.items.splice(${i},1);_drawStoreMenu()" style="border:none;background:none;color:#c0392b;cursor:pointer;font-size:15px" title="この行を消す">×</button></td></tr>`).join('');
+  const others = Object.entries(STORES).filter(([id]) => id !== _menuEd.storeId).map(([id]) => `<option value="${esc(id)}">${esc(storeLabel(id))}</option>`).join('');
+  const isNew = _menuEd.mode === 'new';
+  body.innerHTML = `
+    <div style="font-size:12.5px;margin-bottom:8px"><a href="${esc(d.url)}" target="_blank" rel="noopener" style="color:#22703d;font-weight:700">📄 台帳（スプレッドシート）を開く</a>
+      <span style="color:#888">機械の種類：${esc((d.vendors || []).join('・'))}</span></div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:8px">${machTabs}</div>
+    <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:10px">${verBtns}</div>
+    <div style="background:white;border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:8px;font-size:13px">
+        <b>${mi + 1}台目</b>
+        <label>いつから <input type="date" id="menu-from" value="${esc(_menuEd.from)}" onchange="_menuEd.from=this.value" style="border:1px solid #ddd;border-radius:4px;padding:4px 6px;font-family:inherit"></label>
+        <span style="color:#888;font-size:12px">${isNew ? '新しい版です。保存するとこの日から切り替わります。' : '日付を変えて保存すると、その日からの別の版として保存します（今の版はそのまま残ります）。'}</span>
+      </div>
+      ${rd ? `<div style="font-size:12.5px;margin-bottom:8px;background:#f0fdf4;border-radius:6px;padding:6px 10px">📷 写真の読み取り結果があります（${esc(rd.readAt)}、${rd.items.length}ボタン${rd.photo ? `・<a href="${esc(String(rd.photo))}" target="_blank" rel="noopener">写真を見る</a>` : ''}）
+        <button onclick="menuUseReading()" style="${_SP_BTN_SUB};padding:4px 10px;margin-left:6px">読み取り結果を入れる</button></div>` : ''}
+      ${_menuEd.items.length ? `<div style="overflow-x:auto"><table style="border-collapse:collapse;width:100%;overflow:visible;min-width:640px">
+        <thead><tr><th style="${th}">段</th><th style="${th}">左から</th><th style="${th}">メニュー</th><th style="${th}">温冷</th><th style="${th}">サイズ</th><th style="${th}">価格</th><th style="${th}">メモ</th><th style="${th}"></th></tr></thead>
+        <tbody>${rows}</tbody></table></div>` : '<div style="color:#888;font-size:13px;padding:6px 0">まだボタンがありません。「＋ 行を足す」か、写真の読み取り結果・ほかの店からのコピーで入れてください。</div>'}
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px;align-items:center">
+        <button onclick="_menuEd.items.push({});_drawStoreMenu()" style="${_SP_BTN_SUB};padding:5px 12px">＋ 行を足す</button>
+        <span style="font-size:12px;color:#555">ほかの店からコピー：<select id="menu-copy-from" style="border:1px solid #ddd;border-radius:4px;padding:4px;font-family:inherit;max-width:180px"><option value="">店を選ぶ</option>${others}</select>
+          <button onclick="menuCopyFrom()" style="${_SP_BTN_SUB};padding:4px 10px">入れる</button></span>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px;align-items:center">
+        <button onclick="saveStoreMenuEd()" style="${_SP_BTN}">保存</button>
+        ${!isNew ? `<button onclick="deleteStoreMenuVersion()" style="${_SP_BTN_SUB};color:#b91c1c">この版を消す</button>` : ''}
+        <span id="menu-msg" style="${_SP_MSG}"></span>
+      </div>
+    </div>
+    <div id="menu-ing" style="margin-top:14px">${_menuIngHtml(d.ingredients)}</div>`;
+}
+function _menuSet(i, k, v) { _menuEd.items[i][k] = v; }
+function menuUseReading() {
+  const rd = _menuReading(_menuEd.mi);
+  if (!rd) return;
+  if (_menuEd.items.length && !confirm('いま表に入っている内容を、写真の読み取り結果で置き換えます。よろしいですか？')) return;
+  _menuEd.items = _menuClone(rd.items).sort((a, b) => (Number(a.row) || 0) - (Number(b.row) || 0) || (Number(a.position) || 0) - (Number(b.position) || 0));
+  _drawStoreMenu();
+}
+async function menuCopyFrom() {
+  const id = (document.getElementById('menu-copy-from') || {}).value;
+  if (!id) return;
+  const msg = document.getElementById('menu-msg');
+  if (msg) msg.textContent = '読み込み中…';
+  const r = await gasGet('getStoreMenu', { storeId: id }).catch(() => null);
+  if (!r || !r.ok) { if (msg) msg.textContent = '読み込めませんでした'; return; }
+  const m = (r.machines || []).find(x => x.machineIndex === _menuEd.mi) || (r.machines || [])[0];
+  const v = m && (m.current || m.upcoming[0]);
+  if (!v) { if (msg) msg.textContent = `${STORES[id] || id}にはメニューが登録されていません`; return; }
+  if (_menuEd.items.length && !confirm(`いま表に入っている内容を、${STORES[id] || id}（${m.machineIndex + 1}台目・${v.from}〜）のメニューで置き換えます。よろしいですか？`)) { if (msg) msg.textContent = ''; return; }
+  _menuEd.items = _menuClone(v.items);
+  _drawStoreMenu();
+}
+async function saveStoreMenuEd() {
+  const msg = document.getElementById('menu-msg');
+  const from = _menuEd.from;
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from || '')) { alert('「いつから」の日付を入れてください'); return; }
+  const items = _menuEd.items.filter(it => String(it.menu || '').trim());
+  if (!items.length) { alert('メニューが1つもありません。消すときは「この版を消す」を押してください。'); return; }
+  const noPrice = items.filter(it => it.price === '' || it.price == null).length;
+  const exists = _menuVersions(_menuEd.mi).find(v => v.from === from);
+  let q = `${STORES[_menuEd.storeId] || _menuEd.storeId}・${_menuEd.mi + 1}台目のメニュー（${items.length}ボタン）を、${from}からの版として保存します。`;
+  if (exists && from !== _menuEd.origFrom) q += `\n\n※${from}からの版がすでにあるので、置き換えます。`;
+  if (noPrice) q += `\n\n※価格が空のボタンが${noPrice}つあります。`;
+  if (!confirm(q + '\n\nよろしいですか？')) return;
+  if (msg) msg.textContent = '保存しています…';
+  try {
+    const r = await gasPost('saveStoreMenu', { storeId: _menuEd.storeId, machineIndex: _menuEd.mi, from, items, by: '管理画面' });
+    if (!r || r.error) throw new Error(r && r.error || '保存できませんでした');
+    const mi = _menuEd.mi, sid = _menuEd.storeId;
+    renderStoreMenuCfg(true);
+    _menuEd.mi = mi;
+    const wait = setInterval(() => { if (_menuEd && _menuEd.storeId === sid && _menuEd.data) { clearInterval(wait); _menuSelectVersion(mi, from); const m2 = document.getElementById('menu-msg'); if (m2) m2.textContent = '✓ 保存しました'; } }, 200);
+    setTimeout(() => clearInterval(wait), 30000);
+  } catch (e) { if (msg) msg.innerHTML = `<span style="color:#c0392b">${esc(e.message)}</span>`; }
+}
+async function deleteStoreMenuVersion() {
+  const from = _menuEd.origFrom;
+  if (!from || !confirm(`${STORES[_menuEd.storeId] || _menuEd.storeId}・${_menuEd.mi + 1}台目の、${from}からの版を消します（台帳からも消えます）。よろしいですか？`)) return;
+  const r = await gasPost('saveStoreMenu', { storeId: _menuEd.storeId, machineIndex: _menuEd.mi, from, items: [], by: '管理画面' });
+  if (!r || r.error) { alert('消せませんでした：' + (r && r.error)); return; }
+  const mi = _menuEd.mi;
+  renderStoreMenuCfg(true);
+  _menuEd.mi = mi;
+}
+function _menuIngHtml(ing) {
+  if (!ing) return '';
+  const box = 'background:white;border:1px solid #e5e7eb;border-radius:8px;padding:10px 12px;font-size:13px';
+  if (!ing.hasMenu) return `<div style="${box};color:#888">適用中のメニューが登録されると、チェックシート・発注に出す原料（取扱商品）との過不足をここに出します。</div>`;
+  const warn = ing.unmapped.length + ing.emptyMapped.length + ing.unknownIngredients.length;
+  const showRows = ing.toShow.map(x => `<label style="display:block;margin:3px 0"><input type="checkbox" data-menu-show="${esc(x.product)}" checked> <b>${esc(x.product)}</b> を表示する <span style="color:#888">（${esc(x.menus.join('・'))}に使う）</span></label>`).join('');
+  const hideRows = ing.toHide.map(n => `<label style="display:block;margin:3px 0"><input type="checkbox" data-menu-hide="${esc(n)}"> <b>${esc(n)}</b> を表示しない</label>`).join('');
+  return `<div style="${box}">
+    <b style="color:#22703d">チェックシート・発注に出す原料（適用中のメニューから）</b>
+    ${!ing.toShow.length && !ing.toHide.length ? '<div style="color:#16a34a;margin-top:6px">✓ 取扱商品はメニューと合っています。</div>' : ''}
+    ${ing.toShow.length ? `<div style="margin-top:8px"><div style="color:#b45309;font-weight:700">足りない原料（メニューにあるのに表示していない）</div>${showRows}</div>` : ''}
+    ${ing.toHide.length ? `<div style="margin-top:8px"><div style="color:#555;font-weight:700">メニューで使っていない原料（表示しているが、どのメニューにも使わない）</div>
+      <div style="font-size:12px;color:#888">「迷ったら表示する」方針なので、最初はチェックしていません。機械から外したなど確かなときだけチェックしてください。</div>${hideRows}</div>` : ''}
+    ${ing.toShow.length || ing.toHide.length ? `<div style="margin-top:10px;display:flex;gap:8px;align-items:center"><button onclick="applyMenuIngredientsEd()" style="${_SP_BTN}">チェックしたものを取扱商品に反映</button><span id="menu-ing-msg" style="${_SP_MSG}"></span></div>` : ''}
+    ${warn ? `<div style="margin-top:10px;font-size:12px;color:#b45309;background:#fffbeb;border-radius:6px;padding:6px 10px">
+      ${ing.unmapped.length ? `原料の対応が無いメニュー：${esc(ing.unmapped.join('、'))}<br>` : ''}
+      ${ing.emptyMapped.length ? `対応表で原料が空のメニュー：${esc(ing.emptyMapped.join('、'))}<br>` : ''}
+      ${ing.unknownIngredients.length ? `対応表の原料名が商品一覧に無い：${esc(ing.unknownIngredients.join('、'))}<br>` : ''}
+      台帳の「メニューと原料」タブに書き足すと、ここに反映されます（ページを開き直してください）。</div>` : ''}
+  </div>`;
+}
+async function applyMenuIngredientsEd() {
+  const show = [...document.querySelectorAll('[data-menu-show]:checked')].map(e => e.dataset.menuShow);
+  const hide = [...document.querySelectorAll('[data-menu-hide]:checked')].map(e => e.dataset.menuHide);
+  if (!show.length && !hide.length) { alert('チェックした品がありません'); return; }
+  const lines = show.map(n => '・' + n + ' を表示する').concat(hide.map(n => '・' + n + ' を表示しない'));
+  if (!confirm(`${STORES[_menuEd.storeId] || _menuEd.storeId}の取扱商品を次のとおり変えます。\n\n${lines.join('\n')}\n\nよろしいですか？`)) return;
+  const msg = document.getElementById('menu-ing-msg');
+  if (msg) msg.textContent = '反映しています…';
+  const r = await gasPost('applyMenuIngredients', { storeId: _menuEd.storeId, show, hide }).catch(e => ({ error: e.message }));
+  if (!r || r.error) { if (msg) msg.innerHTML = `<span style="color:#c0392b">${esc(r && r.error || '反映できませんでした')}</span>`; return; }
+  // 管理画面の取扱商品(localStorage)も合わせる
+  try {
+    const cfg = JSON.parse(localStorage.getItem(STORE_PRODUCTS_KEY) || '{}');
+    const cur = (Array.isArray(cfg[_menuEd.storeId]) ? cfg[_menuEd.storeId] : []).filter(n => !show.includes(n));
+    hide.forEach(n => { if (!cur.includes(n)) cur.push(n); });
+    cfg[_menuEd.storeId] = cur;
+    localStorage.setItem(STORE_PRODUCTS_KEY, JSON.stringify(cfg));
+  } catch (e) {}
+  renderStoreMenuCfg(true);
+}
+
+/* --- 管理画面「設定 › ドリンク料金 › 全店のメニュー」 --- */
+function _spMenuList() {
+  setTimeout(loadStoreMenuList, 0);
+  return `
+    <div style="${_SP_NOTE}">全店のドリンクメニューの登録状況です。店名を押すと、その店のメニューの画面（店舗別設定 › ドリンクメニュー）を開きます。「原料」は、メニューに要るのに取扱商品で表示していない原料の数です。</div>
+    <div id="menu-list-wrap"><div style="color:#aaa;font-size:13px">読み込み中…</div></div>`;
+}
+async function loadStoreMenuList() {
+  const wrap = document.getElementById('menu-list-wrap');
+  if (!wrap) return;
+  let r;
+  try { r = await gasGet('getStoreMenuList'); } catch (e) { wrap.innerHTML = '<div style="color:#c0392b;font-size:13px">読み込めませんでした</div>'; return; }
+  if (!r || !r.ok) { wrap.innerHTML = `<div style="color:#c0392b;font-size:13px">読み込めませんでした（${esc(r && r.error || '')}）</div>`; return; }
+  const th = 'padding:6px 8px;font-size:12px;background:#22703d;color:white;white-space:nowrap;text-align:left';
+  const td = 'padding:6px 8px;font-size:12px;border-bottom:1px solid #eee;vertical-align:top';
+  const done = r.stores.filter(s => s.machines.some(m => m.from)).length;
+  const photoOnly = r.stores.filter(s => !s.machines.some(m => m.from) && s.readings.length).length;
+  const rows = r.stores.map(s => {
+    const menu = s.machines.length ? s.machines.map(m => `${m.machineIndex + 1}台目：${m.from ? `${esc(m.from)}〜 ${m.count}ボタン` : '<span style="color:#888">適用中なし</span>'}${m.upcoming.length ? ` <span style="color:#2563eb">予定 ${esc(m.upcoming.join('・'))}〜</span>` : ''}`).join('<br>') : '<span style="color:#b45309">未登録</span>';
+    const photo = s.readings.length ? s.readings.map(x => `${x.machineIndex + 1}台目 ${esc(x.readAt.slice(5, 10))}`).join('<br>') : '<span style="color:#aaa">—</span>';
+    const ing = !s.machines.some(m => m.from) ? '<span style="color:#aaa">—</span>'
+      : (s.toShow ? `<b style="color:#c0392b">不足 ${s.toShow}</b>` : '<span style="color:#16a34a">✓</span>') + (s.unmapped ? ` <span style="color:#b45309">対応なし ${s.unmapped}</span>` : '');
+    return `<tr><td style="${td}">${esc(s.area)}</td><td style="${td};font-weight:700"><a href="javascript:void(0)" onclick="openStoreMenuOf('${esc(s.storeId)}')" style="color:#22703d">${esc(s.storeName)}</a></td>
+      <td style="${td}">${menu}</td><td style="${td}">${photo}</td><td style="${td}">${ing}</td></tr>`;
+  }).join('');
+  wrap.innerHTML = `
+    <div style="font-size:13px;margin-bottom:8px"><a href="${esc(r.url)}" target="_blank" rel="noopener" style="color:#22703d;font-weight:700">📄 台帳（スプレッドシート）を開く</a></div>
+    <div style="font-size:13px;margin-bottom:8px">全${r.stores.length}店：<b style="color:#16a34a">登録済み ${done}</b>／<b style="color:#2563eb">写真だけ届いている ${photoOnly}</b>／<b style="color:#b45309">未登録 ${r.stores.length - done - photoOnly}</b></div>
+    <div style="overflow-x:auto"><table style="border-collapse:collapse;background:white;overflow:visible;min-width:600px">
+      <thead><tr><th style="${th}">エリア</th><th style="${th}">店舗</th><th style="${th}">メニュー（適用中）</th><th style="${th}">写真の読み取り</th><th style="${th}">原料</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`;
+}
+function openStoreMenuOf(storeId) {
+  try { sessionStorage.setItem(SETTINGS_STORE_KEY, storeId); } catch (e) {}
+  openSettingsPage('storecfg/menu');
+}
+
 /* --- 管理画面「設定 › ドリンク料金 › 写真の提出状況」 --- */
 function _spPricePhotos() {
   setTimeout(loadPricePhotoAdmin, 0);
   return `
-    <div style="${_SP_NOTE}">店ごと・機械ごとのドリンクの料金を、現場が撮ったドリンクマシンの正面の写真から Claude が読み取り、本部用の「ドリンク料金の台帳」に書きます。読み取れない写真は自動で「撮り直し」になり、理由つきで店の画面にもう一度お願いが出ます。読み取りには写真1回ごとに少し利用料がかかります。</div>
+    <div style="${_SP_NOTE}">店ごと・機械ごとのドリンクの料金を、現場が撮ったドリンクマシンの正面の写真から Claude が読み取り、本部用の「ドリンクメニュー・料金の台帳」に書きます。読み取った結果は「店舗別設定 › ドリンクメニュー」で確かめてからメニューとして保存します。読み取れない写真は自動で「撮り直し」になり、理由つきで店の画面にもう一度お願いが出ます。読み取りには写真1回ごとに少し利用料がかかります。</div>
     <label style="display:flex;align-items:center;gap:8px;font-size:13px;font-weight:700;margin:8px 0">
       <input type="checkbox" id="price-photo-on" onchange="savePricePhotoRequest(this.checked)"> 店の画面に「料金の写真を送ってください」を出す（全店）
     </label>
@@ -11048,7 +11296,7 @@ async function loadPricePhotoAdmin() {
         <button style="${small}" onclick="redispatchPricePhoto('${esc(m.id)}')">もう一度読み取る</button><button style="${small}" onclick="askPricePhotoRetake('${esc(m.id)}')">撮り直しを頼む</button></td></tr>`).join('');
   }).join('');
   wrap.innerHTML = `
-    <div style="font-size:13px;margin-bottom:8px">${r.ledgerUrl ? `<a href="${esc(r.ledgerUrl)}" target="_blank" rel="noopener" style="color:#22703d;font-weight:700">📄 ドリンク料金の台帳を開く</a>` : '<span style="color:#888">ドリンク料金の台帳は、最初の写真を読み取ったときに作られます。</span>'}
+    <div style="font-size:13px;margin-bottom:8px">${r.ledgerUrl ? `<a href="${esc(r.ledgerUrl)}" target="_blank" rel="noopener" style="color:#22703d;font-weight:700">📄 ドリンクメニュー・料金の台帳を開く</a>` : '<span style="color:#888">台帳は、最初の写真を読み取ったときに作られます。</span>'}
       <button onclick="rebuildPriceLedgerDiffAdmin()" style="${_SP_BTN_SUB};margin-left:8px;padding:5px 12px">標準との違いを作り直す</button> <span id="price-ledger-msg" style="${_SP_MSG}"></span></div>
     <div style="font-size:13px;margin-bottom:8px">全${r.stores.length}店：<b style="color:#16a34a">読み取り済み ${cnt.done}</b>／<b style="color:#c0392b">撮り直し待ち ${cnt.retake}</b>／確認中など ${cnt.other}／<b style="color:#b45309">未提出 ${cnt.none}</b></div>
     <div style="overflow-x:auto"><table style="border-collapse:collapse;background:white;overflow:visible;min-width:560px">
@@ -11525,6 +11773,7 @@ function syncStoreSettingsSelection(storeId) {
   renderStoreOperationCfg();
   renderReorderTargetCfg();
   renderChecksheetCfg();
+  renderStoreMenuCfg();
 }
 
 function renderStoreMachinesCfg() {

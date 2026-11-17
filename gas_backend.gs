@@ -710,6 +710,8 @@ function doGet(e) {
     else if (a === 'getPricePhotoList')   result = getPricePhotoList();
     else if (a === 'getPricePhotoImages') result = getPricePhotoImages(e.parameter.id);
     else if (a === 'rebuildPriceLedgerDiff') result = rebuildPriceLedgerDiff();
+    else if (a === 'getStoreMenu')        result = getStoreMenu(e.parameter.storeId);
+    else if (a === 'getStoreMenuList')    result = getStoreMenuList();
     else if (a === 'getSteraStockEstimate') result = getSteraStockEstimate(e.parameter.storeId);
     else if (a === 'getSteraProductGroups') result = getSteraProductGroups();
     else if (a === 'getInventoryHistory') result = getInventoryHistory(e.parameter.storeId, e.parameter.periodLabel);
@@ -879,6 +881,8 @@ function doPost(e) {
     else if (b.action === 'setPricePhotoResult') result = setPricePhotoResult(b.id, b.status, b.reason, b.result);
     else if (b.action === 'redispatchPricePhoto') result = redispatchPricePhoto(b.id);
     else if (b.action === 'deletePricePhoto')   result = deletePricePhoto(b.id);
+    else if (b.action === 'saveStoreMenu')      result = saveStoreMenu(b.storeId, b.machineIndex, b.from, b.items, b.by);
+    else if (b.action === 'applyMenuIngredients') result = applyMenuIngredients(b.storeId, b.show, b.hide);
     else if (b.action === 'saveLostItem')       result = saveLostItem(b.item, b.imagesBase64, b.imageMime);
     else if (b.action === 'deleteLostItem')     result = deleteLostItem(b.id, b.imageUrl);
     else if (b.action === 'saveOrderImage')     result = saveOrderImage(b.imageBase64, b.imageMime, b.filename);
@@ -2895,7 +2899,7 @@ function applyProductLedger(sig) {
 const SHEET_PRICE_PHOTOS = 'price_photos';
 const PRICE_PHOTO_COLS = ['id', 'store_id', 'machine_index', 'uploaded_at', 'photos_json', 'status', 'reason', 'read_at', 'result_json'];
 const PRICE_PHOTO_STATUS = { reading: '読み取り中', done: '読み取り済み', retake: '撮り直し', failed: '読み取り失敗' };
-const PRICE_LEDGER_NAME = 'ドリンク料金の台帳（本部用）';
+const PRICE_LEDGER_NAME = 'ドリンクメニュー・料金の台帳（本部用）'; // 2026-11-17 店舗別メニューを足したので改名(_ensurePriceLedger_ が既存のファイル名も直す)
 const PRICE_LEDGER_TAB = '店舗別の料金';
 const PRICE_LEDGER_STD_TAB = '標準メニュー';
 const PRICE_LEDGER_DIFF_TAB = '標準と違う所';
@@ -3056,6 +3060,7 @@ function _ensurePriceLedger_() {
     }
     return sh;
   };
+  if (ss.getName() !== PRICE_LEDGER_NAME) ss.rename(PRICE_LEDGER_NAME);
   head(PRICE_LEDGER_TAB, PRICE_LEDGER_COLS, [60, 140, 120, 50, 40, 50, 200, 50, 50, 60, 70, 140, 80]);
   head(PRICE_LEDGER_STD_TAB, ['メニュー', '温冷', 'サイズ', '標準価格', 'メモ'], [200, 60, 60, 80, 240]);
   head(PRICE_LEDGER_DIFF_TAB, ['店舗', '機械', 'メニュー', '温冷', 'サイズ', 'この店の価格', '標準価格', '差', '読み取り日'], [140, 50, 200, 50, 50, 90, 80, 60, 140]);
@@ -3066,15 +3071,30 @@ function _ensurePriceLedger_() {
 }
 
 function _ensurePriceLedgerHelp_(ss) {
-  if (ss.getSheetByName(PRICE_LEDGER_HELP_TAB)) return;
-  const sh = ss.insertSheet(PRICE_LEDGER_HELP_TAB);
+  const title = PRICE_LEDGER_NAME + '　使い方';
+  let sh = ss.getSheetByName(PRICE_LEDGER_HELP_TAB);
+  if (sh && String(sh.getRange(1, 1).getValue()) === title) return;
+  if (sh) ss.deleteSheet(sh);   // 説明を書き換えたとき(タイトルが変わったとき)は作り直す
+  sh = ss.insertSheet(PRICE_LEDGER_HELP_TAB);
   const lines = [
-    ['ドリンク料金の台帳（本部用）　使い方'], [''],
+    [title], [''],
     ['■ この台帳は何か'],
-    ['・店ごと・機械ごとのドリンクの料金（ボタンの値段）の一覧です。本部だけが使います（店舗・パートナーの画面には出ません）。'],
-    ['・現場がポータルから送ったドリンクマシンの正面の写真を、Claude が自動で読み取って「店舗別の料金」タブに書きます。'],
+    ['・店ごと・機械ごとのドリンクのメニューと料金（ボタンの値段）の台帳です。本部だけが使います（店舗・パートナーの画面には出ません）。'],
+    ['・「店舗別メニュー」タブがマスターです。ポータルの管理画面「設定 › 店舗別設定 › ドリンクメニュー」から直しても、このタブを直接直しても、同じデータが変わります。'],
+    ['・現場がポータルから送ったドリンクマシンの正面の写真は、Claude が自動で読み取って「店舗別の料金」タブに書きます。管理画面で「写真の読み取り結果を入れる」を押して確かめてから、メニューとして保存します。'],
     [''],
-    ['■ タブ'],
+    ['■ 店舗別メニューの書き方'],
+    ['・1行が1つのボタンです。店舗IDと機械（1台目・2台目…）と「いつから」（2026-12-01 の形）が同じ行の集まりが、その日からのメニューです。'],
+    ['・メニューが変わるときは、行を書き換えずに、新しい「いつから」の行の集まりを足します（前のメニューは履歴として残ります）。その日になると自動で新しいメニューが「適用中」になります。'],
+    ['・全店まとめて変えるときは、このタブで行をコピーして「いつから」を変えると早いです。'],
+    [''],
+    ['■ メニューと原料'],
+    ['・メニュー名と、作るのに使う原料（ポータルの商品名）の対応表です。メニュー名は「、」区切りで別名を書けます（全角・半角、ひらがな・カタカナ、かっこ書きの違いは同じものとして扱います）。原料も「、」区切りです。'],
+    ['・機械の種類（アペックス・CS3・トーヨー）が違うと原料が違うので分けて書きます。空欄はどの機械でも同じ、の意味です。'],
+    ['・管理画面で、メニューに要る原料と取扱商品（チェックシート・発注に出す品）の過不足が出ます。チェックしてOKを押したものだけ取扱商品に反映します。'],
+    ['・メモが「推測」の行は最初に仮で入れたものです。確かめて、合っていればメモを消してください。原料が空の行は原料を入れてください（「原料なし」と書けば水などの扱いになります）。'],
+    [''],
+    ['■ タブ（料金）'],
     ['・店舗別の料金: 読み取った結果。同じ店・同じ機械の写真がまた届くと、その機械の行は新しい結果に入れ替わります。「確かさ」が「要確認」の行は、写真で確かめてください（写真の列のリンクから開けます）。'],
     ['・標準メニュー: 本部が決める標準の価格を手で入れます（メニュー・温冷・サイズ・標準価格）。メニュー名は「店舗別の料金」と同じ書き方にしてください。'],
     ['・標準と違う所: 標準メニューと値段が違うボタンの一覧です。写真の読み取りのたび、または管理画面の「標準との違いを作り直す」で作り直します（手で直さない）。'],
@@ -3164,6 +3184,293 @@ function rebuildPriceLedgerDiff_(ssArg) {
   return { ok: true, url: ss.getUrl(), diffs: out.length, standards: Object.keys(std).length };
 }
 function rebuildPriceLedgerDiff() { return rebuildPriceLedgerDiff_(_ensurePriceLedger_()); }
+
+// ===== 店舗別のドリンクメニュー(2026-11-17〜) =====
+// 店×機械ごとのドリンクのメニュー(ボタン・値段)を「いつから」付きで持つ。マスターは料金台帳のスプレッドシートの
+// 「店舗別メニュー」タブ(管理画面「店舗別設定 › ドリンクメニュー」から直しても、シートを直接直しても同じデータ)。
+// 同じ店×機械×いつからの行の集まりが1つの版。今日までで一番新しい版が「適用中」、明日以降の版が「予定」。
+// 「メニューと原料」タブ(メニュー名→取扱商品名)で、メニューに要る原料と取扱商品(store_product_cfg)の過不足を出し、
+// 本部がOKしたものだけ取扱商品に反映する(applyMenuIngredients)。写真の読み取り結果(「店舗別の料金」タブ)は
+// 管理画面で下書きに取り込んでから確定する(自動ではメニューにしない)。
+const MENU_TAB = '店舗別メニュー';
+const MENU_COLS = ['エリア', '店舗', '店舗ID', '機械', 'いつから', '段', '左から', '分類', 'メニュー', '温冷', 'サイズ', '価格', 'メモ', '更新日時', '更新者'];
+const MENU_ING_TAB = 'メニューと原料';
+const MENU_ING_COLS = ['メニュー', '機械の種類', '原料', 'メモ'];
+// 機械の種類の書き方(メニューと原料タブ)。キーは machine_defs の vendor
+const MENU_VENDOR_LABELS = { apex: 'アペックス', cs3: 'CS3', toyo: 'トーヨー' };
+const MENU_DEFAULT_MACHINE_DEFS = [{ key: '100rs', vendor: 'apex' }, { key: 'cs3', vendor: 'cs3' }, { key: 'jcc', vendor: 'toyo' }];
+
+// 最初に作るときの「メニューと原料」。原料が空・メモが「推測」の行は本部が確かめて直す
+const MENU_ING_SEED = [
+  ['THE BLEND、ザ・ブレンド', 'アペックス', 'ブレンド', '推測。確かめてください'],
+  ['W-ROAST、Wロースト', 'アペックス', 'ロースト', '推測。確かめてください'],
+  ['ホッと珈琲', 'アペックス', '', '原料を入れてください'],
+  ['キリっと珈琲', 'アペックス', '', '原料を入れてください'],
+  ['カフェオレ', 'アペックス', 'ブレンド、クリーミー', '推測。確かめてください'],
+  ['ストレートティー', 'アペックス', '紅茶(粉末)', ''],
+  ['ミルクティー', 'アペックス', '紅茶(粉末)、クリーミー', '推測。確かめてください'],
+  ['レモンティー', 'アペックス', '紅茶(粉末)', 'レモンの原料があれば足してください'],
+  ['緑茶', 'アペックス', '緑茶', ''],
+  ['烏龍茶、ウーロン茶', 'アペックス', '烏龍茶', ''],
+  ['プレミアムココア、ココア', 'アペックス', 'プレミアムココア', ''],
+  ['抹茶ラテ', 'アペックス', '抹茶ラテ', ''],
+  ['いちごオレ、いちごオーレ', 'アペックス', 'いちごオーレ', ''],
+  ['レモネード', 'アペックス', 'レモネード', ''],
+  ['りんご、リンゴ', 'アペックス', 'リンゴ（粉末）', ''],
+  ['塩とライチ', 'アペックス', '塩とライチ', ''],
+  ['コカ・コーラ、コーラ', 'アペックス', 'コカ・コーラ', ''],
+  ['グレープ、まろやかブドウ', 'アペックス', 'まろやかブドウ', '推測。確かめてください'],
+  ['ソーダグレープ', 'アペックス', '', '原料を入れてください'],
+  ['水、白湯、水・白湯、炭酸水', '', '', '原料なし(このままでよい)'],
+  ['W-ROAST、Wロースト', 'CS3', '', '原料を入れてください'],
+  ['アッサム', 'CS3', 'アッサム', ''],
+  ['ダージリン', 'CS3', 'ダージリン', ''],
+  ['オリジナルブレンド、ミル挽き珈琲、アイスブレンド', 'トーヨー', '', '原料を入れてください(ブレンドA・Bのどちらか)'],
+  ['カフェオレ、カフェラテ、ミルクたっぷり珈琲', 'トーヨー', '', '原料を入れてください'],
+  ['紅茶', 'トーヨー', '㋣紅茶', ''],
+  ['緑茶', 'トーヨー', '㋣緑茶', ''],
+  ['抹茶ラテ', 'トーヨー', '㋣抹茶ラテ', ''],
+  ['ココア', 'トーヨー', '㋣特選ココア', ''],
+  ['なっちゃんオレンジ', 'トーヨー', '㋣なっちゃんオレンジBIB(2.5ガロン）', ''],
+];
+
+// メニュー名を比べるための形(全角半角・ひらがなカタカナ・空白・かっこ書きの違いを無視)
+function _menuKey_(s) {
+  const t = String(s || '').normalize('NFKC').replace(/[(][^)]*[)]/g, '').replace(/\s+/g, '').replace(/[‐−–—]/g, '-').toUpperCase();
+  return t.replace(/[ぁ-ゖ]/g, c => String.fromCharCode(c.charCodeAt(0) + 0x60));
+}
+function _menuDate_(v, tz) {
+  if (v instanceof Date) return Utilities.formatDate(v, tz, 'yyyy-MM-dd');
+  const m = String(v || '').trim().replace(/\//g, '-').match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+  return m ? m[1] + '-' + ('0' + m[2]).slice(-2) + '-' + ('0' + m[3]).slice(-2) : '';
+}
+function _menuMachineIndex_(label) { const m = String(label || '').match(/(\d+)/); return m ? Math.max(0, Number(m[1]) - 1) : 0; }
+function _menuToday_() { return Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd'); }
+
+function _ensureMenuTabs_(ss) {
+  let sh = ss.getSheetByName(MENU_TAB);
+  if (!sh) {
+    sh = ss.insertSheet(MENU_TAB, 0);
+    sh.getRange(1, 1, 1, MENU_COLS.length).setValues([MENU_COLS]).setFontWeight('bold').setBackground('#22703d').setFontColor('#ffffff');
+    sh.setFrozenRows(1);
+    [60, 140, 120, 60, 90, 40, 50, 70, 180, 70, 50, 60, 160, 130, 90].forEach((w, i) => sh.setColumnWidth(i + 1, w));
+    sh.getRange(2, MENU_COLS.indexOf('いつから') + 1, sh.getMaxRows() - 1, 1).setNumberFormat('@');
+  }
+  let ing = ss.getSheetByName(MENU_ING_TAB);
+  if (!ing) {
+    ing = ss.insertSheet(MENU_ING_TAB, 1);
+    ing.getRange(1, 1, 1, MENU_ING_COLS.length).setValues([MENU_ING_COLS]).setFontWeight('bold').setBackground('#22703d').setFontColor('#ffffff');
+    ing.setFrozenRows(1);
+    [260, 90, 320, 300].forEach((w, i) => ing.setColumnWidth(i + 1, w));
+    ing.getRange(2, 1, MENU_ING_SEED.length, MENU_ING_COLS.length).setValues(MENU_ING_SEED);
+    const rule = SpreadsheetApp.newDataValidation().requireValueInList(['アペックス', 'CS3', 'トーヨー'], true).setAllowInvalid(true).build();
+    ing.getRange(2, 2, ing.getMaxRows() - 1, 1).setDataValidation(rule);
+  }
+  return { menu: sh, ing: ing };
+}
+
+function _menuRows_(ss) {
+  const sh = ss.getSheetByName(MENU_TAB);
+  if (!sh || sh.getLastRow() <= 1) return [];
+  const tz = ss.getSpreadsheetTimeZone();
+  const v = sh.getRange(1, 1, sh.getLastRow(), sh.getLastColumn()).getValues();
+  const h = v[0].map(x => String(x).trim());
+  const c = n => h.indexOf(n);
+  return v.slice(1).map((r, i) => ({
+    _row: i + 2, storeId: _normalizeStoreId_(String(r[c('店舗ID')] || '').trim()), machineIndex: _menuMachineIndex_(r[c('機械')]),
+    from: _menuDate_(r[c('いつから')], tz), row: r[c('段')], position: r[c('左から')], category: String(r[c('分類')] || ''),
+    menu: String(r[c('メニュー')] || '').trim(), temp: String(r[c('温冷')] || ''), size: String(r[c('サイズ')] || ''),
+    price: r[c('価格')] === '' ? null : Number(r[c('価格')]), memo: String(r[c('メモ')] || ''),
+    updatedAt: r[c('更新日時')] instanceof Date ? Utilities.formatDate(r[c('更新日時')], tz, 'yyyy-MM-dd HH:mm') : String(r[c('更新日時')] || ''),
+    by: String(r[c('更新者')] || '')
+  })).filter(x => x.storeId && x.from && x.menu);
+}
+
+// 店×機械ごとに版(いつから)でまとめる。today より後は予定
+function _menuVersionsByMachine_(rows, storeId, today) {
+  const by = {};
+  rows.filter(r => r.storeId === storeId).forEach(r => {
+    const m = by[r.machineIndex] = by[r.machineIndex] || {};
+    (m[r.from] = m[r.from] || []).push(r);
+  });
+  const out = {};
+  Object.keys(by).forEach(mi => {
+    const froms = Object.keys(by[mi]).sort();
+    const past = froms.filter(f => f <= today);
+    const cur = past.length ? past[past.length - 1] : '';
+    const strip = f => by[mi][f].map(r => ({ row: r.row, position: r.position, category: r.category, menu: r.menu, temp: r.temp, size: r.size, price: r.price, memo: r.memo }));
+    out[mi] = {
+      machineIndex: Number(mi),
+      current: cur ? { from: cur, items: strip(cur), updatedAt: by[mi][cur][0].updatedAt, by: by[mi][cur][0].by } : null,
+      upcoming: froms.filter(f => f > today).map(f => ({ from: f, items: strip(f) })),
+      past: past.slice(0, -1).reverse().map(f => ({ from: f, items: strip(f) }))
+    };
+  });
+  return out;
+}
+
+// 写真の読み取り結果(店舗別の料金タブ)を店×機械ごとに
+function _priceReadingsByStore_(ss) {
+  const sh = ss.getSheetByName(PRICE_LEDGER_TAB);
+  const out = {};
+  if (!sh || sh.getLastRow() <= 1) return out;
+  const tz = ss.getSpreadsheetTimeZone();
+  const n = sh.getLastRow() - 1;
+  const vals = sh.getRange(2, 1, n, PRICE_LEDGER_COLS.length).getValues();
+  const forms = sh.getRange(2, PRICE_LEDGER_COLS.length, n, 1).getFormulas();
+  vals.forEach((r, i) => {
+    const sid = _normalizeStoreId_(String(r[2] || '')); if (!sid) return;
+    const mi = _menuMachineIndex_(r[3]);
+    const s = out[sid] = out[sid] || {};
+    const m = s[mi] = s[mi] || { machineIndex: mi, readAt: '', photo: '', items: [] };
+    const at = r[11] instanceof Date ? Utilities.formatDate(r[11], tz, 'yyyy-MM-dd HH:mm') : String(r[11] || '');
+    if (at > m.readAt) m.readAt = at;
+    const pm = String(forms[i][0] || '').match(/HYPERLINK\("([^"]+)"/);
+    if (pm) m.photo = pm[1];
+    m.items.push({ row: r[4], position: r[5], category: '', menu: String(r[6] || ''), temp: String(r[7] || ''), size: String(r[8] || ''),
+      price: r[9] === '' ? null : Number(r[9]), memo: r[10] ? '読み取り: ' + r[10] : '' });
+  });
+  return out;
+}
+
+// 店の仕入先(apex/cs3/toyo)。機械が未設定ならアペックス扱い
+function _storeMenuVendors_(storeId) {
+  const sm = (_settingJson_('store_machines', {}) || {})[storeId];
+  const defs = _settingJson_('machine_defs', null) || MENU_DEFAULT_MACHINE_DEFS;
+  const v = (Array.isArray(sm) && sm.length ? sm : ['100rs']).map(k => (defs.find(d => d.key === k) || {}).vendor).filter(Boolean);
+  return v.length ? v : ['apex'];
+}
+
+function _menuIngRows_(ss) {
+  const sh = ss.getSheetByName(MENU_ING_TAB);
+  if (!sh || sh.getLastRow() <= 1) return [];
+  return sh.getRange(2, 1, sh.getLastRow() - 1, MENU_ING_COLS.length).getValues()
+    .filter(r => String(r[0]).trim())
+    .map(r => ({ keys: String(r[0]).split(/[、,，／/]/).map(_menuKey_).filter(Boolean), type: String(r[1] || '').trim(),
+      ings: String(r[2] || '').split(/[、,，]/).map(s => s.trim()).filter(Boolean), memo: String(r[3] || '') }));
+}
+
+// 店の適用中のメニューに要る原料と、取扱商品(store_product_cfg)の過不足
+function _menuIngredientDiff_(ss, storeId, today, ctx) {
+  ctx = ctx || {};
+  const rows = ctx.rows || _menuRows_(ss);
+  const versions = _menuVersionsByMachine_(rows, storeId, today || _menuToday_());
+  const menus = [];
+  Object.keys(versions).forEach(mi => { const c = versions[mi].current; if (c) c.items.forEach(it => menus.push(it.menu)); });
+  const ingRows = ctx.ingRows || _menuIngRows_(ss);
+  const vLabels = _storeMenuVendors_(storeId).map(v => MENU_VENDOR_LABELS[v]).filter(Boolean);
+  const products = ctx.products || (_settingJson_('all_products', []) || []);
+  const productNames = products.map(p => String(p.name || ''));
+  const excluded = ((ctx.cfg || _settingJson_('store_product_cfg', {}) || {})[storeId]) || null;
+  const isShown = n => !Array.isArray(excluded) || excluded.indexOf(n) < 0;
+  const need = {}, unmapped = [], emptyMapped = [], seen = {};
+  menus.forEach(name => {
+    const k = _menuKey_(name);
+    if (!k || seen[k]) return;
+    seen[k] = true;
+    const cands = ingRows.filter(r => r.keys.indexOf(k) >= 0);
+    const hit = cands.find(r => vLabels.indexOf(r.type) >= 0) || cands.find(r => !r.type);
+    if (!hit) { unmapped.push(name); return; }
+    if (!hit.ings.length) { if (!/原料なし/.test(hit.memo)) emptyMapped.push(name); return; }
+    hit.ings.forEach(n => { (need[n] = need[n] || []).push(name); });
+  });
+  // 「使わない候補」は対応表に出てくる原料(この店の機械の種類のもの)だけ(カップ・砂糖などは出さない)。メニューが無い店は出さない
+  const universe = {};
+  ingRows.filter(r => !r.type || vLabels.indexOf(r.type) >= 0).forEach(r => r.ings.forEach(n => { universe[n] = true; }));
+  const toShow = Object.keys(need).filter(n => productNames.indexOf(n) >= 0 && !isShown(n)).map(n => ({ product: n, menus: need[n] }));
+  const toHide = menus.length ? Object.keys(universe).filter(n => productNames.indexOf(n) >= 0 && isShown(n) && !need[n]) : [];
+  return { storeId: storeId, hasMenu: menus.length > 0, toShow: toShow, toHide: toHide, unmapped: unmapped, emptyMapped: emptyMapped,
+    unknownIngredients: Object.keys(need).filter(n => productNames.indexOf(n) < 0) };
+}
+
+function _menuLedger_() {
+  const ss = _ensurePriceLedger_();
+  _ensureMenuTabs_(ss);
+  return ss;
+}
+
+// 管理画面: 1店のメニュー(機械ごとの適用中・予定・過去の版、写真の読み取り結果、原料の過不足)
+function getStoreMenu(storeId) {
+  const sid = _normalizeStoreId_(String(storeId || ''));
+  if (!sid) return { error: 'storeId がありません' };
+  const ss = _menuLedger_();
+  const rows = _menuRows_(ss);
+  const today = _menuToday_();
+  const versions = _menuVersionsByMachine_(rows, sid, today);
+  const readings = _priceReadingsByStore_(ss)[sid] || {};
+  return { ok: true, storeId: sid, storeName: _storeNames_()[sid] || sid, today: today, url: ss.getUrl(),
+    vendors: _storeMenuVendors_(sid).map(v => MENU_VENDOR_LABELS[v] || v),
+    machines: Object.keys(versions).map(k => versions[k]).sort((a, b) => a.machineIndex - b.machineIndex),
+    readings: Object.keys(readings).map(k => readings[k]).sort((a, b) => a.machineIndex - b.machineIndex),
+    ingredients: _menuIngredientDiff_(ss, sid, today, { rows: rows }) };
+}
+
+// 管理画面: 全店の一覧(適用中の版・予定・写真・原料の過不足の件数)
+function getStoreMenuList() {
+  const ss = _menuLedger_();
+  const rows = _menuRows_(ss);
+  const today = _menuToday_();
+  const readings = _priceReadingsByStore_(ss);
+  const names = _storeNames_();
+  const ctx = { rows: rows, ingRows: _menuIngRows_(ss), products: _settingJson_('all_products', []) || [], cfg: _settingJson_('store_product_cfg', {}) || {} };
+  const stores = _allStoreIds_().map(id => {
+    const v = _menuVersionsByMachine_(rows, id, today);
+    const rd = readings[id] || {};
+    const d = _menuIngredientDiff_(ss, id, today, ctx);
+    return { storeId: id, storeName: names[id] || id, area: _areaForStore_(id) || '',
+      machines: Object.keys(v).map(k => v[k]).sort((a, b) => a.machineIndex - b.machineIndex).map(m => ({
+        machineIndex: m.machineIndex, from: m.current ? m.current.from : '', count: m.current ? m.current.items.length : 0,
+        updatedAt: m.current ? m.current.updatedAt : '', upcoming: m.upcoming.map(u => u.from) })),
+      readings: Object.keys(rd).map(k => ({ machineIndex: rd[k].machineIndex, readAt: rd[k].readAt })),
+      toShow: d.toShow.length, toHide: d.toHide.length, unmapped: d.unmapped.length + d.emptyMapped.length };
+  });
+  return { ok: true, today: today, url: ss.getUrl(), stores: stores };
+}
+
+// 1店×1機械の版を保存(同じ いつから の版は入れ替え)。items が空ならその版を消す
+function saveStoreMenu(storeId, machineIndex, from, items, by) {
+  const sid = _normalizeStoreId_(String(storeId || ''));
+  const mi = Math.max(0, parseInt(machineIndex, 10) || 0);
+  const f = _menuDate_(from, 'Asia/Tokyo');
+  if (!sid) return { error: 'storeId がありません' };
+  if (!f) return { error: '「いつから」の日付がありません' };
+  let list = items;
+  if (typeof list === 'string') { try { list = JSON.parse(list); } catch (e) { return { error: 'bad_items' }; } }
+  list = (Array.isArray(list) ? list : []).filter(it => it && String(it.menu || '').trim());
+  const ss = _menuLedger_();
+  const sh = ss.getSheetByName(MENU_TAB);
+  const old = _menuRows_(ss).filter(r => r.storeId === sid && r.machineIndex === mi && r.from === f).map(r => r._row).sort((a, b) => b - a);
+  old.forEach(r => sh.deleteRow(r));
+  if (list.length) {
+    const area = _areaForStore_(sid) || '';
+    const name = _storeNames_()[sid] || sid;
+    const at = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm');
+    const num = x => (x === '' || x == null || isNaN(Number(x))) ? '' : Number(x);
+    const vals = list.map(it => [area, name, sid, (mi + 1) + '台目', f, num(it.row), num(it.position), String(it.category || ''),
+      String(it.menu).trim(), String(it.temp || ''), String(it.size || ''), num(it.price), String(it.memo || ''), at, String(by || '')]);
+    const start = sh.getLastRow() + 1;
+    sh.getRange(start, MENU_COLS.indexOf('いつから') + 1, vals.length, 1).setNumberFormat('@');
+    sh.getRange(start, 1, vals.length, MENU_COLS.length).setValues(vals);
+  }
+  return { ok: true, removed: old.length, added: list.length };
+}
+
+// 原料の過不足のうち、本部がチェックしたものを取扱商品に反映する(show=表示する品、hide=表示しない品)
+function applyMenuIngredients(storeId, show, hide) {
+  const sid = _normalizeStoreId_(String(storeId || ''));
+  if (!sid) return { error: 'storeId がありません' };
+  const s = (Array.isArray(show) ? show : []).map(String), h = (Array.isArray(hide) ? hide : []).map(String);
+  if (!s.length && !h.length) return { ok: true, changed: 0 };
+  const names = (_settingJson_('all_products', []) || []).map(p => String(p.name || ''));
+  const bad = s.concat(h).filter(n => names.indexOf(n) < 0);
+  if (bad.length) return { error: '商品一覧に無い品があります：' + bad.join('、') };
+  const cfg = _settingJson_('store_product_cfg', {}) || {};
+  const next = (Array.isArray(cfg[sid]) ? cfg[sid] : []).filter(n => s.indexOf(n) < 0);
+  h.forEach(n => { if (next.indexOf(n) < 0) next.push(n); });
+  const patch = {}; patch[sid] = next;
+  const r = saveSettingMerge('store_product_cfg', JSON.stringify(patch));
+  return r && r.ok ? { ok: true, changed: s.length + h.length } : r;
+}
 
 // 管理画面の「取扱商品」で store_product_cfg が変わったとき、変わったマスだけ台帳に書く(台帳が無ければ何もしない)
 function _ledgerReflectPortalChange_(oldCfg, newCfg) {
