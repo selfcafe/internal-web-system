@@ -10908,6 +10908,12 @@ function renderPricePhotoCard() {
          <a href="machine-sample-price.jpg" target="_blank" rel="noopener" style="flex:0 0 auto;text-align:center;font-size:11px;color:#666;text-decoration:none"><img src="machine-sample-price.jpg" alt="お手本" style="width:84px;border-radius:4px;display:block;margin-bottom:2px">お手本（タップで拡大）</a>
          <div style="font-size:12.5px">ドリンクマシンの<b>正面（ボタンと値段）</b>を、お手本のように撮って送ってください。<br>${PRICE_PHOTO_TIPS}</div>
        </div>
+       <div style="font-size:12.5px;background:white;border-radius:6px;padding:6px 10px;margin:0 0 6px">
+         <b>何のため？</b> お店ごとにドリンクのメニューと値段が違うため、本部で次のことを正しく把握するためのお願いです。<br>
+         ・<b>お店ごとのメニュー</b>（どのドリンクがあるか）<br>
+         ・<b>ドリンクの値段</b><br>
+         ・チェックシート・発注に出す<b>原料をメニューに合わせる</b>（「○○が無い」を無くすため）
+       </div>
        ${rows}
        <div style="font-size:12px;margin-top:6px"><a href="javascript:void(0)" onclick="_pricePhotoExtra++;renderPricePhotoCard()" style="color:#22703d">＋ 機械がもう1台ある</a></div>
        <input type="file" id="price-photo-input" accept="image/*" capture="environment" style="display:none" onchange="onPricePhotoPicked(this)">
