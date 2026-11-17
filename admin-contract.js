@@ -39,14 +39,16 @@
   // 読み込み。2回目からは前回の一覧をすぐ出し、裏で一覧だけ読み直す（店の住所・社員は最初の1回だけ受け取る）。
   // refresh=true（「読み込み直す」）は、サーバーの覚えも捨てて台帳から読み直す
   async function load(refresh) {
+    if (C.prefetching && !refresh) { try { await C.prefetching; } catch (e) {} } // 先読みの途中なら待つ（2回読まない）
     var first = !C.loaded || refresh;
     if (first) $('actr-body').innerHTML = '<div style="color:#888;font-size:13px;padding:12px">読み込んでいます…</div>';
-    else render();
+    else { render(); if (C.loadedAt && Date.now() - C.loadedAt < 30000) return; } // 読んだばかり（先読みの直後など）なら読み直さない
     try {
       var res = await gasPost('contractList', first ? (refresh ? { refresh: true } : {}) : { lite: true });
       if (!res || !res.ok) { if (first) $('actr-body').innerHTML = '<div style="color:#dc2626">' + esc((res && res.error) || '読み込めませんでした') + '</div>'; return; }
       C.ready = res.ready; C.message = res.message;
       if (first) { C.stores = res.stores || {}; C.staff = res.staff || []; C.hasTemplate = !!res.hasTemplate; C.loaded = true; }
+      C.loadedAt = Date.now();
       applyList(res.contracts || [], first);
     } catch (e) { if (first) $('actr-body').innerHTML = '<div style="color:#dc2626">通信に失敗しました。<a href="#" onclick="actrReload();return false">もう一度読み込む</a></div>'; }
   }
@@ -59,6 +61,18 @@
     if (C.showNew) $('actr-list').innerHTML = listHtml(); else render();
   }
   window.actrReload = function () { load(true); };
+  // 先読み：管理者が「業務管理」を開いた時点で、裏で一覧を読んでおく（「開く」を押したときにすぐ出せる）。
+  // サーバー（Apps Script）は何もしない呼び出しでも2〜3秒かかるので、待ち時間を画面を開く前に済ませる
+  function prefetch() {
+    if (C.loaded || C.prefetching || typeof gasPost !== 'function') return;
+    C.prefetching = gasPost('contractList', {}).then(function (res) {
+      if (res && res.ok) { C.ready = res.ready; C.message = res.message; C.stores = res.stores || {}; C.staff = res.staff || []; C.hasTemplate = !!res.hasTemplate; C.list = res.contracts || []; C.loaded = true; C.loadedAt = Date.now(); }
+    }).catch(function () {}).then(function () { C.prefetching = null; });
+  }
+  if (typeof window.renderAttendanceAdmin === 'function') {
+    var _origRender = window.renderAttendanceAdmin;
+    window.renderAttendanceAdmin = function () { var r = _origRender.apply(this, arguments); try { prefetch(); } catch (e) {} return r; };
+  }
 
   function badge(st) { var s = STATUS[st] || STATUS.creating; return '<span style="background:' + s.bg + ';color:' + s.fg + ';border-radius:10px;padding:2px 9px;font-size:12px;font-weight:700;white-space:nowrap">' + s.label + '</span>'; }
 
