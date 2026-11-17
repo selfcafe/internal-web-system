@@ -37,6 +37,11 @@ function runPartnerContractTests() {
   check('同意: コードが違う', contractValidateAgree_(c, { checkRead: true, checkAgree: true, name: '見本太郎', code: '000000' }, '123456'), '確認コードが違います');
   check('窓口: 相手用と本部用が重ならない', CONTRACT_PUBLIC_ACTIONS.filter(function (a) { return CONTRACT_ADMIN_ACTIONS.indexOf(a) >= 0; }), []);
   check('窓口: 契約の action はログイン確認の「だれでも可」に入っていない', CONTRACT_ADMIN_ACTIONS.filter(function (a) { return AUTH_PUBLIC_ACTIONS.indexOf(a) >= 0 || AUTH_STORE_ACTIONS.indexOf(a) >= 0 || AUTH_ANY_ACTIONS.indexOf(a) >= 0 || AUTH_ONB_ACTIONS.indexOf(a) >= 0; }), []);
+  // 日時は日本時間の文字で保存する（Utilities は実行時だけ見本を置く）
+  var U = typeof Utilities === 'undefined' ? (Utilities = { formatDate: function (d) { return new Date(d.getTime() + 9 * 3600000).toISOString().slice(0, 19).replace('T', ' '); } }) : Utilities;
+  check('日時: Date は「… JST」の文字にする', contractStamp_(new Date(Date.UTC(2026, 10, 17, 14, 45, 31))), '2026-11-17 23:45:31 JST');
+  check('日時: 文字・数はそのまま', [contractStamp_('見本'), contractStamp_(30000), contractStamp_('')], ['見本', 30000, '']);
+  check('日時: 表示は JST を外す・空は空', [_contractTime_('2026-11-17 23:45:31 JST'), _contractTime_('')], ['2026-11-17 23:45:31', '']);
   results.push(failed ? ('失敗 ' + failed + ' 件') : 'すべて成功');
   return results.join('\n');
 }

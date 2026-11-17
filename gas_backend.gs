@@ -11058,11 +11058,16 @@ function _contractRows_() {
 }
 function _contractSave_(c) {
   const sh = _contractSheet_(SHEET_CONTRACTS, CONTRACT_COLS);
-  const row = CONTRACT_COLS.map(k => c[k] == null ? '' : c[k]);
+  const row = CONTRACT_COLS.map(k => c[k] == null ? '' : contractStamp_(c[k]));
   if (c._row) sh.getRange(c._row, 1, 1, CONTRACT_COLS.length).setValues([row]); else sh.appendRow(row);
 }
 function _contractEvent_(id, event, actor, detail) {
-  _contractSheet_(SHEET_CONTRACT_EVENTS, CONTRACT_EVENT_COLS).appendRow([new Date(), id, event, actor || '', detail || '']);
+  _contractSheet_(SHEET_CONTRACT_EVENTS, CONTRACT_EVENT_COLS).appendRow([contractStamp_(new Date()), id, event, actor || '', detail || '']);
+}
+// 日時は日本時間の文字（「2026-11-17 23:45:31 JST」）にしてシートへ入れる。日付の値のまま入れると、台帳のスプレッドシートの
+// タイムゾーンしだいで読み戻したときに時刻がずれる（2026-11-17、8時間ずれた）。「 JST」を付けるのはシートが日付に変えないため
+function contractStamp_(v) {
+  return Object.prototype.toString.call(v) === '[object Date]' ? Utilities.formatDate(v, 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss') + ' JST' : v;
 }
 function _contractLock_(fn) {
   const lock = LockService.getScriptLock();
@@ -11072,7 +11077,12 @@ function _contractLock_(fn) {
 function _contractSha256_(blob) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, blob.getBytes()).map(b => ('0' + (b & 0xff).toString(16)).slice(-2)).join('');
 }
-function _contractTime_(d) { return d ? Utilities.formatDate(new Date(d), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss') : ''; }
+// 画面・記録に出す日時（日本時間）。シートには文字で入っている（contractStamp_）
+function _contractTime_(d) {
+  if (!d) return '';
+  if (typeof d === 'string') return d.replace(/ JST$/, '');
+  return Utilities.formatDate(new Date(d), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss');
+}
 
 // ---- シートを触らない計算（テスト scripts/test_partner_contract.js） ----
 // 氏名の照合用：空白（全角・半角）を除く
