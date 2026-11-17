@@ -11038,28 +11038,47 @@ const CONTRACT_CODE_SEC = 600;        // 確認コードの有効時間（10分�
 const CONTRACT_CODE_TRIES = 5;        // 確認コードの入力まちがいの上限（超えたら送り直し）
 const CONTRACT_FROM_NAME = 'セルフカフェ本部';
 
+// 速くするための工夫（2026-11-18。一覧に約5秒かかっていた）:
+//  ・設定と台帳のスプレッドシートは、1回の呼び出しの中で1度だけ読む・開く（_contractMemo_）
+//  ・契約書の一覧・店の住所・社員・本文の HTML はキャッシュ（6時間）に置き、読むだけの呼び出しでは台帳を開かない。
+//    台帳に書いたらその場で消す。書き込み（ロックの中）では必ず台帳を読み直す（古い内容で上書きしないため）
+const _contractMemo_ = {};
+const CONTRACT_CACHE_SEC = 21600;
+function _contractCacheGet_(key) {
+  try { const v = CacheService.getScriptCache().get(key); return v ? JSON.parse(v) : null; } catch (e) { return null; }
+}
+function _contractCachePut_(key, value) {
+  try { const s = JSON.stringify(value); if (s.length < 95000) CacheService.getScriptCache().put(key, s, CONTRACT_CACHE_SEC); } catch (e) {} // 1件100KBまで。超えたら毎回読む
+}
+function _contractCacheDrop_(keys) { try { CacheService.getScriptCache().removeAll(keys); } catch (e) {} }
+
 function _contractCfg_() {
+  if (_contractMemo_.cfg) return _contractMemo_.cfg;
   const raw = PropertiesService.getScriptProperties().getProperty('CONTRACT_CFG');
   let cfg = null;
   try { cfg = raw ? JSON.parse(raw) : null; } catch (e) {}
   if (!cfg || !cfg.db || !cfg.folder) throw new Error('電子契約の保存先が未設定です（contractSetup）');
-  return cfg;
+  return (_contractMemo_.cfg = cfg);
 }
 function _contractSheet_(name, cols) {
-  const ss = SpreadsheetApp.openById(_contractCfg_().db);
+  const ss = _contractMemo_.ss || (_contractMemo_.ss = SpreadsheetApp.openById(_contractCfg_().db));
   const sh = ss.getSheetByName(name) || ss.insertSheet(name);
   if (sh.getLastRow() === 0) sh.appendRow(cols);
   return sh;
 }
 function _contractRows_() {
+  if (!_contractMemo_.inLock) { const cached = _contractCacheGet_('ctr_rows'); if (cached) return cached; }
   const sh = _contractSheet_(SHEET_CONTRACTS, CONTRACT_COLS);
   const v = sh.getDataRange().getValues();
-  return v.slice(1).map((r, i) => { const o = { _row: i + 2 }; CONTRACT_COLS.forEach((c, j) => { o[c] = r[j]; }); return o; });
+  const rows = v.slice(1).map((r, i) => { const o = { _row: i + 2 }; CONTRACT_COLS.forEach((c, j) => { o[c] = contractStamp_(r[j]); }); return o; });
+  if (!_contractMemo_.inLock) _contractCachePut_('ctr_rows', rows);
+  return rows;
 }
 function _contractSave_(c) {
   const sh = _contractSheet_(SHEET_CONTRACTS, CONTRACT_COLS);
   const row = CONTRACT_COLS.map(k => c[k] == null ? '' : contractStamp_(c[k]));
   if (c._row) sh.getRange(c._row, 1, 1, CONTRACT_COLS.length).setValues([row]); else sh.appendRow(row);
+  _contractCacheDrop_(['ctr_rows']);
 }
 function _contractEvent_(id, event, actor, detail) {
   _contractSheet_(SHEET_CONTRACT_EVENTS, CONTRACT_EVENT_COLS).appendRow([contractStamp_(new Date()), id, event, actor || '', detail || '']);
@@ -11072,7 +11091,8 @@ function contractStamp_(v) {
 function _contractLock_(fn) {
   const lock = LockService.getScriptLock();
   if (!lock.tryLock(20000)) throw new Error('ただいま混み合っています。少し待ってからもう一度お試しください。');
-  try { return fn(); } finally { lock.releaseLock(); }
+  _contractMemo_.inLock = true; // ロックの中では必ず台帳を読み直す
+  try { return fn(); } finally { _contractMemo_.inLock = false; lock.releaseLock(); }
 }
 function _contractSha256_(blob) {
   return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, blob.getBytes()).map(b => ('0' + (b & 0xff).toString(16)).slice(-2)).join('');
@@ -11162,6 +11182,7 @@ function contractSetup_(p) {
   // template: ひな形（差し込み欄 {{店舗名}} などを入れた Google ドキュメント）。無くても動く（文書の URL で登録する形だけになる）
   if (p.template) { if (!contractFileIdFromUrl_(p.template)) return { error: 'template の ID が正しくありません' }; DocumentApp.openById(p.template); cfg.template = p.template; }
   PropertiesService.getScriptProperties().setProperty('CONTRACT_CFG', JSON.stringify(cfg));
+  _contractMemo_.cfg = null; _contractMemo_.ss = null; _contractCacheDrop_(['ctr_rows', 'ctr_stores', 'ctr_staff']);
   _contractSheet_(SHEET_CONTRACTS, CONTRACT_COLS); _contractSheet_(SHEET_CONTRACT_EVENTS, CONTRACT_EVENT_COLS);
   _contractSheet_(SHEET_CONTRACT_STORES, CONTRACT_STORE_COLS); _contractSheet_(SHEET_CONTRACT_STAFF, CONTRACT_STAFF_COLS);
   return { ok: true, template: !!cfg.template };
@@ -11173,13 +11194,19 @@ const CONTRACT_STORE_COLS = ['store_id', 'name', 'address'];
 const SHEET_CONTRACT_STAFF = 'staff';
 const CONTRACT_STAFF_COLS = ['name'];
 function _contractStores_() {
+  const cached = _contractCacheGet_('ctr_stores');
+  if (cached) return cached;
   const out = {};
   _contractSheet_(SHEET_CONTRACT_STORES, CONTRACT_STORE_COLS).getDataRange().getValues().slice(1)
     .forEach(r => { if (r[0]) out[String(r[0])] = { name: String(r[1] || ''), address: String(r[2] || '') }; });
+  _contractCachePut_('ctr_stores', out);
   return out;
 }
 function _contractStaff_() {
-  return _contractSheet_(SHEET_CONTRACT_STAFF, CONTRACT_STAFF_COLS).getDataRange().getValues().slice(1).map(r => String(r[0] || '').trim()).filter(Boolean);
+  if (!_contractMemo_.inLock) { const cached = _contractCacheGet_('ctr_staff'); if (cached) return cached; }
+  const list = _contractSheet_(SHEET_CONTRACT_STAFF, CONTRACT_STAFF_COLS).getDataRange().getValues().slice(1).map(r => String(r[0] || '').trim()).filter(Boolean);
+  if (!_contractMemo_.inLock) _contractCachePut_('ctr_staff', list);
+  return list;
 }
 // 本部の社員を一覧に足す（作成する人・承認する人の選択肢）
 function contractAddStaff_(p) {
@@ -11187,7 +11214,7 @@ function contractAddStaff_(p) {
   if (!name || name.length > 30) return { error: '名前を入れてください' };
   return _contractLock_(() => {
     const list = _contractStaff_();
-    if (list.indexOf(name) < 0) { _contractSheet_(SHEET_CONTRACT_STAFF, CONTRACT_STAFF_COLS).appendRow([name]); list.push(name); }
+    if (list.indexOf(name) < 0) { _contractSheet_(SHEET_CONTRACT_STAFF, CONTRACT_STAFF_COLS).appendRow([name]); list.push(name); _contractCacheDrop_(['ctr_staff']); }
     return { ok: true, staff: list };
   });
 }
@@ -11201,11 +11228,16 @@ function _contractPublicRow_(c) {
     pdf_url: c.pdf_id ? 'https://drive.google.com/file/d/' + c.pdf_id + '/view' : '',
     signed_pdf_url: c.signed_pdf_id ? 'https://drive.google.com/file/d/' + c.signed_pdf_id + '/view' : '' };
 }
-function contractList_() {
+// p.lite: 一覧だけ返す（店の住所・社員は画面が覚えているので送らない）。p.refresh: キャッシュを捨てて台帳から読み直す（台帳を手で直したとき・店の住所を入れ直したとき）
+function contractList_(p) {
+  p = p || {};
+  if (p.refresh) _contractCacheDrop_(['ctr_rows', 'ctr_stores', 'ctr_staff']);
   let rows;
   try { rows = _contractRows_(); } catch (e) { return { ok: true, ready: false, contracts: [], message: e.message }; }
   rows.sort((a, b) => String(b.id).localeCompare(String(a.id)));
-  return { ok: true, ready: true, contracts: rows.map(_contractPublicRow_), stores: _contractStores_(), staff: _contractStaff_(), hasTemplate: !!_contractCfg_().template };
+  const out = { ok: true, ready: true, contracts: rows.map(_contractPublicRow_) };
+  if (!p.lite) Object.assign(out, { stores: _contractStores_(), staff: _contractStaff_(), hasTemplate: !!_contractCfg_().template });
+  return out;
 }
 
 // 契約書を登録する: 元の文書を Google ドキュメントの写しにして固定 → PDF と指紋を記録 → 相手用のリンクを作る
@@ -11349,12 +11381,19 @@ function contractOpen_(p) {
   const c = _contractByToken_(p.k);
   if (!c || c.status === 'creating') return { error: 'リンクが正しくありません。本部に確認してください' };
   if (c.status === 'canceled') return { error: 'この契約書は取り消されています。本部に確認してください' };
-  const res = UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/' + c.doc_id + '/export?mimeType=text/html',
-    { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, muteHttpExceptions: true });
-  if (res.getResponseCode() !== 200) return { error: '契約書を読み込めませんでした。少し待ってからもう一度開いてください' };
+  // 本文の HTML は覚えておく（写しは固定なので変わらない。締結すると「締結の記録」が足されるので、締結の前後で別に持つ）
+  const hk = 'ctr_html_' + c.id + (c.status === 'signed' ? '_s' : '');
+  let html = _contractCacheGet_(hk);
+  if (!html) {
+    const res = UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/' + c.doc_id + '/export?mimeType=text/html',
+      { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, muteHttpExceptions: true });
+    if (res.getResponseCode() !== 200) return { error: '契約書を読み込めませんでした。少し待ってからもう一度開いてください' };
+    html = res.getContentText('UTF-8');
+    _contractCachePut_(hk, html);
+  }
   if (!c.opened_at) { try { _contractLock_(() => { const row = _contractRows_().find(r => r.id === c.id); if (!row.opened_at) { row.opened_at = new Date(); _contractSave_(row); _contractEvent_(c.id, '相手がリンクを開いた', '', String(p.ua || '').slice(0, 200)); } }); } catch (e) {} }
   return { ok: true, id: c.id, status: c.status, title: c.title, partner_name: c.partner_name, email_masked: contractMaskEmail_(c.email),
-    agreed_at: _contractTime_(c.agreed_at), approved_at: _contractTime_(c.approved_at), html: res.getContentText('UTF-8') };
+    agreed_at: _contractTime_(c.agreed_at), approved_at: _contractTime_(c.approved_at), html: html };
 }
 
 // 確認コード（6桁）を登録メールへ送る。1分に1回まで
@@ -11421,13 +11460,16 @@ function _contractRoutePost_(b) {
       const chk = _authCheck_(b.action, b);
       if (!chk.ok) return { error: 'ログインし直してください（' + chk.reason + '）', authError: true, authCode: chk.auth ? 'forbidden' : 'token' };
       if      (b.action === 'contractSetup')    return contractSetup_(b);
-      else if (b.action === 'contractList')     return contractList_();
-      else if (b.action === 'contractCreate')   return contractCreate_(b);
-      else if (b.action === 'contractSendLink') return contractSendLink_(b);
-      else if (b.action === 'contractApprove')  return contractApprove_(b);
+      else if (b.action === 'contractList')     return contractList_(b);
       else if (b.action === 'contractEvents')   return contractEvents_(b);
       else if (b.action === 'contractAddStaff') return contractAddStaff_(b);
-      else                                      return contractCancel_(b);
+      // 一覧が変わる操作は、結果と一緒に新しい一覧を返す（画面がもう1回読みに来なくて済む）
+      const r = b.action === 'contractCreate' ? contractCreate_(b)
+        : b.action === 'contractSendLink' ? contractSendLink_(b)
+        : b.action === 'contractApprove' ? contractApprove_(b)
+        : contractCancel_(b);
+      if (r && r.ok) { try { r.contracts = contractList_({ lite: true }).contracts; } catch (e) {} }
+      return r;
     }
     if      (b.action === 'contractOpen')     return contractOpen_(b);
     else if (b.action === 'contractSendCode') return contractSendCode_(b);

@@ -36,17 +36,29 @@
   }
   function note(id, html, ok) { var el = $(id); if (el) { el.style.color = ok ? '#22703d' : '#dc2626'; el.innerHTML = html; } }
 
-  async function load() {
-    $('actr-body').innerHTML = '<div style="color:#888;font-size:13px;padding:12px">読み込んでいます…</div>';
+  // 読み込み。2回目からは前回の一覧をすぐ出し、裏で一覧だけ読み直す（店の住所・社員は最初の1回だけ受け取る）。
+  // refresh=true（「読み込み直す」）は、サーバーの覚えも捨てて台帳から読み直す
+  async function load(refresh) {
+    var first = !C.loaded || refresh;
+    if (first) $('actr-body').innerHTML = '<div style="color:#888;font-size:13px;padding:12px">読み込んでいます…</div>';
+    else render();
     try {
-      var res = await gasPost('contractList', {});
-      if (!res || !res.ok) { $('actr-body').innerHTML = '<div style="color:#dc2626">' + esc((res && res.error) || '読み込めませんでした') + '</div>'; return; }
-      C.list = res.contracts || []; C.ready = res.ready; C.message = res.message;
-      C.stores = res.stores || {}; C.staff = res.staff || []; C.hasTemplate = !!res.hasTemplate;
-      render();
-    } catch (e) { $('actr-body').innerHTML = '<div style="color:#dc2626">通信に失敗しました。<a href="#" onclick="actrReload();return false">もう一度読み込む</a></div>'; }
+      var res = await gasPost('contractList', first ? (refresh ? { refresh: true } : {}) : { lite: true });
+      if (!res || !res.ok) { if (first) $('actr-body').innerHTML = '<div style="color:#dc2626">' + esc((res && res.error) || '読み込めませんでした') + '</div>'; return; }
+      C.ready = res.ready; C.message = res.message;
+      if (first) { C.stores = res.stores || {}; C.staff = res.staff || []; C.hasTemplate = !!res.hasTemplate; C.loaded = true; }
+      applyList(res.contracts || [], first);
+    } catch (e) { if (first) $('actr-body').innerHTML = '<div style="color:#dc2626">通信に失敗しました。<a href="#" onclick="actrReload();return false">もう一度読み込む</a></div>'; }
   }
-  window.actrReload = load;
+  // 新しい一覧を画面に入れる。登録の欄を開いて入力している途中なら、一覧のところだけ差し替える（入力を消さない）
+  function applyList(list, full) {
+    var same = JSON.stringify(list) === JSON.stringify(C.list);
+    C.list = list;
+    if (full || !$('actr-list')) { render(); return; }
+    if (same) return;
+    if (C.showNew) $('actr-list').innerHTML = listHtml(); else render();
+  }
+  window.actrReload = function () { load(true); };
 
   function badge(st) { var s = STATUS[st] || STATUS.creating; return '<span style="background:' + s.bg + ';color:' + s.fg + ';border-radius:10px;padding:2px 9px;font-size:12px;font-weight:700;white-space:nowrap">' + s.label + '</span>'; }
 
@@ -62,7 +74,8 @@
       + tabs.map(function (t) { var on = C.filter === t[0]; return '<button onclick="actrFilter(\'' + t[0] + '\')" style="' + BTN + 'padding:6px 10px;font-size:12px;background:' + (on ? '#22703d' : 'white') + ';color:' + (on ? 'white' : '#333') + ';border:1px solid ' + (on ? '#22703d' : '#ddd') + '">' + t[1] + ' ' + (counts[t[0]] || 0) + '</button>'; }).join('')
       + '<input value="' + esc(C.q) + '" oninput="actrSearch(this.value)" placeholder="名前・店・契約番号で探す" style="' + INPUT + 'width:200px;padding:6px 10px;font-size:13px">'
       + '<span style="flex:1"></span>'
-      + '<span style="font-size:12px;color:#666">操作する人</span><select id="actr-who" onchange="actrSetWho(this.value)" style="' + INPUT + 'width:140px;padding:6px 8px;font-size:13px">' + staffOpts() + '</select>'
+      + '<span style="display:inline-flex;align-items:center;gap:6px;white-space:nowrap"><span style="font-size:12px;color:#666">操作する人</span>' + staffInput('actr-who', 160) + '</span>'
+      + '<datalist id="actr-staff-list">' + staffOpts() + '</datalist>'
       + (C.showNew ? '' : '<button onclick="actrToggleNew()" style="' + BTN + 'background:#22703d;color:white;padding:8px 12px;font-size:13px">＋ 新しい契約書を登録</button>') + '</div>';
     // 登録の欄。ふつうは「ひな形から作る」（店を選ぶと店名・住所が契約書に入る）。.actr-tpl はひな形のときだけ、.actr-url は文書の URL で登録するときだけ出す
     var today = new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10);
@@ -72,7 +85,7 @@
       + '<div class="actr-tpl" style="font-size:12px;color:#666;line-height:1.6;margin-bottom:8px">店と相手を入れると、ひな形（業務委託契約書）から契約書を自動で作ります。登録した時点の内容で固定されます。</div>'
       + '<div class="actr-url" style="font-size:12px;color:#666;line-height:1.6;margin-bottom:8px">相手の名前・報酬などを書き込んだ契約書（Google ドキュメントか、Drive に置いた Word）の URL で登録します。</div>'
       + '<div style="display:grid;grid-template-columns:150px 1fr;gap:8px 10px;align-items:start;font-size:13px">'
-      + '<span style="padding-top:8px">店名を選ぶ</span><div><select id="actr-store" onchange="actrStoreChange()" style="' + INPUT + '">' + storeOpts + '</select></div>'
+      + '<span style="padding-top:8px">店名を選ぶ</span><div style="display:flex;gap:6px;flex-wrap:wrap"><input oninput="actrStoreSearch(this.value)" placeholder="店名で探す" autocomplete="off" style="' + INPUT + 'width:150px"><select id="actr-store" onchange="actrStoreChange()" style="' + INPUT + 'flex:1;min-width:180px">' + storeOpts + '</select></div>'
       + '<span class="actr-tpl" style="padding-top:8px">店の住所</span><div class="actr-tpl"><input id="actr-store-addr" placeholder="〒000-0000 …（店を選ぶと自動で入ります）" style="' + INPUT + '">' + hint('契約書の「業務場所」に入ります。違っていたら直してください。') + '</div>'
       + '<span style="padding-top:8px">相手の氏名（姓名）</span><div><input id="actr-name" placeholder="例：山田太郎" style="' + INPUT + '">' + hint('姓と名の間にスペースを空けずに入れてください。会社の場合は社名。') + '</div>'
       + '<span class="actr-tpl" style="padding-top:8px">相手の住所</span><div class="actr-tpl"><input id="actr-addr" placeholder="都道府県から。マンション名・部屋番号まで" style="' + INPUT + '"></div>'
@@ -87,7 +100,7 @@
       + '<span class="actr-url" style="padding-top:8px">契約書の URL</span><div class="actr-url"><input id="actr-doc" placeholder="https://docs.google.com/document/d/… または Drive の Word の URL" style="' + INPUT + '"></div>'
       + '<span class="actr-url" style="padding-top:8px">契約書の名前</span><div class="actr-url"><input id="actr-title" value="業務委託契約書" style="' + INPUT + '"></div>'
       + '<span style="padding-top:8px">メモ（社内用）</span><div><input id="actr-note" style="' + INPUT + '"></div>'
-      + '<span style="padding-top:8px">作成する人</span><div style="display:flex;gap:6px;align-items:center"><select id="actr-by" onchange="actrSetWho(this.value)" style="' + INPUT + 'width:200px">' + staffOpts() + '</select>'
+      + '<span style="padding-top:8px">作成する人</span><div style="display:flex;gap:6px;align-items:center">' + staffInput('actr-by', 200)
       + '<button onclick="actrAddStaff()" style="' + BTN + 'background:#f3f4f6;color:#111;padding:7px 10px;font-size:12px">＋ 社員を追加</button></div>'
       + '</div>'
       + '<div style="font-size:12px;margin-top:10px"><a href="#" onclick="actrMode();return false" id="actr-mode-link" style="color:#22703d"></a></div>'
@@ -100,11 +113,25 @@
     if (C.showNew) applyMode();
   }
 
-  function staffOpts() {
-    var w = who(), list = (C.staff || []).slice();
-    if (w && list.indexOf(w) < 0) list.push(w);
-    return '<option value="">選んでください</option>' + list.map(function (n) { return '<option value="' + esc(n) + '"' + (n === w ? ' selected' : '') + '>' + esc(n) + '</option>'; }).join('');
+  // 社員は「名前を打つと候補が出る」入力欄で選ぶ（人数が増えても探せる）。一覧に無い名前は受け付けない
+  function staffOpts() { return (C.staff || []).map(function (n) { return '<option value="' + esc(n) + '">'; }).join(''); }
+  function staffInput(id, width) {
+    var w = who();
+    return '<input id="' + id + '" list="actr-staff-list" value="' + esc((C.staff || []).indexOf(w) >= 0 ? w : '') + '" onchange="actrSetWho(this.value)" onfocus="this.select()" placeholder="名前で探す" autocomplete="off" style="' + INPUT + 'width:' + width + 'px;padding:6px 8px;font-size:13px">';
   }
+  function staffValue(id) {
+    var v = ($(id) && $(id).value.trim()) || '';
+    return (C.staff || []).indexOf(v) >= 0 ? v : '';
+  }
+  // 店は「店名で探す」に打った文字で選択肢を絞る。1つに絞れたらその店を選ぶ
+  window.actrStoreSearch = function (q) {
+    q = q.replace(/\s/g, '');
+    var sel = $('actr-store'), cur = sel.value, ids = Object.keys(STORES).filter(function (id) { return !q || STORES[id].replace(/\s/g, '').indexOf(q) >= 0; });
+    sel.innerHTML = '<option value="">' + (ids.length ? '店名を選ぶ（' + ids.length + '店）' : '当てはまる店がありません') + '</option>'
+      + ids.map(function (id) { return '<option value="' + esc(id) + '">' + esc(STORES[id]) + '</option>'; }).join('');
+    sel.value = ids.length === 1 ? ids[0] : (ids.indexOf(cur) >= 0 ? cur : '');
+    if (sel.value !== cur) window.actrStoreChange();
+  };
   // ひな形から作る／文書の URL で登録する の切り替え（入力した内容は残す）
   function applyMode() {
     var tpl = C.hasTemplate && !C.urlMode;
@@ -115,7 +142,7 @@
   }
   window.actrMode = function () { C.urlMode = !C.urlMode; applyMode(); };
   window.actrStoreChange = function () { var s = (C.stores || {})[$('actr-store').value]; $('actr-store-addr').value = s ? s.address : ''; };
-  window.actrSetWho = function (v) { if (v) setWho(v); };
+  window.actrSetWho = function (v) { v = v.trim(); if ((C.staff || []).indexOf(v) >= 0) { setWho(v); document.querySelectorAll('#actr-by, #actr-who').forEach(function (el) { el.value = v; }); } };
   // 頻度：「その他」を選んだときだけ自由入力の欄を出す
   window.actrFreqChange = function () { var free = $('actr-freq-free'); free.style.display = $('actr-freq-sel').value ? 'none' : ''; if (!$('actr-freq-sel').value) free.focus(); };
   window.actrAddStaff = async function () {
@@ -125,7 +152,7 @@
       var res = await gasPost('contractAddStaff', { name: name });
       if (!res || !res.ok) { alert((res && res.error) || '足せませんでした'); return; }
       C.staff = res.staff; setWho(name);
-      document.querySelectorAll('#actr-by, #actr-who').forEach(function (el) { el.innerHTML = staffOpts(); });
+      $('actr-staff-list').innerHTML = staffOpts(); document.querySelectorAll('#actr-by, #actr-who').forEach(function (el) { el.value = name; });
     } catch (e) { alert('通信に失敗しました'); }
   };
 
@@ -183,13 +210,13 @@
   function find(id) { return C.list.find(function (x) { return x.id === id; }); }
   function needWho() {
     // 承認・送付・取り消しをする人。上の「操作する人」で選ぶ（記録に残る）
-    var w = ($('actr-who') && $('actr-who').value) || '';
-    if (!w) alert('上の「操作する人」を選んでください（記録に残ります）');
+    var w = staffValue('actr-who');
+    if (!w) alert('上の「操作する人」を、社員の一覧から選んでください（記録に残ります）。一覧に無いときは、登録の欄の「＋ 社員を追加」で足せます');
     return w;
   }
 
   window.actrCreate = async function () {
-    var by = $('actr-by').value.trim();
+    var by = staffValue('actr-by');
     if (by) setWho(by);
     var v = function (id) { return $(id).value.trim(); };
     var tpl = C.hasTemplate && !C.urlMode;
@@ -202,7 +229,7 @@
       if (res && res.errors) { note('actr-new-msg', res.errors.map(esc).join('<br>')); $('actr-new-btn').disabled = false; return; }
       if (!res || !res.ok) { note('actr-new-msg', esc((res && res.error) || '登録できませんでした')); $('actr-new-btn').disabled = false; return; }
       C.showNew = false; C.filter = 'all'; C.q = '';
-      await load();
+      applyList(res.contracts || C.list, true);
       note('actr-msg-' + res.contract.id, '登録しました。「相手用のリンクをコピー」で LINE などに貼るか、「リンクをメールで送る」を押してください。', true);
     } catch (e) { note('actr-new-msg', '通信に失敗しました。「読み込み直す」で登録できたか確かめてください'); $('actr-new-btn').disabled = false; }
   };
@@ -218,7 +245,7 @@
     try {
       var res = await gasPost('contractSendLink', { id: id, by: by });
       if (!res || !res.ok) { note('actr-msg-' + id, esc((res && res.error) || '送れませんでした')); return; }
-      await load(); note('actr-msg-' + id, 'メールで送りました。', true);
+      applyList(res.contracts || C.list, true); note('actr-msg-' + id, 'メールで送りました。', true);
     } catch (e) { note('actr-msg-' + id, '通信に失敗しました'); }
   };
   window.actrApprove = async function (id) {
@@ -228,7 +255,7 @@
     try {
       var res = await gasPost('contractApprove', { id: id, by: by });
       if (!res || !res.ok) { note('actr-msg-' + id, esc((res && res.error) || '締結できませんでした')); return; }
-      await load();
+      applyList(res.contracts || C.list, true);
       note('actr-msg-' + id, res.mailed ? '締結しました。相手に控えをメールで送りました。' : '締結しましたが、控えのメールを送れませんでした。締結済み PDF を相手に渡してください。', res.mailed);
     } catch (e) { note('actr-msg-' + id, '通信に失敗しました。「読み込み直す」で締結できたか確かめてください'); }
   };
@@ -240,7 +267,7 @@
     try {
       var res = await gasPost('contractCancel', { id: id, by: by, reason: reason });
       if (!res || !res.ok) { note('actr-msg-' + id, esc((res && res.error) || '取り消せませんでした')); return; }
-      load();
+      applyList(res.contracts || C.list, true);
     } catch (e) { note('actr-msg-' + id, '通信に失敗しました'); }
   };
 
