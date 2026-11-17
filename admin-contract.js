@@ -78,8 +78,11 @@
       + '<span class="actr-tpl" style="padding-top:8px">相手の住所</span><div class="actr-tpl"><input id="actr-addr" placeholder="都道府県から。マンション名・部屋番号まで" style="' + INPUT + '"></div>'
       + '<span style="padding-top:8px">相手のメールアドレス</span><div><input id="actr-email" type="email" placeholder="例：yamada@example.com" style="' + INPUT + '">' + hint('確認コードと、締結済みの契約書（控え）の送り先です。') + '</div>'
       + '<span class="actr-tpl" style="padding-top:8px">報酬（月額・税込）</span><div class="actr-tpl" style="display:flex;align-items:center;gap:6px"><input id="actr-fee" type="number" min="1" step="1000" placeholder="30000" style="' + INPUT + 'width:160px">円</div>'
-      + '<span class="actr-tpl" style="padding-top:8px">業務の頻度</span><div class="actr-tpl"><input id="actr-freq" list="actr-freq-list" value="週7回" style="' + INPUT + 'width:160px"><datalist id="actr-freq-list">'
-      + ['週7回', '週6回', '週5回', '週4回', '週3回', '2日に1回'].map(function (f) { return '<option value="' + f + '">'; }).join('') + '</datalist></div>'
+      + '<span class="actr-tpl" style="padding-top:8px">業務の頻度</span><div class="actr-tpl"><div style="display:flex;gap:6px;flex-wrap:wrap"><select id="actr-freq-sel" onchange="actrFreqChange()" style="' + INPUT + 'width:180px">'
+      + ['週7回', '週6回', '週5回', '週4回', '週3回', '2日に1回', '3日に1回'].map(function (f) { return '<option value="' + f + '">' + f + '</option>'; }).join('')
+      + '<option value="">その他（自由に入力）</option></select>'
+      + '<input id="actr-freq-free" placeholder="例：週2回（火・金）、月10回" style="' + INPUT + 'flex:1;min-width:200px;display:none"></div>'
+      + hint('契約書には「頻度は、◯◯とする。」の形で入ります。選択肢に無いときは「その他」を選んで自由に入力してください。') + '</div>'
       + '<span class="actr-tpl" style="padding-top:8px">契約日</span><div class="actr-tpl"><input id="actr-date" type="date" value="' + today + '" style="' + INPUT + 'width:180px">' + hint('契約書の日付に入ります。') + '</div>'
       + '<span class="actr-url" style="padding-top:8px">契約書の URL</span><div class="actr-url"><input id="actr-doc" placeholder="https://docs.google.com/document/d/… または Drive の Word の URL" style="' + INPUT + '"></div>'
       + '<span class="actr-url" style="padding-top:8px">契約書の名前</span><div class="actr-url"><input id="actr-title" value="業務委託契約書" style="' + INPUT + '"></div>'
@@ -113,6 +116,8 @@
   window.actrMode = function () { C.urlMode = !C.urlMode; applyMode(); };
   window.actrStoreChange = function () { var s = (C.stores || {})[$('actr-store').value]; $('actr-store-addr').value = s ? s.address : ''; };
   window.actrSetWho = function (v) { if (v) setWho(v); };
+  // 頻度：「その他」を選んだときだけ自由入力の欄を出す
+  window.actrFreqChange = function () { var free = $('actr-freq-free'); free.style.display = $('actr-freq-sel').value ? 'none' : ''; if (!$('actr-freq-sel').value) free.focus(); };
   window.actrAddStaff = async function () {
     var name = (prompt('足す社員の名前（姓名）') || '').trim();
     if (!name) return;
@@ -189,7 +194,7 @@
     var v = function (id) { return $(id).value.trim(); };
     var tpl = C.hasTemplate && !C.urlMode;
     var p = { partnerName: v('actr-name'), email: v('actr-email'), storeId: $('actr-store').value, note: v('actr-note'), by: by };
-    if (tpl) Object.assign(p, { useTemplate: true, storeAddress: v('actr-store-addr'), partnerAddress: v('actr-addr'), fee: Number(v('actr-fee')), frequency: v('actr-freq'), contractDate: v('actr-date') });
+    if (tpl) Object.assign(p, { useTemplate: true, storeAddress: v('actr-store-addr'), partnerAddress: v('actr-addr'), fee: Number(v('actr-fee')), frequency: $('actr-freq-sel').value || v('actr-freq-free'), contractDate: v('actr-date') });
     else Object.assign(p, { docUrl: v('actr-doc'), title: v('actr-title') });
     $('actr-new-btn').disabled = true; note('actr-new-msg', '登録しています（PDF を作るので20秒ほどかかります）…', true);
     try {
