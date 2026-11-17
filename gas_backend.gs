@@ -838,6 +838,9 @@ function doPost(e) {
   let _pre = null;
   try { _pre = JSON.parse(e.postData.contents); } catch (_) {}
   if (_pre && _pre.action === 'login') return json(authLogin(_pre.password));
+  // 業務委託契約書の電子締結は全体のロックを取らずに処理する(PDFづくりで他の店の保存を待たせない)
+  const _contractResult = _contractRoutePost_(_pre);
+  if (_contractResult) return json(_contractResult);
   // 取扱商品の台帳を触る処理は店舗名(stores.js)を使う。ロック中に通信しないよう、先に読んでおく
   if (_pre && (_pre.action === 'applyProductLedger' || _pre.key === 'store_product_cfg')) { try { _storeNames_(); } catch (_) {} }
   const lock = LockService.getScriptLock();
@@ -11007,4 +11010,345 @@ function setNewStoreCheckTrigger() {
     if (triggers[i].getHandlerFunction() === 'sendNewStoreCheckNotification') ScriptApp.deleteTrigger(triggers[i]);
   }
   ScriptApp.newTrigger('sendNewStoreCheckNotification').timeBased().atHour(9).nearMinute(0).everyDays(1).inTimezone('Asia/Tokyo').create();
+}
+
+// ================================================================
+// 業務委託契約書の電子締結（最小版、2026-11-17）
+// 設計: selfcafe-automation の docs/partner-contract-design.md（立会人型）。パートナー請求書とは切り離して先に入れる。
+//
+// 流れ: 本部が契約書（Google ドキュメント／Word）を登録 → 写しを固定して PDF と指紋（SHA-256）を記録 →
+//   相手に専用リンクを渡す（メールまたは LINE 等）→ 相手はスマホで本文を読み、チェック・氏名・
+//   登録メールに届く6桁の確認コードで同意 → 本部が承認 → 「締結の記録」のページを足した締結済み PDF を保存し、双方へメール。
+// 契約書の本文・相手の名前はコードに書かない（リポジトリが公開のため）。データは専用のスプレッドシートと Drive フォルダに置き、
+// その ID はスクリプトプロパティ CONTRACT_CFG（JSON 1個: {db, folder}）に入れる（contractSetup で保存。メインのシートには置かない）。
+// 相手の画面（contract.html）はポータルのログインなしで開くので、相手用の action はリンクの合言葉（token）で確かめる。
+// PDF づくりに時間がかかるので、doPost 全体のロックは取らずに処理する（シートへの書き込みのときだけロック）。
+// ================================================================
+const CONTRACT_ADMIN_ACTIONS = ['contractSetup', 'contractList', 'contractCreate', 'contractSendLink', 'contractApprove', 'contractCancel'];
+const CONTRACT_PUBLIC_ACTIONS = ['contractOpen', 'contractSendCode', 'contractAgree', 'contractPdf'];
+const SHEET_CONTRACTS = 'contracts';
+const CONTRACT_COLS = ['id', 'status', 'title', 'partner_name', 'email', 'store_id', 'doc_id', 'pdf_id', 'pdf_sha256', 'token',
+  'created_at', 'created_by', 'sent_at', 'opened_at', 'agreed_at', 'agreed_name', 'agreed_ua', 'approved_at', 'approved_by',
+  'signed_pdf_id', 'signed_sha256', 'canceled_at', 'note'];
+// status: sent（相手の同意待ち）| agreed（相手が同意・本部の承認待ち）| signed（締結済み）| canceled（取り消し）
+const SHEET_CONTRACT_EVENTS = 'contract_events'; // 追記だけの記録
+const CONTRACT_EVENT_COLS = ['at', 'contract_id', 'event', 'actor', 'detail'];
+const CONTRACT_PAGE_URL = 'https://selfcafe.github.io/internal-web-system/contract.html';
+const CONTRACT_CODE_SEC = 600;        // 確認コードの有効時間（10分）
+const CONTRACT_CODE_TRIES = 5;        // 確認コードの入力まちがいの上限（超えたら送り直し）
+const CONTRACT_FROM_NAME = 'セルフカフェ本部';
+
+function _contractCfg_() {
+  const raw = PropertiesService.getScriptProperties().getProperty('CONTRACT_CFG');
+  let cfg = null;
+  try { cfg = raw ? JSON.parse(raw) : null; } catch (e) {}
+  if (!cfg || !cfg.db || !cfg.folder) throw new Error('電子契約の保存先が未設定です（contractSetup）');
+  return cfg;
+}
+function _contractSheet_(name, cols) {
+  const ss = SpreadsheetApp.openById(_contractCfg_().db);
+  const sh = ss.getSheetByName(name) || ss.insertSheet(name);
+  if (sh.getLastRow() === 0) sh.appendRow(cols);
+  return sh;
+}
+function _contractRows_() {
+  const sh = _contractSheet_(SHEET_CONTRACTS, CONTRACT_COLS);
+  const v = sh.getDataRange().getValues();
+  return v.slice(1).map((r, i) => { const o = { _row: i + 2 }; CONTRACT_COLS.forEach((c, j) => { o[c] = r[j]; }); return o; });
+}
+function _contractSave_(c) {
+  const sh = _contractSheet_(SHEET_CONTRACTS, CONTRACT_COLS);
+  const row = CONTRACT_COLS.map(k => c[k] == null ? '' : c[k]);
+  if (c._row) sh.getRange(c._row, 1, 1, CONTRACT_COLS.length).setValues([row]); else sh.appendRow(row);
+}
+function _contractEvent_(id, event, actor, detail) {
+  _contractSheet_(SHEET_CONTRACT_EVENTS, CONTRACT_EVENT_COLS).appendRow([new Date(), id, event, actor || '', detail || '']);
+}
+function _contractLock_(fn) {
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(20000)) throw new Error('ただいま混み合っています。少し待ってからもう一度お試しください。');
+  try { return fn(); } finally { lock.releaseLock(); }
+}
+function _contractSha256_(blob) {
+  return Utilities.computeDigest(Utilities.DigestAlgorithm.SHA_256, blob.getBytes()).map(b => ('0' + (b & 0xff).toString(16)).slice(-2)).join('');
+}
+function _contractTime_(d) { return d ? Utilities.formatDate(new Date(d), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss') : ''; }
+
+// ---- シートを触らない計算（テスト scripts/test_partner_contract.js） ----
+// 氏名の照合用：空白（全角・半角）を除く
+function contractNormName_(s) { return String(s == null ? '' : s).replace(/[\s　]/g, ''); }
+// 契約番号: C-yyyyMMdd-NNN（その日の連番）
+function contractNextId_(existingIds, ymd) {
+  const prefix = 'C-' + ymd + '-';
+  let max = 0;
+  (existingIds || []).forEach(id => { if (String(id).indexOf(prefix) === 0) max = Math.max(max, Number(String(id).slice(prefix.length)) || 0); });
+  return prefix + ('00' + (max + 1)).slice(-3);
+}
+// URL から Drive のファイル ID を取り出す（ID だけでも可）
+function contractFileIdFromUrl_(s) {
+  s = String(s || '').trim();
+  const m = s.match(/\/d\/([A-Za-z0-9_-]{20,})/) || s.match(/[?&]id=([A-Za-z0-9_-]{20,})/);
+  if (m) return m[1];
+  return /^[A-Za-z0-9_-]{20,}$/.test(s) ? s : '';
+}
+// メールアドレスを伏せる（相手の画面に出す用）: ab***@example.com
+function contractMaskEmail_(e) {
+  const m = String(e || '').match(/^([^@]+)@(.+)$/);
+  if (!m) return '';
+  return m[1].slice(0, 2) + '***@' + m[2];
+}
+// 登録内容の確認。誤りの文言を返す
+function contractValidateNew_(p) {
+  const e = [];
+  if (!String(p.title || '').trim()) e.push('契約書の名前を入れてください');
+  if (!contractNormName_(p.partnerName)) e.push('相手の氏名（社名）を入れてください');
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(p.email || '').trim())) e.push('相手のメールアドレスを正しく入れてください');
+  if (!contractFileIdFromUrl_(p.docUrl)) e.push('契約書（Google ドキュメントか Word）の URL を入れてください');
+  if (!String(p.by || '').trim()) e.push('作成する人の名前を入れてください');
+  return e;
+}
+// 同意の確認。誤りの文言を返す（空なら OK）
+function contractValidateAgree_(c, p, expectedCode) {
+  if (!c) return 'リンクが正しくありません。本部に確認してください';
+  if (c.status === 'canceled') return 'この契約書は取り消されています。本部に確認してください';
+  if (c.status !== 'sent') return 'この契約書はすでに同意済みです';
+  if (!p.checkRead || !p.checkAgree) return '2つのチェックを入れてください';
+  if (contractNormName_(p.name) !== contractNormName_(c.partner_name)) return '氏名が契約書の名前と違います。契約書に書かれた氏名（社名）をそのまま入力してください';
+  if (!expectedCode) return '確認コードの有効時間が切れました。「確認コードを送る」を押し直してください';
+  if (String(p.code || '').trim() !== String(expectedCode)) return '確認コードが違います';
+  return '';
+}
+
+// ---- 本部（管理者・スクリプトの鍵だけが呼べる） ----
+// 保存先（専用スプレッドシートと Drive フォルダ）の ID を保存する。selfcafe-automation のスクリプトから1回だけ呼ぶ
+function contractSetup_(p) {
+  if (!contractFileIdFromUrl_(p.db) || !contractFileIdFromUrl_(p.folder)) return { error: 'db と folder の ID が要ります' };
+  SpreadsheetApp.openById(p.db); DriveApp.getFolderById(p.folder); // 開けることを確かめる
+  PropertiesService.getScriptProperties().setProperty('CONTRACT_CFG', JSON.stringify({ db: p.db, folder: p.folder }));
+  _contractSheet_(SHEET_CONTRACTS, CONTRACT_COLS); _contractSheet_(SHEET_CONTRACT_EVENTS, CONTRACT_EVENT_COLS);
+  return { ok: true };
+}
+
+function _contractPublicRow_(c) {
+  return { id: c.id, status: c.status, title: c.title, partner_name: c.partner_name, email: c.email, store_id: c.store_id,
+    link: CONTRACT_PAGE_URL + '?k=' + c.token, created_at: _contractTime_(c.created_at), created_by: c.created_by, sent_at: _contractTime_(c.sent_at),
+    opened_at: _contractTime_(c.opened_at), agreed_at: _contractTime_(c.agreed_at), agreed_name: c.agreed_name,
+    approved_at: _contractTime_(c.approved_at), approved_by: c.approved_by, note: c.note,
+    pdf_url: c.pdf_id ? 'https://drive.google.com/file/d/' + c.pdf_id + '/view' : '',
+    signed_pdf_url: c.signed_pdf_id ? 'https://drive.google.com/file/d/' + c.signed_pdf_id + '/view' : '' };
+}
+function contractList_() {
+  let rows;
+  try { rows = _contractRows_(); } catch (e) { return { ok: true, ready: false, contracts: [], message: e.message }; }
+  rows.sort((a, b) => String(b.id).localeCompare(String(a.id)));
+  return { ok: true, ready: true, contracts: rows.map(_contractPublicRow_) };
+}
+
+// 契約書を登録する: 元の文書を Google ドキュメントの写しにして固定 → PDF と指紋を記録 → 相手用のリンクを作る
+function contractCreate_(p) {
+  const errors = contractValidateNew_(p);
+  if (errors.length) return { errors: errors };
+  const cfg = _contractCfg_();
+  const srcId = contractFileIdFromUrl_(p.docUrl);
+  const ymd = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMdd');
+  const id = _contractLock_(() => {
+    const cid = contractNextId_(_contractRows_().map(r => r.id), ymd);
+    _contractSave_({ id: cid, status: 'creating', title: String(p.title).trim(), created_at: new Date(), created_by: String(p.by).trim() }); // 番号を先に押さえる
+    return cid;
+  });
+  const fail = msg => { _contractLock_(() => { const c = _contractRows_().find(r => r.id === id); if (c) { c.status = 'canceled'; c.note = '作成に失敗: ' + msg; c.canceled_at = new Date(); _contractSave_(c); } }); return { error: msg }; };
+  // Word でも Google ドキュメントでも、Google ドキュメントの写しにする（Drive API の copy で変換）
+  const res = UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/' + srcId + '/copy?supportsAllDrives=true&fields=id', {
+    method: 'post', contentType: 'application/json', muteHttpExceptions: true,
+    headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() },
+    payload: JSON.stringify({ name: id + '_' + String(p.title).trim() + '_本文（固定・編集しない）', parents: [cfg.folder], mimeType: 'application/vnd.google-apps.document' }),
+  });
+  if (res.getResponseCode() !== 200) return fail('契約書の文書を開けませんでした。selfcafe001 から見られる Google ドキュメントか Word の URL か確かめてください（' + res.getResponseCode() + '）');
+  const docId = JSON.parse(res.getContentText()).id;
+  const pdfBlob = DriveApp.getFileById(docId).getAs('application/pdf').setName(id + '_' + String(p.title).trim() + '_送付版.pdf');
+  const pdf = DriveApp.getFolderById(cfg.folder).createFile(pdfBlob);
+  const c = _contractLock_(() => {
+    const row = _contractRows_().find(r => r.id === id);
+    Object.assign(row, { status: 'sent', partner_name: String(p.partnerName).trim(), email: String(p.email).trim(), store_id: p.storeId || '',
+      doc_id: docId, pdf_id: pdf.getId(), pdf_sha256: _contractSha256_(pdf.getBlob()), token: Utilities.getUuid().replace(/-/g, '') + Utilities.getUuid().replace(/-/g, ''),
+      note: String(p.note || '').trim() });
+    _contractSave_(row);
+    _contractEvent_(id, '作成', row.created_by, '指紋 ' + row.pdf_sha256);
+    return row;
+  });
+  return { ok: true, contract: _contractPublicRow_(c) };
+}
+
+// 相手にリンクをメールで送る（LINE 等で渡すときは使わなくてよい）
+function contractSendLink_(p) {
+  const c = _contractRows_().find(r => r.id === p.id);
+  if (!c) return { error: '契約書が見つかりません' };
+  if (c.status !== 'sent') return { error: '同意待ちの契約書だけ送れます' };
+  GmailApp.sendEmail(c.email, '【セルフカフェ】業務委託契約書のご確認のお願い',
+    c.partner_name + ' 様\n\nセルフカフェ本部です。\n業務委託契約書をお送りします。下のリンクを開き、内容をご確認のうえ、同意の操作をお願いいたします。\n\n'
+    + CONTRACT_PAGE_URL + '?k=' + c.token + '\n\n'
+    + '・同意の操作の途中で、このメールアドレスに6桁の確認コードが届きます。\n・このリンクはご本人専用です。ほかの方に転送しないでください。\n・ご不明な点は本部までご連絡ください。\n\nセルフカフェ株式会社',
+    { name: CONTRACT_FROM_NAME });
+  _contractLock_(() => { const row = _contractRows_().find(r => r.id === p.id); row.sent_at = new Date(); _contractSave_(row); _contractEvent_(c.id, 'リンクをメールで送付', String(p.by || ''), contractMaskEmail_(c.email)); });
+  return { ok: true };
+}
+
+// 本部の承認（締結）: 固定した写しの後ろに「締結の記録」を足して PDF にし、双方へメールで送る
+function contractApprove_(p) {
+  const by = String(p.by || '').trim();
+  if (!by) return { error: '承認する人の名前を入れてください' };
+  const c = _contractRows_().find(r => r.id === p.id);
+  if (!c) return { error: '契約書が見つかりません' };
+  if (c.status !== 'agreed') return { error: '相手が同意した契約書だけ承認できます（今の状態: ' + c.status + '）' };
+  const cfg = _contractCfg_();
+  // 相手が同意した PDF が書き換わっていないことを確かめる
+  if (_contractSha256_(DriveApp.getFileById(c.pdf_id).getBlob()) !== c.pdf_sha256) return { error: '送付版の PDF が変わっています。締結できません（指紋が一致しません）' };
+  const now = new Date();
+  const doc = DocumentApp.openById(c.doc_id);
+  const body = doc.getBody();
+  body.appendPageBreak();
+  body.appendParagraph('締結の記録').setHeading(DocumentApp.ParagraphHeading.HEADING2);
+  body.appendParagraph('この契約書は、セルフカフェ社内ポータルの電子締結により、下記のとおり締結されました。');
+  const t = body.appendTable([
+    ['契約番号', c.id], ['契約書の名前', c.title], ['締結日', Utilities.formatDate(now, 'Asia/Tokyo', 'yyyy年M月d日')],
+    ['乙（受託者）', c.partner_name],
+    ['乙の同意', _contractTime_(c.agreed_at) + '　入力した氏名: ' + c.agreed_name],
+    ['乙の本人確認', '専用リンク、および登録メールアドレス（' + c.email + '）へ送った確認コードの入力'],
+    ['乙の端末', String(c.agreed_ua || '').slice(0, 200)],
+    ['甲（委託者）', 'セルフカフェ株式会社'],
+    ['甲の承認', _contractTime_(now) + '　承認者: ' + by],
+    ['送付版 PDF の指紋（SHA-256）', c.pdf_sha256],
+  ]);
+  for (let i = 0; i < t.getNumRows(); i++) { t.getCell(i, 0).setWidth(130); t.getRow(i).editAsText().setFontSize(9); }
+  body.appendParagraph('※ 乙は、指紋が上記と一致する送付版 PDF（本書の締結の記録より前の部分と同じ内容）を確認のうえ同意しました。日時は日本時間です。').editAsText().setFontSize(8);
+  doc.saveAndClose();
+  const signedBlob = DriveApp.getFileById(c.doc_id).getAs('application/pdf')
+    .setName(Utilities.formatDate(now, 'Asia/Tokyo', 'yyyyMMdd') + '_業務委託契約書_' + c.partner_name + '_' + c.id + '_締結済み.pdf');
+  const signed = DriveApp.getFolderById(cfg.folder).createFile(signedBlob);
+  const sha = _contractSha256_(signed.getBlob());
+  _contractLock_(() => {
+    const row = _contractRows_().find(r => r.id === p.id);
+    Object.assign(row, { status: 'signed', approved_at: now, approved_by: by, signed_pdf_id: signed.getId(), signed_sha256: sha });
+    _contractSave_(row);
+    _contractEvent_(c.id, '承認（締結）', by, '締結済み PDF の指紋 ' + sha);
+  });
+  let mailed = true;
+  try {
+    GmailApp.sendEmail(c.email, '【セルフカフェ】業務委託契約書の締結が完了しました（控え）',
+      c.partner_name + ' 様\n\nセルフカフェ本部です。\n業務委託契約書の締結が完了しました。締結済みの契約書（控え）を添付します。大切に保管してください。\n\n契約番号: ' + c.id + '\n\nセルフカフェ株式会社',
+      { name: CONTRACT_FROM_NAME, attachments: [signed.getBlob()], bcc: Session.getEffectiveUser().getEmail() });
+  } catch (e) { mailed = false; console.error('締結の控えメールに失敗: ' + e.message); }
+  _contractEvent_(c.id, mailed ? '控えをメールで送付' : '控えのメール送付に失敗', by, contractMaskEmail_(c.email));
+  return { ok: true, mailed: mailed, signed_pdf_url: 'https://drive.google.com/file/d/' + signed.getId() + '/view' };
+}
+
+function contractCancel_(p) {
+  return _contractLock_(() => {
+    const c = _contractRows_().find(r => r.id === p.id);
+    if (!c) return { error: '契約書が見つかりません' };
+    if (c.status === 'signed') return { error: '締結済みの契約書は取り消せません' };
+    c.status = 'canceled'; c.canceled_at = new Date(); _contractSave_(c);
+    _contractEvent_(c.id, '取り消し', String(p.by || ''), String(p.reason || ''));
+    return { ok: true };
+  });
+}
+
+// ---- 相手（リンクの合言葉で確かめる。ポータルのログインは要らない） ----
+function _contractByToken_(k) {
+  if (!/^[0-9a-f]{64}$/.test(String(k || ''))) return null;
+  return _contractRows_().find(r => String(r.token) === String(k)) || null;
+}
+
+// リンクを開いたとき: 契約書の名前・状態・本文（HTML）を返す
+function contractOpen_(p) {
+  const c = _contractByToken_(p.k);
+  if (!c || c.status === 'creating') return { error: 'リンクが正しくありません。本部に確認してください' };
+  if (c.status === 'canceled') return { error: 'この契約書は取り消されています。本部に確認してください' };
+  const res = UrlFetchApp.fetch('https://www.googleapis.com/drive/v3/files/' + c.doc_id + '/export?mimeType=text/html',
+    { headers: { Authorization: 'Bearer ' + ScriptApp.getOAuthToken() }, muteHttpExceptions: true });
+  if (res.getResponseCode() !== 200) return { error: '契約書を読み込めませんでした。少し待ってからもう一度開いてください' };
+  if (!c.opened_at) { try { _contractLock_(() => { const row = _contractRows_().find(r => r.id === c.id); if (!row.opened_at) { row.opened_at = new Date(); _contractSave_(row); _contractEvent_(c.id, '相手がリンクを開いた', '', String(p.ua || '').slice(0, 200)); } }); } catch (e) {} }
+  return { ok: true, id: c.id, status: c.status, title: c.title, partner_name: c.partner_name, email_masked: contractMaskEmail_(c.email),
+    agreed_at: _contractTime_(c.agreed_at), approved_at: _contractTime_(c.approved_at), html: res.getContentText('UTF-8') };
+}
+
+// 確認コード（6桁）を登録メールへ送る。1分に1回まで
+function contractSendCode_(p) {
+  const c = _contractByToken_(p.k);
+  if (!c || c.status !== 'sent') return { error: c ? 'この契約書はすでに同意済みです' : 'リンクが正しくありません' };
+  const cache = CacheService.getScriptCache();
+  if (cache.get('ctr_wait_' + c.id)) return { error: '確認コードは送信済みです。届かないときは1分ほど待ってから、もう一度押してください' };
+  const code = ('00000' + Math.floor(Math.random() * 1000000)).slice(-6);
+  cache.put('ctr_code_' + c.id, code, CONTRACT_CODE_SEC);
+  cache.put('ctr_try_' + c.id, '0', CONTRACT_CODE_SEC);
+  cache.put('ctr_wait_' + c.id, '1', 60);
+  GmailApp.sendEmail(c.email, '【セルフカフェ】契約書の確認コード: ' + code,
+    c.partner_name + ' 様\n\n業務委託契約書の同意に使う確認コードです。\n\n　　' + code + '\n\n10分以内に、契約書の画面に入力してください。\nお心当たりがない場合は、このメールを破棄してください。\n\nセルフカフェ株式会社',
+    { name: CONTRACT_FROM_NAME });
+  _contractEvent_(c.id, '確認コードを送付', '', contractMaskEmail_(c.email));
+  return { ok: true, email_masked: contractMaskEmail_(c.email) };
+}
+
+// 同意: チェック2つ・氏名・確認コードを確かめ、送付版 PDF の指紋が変わっていないことを確かめて記録する
+function contractAgree_(p) {
+  const c0 = _contractByToken_(p.k);
+  const cache = CacheService.getScriptCache();
+  const tries = c0 ? Number(cache.get('ctr_try_' + c0.id) || 0) : 0;
+  const expected = c0 && tries < CONTRACT_CODE_TRIES ? cache.get('ctr_code_' + c0.id) : null;
+  const err = contractValidateAgree_(c0, p, expected);
+  if (err) {
+    if (c0 && /確認コードが違います/.test(err)) cache.put('ctr_try_' + c0.id, String(tries + 1), CONTRACT_CODE_SEC);
+    return { error: err };
+  }
+  if (_contractSha256_(DriveApp.getFileById(c0.pdf_id).getBlob()) !== c0.pdf_sha256) return { error: '契約書の内容に変更がありました。本部に確認してください' };
+  const out = _contractLock_(() => {
+    const c = _contractRows_().find(r => r.id === c0.id);
+    if (c.status !== 'sent') return { error: 'この契約書はすでに同意済みです' };
+    Object.assign(c, { status: 'agreed', agreed_at: new Date(), agreed_name: String(p.name).trim(), agreed_ua: String(p.ua || '').slice(0, 300) });
+    _contractSave_(c);
+    _contractEvent_(c.id, '相手が同意', c.agreed_name, '確認コード一致・指紋 ' + c.pdf_sha256);
+    return { ok: true, agreed_at: _contractTime_(c.agreed_at) };
+  });
+  if (out.ok) {
+    cache.remove('ctr_code_' + c0.id);
+    try { sendLineWorksNotification('【契約書】' + c0.partner_name + ' さんが「' + c0.title + '」（' + c0.id + '）に同意しました。管理者ポータルの「業務管理」→「業務委託契約書」で承認してください。'); }
+    catch (e) { console.error('契約書の通知に失敗: ' + e.message); }
+  }
+  return out;
+}
+
+// 相手が PDF を保存する用（同意前は送付版、締結後は締結済み）。base64 で返す
+function contractPdf_(p) {
+  const c = _contractByToken_(p.k);
+  if (!c || c.status === 'canceled' || c.status === 'creating') return { error: 'リンクが正しくありません' };
+  const f = DriveApp.getFileById(c.status === 'signed' ? c.signed_pdf_id : c.pdf_id);
+  return { ok: true, name: f.getName(), base64: Utilities.base64Encode(f.getBlob().getBytes()) };
+}
+
+// doPost の入口から最初に呼ぶ。契約の action なら処理して結果を返し、それ以外は null
+function _contractRoutePost_(b) {
+  if (!b) return null;
+  const isAdmin = CONTRACT_ADMIN_ACTIONS.indexOf(b.action) >= 0, isPublic = CONTRACT_PUBLIC_ACTIONS.indexOf(b.action) >= 0;
+  if (!isAdmin && !isPublic) return null;
+  try {
+    if (isAdmin) {
+      // 管理者の通行証かスクリプトの鍵が要る（AUTH_ENFORCE に関係なく必ず断る。契約は記録だけの期間を作らない）
+      const chk = _authCheck_(b.action, b);
+      if (!chk.ok) return { error: 'ログインし直してください（' + chk.reason + '）', authError: true, authCode: chk.auth ? 'forbidden' : 'token' };
+      if      (b.action === 'contractSetup')    return contractSetup_(b);
+      else if (b.action === 'contractList')     return contractList_();
+      else if (b.action === 'contractCreate')   return contractCreate_(b);
+      else if (b.action === 'contractSendLink') return contractSendLink_(b);
+      else if (b.action === 'contractApprove')  return contractApprove_(b);
+      else                                      return contractCancel_(b);
+    }
+    if      (b.action === 'contractOpen')     return contractOpen_(b);
+    else if (b.action === 'contractSendCode') return contractSendCode_(b);
+    else if (b.action === 'contractAgree')    return contractAgree_(b);
+    else                                      return contractPdf_(b);
+  } catch (err) {
+    console.error('contract ' + b.action + ': ' + err.message);
+    try { sendStockBotNotification_('【システムエラー】契約書 action=' + b.action + '\n' + err.message); } catch (e2) {}
+    return { error: err.message };
+  }
 }

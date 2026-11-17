@@ -1,0 +1,168 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="robots" content="noindex,nofollow">
+<meta name="referrer" content="no-referrer">
+<title>契約書のご確認｜セルフカフェ</title>
+<link rel="icon" type="image/png" sizes="192x192" href="icon-192.png">
+<!--
+  業務委託契約書の電子締結：相手（パートナーさん）がスマホで開く画面（2026-11-17）。
+  本部が発行した専用リンク（?k=合言葉）で開く。ポータルのログインは要らない。
+  サーバー側は gas_backend.gs の「業務委託契約書の電子締結」（contractOpen / contractSendCode / contractAgree / contractPdf）。
+  契約書の本文はサーバーから受け取り、スクリプトの動かない枠（iframe sandbox）の中に表示する。
+-->
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: 'Segoe UI','Meiryo',sans-serif; background:#f8f4e7; color:#333; margin:0; line-height:1.7; }
+  header { background:#22703d; color:white; padding:14px 16px; }
+  header img { height:28px; vertical-align:middle; background:white; border-radius:6px; padding:2px 6px; }
+  header span { font-weight:700; font-size:16px; margin-left:8px; vertical-align:middle; }
+  main { max-width:720px; margin:0 auto; padding:14px 12px 60px; }
+  .card { background:white; border-radius:12px; padding:16px; margin-bottom:14px; box-shadow:0 1px 4px rgba(0,0,0,.08); }
+  h1 { font-size:18px; margin:0 0 6px; color:#22703d; }
+  h2 { font-size:15px; margin:0 0 10px; color:#22703d; }
+  .muted { color:#666; font-size:13px; }
+  .step { display:inline-block; background:#22703d; color:white; border-radius:12px; padding:1px 10px; font-size:12px; font-weight:700; margin-right:6px; }
+  #doc-frame { width:100%; border:1px solid #ddd; border-radius:8px; background:white; min-height:300px; }
+  label.chk { display:flex; gap:10px; align-items:flex-start; padding:10px; border:1px solid #ddd; border-radius:8px; margin-bottom:8px; font-size:15px; cursor:pointer; }
+  label.chk input { width:22px; height:22px; flex-shrink:0; margin-top:2px; }
+  input[type=text], input[type=tel] { width:100%; border:1px solid #ccc; border-radius:8px; padding:12px; font-size:17px; font-family:inherit; }
+  button { font-family:inherit; border:none; border-radius:8px; cursor:pointer; font-weight:700; }
+  .btn-main { width:100%; background:#22703d; color:white; padding:14px; font-size:17px; }
+  .btn-sub { background:white; color:#22703d; border:1px solid #22703d; padding:10px 14px; font-size:14px; }
+  button:disabled { opacity:.5; cursor:default; }
+  .msg { font-size:14px; min-height:20px; margin:8px 0; }
+  .err { color:#dc2626; } .ok { color:#22703d; }
+  .banner { border-radius:8px; padding:12px; font-size:14px; margin-bottom:12px; }
+  .banner.done { background:#dcfce7; border:1px solid #86efac; }
+  .banner.wait { background:#e0f2fe; border:1px solid #7dd3fc; }
+  .field { margin:12px 0; }
+  .field > div:first-child { font-size:13px; color:#555; margin-bottom:4px; font-weight:600; }
+</style>
+</head>
+<body>
+<header><img src="logo-horizontal.png" alt="セルフカフェ"><span>契約書のご確認</span></header>
+<main>
+  <div id="loading" class="card muted">契約書を読み込んでいます…（10秒ほどかかります）</div>
+  <div id="error" class="card err" style="display:none"></div>
+
+  <div id="content" style="display:none">
+    <div class="card">
+      <h1 id="title"></h1>
+      <div class="muted"><span id="partner"></span> 様　／　契約番号 <span id="cid"></span></div>
+      <div id="status-banner"></div>
+      <div class="muted" id="lead">セルフカフェ株式会社との契約書です。下の本文を最後までお読みのうえ、同意の操作をお願いします。</div>
+      <button class="btn-sub" style="margin-top:10px" onclick="downloadPdf(this)">PDF を保存する</button>
+      <span id="pdf-msg" class="muted"></span>
+    </div>
+
+    <div class="card">
+      <h2><span class="step">1</span>契約書の本文</h2>
+      <iframe id="doc-frame" sandbox="allow-same-origin" title="契約書の本文"></iframe>
+    </div>
+
+    <div class="card" id="agree-card">
+      <h2><span class="step">2</span>同意の操作</h2>
+      <label class="chk"><input type="checkbox" id="chk-read"><span>契約書の内容をすべて確認しました。</span></label>
+      <label class="chk"><input type="checkbox" id="chk-agree"><span>この内容でセルフカフェ株式会社と契約を締結することに同意します。</span></label>
+      <div class="field">
+        <div>お名前（契約書に書かれた氏名・社名をそのまま入力）</div>
+        <input type="text" id="name" autocomplete="name">
+      </div>
+      <div class="field">
+        <div>確認コード（6桁）</div>
+        <div class="muted" style="margin-bottom:6px">ご本人の確認のため、登録のメールアドレス（<span id="email-masked"></span>）に6桁の数字を送ります。</div>
+        <button class="btn-sub" id="code-btn" onclick="sendCode()">確認コードを送る</button>
+        <div class="msg" id="code-msg"></div>
+        <input type="tel" id="code" inputmode="numeric" maxlength="6" placeholder="メールに届いた6桁の数字" autocomplete="one-time-code">
+      </div>
+      <div class="msg err" id="agree-msg"></div>
+      <button class="btn-main" id="agree-btn" onclick="agree()">同意して締結する</button>
+      <div class="muted" style="margin-top:10px">押したあと、本部（セルフカフェ株式会社）が承認すると締結が完了し、締結済みの契約書（控え）がメールで届きます。</div>
+    </div>
+  </div>
+</main>
+<script>
+const GAS_URL = 'https://script.google.com/macros/s/AKfycbzoqu607sj-rpYulIiDwnuyGSCTzoblzSqaq37cb5k5KiGsK7sisZew9sSRSBoYBSwo_A/exec';
+const K = new URLSearchParams(location.search).get('k') || '';
+const $ = id => document.getElementById(id);
+
+async function api(action, body) {
+  const res = await fetch(GAS_URL, { method: 'POST', headers: { 'Content-Type': 'text/plain' }, body: JSON.stringify({ action, k: K, ...(body || {}) }) });
+  return res.json();
+}
+function showError(text) { $('loading').style.display = 'none'; $('content').style.display = 'none'; $('error').style.display = ''; $('error').textContent = text; }
+
+function renderStatus(d) {
+  const b = $('status-banner');
+  if (d.status === 'signed') {
+    b.innerHTML = '<div class="banner done"><b>締結が完了しています。</b><br>同意 ' + d.agreed_at + '　／　本部の承認 ' + d.approved_at + '<br>「PDF を保存する」で、締結済みの契約書（控え）を保存できます。</div>';
+  } else if (d.status === 'agreed') {
+    b.innerHTML = '<div class="banner wait"><b>同意を受け付けました（' + d.agreed_at + '）。</b><br>本部が承認すると締結が完了し、締結済みの契約書（控え）がメールで届きます。</div>';
+  } else b.innerHTML = '';
+  const open = d.status === 'sent';
+  $('agree-card').style.display = open ? '' : 'none';
+  $('lead').style.display = open ? '' : 'none';
+}
+
+async function load() {
+  if (!/^[0-9a-f]{64}$/.test(K)) { showError('リンクが正しくありません。本部から届いたリンクをそのまま開いてください。'); return; }
+  let d;
+  try { d = await api('contractOpen', { ua: navigator.userAgent }); }
+  catch (e) { showError('通信に失敗しました。電波のよいところで、もう一度開いてください。'); return; }
+  if (!d.ok) { showError(d.error || '契約書を開けませんでした。本部に確認してください。'); return; }
+  $('title').textContent = d.title; $('partner').textContent = d.partner_name; $('cid').textContent = d.id; $('email-masked').textContent = d.email_masked;
+  renderStatus(d);
+  // 本文はスクリプトの動かない枠の中に入れる。スマホの幅に合わせ、枠の高さを本文に合わせる
+  const fit = '<style>html,body{max-width:100%!important;margin:0!important}body{padding:14px!important;font-size:15px!important}img,table{max-width:100%!important}</style>';
+  const html = String(d.html || '').replace(/<\/head>/i, fit + '</head>');
+  const f = $('doc-frame');
+  f.onload = () => { try { f.style.height = (f.contentDocument.documentElement.scrollHeight + 20) + 'px'; } catch (e) { f.style.height = '70vh'; } };
+  f.srcdoc = html.indexOf(fit) >= 0 ? html : fit + html;
+  $('loading').style.display = 'none'; $('content').style.display = '';
+}
+
+async function sendCode() {
+  const btn = $('code-btn'), m = $('code-msg');
+  btn.disabled = true; m.className = 'msg'; m.textContent = '送っています…';
+  try {
+    const d = await api('contractSendCode');
+    if (d.ok) { m.className = 'msg ok'; m.textContent = d.email_masked + ' に送りました。届いた6桁の数字を下に入力してください（10分以内）。'; setTimeout(() => { btn.disabled = false; btn.textContent = '確認コードを送り直す'; }, 60000); $('code').focus(); }
+    else { m.className = 'msg err'; m.textContent = d.error || '送れませんでした'; btn.disabled = false; }
+  } catch (e) { m.className = 'msg err'; m.textContent = '通信に失敗しました。もう一度押してください。'; btn.disabled = false; }
+}
+
+async function agree() {
+  const m = $('agree-msg'), btn = $('agree-btn');
+  const body = { checkRead: $('chk-read').checked, checkAgree: $('chk-agree').checked, name: $('name').value.trim(), code: $('code').value.trim(), ua: navigator.userAgent };
+  if (!body.checkRead || !body.checkAgree) { m.textContent = '2つのチェックを入れてください'; return; }
+  if (!body.name) { m.textContent = 'お名前を入力してください'; return; }
+  if (!/^\d{6}$/.test(body.code)) { m.textContent = '確認コード（6桁の数字）を入力してください。まだの場合は「確認コードを送る」を押してください'; return; }
+  btn.disabled = true; m.className = 'msg'; m.textContent = '送っています…';
+  try {
+    const d = await api('contractAgree', body);
+    if (d.ok) { renderStatus({ status: 'agreed', agreed_at: d.agreed_at }); window.scrollTo({ top: 0, behavior: 'smooth' }); }
+    else { m.className = 'msg err'; m.textContent = d.error || '同意できませんでした'; btn.disabled = false; }
+  } catch (e) { m.className = 'msg err'; m.textContent = '通信に失敗しました。同意できたか分からないときは、このページを開き直して確かめてください。'; btn.disabled = false; }
+}
+
+async function downloadPdf(btn) {
+  const m = $('pdf-msg');
+  btn.disabled = true; m.textContent = ' 用意しています…';
+  try {
+    const d = await api('contractPdf');
+    if (!d.ok) { m.textContent = ' ' + (d.error || '保存できませんでした'); btn.disabled = false; return; }
+    const bytes = Uint8Array.from(atob(d.base64), c => c.charCodeAt(0));
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(new Blob([bytes], { type: 'application/pdf' })); a.download = d.name;
+    document.body.appendChild(a); a.click(); a.remove();
+    m.textContent = '';
+  } catch (e) { m.textContent = ' 通信に失敗しました'; }
+  btn.disabled = false;
+}
+load();
+</script>
+</body>
+</html>
