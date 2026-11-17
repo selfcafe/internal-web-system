@@ -42,6 +42,7 @@
       var res = await gasPost('contractList', {});
       if (!res || !res.ok) { $('actr-body').innerHTML = '<div style="color:#dc2626">' + esc((res && res.error) || '読み込めませんでした') + '</div>'; return; }
       C.list = res.contracts || []; C.ready = res.ready; C.message = res.message;
+      C.stores = res.stores || {}; C.staff = res.staff || []; C.hasTemplate = !!res.hasTemplate;
       render();
     } catch (e) { $('actr-body').innerHTML = '<div style="color:#dc2626">通信に失敗しました。<a href="#" onclick="actrReload();return false">もう一度読み込む</a></div>'; }
   }
@@ -50,7 +51,7 @@
   function badge(st) { var s = STATUS[st] || STATUS.creating; return '<span style="background:' + s.bg + ';color:' + s.fg + ';border-radius:10px;padding:2px 9px;font-size:12px;font-weight:700;white-space:nowrap">' + s.label + '</span>'; }
 
   function render() {
-    var storeOpts = '<option value="">（店を選ばない）</option>' + (typeof STORES !== 'undefined' ? Object.keys(STORES).map(function (id) { return '<option value="' + esc(id) + '">' + esc(STORES[id]) + '</option>'; }).join('') : '');
+    var storeOpts = '<option value="">店名を選ぶ</option>' + (typeof STORES !== 'undefined' ? Object.keys(STORES).map(function (id) { return '<option value="' + esc(id) + '">' + esc(STORES[id]) + '</option>'; }).join('') : '');
     var html = '';
     if (!C.ready) html += '<div style="background:#fee2e2;border-radius:8px;padding:10px;font-size:13px;margin-bottom:12px">保存先がまだ設定されていません（' + esc(C.message || '') + '）。</div>';
     // 上の帯：状態ごとの件数で絞り込み・名前で検索・新しく登録
@@ -61,25 +62,67 @@
       + tabs.map(function (t) { var on = C.filter === t[0]; return '<button onclick="actrFilter(\'' + t[0] + '\')" style="' + BTN + 'padding:6px 10px;font-size:12px;background:' + (on ? '#22703d' : 'white') + ';color:' + (on ? 'white' : '#333') + ';border:1px solid ' + (on ? '#22703d' : '#ddd') + '">' + t[1] + ' ' + (counts[t[0]] || 0) + '</button>'; }).join('')
       + '<input value="' + esc(C.q) + '" oninput="actrSearch(this.value)" placeholder="名前・店・契約番号で探す" style="' + INPUT + 'width:200px;padding:6px 10px;font-size:13px">'
       + '<span style="flex:1"></span>'
+      + '<span style="font-size:12px;color:#666">操作する人</span><select id="actr-who" onchange="actrSetWho(this.value)" style="' + INPUT + 'width:140px;padding:6px 8px;font-size:13px">' + staffOpts() + '</select>'
       + (C.showNew ? '' : '<button onclick="actrToggleNew()" style="' + BTN + 'background:#22703d;color:white;padding:8px 12px;font-size:13px">＋ 新しい契約書を登録</button>') + '</div>';
+    // 登録の欄。ふつうは「ひな形から作る」（店を選ぶと店名・住所が契約書に入る）。.actr-tpl はひな形のときだけ、.actr-url は文書の URL で登録するときだけ出す
+    var today = new Date(Date.now() + 9 * 3600000).toISOString().slice(0, 10);
+    var hint = function (t) { return '<div style="font-size:11px;color:#888;margin-top:2px">' + t + '</div>'; };
     if (C.showNew) html += '<div style="background:white;border:2px solid #22703d;border-radius:10px;padding:14px;margin-bottom:14px">'
       + '<div style="font-weight:700;margin-bottom:4px">新しい契約書を登録する</div>'
-      + '<div style="font-size:12px;color:#666;line-height:1.6;margin-bottom:8px">相手の名前・報酬などを書き込んだ契約書（Google ドキュメントか、Drive に置いた Word）の URL を入れます。登録すると、その時点の内容が写しとして固定されます（あとで元の文書を直しても変わりません）。</div>'
-      + '<div style="display:grid;grid-template-columns:130px 1fr;gap:8px;align-items:center;font-size:13px">'
-      + '<span>契約書の URL</span><input id="actr-doc" placeholder="https://docs.google.com/document/d/… または Drive の Word の URL" style="' + INPUT + '">'
-      + '<span>契約書の名前</span><input id="actr-title" value="業務委託契約書" style="' + INPUT + '">'
-      + '<span>相手の氏名（社名）</span><input id="actr-name" placeholder="契約書に書いた名前と同じに" style="' + INPUT + '">'
-      + '<span>相手のメール</span><input id="actr-email" type="email" placeholder="確認コードと控えの送り先" style="' + INPUT + '">'
-      + '<span>店</span><select id="actr-store" style="' + INPUT + '">' + storeOpts + '</select>'
-      + '<span>メモ（社内用）</span><input id="actr-note" style="' + INPUT + '">'
-      + '<span>作成する人</span><input id="actr-by" value="' + esc(who()) + '" placeholder="あなたの名前（記録に残ります）" style="' + INPUT + '">'
-      + '</div><div id="actr-new-msg" style="font-size:13px;min-height:18px;margin:8px 0"></div>'
+      + '<div class="actr-tpl" style="font-size:12px;color:#666;line-height:1.6;margin-bottom:8px">店と相手を入れると、ひな形（業務委託契約書）から契約書を自動で作ります。登録した時点の内容で固定されます。</div>'
+      + '<div class="actr-url" style="font-size:12px;color:#666;line-height:1.6;margin-bottom:8px">相手の名前・報酬などを書き込んだ契約書（Google ドキュメントか、Drive に置いた Word）の URL で登録します。</div>'
+      + '<div style="display:grid;grid-template-columns:150px 1fr;gap:8px 10px;align-items:start;font-size:13px">'
+      + '<span style="padding-top:8px">店名を選ぶ</span><div><select id="actr-store" onchange="actrStoreChange()" style="' + INPUT + '">' + storeOpts + '</select></div>'
+      + '<span class="actr-tpl" style="padding-top:8px">店の住所</span><div class="actr-tpl"><input id="actr-store-addr" placeholder="〒000-0000 …（店を選ぶと自動で入ります）" style="' + INPUT + '">' + hint('契約書の「業務場所」に入ります。違っていたら直してください。') + '</div>'
+      + '<span style="padding-top:8px">相手の氏名（姓名）</span><div><input id="actr-name" placeholder="例：山田太郎" style="' + INPUT + '">' + hint('姓と名の間にスペースを空けずに入れてください。会社の場合は社名。') + '</div>'
+      + '<span class="actr-tpl" style="padding-top:8px">相手の住所</span><div class="actr-tpl"><input id="actr-addr" placeholder="都道府県から。マンション名・部屋番号まで" style="' + INPUT + '"></div>'
+      + '<span style="padding-top:8px">相手のメールアドレス</span><div><input id="actr-email" type="email" placeholder="例：yamada@example.com" style="' + INPUT + '">' + hint('確認コードと、締結済みの契約書（控え）の送り先です。') + '</div>'
+      + '<span class="actr-tpl" style="padding-top:8px">報酬（月額・税込）</span><div class="actr-tpl" style="display:flex;align-items:center;gap:6px"><input id="actr-fee" type="number" min="1" step="1000" placeholder="30000" style="' + INPUT + 'width:160px">円</div>'
+      + '<span class="actr-tpl" style="padding-top:8px">業務の頻度</span><div class="actr-tpl"><input id="actr-freq" list="actr-freq-list" value="週7回" style="' + INPUT + 'width:160px"><datalist id="actr-freq-list">'
+      + ['週7回', '週6回', '週5回', '週4回', '週3回', '2日に1回'].map(function (f) { return '<option value="' + f + '">'; }).join('') + '</datalist></div>'
+      + '<span class="actr-tpl" style="padding-top:8px">契約日</span><div class="actr-tpl"><input id="actr-date" type="date" value="' + today + '" style="' + INPUT + 'width:180px">' + hint('契約書の日付に入ります。') + '</div>'
+      + '<span class="actr-url" style="padding-top:8px">契約書の URL</span><div class="actr-url"><input id="actr-doc" placeholder="https://docs.google.com/document/d/… または Drive の Word の URL" style="' + INPUT + '"></div>'
+      + '<span class="actr-url" style="padding-top:8px">契約書の名前</span><div class="actr-url"><input id="actr-title" value="業務委託契約書" style="' + INPUT + '"></div>'
+      + '<span style="padding-top:8px">メモ（社内用）</span><div><input id="actr-note" style="' + INPUT + '"></div>'
+      + '<span style="padding-top:8px">作成する人</span><div style="display:flex;gap:6px;align-items:center"><select id="actr-by" onchange="actrSetWho(this.value)" style="' + INPUT + 'width:200px">' + staffOpts() + '</select>'
+      + '<button onclick="actrAddStaff()" style="' + BTN + 'background:#f3f4f6;color:#111;padding:7px 10px;font-size:12px">＋ 社員を追加</button></div>'
+      + '</div>'
+      + '<div style="font-size:12px;margin-top:10px"><a href="#" onclick="actrMode();return false" id="actr-mode-link" style="color:#22703d"></a></div>'
+      + '<div id="actr-new-msg" style="font-size:13px;min-height:18px;margin:8px 0"></div>'
       + '<button id="actr-new-btn" onclick="actrCreate()" style="' + BTN + 'background:#22703d;color:white;padding:9px 16px;font-size:14px">登録して、相手用のリンクを作る</button> '
       + '<button onclick="actrToggleNew()" style="' + BTN + 'background:#e5e7eb;color:#333;padding:9px 16px;font-size:14px">やめる</button></div>';
     html += '<div id="actr-list">' + listHtml() + '</div>'
       + '<button onclick="actrReload()" style="' + BTN + 'background:#e5e7eb;color:#333;padding:8px 12px;font-size:13px;margin-top:6px">読み込み直す</button>';
     $('actr-body').innerHTML = html;
+    if (C.showNew) applyMode();
   }
+
+  function staffOpts() {
+    var w = who(), list = (C.staff || []).slice();
+    if (w && list.indexOf(w) < 0) list.push(w);
+    return '<option value="">選んでください</option>' + list.map(function (n) { return '<option value="' + esc(n) + '"' + (n === w ? ' selected' : '') + '>' + esc(n) + '</option>'; }).join('');
+  }
+  // ひな形から作る／文書の URL で登録する の切り替え（入力した内容は残す）
+  function applyMode() {
+    var tpl = C.hasTemplate && !C.urlMode;
+    document.querySelectorAll('#actr-body .actr-tpl').forEach(function (el) { el.style.display = tpl ? '' : 'none'; });
+    document.querySelectorAll('#actr-body .actr-url').forEach(function (el) { el.style.display = tpl ? 'none' : ''; });
+    var link = $('actr-mode-link');
+    if (link) link.textContent = !C.hasTemplate ? '' : tpl ? 'ひな形を使わず、自分で作った文書の URL で登録する' : 'ひな形から作る（店を選ぶだけ）に戻す';
+  }
+  window.actrMode = function () { C.urlMode = !C.urlMode; applyMode(); };
+  window.actrStoreChange = function () { var s = (C.stores || {})[$('actr-store').value]; $('actr-store-addr').value = s ? s.address : ''; };
+  window.actrSetWho = function (v) { if (v) setWho(v); };
+  window.actrAddStaff = async function () {
+    var name = (prompt('足す社員の名前（姓名）') || '').trim();
+    if (!name) return;
+    try {
+      var res = await gasPost('contractAddStaff', { name: name });
+      if (!res || !res.ok) { alert((res && res.error) || '足せませんでした'); return; }
+      C.staff = res.staff; setWho(name);
+      document.querySelectorAll('#actr-by, #actr-who').forEach(function (el) { el.innerHTML = staffOpts(); });
+    } catch (e) { alert('通信に失敗しました'); }
+  };
 
   // 一覧（絞り込み・検索を反映）。締結済みの契約書は、ここからいつでも開ける
   function listHtml() {
@@ -134,15 +177,20 @@
 
   function find(id) { return C.list.find(function (x) { return x.id === id; }); }
   function needWho() {
-    var w = who();
-    if (!w) { w = (prompt('あなたの名前を入れてください（記録に残ります）') || '').trim(); if (w) setWho(w); }
+    // 承認・送付・取り消しをする人。上の「操作する人」で選ぶ（記録に残る）
+    var w = ($('actr-who') && $('actr-who').value) || '';
+    if (!w) alert('上の「操作する人」を選んでください（記録に残ります）');
     return w;
   }
 
   window.actrCreate = async function () {
     var by = $('actr-by').value.trim();
     if (by) setWho(by);
-    var p = { docUrl: $('actr-doc').value.trim(), title: $('actr-title').value.trim(), partnerName: $('actr-name').value.trim(), email: $('actr-email').value.trim(), storeId: $('actr-store').value, note: $('actr-note').value.trim(), by: by };
+    var v = function (id) { return $(id).value.trim(); };
+    var tpl = C.hasTemplate && !C.urlMode;
+    var p = { partnerName: v('actr-name'), email: v('actr-email'), storeId: $('actr-store').value, note: v('actr-note'), by: by };
+    if (tpl) Object.assign(p, { useTemplate: true, storeAddress: v('actr-store-addr'), partnerAddress: v('actr-addr'), fee: Number(v('actr-fee')), frequency: v('actr-freq'), contractDate: v('actr-date') });
+    else Object.assign(p, { docUrl: v('actr-doc'), title: v('actr-title') });
     $('actr-new-btn').disabled = true; note('actr-new-msg', '登録しています（PDF を作るので20秒ほどかかります）…', true);
     try {
       var res = await gasPost('contractCreate', p);

@@ -23,8 +23,15 @@ function runPartnerContractTests() {
   check('メールを伏せる', contractMaskEmail_('sample.taro@example.com'), 'sa***@example.com');
   check('登録: 正しい内容は誤りなし', contractValidateNew_({ title: '業務委託契約書', partnerName: '見本 太郎', email: 'a@example.com', docUrl: fid, by: '本部A' }), []);
   check('登録: 誤りを全部返す', contractValidateNew_({ title: '', partnerName: '　', email: 'a@example', docUrl: 'x', by: '' }), [
-    '契約書の名前を入れてください', '相手の氏名（社名）を入れてください', '相手のメールアドレスを正しく入れてください',
-    '契約書（Google ドキュメントか Word）の URL を入れてください', '作成する人の名前を入れてください']);
+    '相手の氏名（社名）を入れてください', '相手のメールアドレスを正しく入れてください', '契約書の名前を入れてください',
+    '契約書（Google ドキュメントか Word）の URL を入れてください', '作成する人を選んでください']);
+  var tp = { useTemplate: true, partnerName: '見本太郎', email: 'a@example.com', storeId: 'sugamo', storeAddress: '〒000-0000 見本県見本市1-2-3', partnerAddress: '見本県見本市4-5-6',
+    fee: 30000, frequency: '週7回', contractDate: '2026-11-18', by: '本部A' };
+  check('登録(ひな形): 正しい内容は誤りなし（URL・契約書の名前は要らない）', contractValidateNew_(tp), []);
+  check('登録(ひな形): 誤りを全部返す', contractValidateNew_({ useTemplate: true, partnerName: '見本太郎', email: 'a@example.com', fee: 0, contractDate: '11/18', by: '本部A' }), [
+    '店名を選んでください', '店の住所を入れてください', '相手の住所を入れてください', '報酬（月額・税込）を円で入れてください', '業務の頻度を入れてください（例: 週7回）', '契約日を選んでください']);
+  check('ひな形の差し込み: 店名は「セルフカフェ」「店」を外す・報酬は3桁区切り・契約日は和文', contractTemplateValues_(tp, 'セルフカフェ巣鴨駅南口店'),
+    { '店舗名': '巣鴨駅南口', '店舗住所': '〒000-0000 見本県見本市1-2-3', '頻度': '週7回', '報酬': '30,000', '契約日': '2026年11月18日', '乙住所': '見本県見本市4-5-6', '乙氏名': '見本太郎' });
   var c = { status: 'sent', partner_name: '見本 太郎' };
   var ok = { checkRead: true, checkAgree: true, name: '見本太郎', code: '123456' };
   check('同意: 正しければ通る（氏名は空白の違いを許す）', contractValidateAgree_(c, ok, '123456'), '');

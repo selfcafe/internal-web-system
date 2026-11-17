@@ -11024,7 +11024,7 @@ function setNewStoreCheckTrigger() {
 // 相手の画面（contract.html）はポータルのログインなしで開くので、相手用の action はリンクの合言葉（token）で確かめる。
 // PDF づくりに時間がかかるので、doPost 全体のロックは取らずに処理する（シートへの書き込みのときだけロック）。
 // ================================================================
-const CONTRACT_ADMIN_ACTIONS = ['contractSetup', 'contractList', 'contractCreate', 'contractSendLink', 'contractApprove', 'contractCancel', 'contractEvents'];
+const CONTRACT_ADMIN_ACTIONS = ['contractSetup', 'contractList', 'contractCreate', 'contractSendLink', 'contractApprove', 'contractCancel', 'contractEvents', 'contractAddStaff'];
 const CONTRACT_PUBLIC_ACTIONS = ['contractOpen', 'contractSendCode', 'contractAgree', 'contractPdf'];
 const SHEET_CONTRACTS = 'contracts';
 const CONTRACT_COLS = ['id', 'status', 'title', 'partner_name', 'email', 'store_id', 'doc_id', 'pdf_id', 'pdf_sha256', 'token',
@@ -11110,12 +11110,36 @@ function contractMaskEmail_(e) {
 // 登録内容の確認。誤りの文言を返す
 function contractValidateNew_(p) {
   const e = [];
-  if (!String(p.title || '').trim()) e.push('契約書の名前を入れてください');
+  const s = k => String(p[k] == null ? '' : p[k]).trim();
   if (!contractNormName_(p.partnerName)) e.push('相手の氏名（社名）を入れてください');
-  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(p.email || '').trim())) e.push('相手のメールアドレスを正しく入れてください');
-  if (!contractFileIdFromUrl_(p.docUrl)) e.push('契約書（Google ドキュメントか Word）の URL を入れてください');
-  if (!String(p.by || '').trim()) e.push('作成する人の名前を入れてください');
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s('email'))) e.push('相手のメールアドレスを正しく入れてください');
+  if (p.useTemplate) {
+    // ひな形から作る: 店・店の住所・相手の住所・報酬・頻度・契約日が要る
+    if (!s('storeId')) e.push('店名を選んでください');
+    if (!s('storeAddress')) e.push('店の住所を入れてください');
+    if (!s('partnerAddress')) e.push('相手の住所を入れてください');
+    if (!(Number(p.fee) > 0) || Math.floor(Number(p.fee)) !== Number(p.fee)) e.push('報酬（月額・税込）を円で入れてください');
+    if (!s('frequency')) e.push('業務の頻度を入れてください（例: 週7回）');
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(s('contractDate'))) e.push('契約日を選んでください');
+  } else {
+    if (!s('title')) e.push('契約書の名前を入れてください');
+    if (!contractFileIdFromUrl_(p.docUrl)) e.push('契約書（Google ドキュメントか Word）の URL を入れてください');
+  }
+  if (!s('by')) e.push('作成する人を選んでください');
   return e;
+}
+// ひな形の差し込み欄 {{…}} に入れる値。storeName は店の表示名（「セルフカフェ」「店」を付けない形）
+function contractTemplateValues_(p, storeName) {
+  const d = String(p.contractDate || '').match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  return {
+    '店舗名': String(storeName || '').replace(/^セルフカフェ/, '').replace(/店$/, ''),
+    '店舗住所': String(p.storeAddress || '').trim(),
+    '頻度': String(p.frequency || '').trim(),
+    '報酬': Number(p.fee).toLocaleString('en-US'),
+    '契約日': d ? Number(d[1]) + '年' + Number(d[2]) + '月' + Number(d[3]) + '日' : '',
+    '乙住所': String(p.partnerAddress || '').trim(),
+    '乙氏名': String(p.partnerName || '').trim(),
+  };
 }
 // 同意の確認。誤りの文言を返す（空なら OK）
 function contractValidateAgree_(c, p, expectedCode) {
@@ -11134,9 +11158,38 @@ function contractValidateAgree_(c, p, expectedCode) {
 function contractSetup_(p) {
   if (!contractFileIdFromUrl_(p.db) || !contractFileIdFromUrl_(p.folder)) return { error: 'db と folder の ID が要ります' };
   SpreadsheetApp.openById(p.db); DriveApp.getFolderById(p.folder); // 開けることを確かめる
-  PropertiesService.getScriptProperties().setProperty('CONTRACT_CFG', JSON.stringify({ db: p.db, folder: p.folder }));
+  const cfg = { db: p.db, folder: p.folder };
+  // template: ひな形（差し込み欄 {{店舗名}} などを入れた Google ドキュメント）。無くても動く（文書の URL で登録する形だけになる）
+  if (p.template) { if (!contractFileIdFromUrl_(p.template)) return { error: 'template の ID が正しくありません' }; DocumentApp.openById(p.template); cfg.template = p.template; }
+  PropertiesService.getScriptProperties().setProperty('CONTRACT_CFG', JSON.stringify(cfg));
   _contractSheet_(SHEET_CONTRACTS, CONTRACT_COLS); _contractSheet_(SHEET_CONTRACT_EVENTS, CONTRACT_EVENT_COLS);
-  return { ok: true };
+  _contractSheet_(SHEET_CONTRACT_STORES, CONTRACT_STORE_COLS); _contractSheet_(SHEET_CONTRACT_STAFF, CONTRACT_STAFF_COLS);
+  return { ok: true, template: !!cfg.template };
+}
+
+// 台帳の stores タブ（店の住所。selfcafe-automation の portal_contract.py stores が HP から入れる）と staff タブ（本部の社員）
+const SHEET_CONTRACT_STORES = 'stores';
+const CONTRACT_STORE_COLS = ['store_id', 'name', 'address'];
+const SHEET_CONTRACT_STAFF = 'staff';
+const CONTRACT_STAFF_COLS = ['name'];
+function _contractStores_() {
+  const out = {};
+  _contractSheet_(SHEET_CONTRACT_STORES, CONTRACT_STORE_COLS).getDataRange().getValues().slice(1)
+    .forEach(r => { if (r[0]) out[String(r[0])] = { name: String(r[1] || ''), address: String(r[2] || '') }; });
+  return out;
+}
+function _contractStaff_() {
+  return _contractSheet_(SHEET_CONTRACT_STAFF, CONTRACT_STAFF_COLS).getDataRange().getValues().slice(1).map(r => String(r[0] || '').trim()).filter(Boolean);
+}
+// 本部の社員を一覧に足す（作成する人・承認する人の選択肢）
+function contractAddStaff_(p) {
+  const name = String(p.name || '').trim();
+  if (!name || name.length > 30) return { error: '名前を入れてください' };
+  return _contractLock_(() => {
+    const list = _contractStaff_();
+    if (list.indexOf(name) < 0) { _contractSheet_(SHEET_CONTRACT_STAFF, CONTRACT_STAFF_COLS).appendRow([name]); list.push(name); }
+    return { ok: true, staff: list };
+  });
 }
 
 function _contractPublicRow_(c) {
@@ -11152,7 +11205,7 @@ function contractList_() {
   let rows;
   try { rows = _contractRows_(); } catch (e) { return { ok: true, ready: false, contracts: [], message: e.message }; }
   rows.sort((a, b) => String(b.id).localeCompare(String(a.id)));
-  return { ok: true, ready: true, contracts: rows.map(_contractPublicRow_) };
+  return { ok: true, ready: true, contracts: rows.map(_contractPublicRow_), stores: _contractStores_(), staff: _contractStaff_(), hasTemplate: !!_contractCfg_().template };
 }
 
 // 契約書を登録する: 元の文書を Google ドキュメントの写しにして固定 → PDF と指紋を記録 → 相手用のリンクを作る
@@ -11160,7 +11213,11 @@ function contractCreate_(p) {
   const errors = contractValidateNew_(p);
   if (errors.length) return { errors: errors };
   const cfg = _contractCfg_();
-  const srcId = contractFileIdFromUrl_(p.docUrl);
+  if (p.useTemplate) {
+    if (!cfg.template) return { error: 'ひな形が登録されていません。文書の URL で登録してください' };
+    p.title = '業務委託契約書';
+  }
+  const srcId = p.useTemplate ? cfg.template : contractFileIdFromUrl_(p.docUrl);
   const ymd = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyyMMdd');
   const id = _contractLock_(() => {
     const cid = contractNextId_(_contractRows_().map(r => r.id), ymd);
@@ -11176,6 +11233,17 @@ function contractCreate_(p) {
   });
   if (res.getResponseCode() !== 200) return fail('契約書の文書を開けませんでした。selfcafe001 から見られる Google ドキュメントか Word の URL か確かめてください（' + res.getResponseCode() + '）');
   const docId = JSON.parse(res.getContentText()).id;
+  if (p.useTemplate) {
+    // ひな形の差し込み欄 {{店舗名}} などを埋める。埋め残しがあれば止める（欄の名前の打ちまちがい・ひな形の直し漏れ）
+    const stores = _contractStores_();
+    const values = contractTemplateValues_(p, (stores[p.storeId] && stores[p.storeId].name) || (_storeNames_()[p.storeId] || ''));
+    if (!values['店舗名']) { DriveApp.getFileById(docId).setTrashed(true); return fail('店の名前が分かりません'); }
+    const doc = DocumentApp.openById(docId), body = doc.getBody();
+    Object.keys(values).forEach(k => body.replaceText('\\{\\{' + k + '\\}\\}', String(values[k]).replace(/\\/g, '\\\\').replace(/\$/g, '\\$')));
+    const left = body.getText().match(/\{\{[^}]*\}\}/g);
+    doc.saveAndClose();
+    if (left) { DriveApp.getFileById(docId).setTrashed(true); return fail('ひな形に埋められない欄があります: ' + left.join(' ')); }
+  }
   const pdfBlob = DriveApp.getFileById(docId).getAs('application/pdf').setName(id + '_' + String(p.title).trim() + '_送付版.pdf');
   const pdf = DriveApp.getFolderById(cfg.folder).createFile(pdfBlob);
   const c = _contractLock_(() => {
@@ -11358,6 +11426,7 @@ function _contractRoutePost_(b) {
       else if (b.action === 'contractSendLink') return contractSendLink_(b);
       else if (b.action === 'contractApprove')  return contractApprove_(b);
       else if (b.action === 'contractEvents')   return contractEvents_(b);
+      else if (b.action === 'contractAddStaff') return contractAddStaff_(b);
       else                                      return contractCancel_(b);
     }
     if      (b.action === 'contractOpen')     return contractOpen_(b);
