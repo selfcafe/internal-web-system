@@ -7569,6 +7569,7 @@ function createOrderRequest(apiKey, storeId, items) {
       if (same.length === 1 && !_dateStr(same[0].order_date) && (Number(same[0].qty) !== qty || caseOf(same[0]) !== (unitMode === 'case'))) {
         const before = same[0].qty + (caseOf(same[0]) ? 'ケース' : (p.unit || ''));
         const fixed = Object.assign({}, same[0], { qty: qty, unit_mode: unitMode, case_unit: unitMode === 'case' ? (p.caseUnit || '') : '',
+          actual_qty: '', actual_unit_mode: '',   // 前の発注書の本・袋の数は消す（残すと作り直しで前の数に戻る）
           note: (same[0].note ? same[0].note + '／' : '') + 'LINE WORKS の連絡で数を直した（' + before + '→' + qty + (unitMode === 'case' ? 'ケース' : (p.unit || '')) + '）' });
         upsertOrderRows(storeId, [fixed]);   // 新着のままなので通知は出ない（下の resend で送る）
         skipped.push((p.label || p.name) + '（すでに依頼中。数を ' + before + ' → ' + qty + (unitMode === 'case' ? 'ケース' : (p.unit || '')) + ' に直しました）');
@@ -7690,9 +7691,12 @@ function _apexDraftForOrderRows_(storeId, rows, onCarried) {
         // ケースのみの品（カップ・蓋・豆など）は、行の unit_mode がバラのままでもポータルの画面ではケース。
         // 2026-10-25 新瑞橋のカップM「2」（店の画面では2ケース）を2本で発注書に書いていた
         const isCase = r => r.unit_mode === 'case' || !!m.caseOnly;
-        const allCase = rs.every(isCase), cp = Number(m.casePieces) || 1;
+        // 一度発注書に入れた行は、実際数量に本・袋の数が残っていればそれを使う（2026-11-18 鶴舞: 発注書は「1ケース＝8袋」で書き、
+        // 行にはマスタの入り数で「0.4ケース」と戻すので、作り直すたびに 0.4ケース×8袋＝3袋 → 0.16ケース → … と減っていた）
+        const exact = r => r.actual_unit_mode === 'piece' && r.actual_qty !== '' && r.actual_qty != null && Number(r.actual_qty) > 0;
+        const allCase = rs.every(r => isCase(r) && !exact(r)), cp = Number(m.casePieces) || 1;
         const qty = allCase ? rs.reduce((t, r) => t + Number(r.qty), 0)
-          : rs.reduce((t, r) => t + Number(r.qty) * (isCase(r) ? cp : 1), 0);
+          : rs.reduce((t, r) => t + (exact(r) ? Number(r.actual_qty) : Number(r.qty) * (isCase(r) ? cp : 1)), 0);
         return (m.code || pn) + '=' + qty + (allCase ? 'ケース' : '');
       }).join(',');
     };
@@ -8269,7 +8273,10 @@ function _registerOrderedRows_(storeId, items, source, documentName, opts) {
     const asCase = !!it.caseOnly && cp > 0;
     const rowQty = asCase ? Math.round(Number(it.qty) / cp * 100) / 100 : Number(it.qty);
     // ケースが割り切れないとき（24袋入りを10袋＝0.42ケース）は、実際数量に本・袋の数も入れて、検品の数を正確にする
-    const exactPieces = asCase && Number(it.qty) % cp !== 0;
+    // 発注書とポータルの商品マスタで入り数が違う品（CS3 のガムシロップ・コーヒーフレッシュ: 発注書8袋・マスタ20個/10個）も、
+    // 本・袋の数を残す。発注書を作り直すとき（_apexDraftForOrderRows_）にこの数を使う（2026-11-18 鶴舞）
+    const sheetCp = Number(it.sheetCasePieces) || 0;
+    const exactPieces = asCase && (Number(it.qty) % cp !== 0 || (sheetCp > 0 && sheetCp !== cp));
     const row = Object.assign({}, base || {}, {
       id: (base && base.id) || it.id || Utilities.getUuid(), store_id: storeId, group_id: (base && base.group_id) || groupId,
       product: it.product, label: it.label || it.product, qty: rowQty, actual_qty: exactPieces ? Number(it.qty) : '', unit: it.unit || '',
@@ -8296,7 +8303,7 @@ function _registerApexSheetItems_(storeId, sheetItems, source, documentName, opt
     const p = _portalProductForSheetCode_(x.code);
     if (!p) { unknown.push((x.name || '') + '（' + x.code + '）'); return; }
     items.push({ product: p.name, label: p.label || p.name, qty: x.qty, unit: p.unit || x.unit || '', unitPrice: x.price,
-      portalCode: String(p.code), sheetCode: String(x.code), vendor: p.vendor || '', caseOnly: !!p.caseOnly,
+      portalCode: String(p.code), sheetCode: String(x.code), vendor: p.vendor || '', caseOnly: !!p.caseOnly, sheetCasePieces: Number(x.casePieces) || 0,
       // 画面は商品マスタの入り数でケース→本・袋に直すので、記録もその入り数でケースにする（無ければ発注書の入り数）
       casePieces: Number((String(p.caseUnit || '').match(/\d+/g) || []).pop()) || x.casePieces || 0 });
   });
