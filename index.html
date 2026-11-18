@@ -6728,6 +6728,7 @@ function _multiMgrStartStore(m) {
   return stores.includes(last) ? last : (stores[0] || null);
 }
 
+const MSB_MAX_BUTTONS = 8; // これより多い担当店はボタンでなく一覧から選ぶ
 const MSB_BTN = 'padding:7px 12px;font-size:13px;font-weight:700;border-radius:16px;cursor:pointer;font-family:inherit;white-space:nowrap;';
 let _storeSwitching = false;
 function renderMultiStoreBar() {
@@ -6736,6 +6737,23 @@ function renderMultiStoreBar() {
   const m = currentMultiStoreManager();
   if (!m || m.stores.length < 1) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
   bar.style.display = '';
+  // 担当店が多い(社員の巡回用に全店など)ときは、ボタンを並べず、エリアごとの一覧から選ぶ(2026-11-18)
+  if (m.stores.length > MSB_MAX_BUTTONS) {
+    const mine = new Set(m.stores);
+    const groups = Object.keys(REGIONS).map(rId => [REGIONS[rId].label, REGIONS[rId].stores.filter(sid => mine.has(sid) && STORES[sid])]).filter(g => g[1].length);
+    const grouped = new Set(groups.flatMap(g => g[1]));
+    const rest = m.stores.filter(sid => !grouped.has(sid) && STORES[sid]);
+    if (rest.length) groups.push(['その他', rest]);
+    bar.innerHTML = `
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;background:#f0f7e8;border:1px solid #cfe3bd;border-radius:10px;padding:8px 10px;margin:8px 0">
+      <span style="font-size:12px;color:#22703d;font-weight:700;white-space:nowrap">${esc(m.name || '担当者')}さん：店舗を選ぶ</span>
+      <select id="msb-select" onchange="switchManagedStore(this.value)" style="flex:1;min-width:180px;border:1px solid #22703d;border-radius:8px;padding:8px 10px;font-size:15px;font-family:inherit;color:#22703d;font-weight:700;background:white">
+        ${groups.map(([label, sids]) => `<optgroup label="${esc(label)}">${sids.map(sid => `<option value="${esc(sid)}" ${sid === storeTab ? 'selected' : ''}>${esc(STORES[sid])}</option>`).join('')}</optgroup>`).join('')}
+      </select>
+      <button onclick="openInventoryTransfer()" style="${MSB_BTN}background:#b6952f;color:white;border:1px solid #b6952f">在庫移動</button>
+    </div>`;
+    return;
+  }
   bar.innerHTML = `
     <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;background:#f0f7e8;border:1px solid #cfe3bd;border-radius:10px;padding:8px 10px;margin:8px 0">
       <span style="font-size:12px;color:#22703d;font-weight:700;white-space:nowrap">${esc(m.name || '担当者')}さんの担当店舗</span>
@@ -7282,7 +7300,10 @@ function _mgrPageInner() {
         <input id="mgr-name" type="text" placeholder="名前（例：山田）" value="${esc(edit ? edit.name : '')}" style="${inp};width:160px">
         <input id="mgr-pw" type="text" placeholder="ログインパスワード" value="${esc(edit ? edit.password : '')}" style="${inp};width:180px">
       </div>
-      <div style="font-size:12px;font-weight:700;color:#555;margin:6px 0">担当店舗（2店舗以上）</div>
+      <div style="font-size:12px;font-weight:700;color:#555;margin:6px 0">担当店舗（2店舗以上）
+        <button type="button" onclick="document.querySelectorAll('.mgr-store-cb').forEach(c=>c.checked=true)" style="margin-left:8px;padding:3px 10px;font-size:12px;border:1px solid #22703d;background:white;color:#22703d;border-radius:12px;cursor:pointer;font-family:inherit">全店を選ぶ</button>
+        <button type="button" onclick="document.querySelectorAll('.mgr-store-cb').forEach(c=>c.checked=false)" style="margin-left:4px;padding:3px 10px;font-size:12px;border:1px solid #cbd5e1;background:white;color:#555;border-radius:12px;cursor:pointer;font-family:inherit">全部外す</button>
+        <span style="font-weight:400;color:#888">（社員が巡回して補充を入力するときなど。担当店が多いと、画面上の切り替えは店を選ぶ一覧になります）</span></div>
       ${storeChecks}
       <div style="display:flex;gap:8px;margin-top:10px">
         <button onclick="saveMultiStoreManager()" style="background:#22703d;color:white;padding:9px 18px;font-size:13px;font-weight:600;border-radius:6px;border:none;cursor:pointer;font-family:inherit">${edit ? '保存' : '追加'}</button>
