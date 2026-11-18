@@ -3241,7 +3241,8 @@ const MENU_ING_SEED = [
 
 // メニュー名を比べるための形(全角半角・ひらがなカタカナ・空白・かっこ書きの違いを無視)
 function _menuKey_(s) {
-  const t = String(s || '').normalize('NFKC').replace(/[(][^)]*[)]/g, '').replace(/\s+/g, '').replace(/[‐−–—]/g, '-').toUpperCase();
+  // 「氷入り」はアイスのボタンに付く表示で、原料は同じなので無視する(2026-11-18、写真の読み取りで「THE BLEND 氷入り」など多数)
+  const t = String(s || '').normalize('NFKC').replace(/[(][^)]*[)]/g, '').replace(/氷入り/g, '').replace(/\s+/g, '').replace(/[‐−–—]/g, '-').toUpperCase();
   return t.replace(/[ぁ-ゖ]/g, c => String.fromCharCode(c.charCodeAt(0) + 0x60));
 }
 function _menuDate_(v, tz) {
