@@ -2076,6 +2076,26 @@ function unitLabelText(name, unitMode) {
 // 別々の文字列にしてある。ケース以外（バラ数量そのままの行、砂糖の「5 袋（20）」等）や、
 // ケースサイズ表記から入り数を自動判定できない行はnullを返す（呼び出し側で従来通りの
 // 表記にフォールバックする）
+// ケースの数が整数でない行（本部の発注で 8袋＝0.8ケース のように入る）の、袋・本・個の数と単位。整数のケース・バラの行は null。
+// 小数のケースは分かりにくいので、画面には袋・個の数だけを出す（2026-11-18 塩川さん）
+function fracCasePieces(row) {
+  const p = prodByName(row.product);
+  const mode = p && p.caseOnly ? 'case' : (row.unitMode || 'piece');
+  if (!p || mode !== 'case' || row.qty === '' || row.qty == null) return null;
+  const n = Number(row.qty);
+  if (Number.isNaN(n) || Number.isInteger(n)) return null;
+  const cs = casePiecesFromUnit(p.caseUnit);
+  return cs == null ? null : { pieces: Math.round(n * cs), unit: p.unit || row.unit || '個' };
+}
+// 発注履歴の表の「数量」。小数のケースは袋・個の数で出し、「実際：」が同じ数なら重ねて出さない
+function histQtyCellHTML(row, unitTxt) {
+  const fr = fracCasePieces(row);
+  const hasActual = row.actualQty !== '' && row.actualQty != null;
+  const actualLine = hasActual && !(fr && row.actualUnitMode === 'piece' && Number(row.actualQty) === fr.pieces)
+    ? `<div style="font-size:11px;color:#888">実際：${esc(row.actualQty)}${esc(prodByName(row.product)?.unit||'')}</div>` : '';
+  if (fr) return `${fr.pieces} <span style="font-size:11px;color:#aaa">${esc(fr.unit)}</span>${actualLine}`;
+  return `${esc(row.qty)||'—'} <span style="font-size:11px;color:#aaa">${esc(unitTxt)}</span>${actualLine}`;
+}
 function caseQtyParts(row) {
   const product = prodByName(row.product);
   const mode = product && product.caseOnly ? 'case' : (row.unitMode || 'piece');
@@ -2086,11 +2106,8 @@ function caseQtyParts(row) {
       if (row.qty === '' || row.qty == null) return { qtyPart: '数量未入力', sizePart: caseSizeHint(caseSize) };
       // 本部の発注はケースの倍数でない数を 1.2ケース のような小数で入れる（30本＝1.2ケース）。
       // 発注書は本・袋の数なので、割り切れないときは本・袋の数を先に出す（2026-11-04 心斎橋 0.15ケース＝3本で混乱）
-      const n = Number(row.qty);
-      if (!Number.isNaN(n) && !Number.isInteger(n)) {
-        const pieces = Math.round(n * caseSize);
-        return { qtyPart: `${pieces}${esc(product.unit || row.unit || '個')}（${esc(row.qty)}ケース）`, sizePart: caseSizeHint(caseSize) };
-      }
+      const fr = fracCasePieces(row);
+      if (fr) return { qtyPart: `${fr.pieces}${esc(fr.unit)}`, sizePart: caseSizeHint(caseSize) };
       return { qtyPart: `${esc(row.qty)}ケース`, sizePart: caseSizeHint(caseSize) };
     }
   }
@@ -8289,6 +8306,8 @@ function _orderedQtyOf(row) {
   const useActual = row.actualQty !== '' && row.actualQty != null;
   const mode = useActual ? (row.actualUnitMode || (p.caseOnly ? 'case' : 'piece')) : (p.caseOnly ? 'case' : (row.unitMode || 'piece'));
   const qty = useActual ? row.actualQty : row.qty;
+  const fr = useActual ? null : fracCasePieces(row);   // 小数のケースは袋・個の数で出す
+  if (fr) return { qty: fr.pieces, mode: 'piece', unit: fr.unit };
   return { qty, mode, unit: mode === 'case' ? 'ケース' : (p.unit || row.unit || '個') };
 }
 // 届いた数を入れてもらう。送ったら true、やめたら false
@@ -8389,12 +8408,7 @@ function askOverdueDeliveries(all) {
     document.body.appendChild(ov);
     const pending = new Set(rows.map(r => r.id));
     const done = () => { ov.remove(); _deliveryAskOpen = null; renderStore(); resolve(); };
-    const qtyText = r => {
-      const p = prodByName(r.product) || {};
-      const useActual = r.actualQty !== '' && r.actualQty != null;
-      const mode = useActual ? (r.actualUnitMode || (p.caseOnly ? 'case' : 'piece')) : (p.caseOnly ? 'case' : (r.unitMode || 'piece'));
-      return (useActual ? r.actualQty : r.qty) + (mode === 'case' ? 'ケース' : (p.unit || r.unit || '個'));
-    };
+    const qtyText = r => { const o = _orderedQtyOf(r); return o.qty + o.unit; };
     const draw = () => {
       const left = rows.filter(r => pending.has(r.id));
       if (!left.length) { done(); return; }
@@ -9709,14 +9723,14 @@ function buildHistTable(sid, rowsOverride, showStore) {
           <td rowspan="${N}" style="padding:8px 10px;vertical-align:middle">${esc(first.orderDate)||'—'}</td>
           <td rowspan="${N}" style="padding:8px 10px;vertical-align:middle">${esc(first.deliveryDate)||'—'}</td>
           <td style="padding:8px 10px">${esc(pLabel)}</td>
-          <td style="padding:8px 10px;white-space:nowrap">${esc(row.qty)||'—'} <span style="font-size:11px;color:#aaa">${esc(unitTxt)}</span>${row.actualQty !== '' && row.actualQty != null ? `<div style="font-size:11px;color:#888">実際：${esc(row.actualQty)}${esc(prodByName(row.product)?.unit||'')}</div>` : ''}</td>
+          <td style="padding:8px 10px;white-space:nowrap">${histQtyCellHTML(row, unitTxt)}</td>
           <td rowspan="${N}" style="padding:8px 10px;white-space:pre-wrap;font-size:12px;vertical-align:middle;min-width:200px">${esc(first.note)}</td>
           <td rowspan="${N}" style="padding:8px 10px;vertical-align:middle">${first._pending ? '—' : fmtDate(first.deliveredAt)}</td>
         </tr>`;
       } else {
         html += `<tr>
           <td style="padding:6px 10px 6px 22px">${esc(pLabel)}</td>
-          <td style="padding:6px 10px;white-space:nowrap">${esc(row.qty)||'—'} <span style="font-size:11px;color:#aaa">${esc(unitTxt)}</span>${row.actualQty !== '' && row.actualQty != null ? `<div style="font-size:11px;color:#888">実際：${esc(row.actualQty)}${esc(prodByName(row.product)?.unit||'')}</div>` : ''}</td>
+          <td style="padding:6px 10px;white-space:nowrap">${histQtyCellHTML(row, unitTxt)}</td>
         </tr>`;
       }
     });

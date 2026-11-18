@@ -6935,14 +6935,28 @@ function _amazonUrlMap_() {
 // スクリプト プロパティ: GBP_PHOTO_BOT_URL（Bot のウェブアプリ URL）、GBP_PHOTO_BOT_API_KEY（Bot の API_KEY と同じ値）
 // opts.dedupe: 店の画面からの保存のとき。同じ品・同じ数の依頼の通知を6時間以内にもう送っていれば送らない
 // （2026-10-29 高畑: 「依頼する」→「取り消す」→「依頼する」で同じ依頼の通知が2通来た）。中身が変わっていれば送る
+// 依頼の行の数と単位（通知・Bot の返事用）。ケースの数が整数でないとき（発注書の袋数をマスタの入り数で割った 0.8ケース など）は、
+// 小数のケースは分かりにくいので袋・個の数で返す（2026-11-18 塩川さん）。meta は _productMeta_()
+function _orderQtyParts_(r, meta) {
+  const m = (meta || {})[r.product] || {};
+  const isCase = r.unit_mode === 'case' || !!m.caseOnly;
+  const n = Number(r.qty);
+  if (isCase && r.qty !== '' && r.qty != null && !isNaN(n) && !Number.isInteger(n)) {
+    const cp = Number(m.casePieces) || Number((String(r.case_unit || '').match(/\d+/) || [0])[0]) || 0;
+    if (cp) return { qty: Math.round(n * cp), unit: String(r.unit || '個') };
+  }
+  return { qty: r.qty, unit: isCase ? 'ケース' : String(r.unit || '') };
+}
+function _orderQtyText_(r, meta) { const q = _orderQtyParts_(r, meta); return (q.qty == null ? '' : q.qty) + q.unit; }
+
 function _withAmazonOrderNotify_(result, storeId, rows, opts) {
   try {
     const urls = _amazonUrlMap_();
     const meta = _productMeta_();   // ケースのみの品は unit_mode がバラのままでもケース（ポータルの画面と同じ扱い）
     const items = (rows || []).filter(r => r && r.product &&
       (r.is_new === true || String(r.is_new) === 'TRUE') && !(r.denied === true || String(r.denied) === 'TRUE'))
-      .map(r => ({ id: String(r.id), label: String(r.label || r.product), qty: (r.qty === '' || r.qty == null) ? '?' : r.qty,   // 数が空の依頼は ? と出す（2026-10-24）
-        unit: r.unit_mode === 'case' || (meta[r.product] || {}).caseOnly ? 'ケース' : String(r.unit || ''), url: urls[r.product] || '',
+      .map(r => ({ id: String(r.id), label: String(r.label || r.product), qty: (r.qty === '' || r.qty == null) ? '?' : _orderQtyParts_(r, meta).qty,   // 数が空の依頼は ? と出す（2026-10-24）
+        unit: _orderQtyParts_(r, meta).unit, url: urls[r.product] || '',
         vendor: (meta[r.product] || {}).vendor || '',
         // 「その他」は中身が備考欄に書かれるので、通知にも備考を載せる（2026-10-17 塩川さん。例: その他 ×1（パイプユニッシュ））
         note: r.product === 'その他' ? String(r.note || '').trim() : '' }));
@@ -7486,7 +7500,7 @@ function previewOrderText(apiKey, storeText, body) {
       const same = pend.filter(r => r.product === it.product);
       if (same.length !== 1) return;
       const r = same[0], isCase = r.unit_mode === 'case' || !!(meta[r.product] || {}).caseOnly;
-      const now = r.qty + (isCase ? 'ケース' : String(r.unit || ''));
+      const now = _orderQtyText_(r, meta);
       it.unitText += (Number(r.qty) === Number(it.qty) && isCase === (it.unitMode === 'case')) ? '（依頼中と同じ）' : '（依頼中の ' + now + ' から変更）';
     });
   } catch (e) { console.error('previewOrderText 依頼中の品の確認に失敗: ' + e.message); }
@@ -7567,7 +7581,7 @@ function createOrderRequest(apiKey, storeId, items) {
       const same = pendingRows.filter(r => r.product === p.name);
       const caseOf = r => r.unit_mode === 'case' || !!p.caseOnly;
       if (same.length === 1 && !_dateStr(same[0].order_date) && (Number(same[0].qty) !== qty || caseOf(same[0]) !== (unitMode === 'case'))) {
-        const before = same[0].qty + (caseOf(same[0]) ? 'ケース' : (p.unit || ''));
+        const before = _orderQtyText_(same[0], _productMeta_());
         const fixed = Object.assign({}, same[0], { qty: qty, unit_mode: unitMode, case_unit: unitMode === 'case' ? (p.caseUnit || '') : '',
           actual_qty: '', actual_unit_mode: '',   // 前の発注書の本・袋の数は消す（残すと作り直しで前の数に戻る）
           note: (same[0].note ? same[0].note + '／' : '') + 'LINE WORKS の連絡で数を直した（' + before + '→' + qty + (unitMode === 'case' ? 'ケース' : (p.unit || '')) + '）' });
@@ -10658,14 +10672,14 @@ function notifyOverdueDeliveries_() {
   const today = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd');
   const rows = _overdueDeliveryRows_(today);
   if (!rows.length) return { ok: true, count: 0 };
-  const names = _storeNames_(), by = {};
+  const names = _storeNames_(), by = {}, qtyMeta = _productMeta_();
   rows.forEach(r => { (by[r.store_id] = by[r.store_id] || []).push(r); });
   const lines = ['【納品済みになっていない品】納品予定日から' + DELIVERY_OVERDUE_NOTIFY_DAYS + '日以上たっても、店で「納品済み」が押されていません。',
     '届いていないのか、押し忘れかを店に確かめてください。', ''];
   Object.keys(by).sort((a, b) => String(names[a] || a).localeCompare(String(names[b] || b), 'ja')).forEach(sid => {
     lines.push('■ ' + (names[sid] || sid) + (_isFcStore_(sid) ? '（FC）' : ''));
     by[sid].sort((a, b) => a._due.localeCompare(b._due)).forEach(r =>
-      lines.push('  ・' + (r.label || r.product) + ' ' + (r.qty == null ? '' : r.qty) + (r.unit_mode === 'case' ? 'ケース' : (r.unit || '')) +
+      lines.push('  ・' + (r.label || r.product) + ' ' + _orderQtyText_(r, qtyMeta) +
         '（発注 ' + _dateStr(r.order_date) + '／' + (_dateStr(r.delivery_date) ? '納品予定 ' + _dateStr(r.delivery_date) : '納品予定日なし') + '）'));
     lines.push('');
   });
