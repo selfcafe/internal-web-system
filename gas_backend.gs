@@ -585,7 +585,9 @@ function _authStoreIdsFor_(action, p) {
 
 // 呼んでよいかを判定する。戻り値 {ok, auth(通行証の中身 or {r:'script'}), reason}
 function _authCheck_(action, p) {
-  if (AUTH_PUBLIC_ACTIONS.indexOf(action) >= 0) return { ok: true, auth: p.t ? _authVerify_(p.t) : null };
+  // 公開の action でもスクリプトの鍵が付いていればスクリプトとして扱う(getSettings の単価・パスワード類を外さないため。
+  // 2026-11-18、鍵付きで読んだ all_products に単価が無く、そのまま保存して69品の単価を消しかけた)
+  if (AUTH_PUBLIC_ACTIONS.indexOf(action) >= 0) return { ok: true, auth: _authScriptKeyOk_(p.scriptKey) ? { r: 'script', s: [] } : (p.t ? _authVerify_(p.t) : null) };
   if (_authScriptKeyOk_(p.scriptKey)) return { ok: true, auth: { r: 'script', s: [] } };
   const a = p.t ? _authVerify_(p.t) : null;
   if (!a) return { ok: false, reason: p.t ? '通行証が無効(期限切れ・パスワード変更)' : '通行証なし' };
