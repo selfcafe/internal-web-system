@@ -984,6 +984,7 @@
     <button class="sub-tab"        id="sub-machinePhoto" onclick="switchAdminView('machinePhoto')">機械内写真</button>
     <button class="sub-tab"        id="sub-meter"    onclick="switchAdminView('meter')">集計表</button>
     <button class="sub-tab"        id="sub-toyoReorder" onclick="switchAdminView('toyoReorder')">トーヨー月初発注</button>
+    <button class="sub-tab"        id="sub-patrol"   onclick="switchAdminView('patrol')">店舗巡回</button>
     <button class="sub-tab"        id="sub-bugreport" onclick="switchAdminView('bugreport')">バグ報告<span class="tab-badge" id="badge-bugreport" style="display:none"></span></button>
   </div>
 
@@ -6734,6 +6735,7 @@ let _storeSwitching = false;
 function renderMultiStoreBar() {
   const bar = document.getElementById('multi-store-bar');
   if (!bar) return;
+  if (isPatrolMode()) { _renderPatrolBar(bar); return; }
   const m = currentMultiStoreManager();
   if (!m || m.stores.length < 1) { bar.style.display = 'none'; bar.innerHTML = ''; return; }
   bar.style.display = '';
@@ -6791,6 +6793,83 @@ async function switchManagedStore(sid) {
     _storeSwitching = false;
     renderMultiStoreBar();
   }
+}
+
+/* --- 店舗巡回(2026-11-18、ユーザー依頼「社員が巡回して補充したときの画面。店ごとのアカウントに入り直さずに」) ---
+   管理者でログインしたまま、業務タブ「店舗巡回」で店を選ぶと、その店の画面(チェックシート)を開く。
+   通行証は管理者のままなので、どの店にも入力できる。画面上の帯で店を替える・管理画面に戻る。
+   巡回中は sessionStorage.patrol='1' と site_authed_store(開いている店)を置き、管理画面に戻ると消す。
+   店の画面を開いたときの「業務開始の押し忘れ」「届きましたか？」「在庫移動が届いています」は出さない(巡回の人に聞いても分からないため)。 */
+function isPatrolMode() { return sessionStorage.getItem('patrol') === '1' && isAuthed(); }
+function _patrolStoreGroups() {
+  return Object.keys(REGIONS).map(rId => [REGIONS[rId].label, REGIONS[rId].stores.filter(sid => STORES[sid])]).filter(g => g[1].length);
+}
+function renderPatrolAdmin() {
+  document.querySelector('#page-admin .table-wrap').style.display = 'none';
+  document.getElementById('pagination').style.display = 'none';
+  document.getElementById('admin-thead').innerHTML = '';
+  document.getElementById('admin-tbody').innerHTML = '';
+  document.getElementById('admin-summary').innerHTML = '';
+  const container = document.getElementById('settings-container');
+  container.style.display = 'block';
+  const region = REGIONS[adminRegion];
+  const sids = region ? region.stores.filter(sid => STORES[sid]) : [];
+  const btn = 'padding:12px 16px;font-size:15px;font-weight:700;border-radius:10px;border:1px solid #22703d;background:white;color:#22703d;cursor:pointer;font-family:inherit;min-width:140px;text-align:left';
+  container.innerHTML = `<div class="settings-card">
+      <div class="settings-card-title">店舗巡回（${esc(region ? region.label : '')}）</div>
+      <div style="${_SP_NOTE}">店舗を巡回して補充したときなどに、その店の画面でチェックシートを入力します。店を押すと、その店のチェックシートが開きます（店のパスワードは不要）。
+        終わったら、画面の上の「管理画面に戻る」を押してください。ほかのエリアの店は、上のエリアのタブで切り替えます。</div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px">${sids.map(sid => `<button style="${btn}" onclick="startPatrol('${esc(sid)}')">${esc(STORES[sid])}</button>`).join('') || '<span style="color:#888;font-size:13px">このエリアに店舗がありません</span>'}</div>
+    </div>`;
+}
+async function startPatrol(sid) {
+  if (!STORES[sid]) return;
+  sessionStorage.setItem('patrol', '1');
+  sessionStorage.setItem('site_authed_store', sid);
+  storeTab = sid;
+  location.hash = '';
+  await showPage('store');
+  try { await switchPartnerTab('checklist'); } catch (e) { console.error('startPatrol:', e); }
+  window.scrollTo(0, 0);
+}
+async function switchPatrolStore(sid) {
+  if (!STORES[sid] || sid === storeTab || _storeSwitching) return;
+  _storeSwitching = true;
+  try {
+    saveChecksheetNow(storeTab); // 切り替える前に、元の店の未保存分を送る
+    sessionStorage.setItem('site_authed_store', sid);
+    storeTab = sid;
+    const keepTab = partnerTabCurrent;
+    await showPage('store');
+    if (keepTab === 'attendance' && !isAttendanceEnabled(sid)) await switchPartnerTab('checklist');
+    else if (partnerTabCurrent !== keepTab) await switchPartnerTab(keepTab);
+  } catch (e) {
+    console.error('switchPatrolStore:', e);
+    alert('店舗を切り替えられませんでした。通信環境の良い場所でもう一度お試しください。');
+  } finally {
+    _storeSwitching = false;
+    renderMultiStoreBar();
+  }
+}
+async function endPatrol() {
+  if (storeTab && _checksheetUnsavedCount(storeTab) > 0) {
+    try { await Promise.race([saveChecksheetNow(storeTab), new Promise(r => setTimeout(r, 8000))]); } catch (_) {}
+  }
+  sessionStorage.removeItem('patrol');
+  sessionStorage.removeItem('site_authed_store');
+  location.hash = '#admin';
+  await showPage('admin');
+}
+function _renderPatrolBar(bar) {
+  bar.style.display = '';
+  bar.innerHTML = `
+    <div style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;background:#fff7e0;border:1px solid #e5c76b;border-radius:10px;padding:8px 10px;margin:8px 0">
+      <span style="font-size:12px;color:#8a6d1a;font-weight:700;white-space:nowrap">🚶 店舗巡回中</span>
+      <select onchange="switchPatrolStore(this.value)" style="flex:1;min-width:170px;border:1px solid #b6952f;border-radius:8px;padding:8px 10px;font-size:15px;font-family:inherit;color:#5c4a12;font-weight:700;background:white">
+        ${_patrolStoreGroups().map(([label, sids]) => `<optgroup label="${esc(label)}">${sids.map(sid => `<option value="${esc(sid)}" ${sid === storeTab ? 'selected' : ''}>${esc(STORES[sid])}</option>`).join('')}</optgroup>`).join('')}
+      </select>
+      <button onclick="endPatrol()" style="${MSB_BTN}background:#6b7280;color:white;border:1px solid #6b7280">管理画面に戻る</button>
+    </div>`;
 }
 
 /* --- 在庫移動の入力画面 --- */
@@ -7390,6 +7469,7 @@ async function showPage(p) {
   // ログインしていないのに店の画面を描くと、ログイン画面の裏で読み込みが走る(2026-11-16)
   if (p === 'store' && !window.__ONB && !isSiteAuthed() && !isAuthed()) { showLock(); return; }
   if (p === 'admin') await ensureAdminSecrets();
+  if (p === 'admin' && sessionStorage.getItem('patrol') === '1') { sessionStorage.removeItem('patrol'); sessionStorage.removeItem('site_authed_store'); }
   // 管理画面は全店舗分の設定が前提(店舗分だけのまま開くと他店舗の設定が空に見え、保存で消える恐れ)
   if (p === 'admin' && _cachedSettingsScope() !== 'all') {
     alert('管理画面の設定を読み込めませんでした。通信環境の良い場所で再読み込みしてください。');
@@ -7414,7 +7494,7 @@ async function showPage(p) {
   }
   document.getElementById('page-store').classList.toggle('active', p==='store');
   document.getElementById('page-admin').classList.toggle('active', p==='admin');
-  if (p==='store') { renderStore(); maybeShowAttendanceReminder(); askOverdueDeliveries(false).then(() => askIncomingTransfers()); }
+  if (p==='store') { renderStore(); if (!isPatrolMode()) { maybeShowAttendanceReminder(); askOverdueDeliveries(false).then(() => askIncomingTransfers()); } }
   if (p==='admin') { renderAdmin(); refreshBugReportBadge(); }
   updateBadges();
 }
@@ -8399,7 +8479,7 @@ function switchAdminView(v) {
   if (v === 'lost') _lostForceRefresh = true;
   if (v === 'history') _historyForceRefresh = true;
   if (v === 'bugreport') _bugReportAdminForceRefresh = true;
-  ['overview','history','lost','machinePhoto','meter','toyoReorder','bugreport'].forEach(k => document.getElementById('sub-'+k)?.classList.toggle('active', k===v));
+  ['overview','history','lost','machinePhoto','meter','toyoReorder','patrol','bugreport'].forEach(k => document.getElementById('sub-'+k)?.classList.toggle('active', k===v));
   document.getElementById('admin-region-nav')?.classList.toggle('nav-disabled', v === 'lost' || v === 'bugreport' || v === 'toyoReorder');
   const hideFc = _fcTabHiddenForView_(v);
   const subFcEl = document.getElementById('sub-fc'), menuFcEl = document.getElementById('menu-fc');
@@ -8418,6 +8498,7 @@ function renderAdmin() {
   else if (adminView==='machinePhoto') renderMachinePhotoAdmin();
   else if (adminView==='meter')      renderMeterAdmin();
   else if (adminView==='toyoReorder') renderToyoReorderAdmin();
+  else if (adminView==='patrol')     renderPatrolAdmin();
   else if (adminView==='attendance') renderAttendanceAdmin();
   else if (adminView==='bugreport')  renderBugReportAdmin();
   else                                renderSettings();

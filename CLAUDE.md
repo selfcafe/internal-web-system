@@ -415,6 +415,12 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 - **注意**: GAS側にはログイン確認が無く、担当者IDと担当店舗の照合は入力ミス防止にすぎない(セキュリティの作り直しは別作業)。棚卸を送った後に移動を入れると、`inventory_log`の消費量は古いまま(納品済みボタンと同じ扱い)。練習モード(onboarding)には担当者の機能を入れていない。
 - **どの店からでも送れる在庫移動**(2026-11-12〜、塩川さん「同一担当者じゃなくていい」): 発注タブの上の「🔁 在庫移動（ほかの店へ送る）」(`openStoreTransfer`)→商品・数量(バラ)・送り先の店・メモ→`sendInventoryTransfer`。送った店の当月納品に−(送った月)。受け取る店は画面を開いたとき「在庫移動が届いています」(`askIncomingTransfers`、「届きましたか？」のあと)→「受け取った」で`receiveInventoryTransfer`が受け取った店の当月納品に＋(押した月)。「まだ届いていない」はその日は聞かない(端末ごと`transfer_snooze_<店>`)。受け取られる前は送った店が取り消せる(`cancelSentInventoryTransfer`、−を戻す)。直営どうしだけ(FC店は原料に値段を付けないため。GAS `_isFcStore_`・画面 `REGIONS.fc`)。`inventory_transfer`の末尾に status(''=担当者の移動・その場で確定/移動中/受け取り済み/取り消し)・sent_by・received_at・received_by を足した(`_ensureTransferCols_`が見出しを書く)。移動中は今月・先月のファイルを探す(`_transferSheetIds_`)。送って3日たっても移動中なら毎朝`notifyOverdueTransfers_`が塩川用Botへ。管理画面「履歴 › 店舗間の在庫移動」で地域の今月・先月の移動と金額(単価×数)を見て、本部が代わりに受け取り済み・取り消しできる。担当者の「在庫移動」(上)はその場で確定のまま。
 
+### 店舗巡回(管理者が店の画面に入る、2026-11-18〜)
+- **しくみ**: 管理画面の業務タブ「店舗巡回」(`renderPatrolAdmin`、エリアのタブの店をボタンで並べる)→店を押すと`startPatrol`がその店の画面(チェックシートのタブ)を開く。社員が巡回して補充したときに、店ごとのパスワードで入り直さずに入力するため(ユーザー依頼)。通行証は管理者のままなので、どの店の操作もできる。
+- 巡回中は sessionStorage `patrol='1'` と`site_authed_store`(開いている店)を置き、店の画面の上の帯(`_renderPatrolBar`、`renderMultiStoreBar`の先頭で分岐)で店を替える(`switchPatrolStore`、元の店の未保存分を送ってから)・「管理画面に戻る」(`endPatrol`)。管理画面を開くと(`showPage('admin')`)巡回の状態を消す。
+- 巡回中は店の画面を開いたときの「業務開始の押し忘れ」「届きましたか？」「在庫移動が届いています」を出さない(`isPatrolMode`)。
+- 複数店舗の担当者(下)でも同じことはできるが、管理者でログインする人はこちらが早い。
+
 ### ログインの確認(通行証、2026-10-17〜)
 - **しくみ**: ログイン画面のパスワードを`login`(doPost、ロックを取らない)でGASが照合し、通行証(`token`)を返す。端末はsessionStorage `auth_t`に置き、`gasGet`/`gasPost`がすべての通信に`t`として付ける。中身は種類(admin/store/mgr/onb)・使える店舗・パスワードの指紋・期限12時間で、Script Properties `AUTH_SECRET`(初回に自動作成)で署名する。パスワードを変えると古い通行証は使えない。30分操作が無いと自動ログアウトする端末側の動きはそのまま。
 - **判定**: `_authCheck_`(gas_backend.gs)。action ごとの区分は`AUTH_PUBLIC_ACTIONS`(認証なし: login・設定の読み込み・Bot用apiKey付き)/`AUTH_ONB_ACTIONS`(練習)/`AUTH_STORE_ACTIONS`(店舗IDが自分の範囲)/`AUTH_ANY_ACTIONS`(店舗の通行証なら可)で、どれにも無いactionは管理者かスクリプトの鍵だけ。**actionを足したら、どの区分かを必ず決めて一覧に足す**(足し忘れると管理者専用になり、パートナー画面から呼ぶと拒否される)。getOrdersは店舗・担当者なら自分の範囲の行だけ返す。
