@@ -194,6 +194,7 @@
       if (c.signed_pdf_url) html += '<a href="' + esc(c.signed_pdf_url) + '" target="_blank" rel="noopener" style="' + BTN + 'background:#22703d;color:white;padding:6px 12px;font-size:13px;text-decoration:none">締結済みの契約書を開く</a>';
       if (c.status === 'sent') {
         html += '<button onclick="actrCopy(\'' + esc(c.id) + '\')" style="' + BTN + 'background:#22703d;color:white;padding:6px 10px;font-size:12px">相手用のリンクをコピー</button>'
+          + '<button onclick="actrQr(\'' + esc(c.id) + '\')" style="' + BTN + 'background:#22703d;color:white;padding:6px 10px;font-size:12px">QR コードを表示（対面用）</button>'
           + '<button onclick="actrSend(\'' + esc(c.id) + '\')" style="' + BTN + 'background:#f3f4f6;color:#111;padding:6px 10px;font-size:12px">リンクをメールで送る</button>';
       }
       if (c.status === 'agreed') html += '<button onclick="actrApprove(\'' + esc(c.id) + '\')" style="' + BTN + 'background:#22703d;color:white;padding:6px 12px;font-size:13px">承認して締結する</button>';
@@ -252,6 +253,48 @@
     try { await navigator.clipboard.writeText(c.link); note('actr-msg-' + id, 'リンクをコピーしました。相手ご本人にだけ渡してください。', true); }
     catch (e) { prompt('このリンクをコピーして、相手ご本人にだけ渡してください', c.link); }
   };
+  // 対面用：相手用のリンクを QR コードで大きく出し、その場で相手のスマホで読み取ってもらう。
+  // QR はこの画面の中で作る（リンクを外部のサービスに送らない）。作る部品（qrcode-generator、MIT）は押したときだけ読み込む
+  var QR_LIB = 'https://cdnjs.cloudflare.com/ajax/libs/qrcode-generator/1.4.4/qrcode.min.js';
+  function loadQrLib() {
+    if (window.qrcode) return Promise.resolve();
+    if (C.qrLoading) return C.qrLoading;
+    C.qrLoading = new Promise(function (resolve, reject) {
+      var s = document.createElement('script');
+      s.src = QR_LIB; s.onload = resolve; s.onerror = function () { C.qrLoading = null; reject(new Error('load')); };
+      document.head.appendChild(s);
+    });
+    return C.qrLoading;
+  }
+  window.actrQr = async function (id) {
+    var c = find(id);
+    var box = $('actr-qr');
+    if (!box) {
+      box = document.createElement('div'); box.id = 'actr-qr';
+      box.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,.6);z-index:2100;display:flex;align-items:center;justify-content:center;padding:16px;box-sizing:border-box';
+      box.onclick = function (e) { if (e.target === box) window.actrQrClose(); };
+      document.body.appendChild(box);
+    }
+    box.style.display = 'flex';
+    box.innerHTML = '<div style="background:white;border-radius:14px;padding:20px;max-width:420px;width:100%;text-align:center;max-height:100%;overflow:auto">'
+      + '<div style="font-weight:700;font-size:17px;color:#22703d">' + esc(c.partner_name) + ' 様の契約書</div>'
+      + '<div style="font-size:13px;color:#555;margin:6px 0 12px;line-height:1.6">スマホのカメラでこの QR コードを読み取ってください。<br>契約書の画面が開きます。</div>'
+      + '<div id="actr-qr-img" style="min-height:260px;display:flex;align-items:center;justify-content:center;color:#888;font-size:13px">QR コードを作っています…</div>'
+      + '<div style="font-size:12px;color:#b45309;margin-top:10px;line-height:1.6">この QR コードはご本人専用です。ご本人以外に見せたり、写真に残したりしないでください。<br>確認コードは、登録のメールアドレス（' + esc(c.email) + '）に届きます。</div>'
+      + '<button onclick="actrQrClose()" style="' + BTN + 'background:#22703d;color:white;padding:11px;font-size:15px;width:100%;margin-top:14px">閉じる</button></div>';
+    try {
+      await loadQrLib();
+      var qr = window.qrcode(0, 'M'); // 大きさは自動、誤り訂正は中
+      qr.addData(c.link); qr.make();
+      $('actr-qr-img').innerHTML = qr.createSvgTag({ cellSize: 6, margin: 4, scalable: true });
+      var svg = $('actr-qr-img').querySelector('svg');
+      if (svg) { svg.style.width = '100%'; svg.style.maxWidth = '300px'; svg.style.height = 'auto'; }
+    } catch (e) {
+      $('actr-qr-img').innerHTML = '<span style="color:#dc2626">QR コードを作れませんでした（通信の状態を確かめてください）。「相手用のリンクをコピー」か「リンクをメールで送る」を使ってください。</span>';
+    }
+  };
+  window.actrQrClose = function () { var b = $('actr-qr'); if (b) { b.style.display = 'none'; b.innerHTML = ''; } };
+
   window.actrSend = async function (id) {
     var c = find(id), by = needWho();
     if (!by || !confirm(c.partner_name + ' さん（' + c.email + '）に、契約書のリンクをメールで送ります。よろしいですか？')) return;
