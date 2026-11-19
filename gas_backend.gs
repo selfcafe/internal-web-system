@@ -877,7 +877,7 @@ function doPost(e) {
     if      (_denied)                           result = _denied;
     else if (_isLwCallback)                     result = _routeLineWorksCallback_(b, e.parameter.bot);
     else if (b.action === 'saveOrders')         result = saveOrders(b.storeId, b.rows);
-    else if (b.action === 'upsertOrders')       result = upsertOrderRows(b.storeId, b.rows);
+    else if (b.action === 'upsertOrders')       result = upsertOrderRows(b.storeId, b.rows, b.__auth);
     else if (b.action === 'deleteOrders')       result = deleteOrderRows(b.ids);
     else if (b.action === 'saveSetting')        result = saveSetting(b.key, b.value);
     else if (b.action === 'saveSettingMerge')   result = saveSettingMerge(b.key, b.value);
@@ -993,6 +993,8 @@ function _dispatchNotifies_(result) {
       else if (n.type === 'amazonOrderNew' && n.batch) _queueOrderNotify_(n);
       else if (n.type === 'amazonOrderNew')        sendAmazonOrderToBot_(n.storeId, n.items, n.toyo);
       else if (n.type === 'pricePhotoNew')         dispatchPricePhotoRead_(n.id);
+      // 発注ルールを満たさない依頼の自動差し戻し(2026-11-19)。文字だけ送れる窓口(バグ報告と同じ)で本部へ
+      else if (n.type === 'orderRuleRejected')     sendBugReportToOwnerBot_(n.message);
     } catch (e) {
       console.error('LINE WORKS通知エラー(ロック解放後):', e.message);
     }
@@ -1491,7 +1493,7 @@ function _orderRowSame_(cur, next) {
 // 割り込むと、本当は行があるのに0件に見えてしまう（実際にこの隙間が原因でデータが
 // 消える事故が発生した）。idで一致する行だけを個別に更新・追加し、他の行には一切
 // 触れないため、この種の空白状態が構造的に発生しない。
-function upsertOrderRows(storeId, rows) {
+function upsertOrderRows(storeId, rows, auth) {
   const sheet = getSheet(SHEET_ORDERS);
   ensureHeaders(sheet, ORDER_COLS);
   if (!rows || !rows.length) return { ok: true };
@@ -1516,6 +1518,10 @@ function upsertOrderRows(storeId, rows) {
     });
   }
 
+  // アペックスの発注ルール(1回の発注で1品以上を1ケース以上)を満たさない店からの依頼は、書き込む前に差し戻す(2026-11-19)
+  const ruleDenied = _rejectNoCaseApexRequests_(storeId, rows, current, auth);
+  const ruleDeniedIds = ruleDenied.map(r => String(r.id));
+
   const dateCols = ['request_date', 'order_date', 'delivery_date'];
   const toAppend = [];
   const changedRowNums = [];
@@ -1527,7 +1533,7 @@ function upsertOrderRows(storeId, rows) {
     if (rowNum) {
       if (_orderRowSame_(current[String(r.id)], values)) return;
       const was = current[String(r.id)][deniedIdx];
-      if ((r.denied === true || String(r.denied) === 'TRUE') && !(was === true || String(was) === 'TRUE')) newlyDenied.push(String(r.id));
+      if ((r.denied === true || String(r.denied) === 'TRUE') && !(was === true || String(was) === 'TRUE') && ruleDeniedIds.indexOf(String(r.id)) < 0) newlyDenied.push(String(r.id));
       sheet.getRange(rowNum, 1, 1, ORDER_COLS.length).setValues([values]);
       changedRowNums.push(rowNum);
     } else {
@@ -1551,7 +1557,81 @@ function upsertOrderRows(storeId, rows) {
 
   const res = { ok: true };
   if (newlyDenied.length) res.apexDraftNotes = _cleanupDeniedApexDrafts_(newlyDenied);   // 管理画面がお知らせに出す
-  return _withAmazonOrderNotify_(res, storeId, rows.filter(r => !wasNew[String(r.id)]), { dedupe: true });
+  const out = _withAmazonOrderNotify_(res, storeId, rows.filter(r => !wasNew[String(r.id)]), { dedupe: true });
+  if (ruleDenied.length) {
+    // 画面(新しい版)はこの印を見て、その場で「受け付けられませんでした」と出す。本部にも1通知らせる
+    out.ruleDenied = ruleDenied.map(r => ({ id: String(r.id), note: r.note }));
+    out.ruleDeniedMessage = APEX_NO_CASE_STORE_MSG;
+    const n = { type: 'orderRuleRejected', message: _orderRuleRejectedText_(storeId, ruleDenied) };
+    out._notify = out._notify ? [].concat(out._notify, n) : n;
+  }
+  return out;
+}
+
+// アペックスの発注ルール: 1回の発注(店ごと)で、1品以上を1ケース以上にする。ほかの品は袋・本・個でよい。
+// 店の画面は依頼の前に止める(index.html の lockGroup)が、古い画面を開いたままの端末は止まらない
+// (2026-11-18 天満: ペーパーフィルター5個だけの依頼がそのまま届き、発注書の下書きまでできた)。
+// そこで保存のときにも確かめ、満たさない依頼は「否認＋理由」にして受け付けない。発注書・下書き・発注依頼の通知は作らない。
+// ・確かめるのは、この保存であらたに依頼になったアペックス(apex・cs3)の行。本部(管理者・スクリプト)の保存は対象外
+// ・この店のまだ発注していない依頼(今回の行も含む)に1ケース以上の品があれば、一緒に発注できるので通す(画面と同じ)
+// ・入り数(ケース)の登録が無い品(ペーパーフィルター・ダージリンなど)は、数がいくつでも「1ケース以上」に数えない
+// ・一度差し戻した行を、古い画面が「依頼中」のまま送り直しても、差し戻しのままにする
+const APEX_NO_CASE_MARK = '【自動で差し戻し】';
+const APEX_NO_CASE_STORE_MSG = 'アペックスの品は、1回の発注で1品以上を1ケース以上にする決まりです。ケースで頼む品（コーヒー豆・カップなど）を一緒に入れて、もう一度依頼してください。';
+function _apexRowReachesCase_(r, meta) {
+  const m = meta[r.product];
+  const n = Number(r.qty);
+  if (!m || !m.casePieces || !(n > 0)) return false;
+  const asCase = m.caseOnly || String(r.unit_mode || 'piece') === 'case';
+  return (asCase ? n * m.casePieces : n) >= m.casePieces;
+}
+function _rejectNoCaseApexRequests_(storeId, rows, current, auth) {
+  const out = [];
+  try {
+    if (auth && (auth.r === 'admin' || auth.r === 'script')) return out;
+    const isTrue = v => v === true || String(v).toUpperCase() === 'TRUE';
+    const meta = _productMeta_();
+    const isApex = r => !!(r && r.product && meta[r.product] && APEX_ORDER_VENDORS.indexOf(meta[r.product].vendor || '') >= 0);
+    const pending = r => isTrue(r.is_new) && isTrue(r.locked) && !isTrue(r.denied) && !_dateStr(r.order_date);
+    const curObj = id => { const c = current[String(id)]; if (!c) return null; const o = {}; ORDER_COLS.forEach((k, i) => { o[k] = c[i]; }); return o; };
+    // 差し戻した行の送り直し(古い画面)は、差し戻しのままにする。数・品を直して依頼し直したものは下で確かめ直す
+    const kept = {};
+    rows.forEach(r => {
+      const c = curObj(r.id);
+      if (!c || !isTrue(c.denied) || String(c.note || '').indexOf(APEX_NO_CASE_MARK) < 0 || !pending(r)) return;
+      if (String(r.product) === String(c.product) && Number(r.qty) === Number(c.qty) && String(r.unit_mode || '') === String(c.unit_mode || '')) {
+        r.denied = true; r.is_new = true; r.note = c.note; kept[String(r.id)] = true;
+      } else {
+        r.note = String(r.note || '').split('\n').filter(l => l.indexOf(APEX_NO_CASE_MARK) < 0).join('\n');
+      }
+    });
+    const fresh = rows.filter(r => isApex(r) && pending(r) && !kept[String(r.id)] && (() => {
+      const c = curObj(r.id);
+      return !c || !isTrue(c.is_new) || isTrue(c.denied);   // 新しい行・下書きだった行・差し戻しから直した行
+    })());
+    if (!fresh.length) return out;
+    const byId = {};
+    Object.keys(current).forEach(id => { const o = curObj(id); if (String(o.store_id) === String(storeId)) byId[id] = o; });
+    rows.forEach(r => { byId[String(r.id)] = r; });
+    const pool = Object.keys(byId).map(id => byId[id]).filter(r => isApex(r) && pending(r));
+    if (pool.some(r => _apexRowReachesCase_(r, meta))) return out;
+    fresh.forEach(r => {
+      const note = String(r.note || '').trim();
+      r.denied = true; r.is_new = true;
+      r.note = (note ? note + '\n' : '') + '【否認理由】' + APEX_NO_CASE_MARK + APEX_NO_CASE_STORE_MSG;
+      out.push(r);
+    });
+  } catch (e) { console.error('_rejectNoCaseApexRequests_ error: ' + e.message); }
+  return out;
+}
+function _orderRuleRejectedText_(storeId, rows) {
+  const meta = _productMeta_();
+  const name = (_storeNames_()[storeId] || storeId) + (_isFcStore_(storeId) ? '（FC）' : '');
+  return ['【発注依頼を自動で差し戻しました】' + name,
+    '（アペックスの発注ルールを満たしていないため、受け付けていません。発注書・下書きは作っていません）', '']
+    .concat(rows.map(r => '・' + (r.label || r.product) + ' ' + _orderQtyText_(r, meta)))
+    .concat(['', '理由: アペックスの品がどれも1ケースに届いていません（1回の発注で1品以上を1ケース以上にする決まり）。',
+      '店の画面には「否認（理由つき）」で出ます。古い画面を開いたままの店には伝わらないことがあるので、急ぎのようなら店に声をかけてください。']).join('\n');
 }
 
 // 指定したidの行だけを個別に削除する。他の行（他店舗はもちろん、同じ店舗の
