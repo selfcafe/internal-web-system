@@ -2300,6 +2300,19 @@ function updatePartnerOrderBadge() {
   if (deliveryBadge) deliveryBadge.style.display = needsDelivery ? '' : 'none';
   const deliveryMsg = document.getElementById('delivery-new-msg');
   if (deliveryMsg) deliveryMsg.style.display = needsDelivery ? '' : 'none';
+  // 何件あるか・期限を過ぎた件数も出す(2026-11-20 検品の段階2: 件数の表示、過ぎたら赤)。
+  // 過ぎた＝納品予定日(無ければ発注日から DELIVERY_ASK_DAYS_NO_DATE 日)より後。「届きましたか？」で聞く品と同じ決め方
+  if (deliveryMsg && needsDelivery) {
+    const waiting = groups.filter(g => !g.some(r => r.denied) && !g[0].isNew)
+      .flatMap(g => g.filter(r => String(r.product || '').trim() && (!r.deliveryDate || r.deliveryDate <= t)));
+    const late = waiting.filter(r => { try { return !!r.orderDate && _deliveryDue(r) < t; } catch (e) { return false; } }).length;
+    deliveryMsg.textContent = `届いたら「納品済み」を押す商品が ${waiting.length}件 あります。`
+      + (late ? `うち ${late}件 は、届く予定の日を過ぎています（予定日が無い品は発注から${DELIVERY_ASK_DAYS_NO_DATE}日）。届いていれば、すぐ「納品済み」を押してください。` : '');
+    deliveryMsg.style.color = late ? '#b91c1c' : '#c2410c';
+    deliveryMsg.style.background = late ? '#fee2e2' : '#ffedd5';
+    deliveryMsg.style.borderColor = late ? '#fca5a5' : '#fdba74';
+    if (deliveryBadge) deliveryBadge.textContent = '納品 ' + waiting.length;
+  }
 
   const orderTabBtn = document.getElementById('ptab-order');
   if (orderTabBtn) orderTabBtn.classList.toggle('tab-blink', needsAttention || needsDelivery);
