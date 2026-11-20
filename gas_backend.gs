@@ -907,7 +907,7 @@ function doPost(e) {
     else if (b.action === 'checkWaterStockMismatch') result = checkWaterStockMismatch(b.storeId, b.product);
     else if (b.action === 'reportScriptFailure') result = reportScriptFailure(b.message, b.key);
     else if (b.action === 'reportScriptRecovery') result = reportScriptRecovery(b.message, b.key);
-    else if (b.action === 'saveAttendance')      result = saveAttendance(b.storeId, b.name, b.lat, b.lng);
+    else if (b.action === 'saveAttendance')      result = saveAttendance(b.storeId, b.name, b.lat, b.lng, b.noLocation);
     else if (b.action === 'setAttendanceStartTime') result = setAttendanceStartTime(b.storeId, b.name, b.time);
     else if (b.action === 'saveLeaveRequest')    result = saveLeaveRequest(b.storeId, b.name, b.leaveDate);
     else if (b.action === 'saveOnboardingProgress') result = saveOnboardingProgress(b.name, b.storeId, b.chapter, b.chapterTitle, b.deviceId);
@@ -3729,7 +3729,10 @@ function _haversineMeters(lat1, lng1, lat2, lng2) {
 // 対応。連打や複数端末からのほぼ同時押しで別々の行が2つできてしまう問題も、この「当日1人1行」への
 // 統一で結果的に解消される——クライアント側の連打防止(doAttendanceClockInのボタン無効化)は
 // あくまで補助で、こちらがデータ上の最終防御）
-function saveAttendance(storeId, name, lat, lng) {
+// noLocation: 端末が位置情報を渡せないとき(許可が外れた・アプリ内のブラウザで開いた等)に「位置情報なしで記録する」で押した打刻。
+// 店から離れた打刻と同じ「要確認」(within_range=false)にして、本人の申告時刻と映像で本部が確かめる(2026-11-20 藤が丘)
+function saveAttendance(storeId, name, lat, lng, noLocation) {
+  if (noLocation) { lat = ''; lng = ''; }
   const sheet = getSheet(SHEET_ATTENDANCE);
   ensureHeaders(sheet, ATTENDANCE_COLS);
 
@@ -3741,6 +3744,7 @@ function saveAttendance(storeId, name, lat, lng) {
     const dist = _haversineMeters(Number(lat), Number(lng), Number(base.lat), Number(base.lng));
     withinRange = dist <= (ATTENDANCE_THRESHOLD_BY_STORE[storeId] || ATTENDANCE_THRESHOLD_M);
   }
+  if (noLocation) withinRange = false;
 
   const now = new Date();
   // 「同じ日に同じ人がもう一度打刻したら上書き」の"同じ日"は暦日ではなく営業日(AM4:30締め)で
