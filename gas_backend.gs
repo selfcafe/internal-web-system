@@ -450,7 +450,8 @@ const SHEET_AUTH_LOG = 'auth_log';
 const AUTH_SECRET_SETTING_KEYS = ['store_passwords', 'admin_pin', 'onboarding_password'];
 // 認証なしで呼べるもの(Bot用のapiKey付きは各関数の中で鍵を確かめる)
 const AUTH_PUBLIC_ACTIONS = ['login', 'authStatus', 'getSettings', 'getStoreSettings',
-  'markAmazonOrdered', 'markAmazonDenied', 'previewOrderText', 'createOrderRequest', 'getProductAlternatives'];
+  'markAmazonOrdered', 'markAmazonDenied', 'previewOrderText', 'createOrderRequest', 'getProductAlternatives',
+  'importSteraDailyFromBot'];
 // 練習モードの通行証で呼べるもの(onboarding-sandbox.js が本物へ送るものと揃える)
 const AUTH_ONB_ACTIONS = ['getSteraStockEstimate', 'getSteraProductGroups', 'getOnboardingProgress', 'saveOnboardingProgress'];
 // 店舗の通行証で呼べるもの: 店舗IDが自分の範囲(店舗・担当店舗)に入っていること。店舗IDが空(=全店舗)は管理者だけ
@@ -902,6 +903,7 @@ function doPost(e) {
     else if (b.action === 'importSteraOrdersCsv') result = importSteraOrdersCsv(b.csvText);
     else if (b.action === 'importSteraDailySales') result = importSteraDailySales(b.dateStr, b.csvText);
     else if (b.action === 'importSteraDailySalesBulk') result = importSteraDailySalesBulk(b.csvText);
+    else if (b.action === 'importSteraDailyFromBot') result = importSteraDailyFromBot(b.apiKey, b.csvText, b.minDate, b.dryRun);
     else if (b.action === 'updateSteraRealtimeToday') result = updateSteraRealtimeToday(b.dateStr, b.rows);
     else if (b.action === 'checkSteraRefunds') result = checkSteraRefunds(b.dateStr, b.refunds);
     else if (b.action === 'checkWaterStockMismatch') result = checkWaterStockMismatch(b.storeId, b.product);
@@ -8997,7 +8999,9 @@ function importSteraDailySales(dateStr, csvText) {
 // 対象となった日付は(スプレッドシート上に既存の行があってもなくても)まとめて上書きする——
 // 通常のimportSteraDailySalesと同じ「取り直し対応」の考え方を複数日分に拡張したもの。
 // ?action=importSteraDailySalesBulk(POST、{csvText})で実行。
-function importSteraDailySalesBulk(csvText) {
+function importSteraDailySalesBulk(csvText, opts) {
+  opts = opts || {};
+  let outOfRangeRows = 0;
   const rows = Utilities.parseCsv(csvText);
   if (!rows.length) return { error: 'CSVが空です' };
   const hdrs = rows[0].map(String);
@@ -9023,6 +9027,8 @@ function importSteraDailySalesBulk(csvText) {
     const createdAt = String(r[idx['作成日時']] || '');
     const dateStr = _steraBusinessDateFromDateTime_(createdAt);
     if (!dateStr) { unparsedDateRows++; continue; }
+    // 一部しか入っていない営業日(CSVの期間の端)は取り込まない。入れると、その日の既存の行が端の分だけに置き換わってしまう
+    if ((opts.minDate && dateStr < opts.minDate) || (opts.maxDate && dateStr > opts.maxDate)) { outOfRangeRows++; continue; }
     const storeNameRaw = r[idx['店舗名']];
     const storeId = nameToId[normalize(storeNameRaw)];
     if (!storeId) { unmatchedStores[storeNameRaw] = true; continue; }
@@ -9040,6 +9046,10 @@ function importSteraDailySalesBulk(csvText) {
   });
   const coveredDates = {};
   newRows.forEach(r => { coveredDates[r[0]] = true; });
+  if (opts.dryRun) {
+    return { ok: true, dryRun: true, datesCovered: Object.keys(coveredDates).sort(), rows: newRows.length, unparsedDateRows, outOfRangeRows,
+      unmatchedStores: Object.keys(unmatchedStores) };
+  }
 
   const dIdx = STERA_DAILY_COLS.indexOf('date');
   // 年またぎ対応(2026-09-12): 1回のCSV(直近3日プリセット等)に12/31と1/1が混在する年に1回のケースに
@@ -9072,8 +9082,29 @@ function importSteraDailySalesBulk(csvText) {
     datesCovered: Object.keys(coveredDates).sort(),
     rows: newRows.length,
     unparsedDateRows,
+    outOfRangeRows,
     unmatchedStores: Object.keys(unmatchedStores)
   };
+}
+
+// LINE WORKS Bot(selfcafe-automation の gas/gbp-photo-bot/SteraDaily.gs)が、ステラの注文詳細CSV(全店・数日分)を
+// 送ってくる入口(2026-11-20)。PC(Playwright)での取込み(2026-10-12 停止、CLAUDE.md 7.4)の置き換えで、PC が要らない。
+// 鍵は Amazon の通知と同じ GBP_PHOTO_BOT_API_KEY。minDate は CSV の期間の最初の暦日("YYYY-MM-DD")。
+// 取り込むのは「全部そろっている営業日」だけ: minDate の営業日(その日の AM4:30〜)から、きのうの営業日まで。
+// minDate の 0:00〜4:29 は前の営業日の端、いまの営業日はまだ途中なので、どちらも入れない(入れるとその日の行が端の分だけになる)。
+// dryRun なら書き込まず、何行・どの日が入るかだけ返す。
+function importSteraDailyFromBot(apiKey, csvText, minDate, dryRun) {
+  const key = PropertiesService.getScriptProperties().getProperty('GBP_PHOTO_BOT_API_KEY');
+  if (!key || apiKey !== key) return { error: 'unauthorized' };
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(minDate || ''))) return { error: 'minDate は YYYY-MM-DD で指定してください' };
+  const todayBiz = _steraBusinessDateFromDateTime_(Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss'));
+  const t = new Date(todayBiz + 'T00:00:00Z');
+  t.setUTCDate(t.getUTCDate() - 1);
+  const maxDate = Utilities.formatDate(t, 'UTC', 'yyyy-MM-dd');
+  if (minDate > maxDate) return { ok: true, datesCovered: [], rows: 0, note: 'そろっている営業日がまだありません' };
+  const res = importSteraDailySalesBulk(csvText, { minDate: String(minDate), maxDate: maxDate, dryRun: !!dryRun });
+  res.minDate = String(minDate); res.maxDate = maxDate;
+  return res;
 }
 
 // storeId×prdId(単一)について、(fromDateExclusive, toDateInclusive]の範囲でstera_daily_salesの
