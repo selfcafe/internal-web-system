@@ -11107,6 +11107,7 @@ async function loadPricePhotoCard(force) {
   try {
     const r = await gasGet('getPricePhotoStatus', { storeId: sid });
     if (sid !== storeTab) return;
+    if (!_pricePhotoState || _pricePhotoState.storeId !== sid) _pricePhotoExtra = 0;   // 足した台数は店ごと(別の店に持ち越さない)
     _pricePhotoState = r && r.ok ? { storeId: sid, at: Date.now(), on: !!r.on, configuredCount: r.configuredCount, machines: r.machines || [] } : null;
   } catch (e) { _pricePhotoState = null; }
   renderPricePhotoCard();
@@ -11150,7 +11151,7 @@ function renderPricePhotoCard() {
          ・チェックシート・発注に出す<b>原料をメニューに合わせる</b>（「○○が無い」を無くすため）
        </div>
        ${rows}
-       <div style="font-size:12px;margin-top:6px"><a href="javascript:void(0)" onclick="_pricePhotoExtra++;renderPricePhotoCard()" style="color:#22703d">＋ 機械がもう1台ある</a></div>
+       <div style="font-size:12px;margin-top:6px"><a href="javascript:void(0)" onclick="_pricePhotoExtra++;renderPricePhotoCard()" style="color:#22703d">＋ 機械がもう1台ある</a>${_pricePhotoExtra > 0 && !byIdx[n - 1] ? `<a href="javascript:void(0)" onclick="_pricePhotoExtra--;renderPricePhotoCard()" style="color:#666;margin-left:14px">－ ${n}台目は無い（取り消す）</a>` : ''}</div>
        <input type="file" id="price-photo-input" accept="image/*" capture="environment" style="display:none" onchange="onPricePhotoPicked(this)">
        <div id="price-photo-msg" style="font-size:12.5px;margin-top:6px"></div>`;
 }
