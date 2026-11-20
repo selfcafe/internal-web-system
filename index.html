@@ -11121,13 +11121,16 @@ function renderPricePhotoCard() {
   const byIdx = {};
   st.machines.forEach(m => { byIdx[m.machineIndex] = m; });
   const maxSent = st.machines.reduce((a, m) => Math.max(a, m.machineIndex + 1), 0);
-  const n = Math.max(st.configuredCount || 1, maxSent) + _pricePhotoExtra;
+  const base = Math.max(st.configuredCount || 1, maxSent);
+  const n = base + _pricePhotoExtra;
   const allDone = Array.from({ length: n }, (_, i) => byIdx[i]).every(m => m && m.status === '読み取り済み');
   const btn = 'padding:7px 14px;background:#22703d;color:white;border:none;border-radius:6px;font-weight:700;cursor:pointer;font-family:inherit;font-size:13px';
   const rows = Array.from({ length: n }, (_, i) => {
     const m = byIdx[i];
     let state, action = `<button onclick="pickPricePhoto(${i})" style="${btn}">📷 撮影する</button>`;
     if (!m) state = '<span style="color:#b45309;font-weight:700">未提出</span>';
+    // 「もう1台ある」で足した最後の行は取り消せるようにする(押し間違えると消せず、3台目が未提出のまま残った。バグ報告No.29)
+    if (!m && i === n - 1 && i >= base) action += ` <button onclick="_pricePhotoExtra=Math.max(0,_pricePhotoExtra-1);renderPricePhotoCard()" style="${btn};background:white;color:#334155;border:1px solid #cbd5e1;font-weight:400">この行を消す</button>`;
     else if (m.status === '読み取り済み') { state = '<span style="color:#16a34a;font-weight:700">✓ 届いています</span>'; action = `<button onclick="pickPricePhoto(${i})" style="${btn};background:white;color:#334155;border:1px solid #cbd5e1;font-weight:400">撮り直す</button>`; }
     else if (m.status === '撮り直し') state = `<span style="color:#c0392b;font-weight:700">撮り直しをお願いします</span><div style="font-size:12px;color:#c0392b;margin-top:2px">${esc(m.reason || '')}</div>`;
     else { state = '<span style="color:#2563eb;font-weight:700">⏳ 確認しています…</span><div style="font-size:12px;color:#2563eb">1〜2分で、この画面のまま結果に切り替わります</div>'; action = ''; }
