@@ -36,9 +36,10 @@ SCHEMA = {
                     'temp': {'type': 'string', 'enum': ['HOT', 'ICED', '']},
                     'size': {'type': 'string', 'enum': ['R', 'L', '']},
                     'price': {'anyOf': [{'type': 'integer'}, {'type': 'null'}]},
+                    'no_tag': {'type': 'boolean'},
                     'confidence': {'type': 'string', 'enum': ['high', 'low']},
                 },
-                'required': ['unit', 'row', 'position', 'menu', 'temp', 'size', 'price', 'confidence'],
+                'required': ['unit', 'row', 'position', 'menu', 'temp', 'size', 'price', 'no_tag', 'confidence'],
                 'additionalProperties': False,
             },
         },
@@ -57,8 +58,11 @@ PROMPT = """セルフカフェのドリンクマシン（カップ式の自動�
 - menu: カップに書いてあるメニュー名（例: オリジナルブレンド 1st、カフェラテ、冷水、炭酸水 氷入り）。書いてあるとおりに。「増量」の札はメニュー名に入れません。
 - temp: HOT / ICED（どちらとも書いていなければ空文字）。size: R / L（書いていなければ空文字）。
 - price: 円の数字だけ（例: 440）。読めなければ null。
+- no_tag: そのボタンには値段の札がもともと貼られていない（はっきり写っているのに札が無い）なら true、price は null。
+  撮り直しても値段は写らないので、撮り直しを頼む理由にしません。写りが悪くて読めないだけなら false。
 - confidence: 数字・メニュー名がはっきり読めれば high。推測が入ったら low。
-- readable: すべてのボタンの値段が読めたら true。ドリンクマシンの写真でない・ぼやけている・反射や影で読めないボタンがある・一部が写っていないときは false。
+- readable: すべてのボタンの値段が読めたら true（値段の札がもともと無いボタン＝no_tag は読めたものとして数える）。
+  ドリンクマシンの写真でない・ぼやけている・反射や影で読めないボタンがある・一部が写っていないときは false。
 - retake_reason: readable が false のとき、店のスタッフに撮り直しを頼む短い日本語（例: 「右下のボタンの値段が光の反射で読めません。反射が入らない角度でもう一度撮ってください。」）。true なら空文字。
 """
 
@@ -97,7 +101,11 @@ def main():
         _post('setPricePhotoResult', id=pid, status='読み取り失敗', reason=str(e)[:200], result='')
         raise
     buttons = out.get('buttons') or []
-    ok = bool(out.get('readable')) and buttons and all(b.get('price') is not None for b in buttons)
+    # 値段の札がもともと無いボタン(no_tag)は撮り直しても読めないので、値段は空・要確認のまま台帳に書き、本部が確かめる(No.31 鶴舞)
+    for b in buttons:
+        if b.get('no_tag') and b.get('price') is None:
+            b['confidence'] = 'low'
+    ok = bool(out.get('readable')) and buttons and all(b.get('price') is not None or b.get('no_tag') for b in buttons)
     if ok:
         res = _post('setPricePhotoResult', id=pid, status='読み取り済み', reason='', result=json.dumps({'buttons': buttons}, ensure_ascii=False))
     else:
@@ -106,7 +114,8 @@ def main():
     if not res.get('ok'):
         sys.exit(f'結果を書けませんでした: {res.get("error")}')
     low = sum(1 for b in buttons if b.get('confidence') == 'low')
-    print(f'{"読み取り済み" if ok else "撮り直し"}: ボタン{len(buttons)}件(要確認{low}件)')
+    no_tag = sum(1 for b in buttons if b.get('no_tag'))
+    print(f'{"読み取り済み" if ok else "撮り直し"}: ボタン{len(buttons)}件(要確認{low}件・札なし{no_tag}件)')
 
 
 if __name__ == '__main__':
