@@ -936,6 +936,7 @@ function doPost(e) {
     else if (b.action === 'createOrderRequest') result = createOrderRequest(b.apiKey, b.storeId, b.items);
     else if (b.action === 'getProductAlternatives') result = getProductAlternatives(b.apiKey, b.text);
     else if (b.action === 'resendOrderNotify')  result = resendOrderNotify(b.storeId);   // 管理者・スクリプトだけ（2026-10-24）
+    else if (b.action === 'rebuildApexDraft')   result = rebuildApexDraft(b.storeId);    // 管理者・スクリプトだけ（2026-11-24）
     else if (b.action === 'registerApexOrder')  result = registerApexOrder(b.storeId, b.items, b.source, b.document);
     else if (b.action === 'registerToyoMonthlyOrder') result = registerToyoMonthlyOrder(b.storeId, b.periodLabel, b.items, b.skips);
     else if (b.action === 'notifyToyoMonthlyCart') result = sendToyoMonthlyToBot_(b.storeId, b.periodLabel, b.lines, b.cartUrl, true);
@@ -7907,6 +7908,20 @@ function resendOrderNotify(storeId) {
   if (!n) return { ok: true, sent: 0 };
   sendAmazonOrderToBot_(n.storeId, n.items, n.toyo);
   return { ok: true, sent: 1, items: n.items.map(i => i.label + ' ×' + i.qty + (i.unit || '')) };
+}
+
+// 店のまだ発注していないアペックスの依頼で、発注書と Gmail の下書きを作り直す（通知は送らない。管理者・スクリプトだけ。2026-11-24）。
+// 支店あての下書きが店・日ごとに分かれて残っているとき、その支店の店を順に呼ぶと1通にまとまる
+// （_apexDraftForOrderRows_ が、今日作った同じ支店の下書きと、行の備考にある前の日の下書きの品を取り込み、前の下書き・PDF・写しを消す）。
+// resendOrderNotify でも同じことはできるが、Amazon の品も入った発注依頼の通知がもう一度届き、二重に発注しかねないので分けた
+function rebuildApexDraft(storeId) {
+  storeId = _normalizeStoreId_(storeId);
+  const meta = _productMeta_();
+  const isT = v => v === true || String(v) === 'TRUE';
+  const rows = getOrders().filter(r => r.store_id === storeId && r.product && isT(r.is_new) && !isT(r.denied) && !_dateStr(r.order_date) &&
+    APEX_ORDER_VENDORS.indexOf((meta[r.product] || {}).vendor || '') >= 0);
+  if (!rows.length) return { ok: true, rows: 0, note: '' };
+  return { ok: true, rows: rows.length, note: _apexDraftForOrderRows_(storeId, rows) || '' };
 }
 
 function buildAmazonList(periodLabel) {
