@@ -329,6 +329,8 @@ gh workflow run rollover-inventory-year.yml --repo selfcafe/internal-web-system 
 - **忘れ物の運用**: 貴重品は警察に届けたうえでポータルに登録。それ以外も全てポータルに登録する。
 
 ### 在庫差異検知・ステラ
+- **ステラの取り込みは Bot から(2026-11-20〜)**: selfcafe-automation の LINE WORKS Bot(`gas/gbp-photo-bot/SteraDaily.gs`、毎朝5時台)が全店の注文詳細CSV(直近4日分)を `importSteraDailyFromBot`(鍵は `GBP_PHOTO_BOT_API_KEY`)へ送る。PC は要らない。全部そろっている営業日だけを `stera_daily_sales` に入れ替え、注文1行ずつの時刻も `stera_sales_times`(120日分)に残す。10/11 以降は入れ直し済み。下の「2026-10-12以降は停止中」は PC での取り込みの話で、`STERA_IMPORT_STOPPED_AFTER`・`CHECKSHEET_SHOW_STERA_ESTIMATE` はまだ戻していない(戻すのはユーザーの判断)。店名がステラと合わず入らない店がある(戻り値の `unmatchedStores`)。
+- **お菓子・アイスの数の確認(2026-11-24〜、まず相川駅前・常滑)**: 設定 `stera_check_stores`(store_id の配列)の店だけ、チェックシート › デイリーカウントの下に「お菓子・アイスの数の確認」を出す(`steraCheckCardHtml`)。日ごとの販売数を見せ、数えたときだけ店全体の「いまの数」を入れる(毎日でなくてよい。「保存する」とは別のボタン)。あるはずの数 = 前回数えた数 + その後の納品済み − その後の販売数(注文の時刻で分ける)。数えた日の販売数は翌朝に入るので、記録は仮(`pending`)で、翌朝の取り込みのあと `_finalizeSteraCounts_` が確定する。最初の数は基準(`base`)で差を出さない。記録は `stera_stock_count`。水は対象外(補充数の入力が別にある)、店舗間の移動は計算に入れていない。本部への通知はまだ無い(2店の数字を見てから)。GAS は `getSteraStockCheck`/`saveSteraStockCount`。以前の不採用案(日次の閾値・理論在庫の表示)とは別物で、ユーザーの依頼で作った。
 - **対象にする基準**: 「ドリンクマシン経由で会員がQRで無料消費できる商品か」で決める。カテゴリ名では判断しない。水は対象(会員かどうかに関わらず必ずステラ決済が発生する)。
 - **名寄せ**:
   - 商品コード(STE0xx)が空欄の行があるので、主キーは商品ID(`prd_`)のほうが安全。味を区別しない商品はグループで合算する(`STERA_SALES_MAPPING`)。

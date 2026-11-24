@@ -465,6 +465,7 @@ const AUTH_STORE_ACTIONS = [
   'saveMachinePhotoSet', 'submitBugReport', 'addBugReportComment', 'saveLostItem',
   'recordInventoryTransfer', 'cancelInventoryTransfer', 'sendInventoryTransfer', 'receiveInventoryTransfer', 'cancelSentInventoryTransfer', 'getIncomingTransfers', 'getMeterReadings', 'saveMeterReading', 'getMeterReportInfo',
   'getPricePhotoStatus', 'savePricePhotos',
+  'getSteraStockCheck', 'saveSteraStockCount',
 ];
 // 店舗の通行証なら店舗を問わず呼べるもの(IDで指す削除・画像保存など。getOrdersは自分の範囲の行だけ返す)
 const AUTH_ANY_ACTIONS = ['getOrders', 'getSteraProductGroups', 'getBugReportThread', 'saveOrderImage',
@@ -717,6 +718,7 @@ function doGet(e) {
     else if (a === 'getStoreMenuList')    result = getStoreMenuList();
     else if (a === 'getSteraStockEstimate') result = getSteraStockEstimate(e.parameter.storeId);
     else if (a === 'getSteraProductGroups') result = getSteraProductGroups();
+    else if (a === 'getSteraStockCheck') result = getSteraStockCheck(e.parameter.storeId);
     else if (a === 'getInventoryHistory') result = getInventoryHistory(e.parameter.storeId, e.parameter.periodLabel);
     else if (a === 'getLatestConsumptionByCode') result = getLatestConsumptionByCode(e.parameter.storeId);
     else if (a === 'getInventoryDeliveryAuto') result = getInventoryDeliveryAuto(e.parameter.storeId, e.parameter.periodLabel);
@@ -907,6 +909,7 @@ function doPost(e) {
     else if (b.action === 'updateSteraRealtimeToday') result = updateSteraRealtimeToday(b.dateStr, b.rows);
     else if (b.action === 'checkSteraRefunds') result = checkSteraRefunds(b.dateStr, b.refunds);
     else if (b.action === 'checkWaterStockMismatch') result = checkWaterStockMismatch(b.storeId, b.product);
+    else if (b.action === 'saveSteraStockCount') result = saveSteraStockCount(b.storeId, b.counts, (b.__auth && b.__auth.n) || '');
     else if (b.action === 'reportScriptFailure') result = reportScriptFailure(b.message, b.key);
     else if (b.action === 'reportScriptRecovery') result = reportScriptRecovery(b.message, b.key);
     else if (b.action === 'saveAttendance')      result = saveAttendance(b.storeId, b.name, b.lat, b.lng, b.noLocation);
@@ -9034,6 +9037,7 @@ function importSteraDailySales(dateStr, csvText) {
 function importSteraDailySalesBulk(csvText, opts) {
   opts = opts || {};
   let outOfRangeRows = 0;
+  const timeRows = [];
   const rows = Utilities.parseCsv(csvText);
   if (!rows.length) return { error: 'CSVが空です' };
   const hdrs = rows[0].map(String);
@@ -9070,6 +9074,7 @@ function importSteraDailySalesBulk(csvText, opts) {
     const key = dateStr + '|' + storeId + '|' + prdId;
     totals[key] = (totals[key] || 0) + qty;
     amountTotals[key] = (amountTotals[key] || 0) + amount;
+    timeRows.push([dateStr, storeId, prdId, createdAt, qty]);   // 数の確認(stera_sales_times)用
   }
 
   const newRows = Object.keys(totals).map(key => {
@@ -9109,10 +9114,15 @@ function importSteraDailySalesBulk(csvText, opts) {
       sheet.getRange(2, 1, allRows.length, STERA_DAILY_COLS.length).setValues(allRows);
     }
   });
+  // 数の確認用に、注文の時刻も残す(失敗しても日ごとの取り込みは成功のまま返す)
+  let timeRowsWritten = 0, timeRowsError = '';
+  try { timeRowsWritten = _writeSteraSalesTimes_(timeRows, coveredDates); } catch (e) { timeRowsError = String(e.message || e); }
   return {
     ok: true,
     datesCovered: Object.keys(coveredDates).sort(),
     rows: newRows.length,
+    timeRows: timeRowsWritten,
+    timeRowsError,
     unparsedDateRows,
     outOfRangeRows,
     unmatchedStores: Object.keys(unmatchedStores)
@@ -9136,6 +9146,9 @@ function importSteraDailyFromBot(apiKey, csvText, minDate, dryRun) {
   if (minDate > maxDate) return { ok: true, datesCovered: [], rows: 0, note: 'そろっている営業日がまだありません' };
   const res = importSteraDailySalesBulk(csvText, { minDate: String(minDate), maxDate: maxDate, dryRun: !!dryRun });
   res.minDate = String(minDate); res.maxDate = maxDate;
+  if (!dryRun && res.ok) {
+    try { res.finalizedCounts = _finalizeSteraCounts_(maxDate); } catch (e) { res.finalizeError = String(e.message || e); }
+  }
   return res;
 }
 
@@ -9471,6 +9484,224 @@ function getSteraStockEstimate(storeId) {
 // 事故が再発するため、単一の情報源(このマッピング)から都度取得させる形にする。
 function getSteraProductGroups() {
   return STERA_SALES_MAPPING.filter(m => m.ourProducts.length > 1).map(m => ({ label: m.label, members: m.ourProducts }));
+}
+
+// ----------------------------------------------------------------
+// ステラ商品の数の確認(販売数と「いまの数」の突き合わせ) 2026-11-24
+// ----------------------------------------------------------------
+// 塩川さん依頼(2026-11-20):「お菓子・アイスの万引きが多い。売れていないのに減っているとパートナーが気付けるようにしたい」。
+// 店の画面(チェックシート › デイリーカウントの下)に、商品ごとの日ごとの販売数を出し、パートナーが数えたときだけ
+// 「いまの数」(棚とバックヤードを合わせた店全体の数)を入れる。毎日でなくてよい。
+//   あるはずの数 = 前回数えた数 + その後に「納品済み」にした数 − その後にステラで売れた数
+//   不明 = あるはずの数 − いまの数
+// 前回数えた時刻から今回数えた時刻までを、ステラの注文の時刻(stera_sales_times)で分けるので、数えた日の途中の売上も正しく分かれる。
+// ただしステラの販売数は毎朝の取り込み(importSteraDailyFromBot)で入るので、数えた日の分は翌朝まで無い。そのため、
+// 数えた直後は「仮」(status=pending。きのうまでの販売で計算)とし、翌朝の取り込みのあと _finalizeSteraCounts_ が確定(final)にする。
+// 最初に数えた数は基準(status=base)で、差は出さない(棚卸の期末在庫は数えた時刻が分からず、基準にすると誤った差が出るため)。
+// 使う店は設定 stera_check_stores(store_id の配列。まず相川駅前・常滑)。水は補充数の入力が別にあるので対象外。
+// 店舗間の移動(recordInventoryTransfer)は計算に入れていない(移した分は不明に出る)。
+const STERA_CHECK_SETTING_KEY = 'stera_check_stores';
+const STERA_CHECK_SKIP_PRODUCTS = ['水'];
+const STERA_CHECK_DAILY_DAYS = 7;      // 画面に出す日ごとの販売数の日数
+const STERA_TIMES_KEEP_DAYS = 120;     // 注文の時刻を残す日数。これより前に数えたきりの商品は、数え直しが基準になる
+const SHEET_STERA_TIMES = 'stera_sales_times';
+const STERA_TIMES_COLS = ['date', 'store_id', 'prd_id', 'at', 'qty'];
+const SHEET_STERA_COUNT = 'stera_stock_count';
+const STERA_COUNT_COLS = ['id', 'store_id', 'prd_id', 'label', 'counted_at', 'counted', 'by', 'status', 'expected', 'diff',
+  'base_at', 'base_qty', 'delivery_since', 'sales_since', 'finalized_at'];
+
+function _steraCheckSheet_(name, cols, sheetId) {
+  const ss = SpreadsheetApp.openById(sheetId || INVENTORY_SHEET_ID);
+  let sheet = ss.getSheetByName(name);
+  if (!sheet) {
+    try { sheet = ss.insertSheet(name); } catch (e) { sheet = ss.getSheetByName(name); if (!sheet) throw e; }
+  }
+  ensureHeaders(sheet, cols);
+  return sheet;
+}
+// シートが日付型に変えてしまった値・ISO形式(納品の recorded_at)も "YYYY-MM-DD HH:MM:SS"(日本時間)にそろえる
+function _steraTs_(v) {
+  if (v instanceof Date) return Utilities.formatDate(v, 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss');
+  const s = String(v === null || v === undefined ? '' : v);
+  if (/^\d{4}-\d{2}-\d{2}T/.test(s)) {
+    const d = new Date(s);
+    if (!isNaN(d.getTime())) return Utilities.formatDate(d, 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss');
+  }
+  return s;
+}
+function _steraDateStr_(v) {
+  return v instanceof Date ? Utilities.formatDate(v, 'Asia/Tokyo', 'yyyy-MM-dd') : String(v === null || v === undefined ? '' : v).slice(0, 10);
+}
+function _steraAddDays_(dateStr, n) {
+  const d = new Date(dateStr + 'T00:00:00Z');
+  d.setUTCDate(d.getUTCDate() + n);
+  return Utilities.formatDate(d, 'UTC', 'yyyy-MM-dd');
+}
+function _steraCheckEnabled_(storeId) {
+  const list = _settingJson_(STERA_CHECK_SETTING_KEY, []);
+  return Array.isArray(list) && list.map(String).indexOf(String(storeId)) >= 0;
+}
+function _steraCheckGroups_() {
+  return STERA_SALES_MAPPING.filter(m => !m.ourProducts.some(n => STERA_CHECK_SKIP_PRODUCTS.indexOf(n) >= 0));
+}
+
+// 取り込みのたびに、注文1行ずつの時刻を stera_sales_times に残す(全店。CSV に入っている営業日の分は入れ替え、古い日は捨てる)
+function _writeSteraSalesTimes_(timeRows, coveredDates) {
+  const n = STERA_TIMES_COLS.length, dIdx = 0, aIdx = 3;
+  const cutoff = _steraAddDays_(Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd'), -STERA_TIMES_KEEP_DAYS);
+  const bySheet = {};
+  timeRows.forEach(r => { const sid = _inventorySheetIdForPeriod_(r[dIdx]); (bySheet[sid] || (bySheet[sid] = [])).push(r); });
+  Object.keys(bySheet).forEach(sid => {
+    const sheet = _steraCheckSheet_(SHEET_STERA_TIMES, STERA_TIMES_COLS, sid);
+    const lastRow = sheet.getLastRow();
+    const kept = lastRow > 1
+      ? sheet.getRange(2, 1, lastRow - 1, n).getValues()
+          .map(row => { row[dIdx] = _steraDateStr_(row[dIdx]); row[aIdx] = _steraTs_(row[aIdx]); return row; })
+          .filter(row => row[dIdx] && !coveredDates[row[dIdx]] && row[dIdx] >= cutoff)
+      : [];
+    if (lastRow > 1) sheet.getRange(2, 1, lastRow - 1, n).clearContent();
+    const all = kept.concat(bySheet[sid]);
+    if (all.length) {
+      sheet.getRange(2, dIdx + 1, all.length, 1).setNumberFormat('@');
+      sheet.getRange(2, aIdx + 1, all.length, 1).setNumberFormat('@');
+      sheet.getRange(2, 1, all.length, n).setValues(all);
+    }
+  });
+  return timeRows.length;
+}
+
+// その店の、計算に要るもの(注文の時刻・数えた記録・納品)を1回ずつ読む
+function _steraCheckContext_(storeId) {
+  const nowStr = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss');
+  const today = nowStr.slice(0, 10);
+  const cutoff = _steraAddDays_(today, -STERA_TIMES_KEEP_DAYS);
+  const ctx = { storeId: String(storeId), nowStr: nowStr, cutoff: cutoff, times: [], counts: [], deliveries: [], latestDate: '' };
+  const dsI = DELIVERY_AUTO_COLS.indexOf('store_id'), dpI = DELIVERY_AUTO_COLS.indexOf('product'),
+        dqI = DELIVERY_AUTO_COLS.indexOf('qty'), drI = DELIVERY_AUTO_COLS.indexOf('recorded_at');
+  _steraSheetIdsForRange_(cutoff, today).forEach(sid => {
+    sheetRows(_steraCheckSheet_(SHEET_STERA_TIMES, STERA_TIMES_COLS, sid), STERA_TIMES_COLS).forEach(r => {
+      const d = _steraDateStr_(r.date);
+      if (d > ctx.latestDate) ctx.latestDate = d;
+      if (String(r.store_id) === ctx.storeId) ctx.times.push({ date: d, prd_id: String(r.prd_id), at: _steraTs_(r.at), qty: Number(r.qty) || 0 });
+    });
+    sheetRows(_steraCheckSheet_(SHEET_STERA_COUNT, STERA_COUNT_COLS, sid), STERA_COUNT_COLS).forEach(r => {
+      if (String(r.store_id) !== ctx.storeId) return;
+      r.counted_at = _steraTs_(r.counted_at);
+      ctx.counts.push(r);
+    });
+    const ds = getDeliveryAutoSheet(sid), lr = ds.getLastRow();
+    if (lr > 1) ds.getRange(2, 1, lr - 1, DELIVERY_AUTO_COLS.length).getValues().forEach(row => {
+      if (_normalizeStoreId_(String(row[dsI])) !== ctx.storeId) return;
+      ctx.deliveries.push({ product: String(row[dpI]), qty: Number(row[dqI]) || 0, at: _steraTs_(row[drI]) });
+    });
+  });
+  return ctx;
+}
+
+// atStr("YYYY-MM-DD HH:MM:SS")の時点であるはずの数。その前に数えた記録が無ければ null
+function _steraExpectedAt_(ctx, m, atStr) {
+  const prev = ctx.counts.filter(c => String(c.prd_id) === m.prdId && c.counted_at && c.counted_at < atStr)
+    .sort((a, b) => (a.counted_at < b.counted_at ? 1 : -1))[0];
+  if (!prev || prev.counted_at.slice(0, 10) < ctx.cutoff) return null;
+  const baseQty = Number(prev.counted) || 0;
+  const delivery = ctx.deliveries.filter(d => m.ourProducts.indexOf(d.product) >= 0 && d.at > prev.counted_at && d.at <= atStr)
+    .reduce((s, d) => s + d.qty, 0);
+  const sales = ctx.times.filter(t => t.prd_id === m.prdId && t.at > prev.counted_at && t.at <= atStr)
+    .reduce((s, t) => s + t.qty, 0);
+  return { baseAt: prev.counted_at, baseQty: baseQty, delivery: delivery, sales: sales, expected: baseQty + delivery - sales };
+}
+
+function _steraCheckView_(ctx) {
+  const todayBiz = _steraBusinessDateFromDateTime_(ctx.nowStr);
+  const days = [];
+  for (let i = STERA_CHECK_DAILY_DAYS; i >= 1; i--) days.push(_steraAddDays_(todayBiz, -i));
+  const num = v => (v === '' || v === null || v === undefined) ? null : Number(v);
+  const groups = _steraCheckGroups_().map(m => {
+    const e = _steraExpectedAt_(ctx, m, ctx.nowStr);
+    const byDay = {};
+    ctx.times.forEach(t => { if (t.prd_id === m.prdId) byDay[t.date] = (byDay[t.date] || 0) + t.qty; });
+    const last = ctx.counts.filter(c => String(c.prd_id) === m.prdId && c.counted_at)
+      .sort((a, b) => (a.counted_at < b.counted_at ? 1 : -1))[0];
+    return {
+      prdId: m.prdId, label: m.label, members: m.ourProducts,
+      daily: days.map(d => ({ date: d, qty: byDay[d] || 0 })),
+      base: e,
+      last: last ? { at: last.counted_at, counted: num(last.counted), status: String(last.status || ''), expected: num(last.expected), diff: num(last.diff) } : null,
+    };
+  });
+  return { enabled: true, latestDate: ctx.latestDate, groups: groups };
+}
+
+// ?action=getSteraStockCheck&storeId=... 使わない店は {enabled:false}
+function getSteraStockCheck(storeId) {
+  if (!storeId) return { error: 'storeIdは必須です' };
+  storeId = _normalizeStoreId_(String(storeId));
+  if (!_steraCheckEnabled_(storeId)) return { enabled: false };
+  return _steraCheckView_(_steraCheckContext_(storeId));
+}
+
+// 数えた数を記録する(POST {storeId, counts:[{prdId, counted}]})。返り値の view は記録後の画面用
+function saveSteraStockCount(storeId, counts, by) {
+  if (!storeId) return { error: 'storeIdは必須です' };
+  storeId = _normalizeStoreId_(String(storeId));
+  if (!_steraCheckEnabled_(storeId)) return { error: 'この店舗では使っていません' };
+  if (!Array.isArray(counts) || !counts.length) return { error: '数が入っていません' };
+  const lock = LockService.getScriptLock();
+  if (!lock.tryLock(20000)) return { error: '混み合っています。少し待ってもう一度押してください' };
+  try {
+    const ctx = _steraCheckContext_(storeId);
+    const groups = _steraCheckGroups_();
+    const rows = [], seen = {};
+    counts.forEach(c => {
+      const m = groups.find(x => x.prdId === String(c && c.prdId));
+      if (!m || seen[m.prdId] || c.counted === '' || c.counted === null || c.counted === undefined) return;
+      const n = Math.round(Number(c.counted));
+      if (!isFinite(n) || n < 0) return;
+      seen[m.prdId] = true;
+      const e = _steraExpectedAt_(ctx, m, ctx.nowStr);
+      rows.push([Utilities.getUuid(), storeId, m.prdId, m.label, ctx.nowStr, n, String(by || ''), e ? 'pending' : 'base',
+        e ? e.expected : '', e ? e.expected - n : '', e ? e.baseAt : '', e ? e.baseQty : '', e ? e.delivery : '', e ? e.sales : '', e ? '' : ctx.nowStr]);
+    });
+    if (!rows.length) return { error: '数が入っていません' };
+    const sheet = _steraCheckSheet_(SHEET_STERA_COUNT, STERA_COUNT_COLS);
+    const start = sheet.getLastRow() + 1;
+    ['counted_at', 'base_at', 'finalized_at'].forEach(c => sheet.getRange(start, STERA_COUNT_COLS.indexOf(c) + 1, rows.length, 1).setNumberFormat('@'));
+    sheet.getRange(start, 1, rows.length, STERA_COUNT_COLS.length).setValues(rows);
+    SpreadsheetApp.flush();
+    return { ok: true, saved: rows.length, view: _steraCheckView_(_steraCheckContext_(storeId)) };
+  } finally {
+    lock.releaseLock();
+  }
+}
+
+// 毎朝の取り込みのあとに呼ぶ: 数えた日(営業日)の販売数が入った「仮」の記録を、数えた時刻までの販売数で計算し直して確定にする
+function _finalizeSteraCounts_(maxDate) {
+  const sheet = _steraCheckSheet_(SHEET_STERA_COUNT, STERA_COUNT_COLS);
+  if (sheet.getLastRow() <= 1) return 0;
+  const data = sheet.getDataRange().getValues();
+  const hdr = data[0].map(String), col = name => hdr.indexOf(name);
+  const ctxs = {};
+  let done = 0;
+  for (let i = 1; i < data.length; i++) {
+    if (String(data[i][col('status')]) !== 'pending') continue;
+    const at = _steraTs_(data[i][col('counted_at')]);
+    const biz = _steraBusinessDateFromDateTime_(at);
+    if (!biz || biz > maxDate) continue;
+    const sid = _normalizeStoreId_(String(data[i][col('store_id')]));
+    const m = STERA_SALES_MAPPING.find(x => x.prdId === String(data[i][col('prd_id')]));
+    if (!m) continue;
+    const ctx = ctxs[sid] || (ctxs[sid] = _steraCheckContext_(sid));
+    const e = _steraExpectedAt_(ctx, m, at);
+    const set = (name, v) => sheet.getRange(i + 1, col(name) + 1).setValue(v);
+    if (e) {
+      set('expected', e.expected); set('diff', e.expected - (Number(data[i][col('counted')]) || 0));
+      set('delivery_since', e.delivery); set('sales_since', e.sales);
+    }
+    set('status', e ? 'final' : 'base');
+    sheet.getRange(i + 1, col('finalized_at') + 1).setNumberFormat('@').setValue(Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss'));
+    done++;
+  }
+  return done;
 }
 
 // ----------------------------------------------------------------
