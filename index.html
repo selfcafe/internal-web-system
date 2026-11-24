@@ -9690,6 +9690,11 @@ function buildStoreOrderDetail(sid, groups) {
   // 維持するが、発注日・発注(操作)は行ごとに完全に独立させた)
   const pendingIds = [];
   groups.forEach(g => g.forEach(r => { if (r.isNew && !r.denied) pendingIds.push(r.id); }));
+  // 描き直しても入れたチェックを残す(2026-11-24。どこかの店で発注が動くたびに一覧が描き直され、チェックが消えていた)。
+  // もう依頼中でなくなった行(発注済み・否認・削除)のチェックは外す
+  const _pendSet = new Set(pendingIds);
+  [...adminOrderChecked].forEach(k => { if (k.startsWith(sid + '|') && !_pendSet.has(k.slice(sid.length + 1))) adminOrderChecked.delete(k); });
+  const _checkedN = pendingIds.filter(id => adminOrderChecked.has(sid + '|' + id)).length;
 
   let rows = '';
   groups.forEach((group, gi) => {
@@ -9710,7 +9715,7 @@ function buildStoreOrderDetail(sid, groups) {
       const msgId      = `omsg-${sid}-${row.id}`;
 
       const checkboxCell = isPending
-        ? `<input type="checkbox" class="ordcb" data-sid="${esc(sid)}" data-rowid="${esc(row.id)}" onchange="toggleOrderRowCheck('${sid}','${row.id}',this.checked)">`
+        ? `<input type="checkbox" class="ordcb" data-sid="${esc(sid)}" data-rowid="${esc(row.id)}" ${adminOrderChecked.has(sid + '|' + row.id) ? 'checked' : ''} onchange="toggleOrderRowCheck('${sid}','${row.id}',this.checked)">`
         : '';
       const orderDateCell = `<input type="date" value="${esc(row.orderDate)}" style="font-size:13px;border:1px solid #ddd;border-radius:5px;padding:4px 6px;font-family:inherit" onchange="adminUpd('${sid}','${row.id}','orderDate',this.value)">`;
       const actionCell = isDenied
@@ -9765,17 +9770,17 @@ function buildStoreOrderDetail(sid, groups) {
   const isMobileDetail = window.innerWidth < 640;
   const bulkBar = pendingIds.length ? `
     <div id="order-bulk-bar-${esc(sid)}" style="display:flex;align-items:center;gap:12px;background:#fff;border-radius:8px;padding:8px 12px;margin-bottom:8px;box-shadow:0 1px 4px rgba(0,0,0,.06);flex-wrap:wrap">
-      <span class="bulk-count hint">一括対応時は、チェックボックスにチェックを入れてください</span>
+      <span class="bulk-count${_checkedN ? '' : ' hint'}">${_checkedN ? _checkedN + '件選択中' : '一括対応時は、チェックボックスにチェックを入れてください'}</span>
       <div style="flex:1"></div>
-      <button class="btn-confirm bulk-confirm-btn" disabled onclick="bulkConfirmOrderRows('${esc(sid)}')" style="padding:7px 14px;font-size:12.5px">一括発注済み</button>
-      <button class="btn-deny bulk-deny-btn" disabled onclick="bulkDenyOrderRows('${esc(sid)}')" style="padding:7px 14px;font-size:12.5px">一括否認</button>
+      <button class="btn-confirm bulk-confirm-btn" ${_checkedN ? '' : 'disabled'} onclick="bulkConfirmOrderRows('${esc(sid)}')" style="padding:7px 14px;font-size:12.5px">一括発注済み</button>
+      <button class="btn-deny bulk-deny-btn" ${_checkedN ? '' : 'disabled'} onclick="bulkDenyOrderRows('${esc(sid)}')" style="padding:7px 14px;font-size:12.5px">一括否認</button>
     </div>` : '';
 
   return `<div style="padding:0 12px 12px;overflow-x:auto">
     ${bulkBar}
     <table class="${isMobileDetail ? 'card-mode' : ''}" style="width:100%;border-collapse:collapse;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
       <thead><tr style="background:#22703d;color:#f8f4e7">
-        <th style="padding:9px 6px;font-size:13px">${pendingIds.length ? `<input type="checkbox" onchange="toggleOrderSelectAll('${esc(sid)}',this.checked)">` : ''}</th>
+        <th style="padding:9px 6px;font-size:13px">${pendingIds.length ? `<input type="checkbox" ${_checkedN && _checkedN === pendingIds.length ? 'checked' : ''} onchange="toggleOrderSelectAll('${esc(sid)}',this.checked)">` : ''}</th>
         <th style="padding:9px 10px;font-size:13px;white-space:nowrap">依頼日</th>
         <th style="padding:9px 10px;font-size:13px;white-space:nowrap">発注日</th>
         <th style="padding:9px 10px;font-size:13px;white-space:nowrap">納品予定日</th>
