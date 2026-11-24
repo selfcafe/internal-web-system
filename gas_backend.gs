@@ -8104,8 +8104,9 @@ function buildBranchReorder(branchKey, periodLabel, dryRun, opts) {
       return Object.assign({ ok: true, skipped: 'no_reorder_needed' }, summary);
     }
     const src = SpreadsheetApp.openById(b.sheet);
-    const to = String(src.getSheets()[0].getRange('C1').getDisplayValue() || '').trim() || b.to; // 宛先は発注書の記載が正
-    const alreadySent = GmailApp.search(`in:sent to:${to} newer_than:180d`, 0, 100).some(thread =>
+    const toList = _apexSheetRecipients_(src.getSheets()[0], b.to); // 宛先は発注書の記載が正（C1・C2）
+    const to = toList.join(', ');
+    const alreadySent = GmailApp.search(`in:sent to:${toList[0] || ''} newer_than:180d`, 0, 100).some(thread =>
       thread.getMessages().some(msg => msg.getSubject() === subject));
     if (alreadySent) return Object.assign({ ok: true, skipped: 'already_sent' }, summary);
 
@@ -8189,8 +8190,9 @@ function _waitBranchReorder_(branchKey, periodLabel, summary) {
     const rows = getOrders().filter(r => r.group_id === groupId && !_dateStr(r.delivery_date));
     if (!drafts.length && !rows.length) return Object.assign({ ok: true, skipped: 'waiting_for_stores' }, summary);
     const src = SpreadsheetApp.openById(b.sheet);
-    const to = String(src.getSheets()[0].getRange('C1').getDisplayValue() || '').trim() || b.to;
-    const alreadySent = GmailApp.search(`in:sent to:${to} newer_than:180d`, 0, 100).some(thread =>
+    const toList = _apexSheetRecipients_(src.getSheets()[0], b.to);
+    const to = toList.join(', ');
+    const alreadySent = GmailApp.search(`in:sent to:${toList[0] || ''} newer_than:180d`, 0, 100).some(thread =>
       thread.getMessages().some(msg => msg.getSubject() === summary.subject));
     if (alreadySent) return Object.assign({ ok: true, skipped: 'already_sent' }, summary);
     drafts.forEach(d => d.deleteDraft());
@@ -8259,6 +8261,21 @@ const APEX_SENDER_NAME = 'セルフカフェ';
 
 function _mimeWord_(s) { return '=?UTF-8?B?' + Utilities.base64Encode(Utilities.newBlob(String(s)).getBytes()) + '?='; }
 function _b64Lines_(bytes) { return Utilities.base64Encode(bytes).replace(/.{76}/g, '$&\r\n'); }
+
+// 発注書の宛先（2026-11-24〜）。発注書の C1 に加えて、すぐ下の C2 にも書ける（大阪東支店から「担当が休みの日に処理が遅れるので
+// 2件に送ってほしい」と依頼があった）。1つの欄にカンマ・空白・改行で区切って並べてもよい。メールアドレスの形のものだけを拾い、
+// 1件も無ければ設定(reorder_branches の to)を使う。返すのは配列で、下書きの To にはカンマでつないで入れる
+function _apexRecipientList_(text, fallback) {
+  const pick = t => String(t || '').split(/[\s,、，;；]+/).map(x => x.trim()).filter(x => /^[^@\s<>]+@[^@\s<>]+\.[^@\s<>]+$/.test(x));
+  const list = pick(text);
+  const out = list.length ? list : pick(fallback);
+  return out.filter((x, i) => out.indexOf(x) === i);
+}
+function _apexSheetRecipients_(sh, fallback) {
+  let cells = [];
+  try { cells = sh.getRange('C1:C2').getDisplayValues().map(r => r[0]); } catch (e) { cells = []; }
+  return _apexRecipientList_(cells.join(' '), fallback);
+}
 
 function _createApexDraft_(to, cc, subject, body, attachments) {
   const ccList = String(cc || '').split(',').map(x => x.trim()).filter(x => x && x.toLowerCase() !== APEX_SENDER);
@@ -8554,7 +8571,7 @@ function buildAdhocApexOrder(branchKey, spec, dryRun, opts) {
   const now = new Date();
   const md = `${now.getMonth() + 1}/${now.getDate()}`;
   const subject = `${mail.subject || '発注依頼'}（${b.label}支店 追加 ${md}）`;
-  const to = String(values[0][2] || '').trim() || b.to; // 宛先は発注書の記載が正
+  const to = _apexRecipientList_([values[0][2], (values[1] || [])[2]].join(' '), b.to).join(', '); // 宛先は発注書の記載が正（C1・C2）
   const result = { ok: true, branch: b.label, to, subject, lines, total, warnings, detail };
   if (dryRun) return Object.assign(result, { dryRun: true });
 
