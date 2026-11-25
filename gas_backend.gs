@@ -464,7 +464,7 @@ const AUTH_STORE_ACTIONS = [
   'checkWaterStockMismatch', 'saveAttendance', 'setAttendanceStartTime', 'saveLeaveRequest', 'saveDeliveryHistory', 'clearDeliveryHistory', 'reportDeliveryMismatch',
   'saveMachinePhotoSet', 'submitBugReport', 'addBugReportComment', 'saveLostItem',
   'recordInventoryTransfer', 'cancelInventoryTransfer', 'sendInventoryTransfer', 'receiveInventoryTransfer', 'cancelSentInventoryTransfer', 'getIncomingTransfers', 'getMeterReadings', 'saveMeterReading', 'getMeterReportInfo',
-  'getPricePhotoStatus', 'savePricePhotos',
+  'getPricePhotoStatus', 'savePricePhotos', 'setStoreMachineCount',
 ];
 // 店舗の通行証なら店舗を問わず呼べるもの(IDで指す削除・画像保存など。getOrdersは自分の範囲の行だけ返す)
 const AUTH_ANY_ACTIONS = ['getOrders', 'getSteraProductGroups', 'getBugReportThread', 'saveOrderImage',
@@ -884,6 +884,7 @@ function doPost(e) {
     else if (b.action === 'saveSettingMerge')   result = saveSettingMerge(b.key, b.value);
     else if (b.action === 'applyProductLedger') result = applyProductLedger(b.sig);
     else if (b.action === 'savePricePhotos')    result = savePricePhotos(b.storeId, b.machineIndex, b.images);
+    else if (b.action === 'setStoreMachineCount') result = setStoreMachineCount(b.storeId, b.count);
     else if (b.action === 'setPricePhotoResult') result = setPricePhotoResult(b.id, b.status, b.reason, b.result);
     else if (b.action === 'redispatchPricePhoto') result = redispatchPricePhoto(b.id);
     else if (b.action === 'deletePricePhoto')   result = deletePricePhoto(b.id);
@@ -2473,6 +2474,18 @@ function _machinePhotoMachineCounts_() {
     const s = getSettings().find(x => x.key === 'machine_photo_machine_counts');
     return s ? JSON.parse(s.value || '{}') : {};
   } catch (e) { return {}; }
+}
+// 店舗が自分の店のドリンクマシンの台数を直す(2026-11-25。台数の違いを毎回バグ報告で本部に頼んでいたため)。
+// 自分の店の分だけを書き足す(saveSettingMerge)ので、ほかの店の台数は変わらない。範囲は1〜6台
+function setStoreMachineCount(storeId, count) {
+  const sid = _normalizeStoreId_(String(storeId || ''));
+  const n = parseInt(count, 10);
+  if (!sid) return { error: '店舗の指定がありません' };
+  if (!(n >= 1 && n <= 6)) return { error: '台数は1〜6台で選んでください' };
+  const patch = {}; patch[sid] = n;
+  const r = saveSettingMerge('machine_photo_machine_counts', JSON.stringify(patch));
+  if (r && r.error) return r;
+  return { ok: true, storeId: sid, count: n };
 }
 function _machinePhotoMachineCount_(storeId, counts) {
   const n = (counts || _machinePhotoMachineCounts_())[storeId];
