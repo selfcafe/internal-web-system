@@ -1526,7 +1526,10 @@ function upsertOrderRows(storeId, rows, auth) {
   }
 
   // アペックスの発注ルール(1回の発注で1品以上を1ケース以上)を満たさない店からの依頼は、書き込む前に差し戻す(2026-11-19)
-  const ruleDenied = _rejectNoCaseApexRequests_(storeId, rows, current, auth);
+  // 取り扱いをやめた品(ロースト)の依頼も、書き込む前に差し戻す(2026-11-26)。先に確かめる(差し戻した行は下の1ケースの確かめに数えない)
+  const stopDenied = _rejectStoppedProductRequests_(storeId, rows, current, auth);
+  const caseDenied = _rejectNoCaseApexRequests_(storeId, rows, current, auth);
+  const ruleDenied = stopDenied.concat(caseDenied);
   const ruleDeniedIds = ruleDenied.map(r => String(r.id));
 
   const dateCols = ['request_date', 'order_date', 'delivery_date'];
@@ -1579,9 +1582,11 @@ function upsertOrderRows(storeId, rows, auth) {
   if (ruleDenied.length) {
     // 画面(新しい版)はこの印を見て、その場で「受け付けられませんでした」と出す。本部にも1通知らせる
     out.ruleDenied = ruleDenied.map(r => ({ id: String(r.id), note: r.note }));
-    out.ruleDeniedMessage = APEX_NO_CASE_STORE_MSG;
-    const n = { type: 'orderRuleRejected', message: _orderRuleRejectedText_(storeId, ruleDenied) };
-    out._notify = out._notify ? [].concat(out._notify, n) : n;
+    out.ruleDeniedMessage = [stopDenied.length ? ORDER_STOPPED_STORE_MSG : '', caseDenied.length ? APEX_NO_CASE_STORE_MSG : ''].filter(Boolean).join('\n\n');
+    const ns = [];
+    if (caseDenied.length) ns.push({ type: 'orderRuleRejected', message: _orderRuleRejectedText_(storeId, caseDenied) });
+    if (stopDenied.length) ns.push({ type: 'orderRuleRejected', message: _orderStoppedRejectedText_(storeId, stopDenied) });
+    out._notify = [].concat(out._notify || [], ns);
   }
   return out;
 }
@@ -1641,6 +1646,39 @@ function _rejectNoCaseApexRequests_(storeId, rows, current, auth) {
     });
   } catch (e) { console.error('_rejectNoCaseApexRequests_ error: ' + e.message); }
   return out;
+}
+// 取り扱いをやめた品（_isOrderStoppedProduct_。ロースト・アイス）の依頼は受け付けない(2026-11-26)。
+// 店の画面は候補に出さず、依頼の前にも止める(index.html の filterProd・lockGroup)が、古い画面を開いたままの端末は止まらない。
+// 終了を知らない店からローストの依頼が続いたため。本部(管理者・スクリプト)の保存は対象外
+const ORDER_STOPPED_STORE_MSG = 'ロースト（Wロースト）は取り扱いを終了したため、依頼できません。コーヒー豆は「ブレンド」で依頼してください。';
+function _rejectStoppedProductRequests_(storeId, rows, current, auth) {
+  const out = [];
+  try {
+    if (auth && (auth.r === 'admin' || auth.r === 'script')) return out;
+    const isTrue = v => v === true || String(v).toUpperCase() === 'TRUE';
+    const byName = {};
+    (_settingJson_('all_products', []) || []).forEach(p => { if (p && p.name) byName[p.name] = p; });
+    const pending = r => isTrue(r.is_new) && isTrue(r.locked) && !isTrue(r.denied) && !_dateStr(r.order_date);
+    const newIdx = ORDER_COLS.indexOf('is_new'), deniedIdx = ORDER_COLS.indexOf('denied');
+    rows.forEach(r => {
+      if (!r || !r.product || !pending(r) || !_isOrderStoppedProduct_(byName[r.product])) return;
+      const c = current[String(r.id)];
+      if (c && isTrue(c[newIdx]) && !isTrue(c[deniedIdx])) return;   // 前から依頼中の行（本部が見て決める）はそのまま
+      const note = String(r.note || '').split('\n').filter(l => l.indexOf(APEX_NO_CASE_MARK) < 0).join('\n').trim();
+      r.denied = true; r.is_new = true;
+      r.note = (note ? note + '\n' : '') + '【否認理由】' + APEX_NO_CASE_MARK + (r.product === 'ロースト' ? ORDER_STOPPED_STORE_MSG : 'この商品は取り扱いを終了したため、依頼できません。');
+      out.push(r);
+    });
+  } catch (e) { console.error('_rejectStoppedProductRequests_ error: ' + e.message); }
+  return out;
+}
+function _orderStoppedRejectedText_(storeId, rows) {
+  const meta = _productMeta_();
+  const name = (_storeNames_()[storeId] || storeId) + (_isFcStore_(storeId) ? '（FC）' : '');
+  return ['【発注依頼を自動で差し戻しました】' + name,
+    '（取り扱いを終了した品のため、受け付けていません。発注書・下書きは作っていません）', '']
+    .concat(rows.map(r => '・' + (r.label || r.product) + ' ' + _orderQtyText_(r, meta)))
+    .concat(['', '店の画面には「否認（理由つき）」で出ます。']).join('\n');
 }
 function _orderRuleRejectedText_(storeId, rows) {
   const meta = _productMeta_();
@@ -7515,8 +7553,13 @@ function _orderableProducts_(storeId) {
   const all = _settingJson_('all_products', []);
   const excluded = storeId ? (_settingJson_('store_product_cfg', {}) || {})[storeId] || [] : [];
   // 全店でアイス(販売品のレディーボーデン各種)の扱いをやめた(2026-10-28)。index.html の isOrderStoppedProduct と同じ条件
+  // 2026-11-26: ロースト(アペックスの Wロースト)も全店で取り扱い終了
   return (Array.isArray(all) ? all : []).filter(p => p && p.name && p.name !== 'その他' && excluded.indexOf(p.name) < 0
-    && !(p.vendor === 'sales' && /^アイス/.test(p.name)));
+    && !_isOrderStoppedProduct_(p));
+}
+// 発注の候補から外す商品（index.html の isOrderStoppedProduct と同じ条件）。棚卸・チェックシートには残す
+function _isOrderStoppedProduct_(p) {
+  return !!p && ((p.vendor === 'sales' && /^アイス/.test(p.name || '')) || (p.vendor === 'apex' && p.name === 'ロースト'));
 }
 
 // 連絡文に出てくる商品を探す。カタカナ・漢字・英数字のかたまりごとに、商品名・表示名・ORDER_TEXT_ALIASES と照合する

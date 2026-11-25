@@ -6584,7 +6584,8 @@ function setStoreProductConfig(storeId, productNames) {
 // 発注の候補から外す商品(2026-10-28、全店でアイス(販売品のレディーボーデン各種)の扱いをやめた)。
 // 棚卸・チェックシートには残す(残っている在庫を数えて処分できるように)。GAS の _orderableProducts_ も同じ条件。
 // アイスカップ(cs3)は名前が「アイス」で始まるが販売品ではないので対象外
-function isOrderStoppedProduct(p) { return !!p && p.vendor === 'sales' && /^アイス/.test(p.name || ''); }
+// 2026-11-26: ロースト(アペックスの Wロースト)も全店で取り扱い終了。終了を知らずに依頼が続いたため、候補から外す
+function isOrderStoppedProduct(p) { return !!p && ((p.vendor === 'sales' && /^アイス/.test(p.name || '')) || (p.vendor === 'apex' && p.name === 'ロースト')); }
 // cfgは「除外リスト」（その商品名に一致するものを非表示にする）。nullなら常に全商品を表示する。
 function getAvailableProducts(storeId) {
   const cfg = getStoreProductConfig(storeId);
@@ -8462,6 +8463,16 @@ function lockGroup(groupId) {
     saveA(storeTab, storeRows);
     renderStore();
   };
+  // 取り扱いをやめた品(ロースト・アイス)は依頼できない(2026-11-26)。候補から外す前に下書きへ入れてあった行を、依頼の前に止める
+  const stoppedRows = group.filter(r => isOrderStoppedProduct(prodByName(r.product)));
+  if (stoppedRows.length) {
+    const names = stoppedRows.map(r => { const p = prodByName(r.product); return (p && (p.label || p.name)) || r.product; }).join('、');
+    backToEdit();
+    alert(`「${names}」は取り扱いを終了したため、依頼できません。
+その行を消してから、もう一度依頼してください。` + (stoppedRows.some(r => r.product === 'ロースト') ? `
+（コーヒー豆は「ブレンド」で依頼してください）` : ''));
+    return;
+  }
   // 数量が空・0 の品は依頼しない(2026-11-12)。数を入れないまま依頼され、本部への通知が「？ケース」になり、
   // そのたびに店へ聞き直していた。入力欄に打ったまま押したときのために、欄の数字も読み直す
   group.forEach(r => { const inp = document.getElementById('qty-' + r.id); if (inp) r.qty = inp.value; });
