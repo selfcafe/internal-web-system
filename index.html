@@ -4142,26 +4142,26 @@ function steraCheckCardHtml() {
     const sold = (g.daily || []).filter(d => d.date <= latest);
     const total = sold.reduce((s, d) => s + d.qty, 0);
     const detail = sold.filter(d => d.qty > 0).map(d => `${_steraMd(d.date)} ${d.qty}個`).join('・');
-    const soldLine = `<div class="stera-check-note">この${sold.length}日で売れた数：<b>${total}個</b>${detail ? `（${esc(detail)}）` : ''}</div>`;
+    const soldLine = `<div class="stera-check-note">ステラで売れた数（この${sold.length}日）：<b>${total}個</b>${detail ? `（${esc(detail)}）` : ''}</div>`;
     if (!(g.par > 0)) {
       return `<div class="stera-check-row">
         <div class="stera-check-main">
           <div class="stera-check-name">${esc(g.label)}</div>
           ${soldLine}
-          <div class="stera-check-note">この商品を棚にいくつ並べるかを決めて「並べる数」に入れ、棚をその数にそろえてから記録してください</div>
+          <div class="stera-check-note">棚にいくつ並べるかを決めて、右に入れてください（10個、5個など）。その数を棚に並べてから「記録する」を押します</div>
         </div>
         <div class="stera-check-input"><span>並べる数</span>${num('par', g.prdId, '―')}</div>
       </div>`;
     }
     const b = g.base, last = g.last;
     const baseLine = b
-      ? `前回 ${esc(_steraMdHm(b.baseAt))} に ${b.baseQty}個にそろえた → その後 売れた ${b.sales}個 → 棚にあるはずの数 <b>${b.expected}個</b>`
-      : '棚を並べる数にそろえて記録すると、次から棚にあるはずの数が出ます';
+      ? `前回 ${esc(_steraMdHm(b.baseAt))} に ${b.baseQty}個並べた → そのあとステラで売れた ${b.sales}個 → いま棚に <b>${b.expected}個</b> あるはず`
+      : '並べる数を棚に並べて記録すると、次からいま棚にあるはずの数が出ます';
     let lastLine = '';
     if (last && last.status === 'final' && last.diff !== null) {
-      lastLine = last.diff > 0 ? `<span class="stera-check-ng">${esc(_steraMd(last.at))} の結果：${last.diff}個 足りません</span>（棚にあるはず ${last.expected}個・残っていた数 ${last.remain}個）`
+      lastLine = last.diff > 0 ? `<span class="stera-check-ng">${esc(_steraMd(last.at))} の結果：${last.diff}個 足りません</span>（売れた数より多く減っています。棚にあるはず ${last.expected}個・残っていた ${last.remain}個）`
         : last.diff < 0 ? `${esc(_steraMd(last.at))} の結果：計算より ${-last.diff}個 多い（記録せずに補充していないか、数え違いがないか確かめてください）`
-        : `<span class="stera-check-ok">${esc(_steraMd(last.at))} の結果：計算どおりでした</span>`;
+        : `<span class="stera-check-ok">${esc(_steraMd(last.at))} の結果：合っていました（減った数＝売れた数）</span>`;
     } else if (last && last.status === 'pending') {
       lastLine = `${esc(_steraMd(last.at))} の結果は、あすの朝に確定します（その日に売れた数が入ってから計算します）`;
     }
@@ -4179,9 +4179,10 @@ function steraCheckCardHtml() {
     </div>`;
   }).join('');
   return `<div class="stera-check">
-    <div class="checksheet-today-group-hdr">お菓子・アイスの数の確認（並べる数と売れた数をくらべます）</div>
-    <div class="stera-check-lead">補充するときは、<b>補充する前に棚に残っている数</b>を「棚の残り」に入れ、棚を<b>並べる数</b>まで足してから記録してください。補充しない日は入れなくてかまいません。<br>
-      ステラで売れた数は ${esc(_steraMd(latest))} の分まで入っています（きょうの分は、あすの朝に入ります）。</div>
+    <div class="checksheet-today-group-hdr">お菓子・アイスの数の確認（減った数と売れた数をくらべます）</div>
+    <div class="stera-check-lead"><b>たとえば、ソイジョイをいつも10個並べるとします。次に来たとき8個なら、2個減っています。ステラで売れた数も2個なら合っています。</b>売れた数より多く減っていたら、お金を払わずに持っていかれた分です。<br>
+      ① 商品ごとに、棚に並べる数（10個なのか5個なのか）を決める　② 補充のときは、足す前に残っている数を「棚の残り」に入れる　③ 並べる数まで足して「記録する」を押す<br>
+      ステラで売れた数は ${esc(_steraMd(latest))} の分まで出ています（きょうの分は、あすの朝に出ます）。補充しない日は入れなくてかまいません。</div>
     ${rows}
     <div class="stera-check-foot">
       <span id="stera-check-msg">${esc(_steraCheckMsg)}</span>
