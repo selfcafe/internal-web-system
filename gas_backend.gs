@@ -9660,7 +9660,7 @@ function saveSteraStockCount(storeId, counts, by) {
       rows.push([Utilities.getUuid(), storeId, m.prdId, m.label, ctx.nowStr, remain === null ? '' : remain, after, par, String(by || ''),
         e ? 'pending' : 'base', e ? e.expected : '', e ? e.expected - remain : '', e ? e.baseAt : '', e ? e.baseQty : '', e ? e.sales : '', e ? '' : ctx.nowStr]);
     });
-    if (!rows.length) return { error: noPar.length ? '先に定数を決めてください（' + noPar.join('、') + '）' : '数が入っていません' };
+    if (!rows.length) return { error: noPar.length ? '先に「並べる数」を決めてください（' + noPar.join('、') + '）' : '数が入っていません' };
     const sheet = _steraCheckSheet_(SHEET_STERA_COUNT, STERA_COUNT_COLS);
     const start = sheet.getLastRow() + 1;
     ['counted_at', 'base_at', 'finalized_at'].forEach(c => sheet.getRange(start, STERA_COUNT_COLS.indexOf(c) + 1, rows.length, 1).setNumberFormat('@'));
