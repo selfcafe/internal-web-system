@@ -738,7 +738,7 @@
         { setup: prepareInventory, target: () => one('#inventory-table-wrap thead'), text: '商品ごとに、数えた数を入れる表です。見出しの「期末在庫」の列に数を入れます。' },
         { confirm: true, target: () => invCell('endStock'), wait: () => !!invCell('endStock')?.querySelector('input')?.value,
           text: '1品目の「<b>期末在庫</b>」に、数えた数を入れます。練習なので「<b>5</b>」と入れてください。' },
-        { optional: true, target: () => invFirstRow()?.querySelector('input[type=date]')?.closest('td'),
+        { optional: true, target: () => invFirstRow()?.querySelector('.inv-exp-date')?.closest('td'),
           text: '消費期限がある商品は、期限の日付と、その期限の個数も入れます。期限が近い物・切れた物は色が変わります。' },
         { target: () => invCell('disposedQty'),
           text: '期限切れなどで捨てた数は「<b>処分数量</b>」に入れます（無ければ空のままで大丈夫です）。' },

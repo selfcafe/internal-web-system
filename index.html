@@ -2389,9 +2389,44 @@ function updateInventoryField(idx, field, value) {
   setInventoryData(storeTab, data);
 }
 
+// 消費期限は西暦の年・月・日を選ぶ(2026-11-25、福田さん依頼)。日付欄(type=date)は端末の暦の設定で
+// 「令和」表示になることがあるため。3つとも選んだ時点で保存し、途中の選択は _invExpDraft に残す(描き直しで消えないように)
+const _invExpDraft = {};
+function _invExpDateSelects(idx, slot, value, style) {
+  const key = storeTab + '|' + idx + '|' + slot;
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value || '');
+  const cur = m ? { y: m[1], m: String(Number(m[2])), d: String(Number(m[3])) } : (_invExpDraft[key] || { y: '', m: '', d: '' });
+  const thisYear = new Date().getFullYear();
+  const years = [];
+  for (let y = thisYear - 1; y <= thisYear + 5; y++) years.push(String(y));
+  if (cur.y && !years.includes(cur.y)) years.unshift(cur.y);
+  const opts = (list, sel, ph) => `<option value="">${ph}</option>` + list.map(v => `<option value="${v}"${v === sel ? ' selected' : ''}>${v}</option>`).join('');
+  const range = n => Array.from({ length: n }, (_, k) => String(k + 1));
+  const st = `${style};padding:3px 1px;min-width:0`;
+  const on = `onchange="onInvExpDateSelect(${idx},'${slot}',this)"`;
+  return `<span class="inv-exp-date" style="display:flex;gap:2px;align-items:center;flex:1;min-width:0;font-size:11px">
+    <select data-part="y" style="${st};flex:1.6" ${on} aria-label="年">${opts(years, cur.y, '年')}</select>
+    <select data-part="m" style="${st};flex:1" ${on} aria-label="月">${opts(range(12), cur.m, '月')}</select>
+    <select data-part="d" style="${st};flex:1" ${on} aria-label="日">${opts(range(31), cur.d, '日')}</select>
+  </span>`;
+}
+function onInvExpDateSelect(idx, slot, el) {
+  const box = el.closest('.inv-exp-date');
+  const get = part => box.querySelector(`select[data-part="${part}"]`).value;
+  const y = get('y'), mo = get('m'), d = get('d');
+  const key = storeTab + '|' + idx + '|' + slot;
+  if (!y || !mo || !d) { _invExpDraft[key] = { y, m: mo, d }; return; }
+  delete _invExpDraft[key];
+  const last = new Date(Number(y), Number(mo), 0).getDate();   // その月の末日(2月30日などは末日にする)
+  const day = Math.min(Number(d), last);
+  updateInventoryField(idx, slot, `${y}-${String(mo).padStart(2, '0')}-${String(day).padStart(2, '0')}`);
+  renderInventory();
+}
+
 // iPhoneの日付欄の「リセット」は空にせず、画面を開いたときの日付に戻すだけなので、
 // 前に入れた日付を消せなかった(2026-10-29 梅田)。✕ボタンから空にする
 function clearInventoryExpiry(idx, field) {
+  delete _invExpDraft[storeTab + '|' + idx + '|' + field];
   updateInventoryField(idx, field, '');
   renderInventory();
 }
@@ -2825,8 +2860,7 @@ function renderInventoryInputScreen(wrap, allProducts, period, periodData) {
       const expCell = (slot, colLabel) => trackExpiry
         ? `<td data-label="${colLabel}" style="padding:5px 6px">
           <div style="display:flex;gap:4px;align-items:center">
-          <input type="date" value="${esc(d[slot]||'')}" style="${fieldStyle(slot)};flex:1;min-width:0"
-            onchange="updateInventoryField(${i},'${slot}',this.value)">
+          ${_invExpDateSelects(i, slot, d[slot] || '', fieldStyle(slot))}
           ${d[slot] ? `<button type="button" onclick="clearInventoryExpiry(${i},'${slot}')" title="この日付を消す"
             style="flex:none;padding:2px 5px;font-size:12px;line-height:1;color:#6b7280;background:#f3f4f6;border:1px solid #d1d5db;border-radius:4px;cursor:pointer">✕</button>` : ''}
           <input type="number" min="0" step="1" placeholder="個数" value="${esc(expQty[slot==='exp1'?'qty1':slot==='exp2'?'qty2':'qty3']||'')}"
@@ -8547,16 +8581,19 @@ async function _markDeliveredCore(id, override) {
   if (_markDeliveredInProgress.has(id)) return;
   _markDeliveredInProgress.add(id);
   try {
+    let duplicate = false;
     try {
       const res = await gasPost('saveDeliveryHistory', { storeId: storeTab, row: _rowToDb(row, storeTab) });
       if (res && res.error) throw new Error(res.error);
+      // すでに納品済みの依頼(別の端末が生き返らせた行)。当月納品に二重に足さない(2026-11-25)
+      if (res && res.duplicate) duplicate = true;
     } catch(e) {
       // DELIVERY_HISTORY_SHEET_ID未デプロイ・通信エラー時のフォールバック。
       // 従来通りlocalStorageに保存し、「納品済み」操作自体は止めない
       console.error('saveDeliveryHistory error (falling back to localStorage):', e);
       _saveLocalH(storeTab, [..._loadLocalH(storeTab), {...row, deliveredAt:Date.now()}]);
     }
-    recordDeliveredRows(storeTab, [row]);
+    if (!duplicate) recordDeliveredRows(storeTab, [row]);
     storeRows = storeRows.filter(r=>r.id!==id);
     saveA(storeTab, storeRows);
     renderStore();

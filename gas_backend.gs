@@ -1534,6 +1534,16 @@ function upsertOrderRows(storeId, rows, auth) {
   const changedRowNums = [];
   const deniedIdx = ORDER_COLS.indexOf('denied');
   const newlyDenied = [];   // 管理画面で否認した行（発注メールの下書きを片づける）
+  // 納品済みにした行を、古い状態のまま開いていた別の端末が保存し直して生き返らせない(2026-11-25、緑鴻仏目・北方)。
+  // 生き返った行はまた「届きましたか？」で聞かれ、押すたびに当月納品が足されていた。納品済みの履歴に同じidと品があれば追加しない
+  let deliveredKeys = null;
+  const isDelivered = r => {
+    if (!deliveredKeys) {
+      deliveredKeys = new Set();
+      try { _deliveryHistoryRowsCached_().forEach(h => { if (String(h.store_id) === String(storeId)) deliveredKeys.add(String(h.id) + '' + String(h.product)); }); } catch (e) {}
+    }
+    return deliveredKeys.has(String(r.id) + '' + String(r.product));
+  };
   rows.forEach(r => {
     const values = ORDER_COLS.map(c => (r[c] === undefined || r[c] === null) ? '' : r[c]);
     const rowNum = idToRowNum[String(r.id)];
@@ -1544,6 +1554,7 @@ function upsertOrderRows(storeId, rows, auth) {
       sheet.getRange(rowNum, 1, 1, ORDER_COLS.length).setValues([values]);
       changedRowNums.push(rowNum);
     } else {
+      if (isDelivered(r)) return;
       toAppend.push(values);
     }
   });
@@ -4331,6 +4342,12 @@ function getDeliveryHistory(storeId, month) {
 }
 
 function saveDeliveryHistory(storeId, row) {
+  // 同じ依頼(idと品)を2回納品済みにしない(2026-11-25)。duplicate を返すと端末は当月納品にも足さない。
+  // 発注の行も消しておく(別の端末が生き返らせた行が残っていると、また「届きましたか？」で聞かれるため)
+  if (row && row.id) {
+    const dup = _deliveryHistoryRowsCached_().some(h => String(h.store_id) === String(storeId) && String(h.id) === String(row.id) && String(h.product) === String(row.product));
+    if (dup) { deleteOrderRows([row.id]); return { ok: true, duplicate: true }; }
+  }
   const sheet = getDeliveryHistorySheet();
   ensureHeaders(sheet, DELIVERY_HISTORY_COLS);
   sheet.appendRow(DELIVERY_HISTORY_COLS.map(c => {
@@ -4340,6 +4357,7 @@ function saveDeliveryHistory(storeId, row) {
     return (v === undefined || v === null) ? '' : v;
   }));
   _invalidateDeliveryHistoryCache_();
+  if (row && row.id) deleteOrderRows([row.id]);
   return { ok: true };
 }
 
