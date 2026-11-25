@@ -529,6 +529,12 @@
     .stera-check-name { font-weight:700; font-size:14px; }
     .stera-check-note { font-size:12px; color:#555; line-height:1.5; margin-top:2px; }
     .stera-check-ng { color:#c0392b; font-weight:700; }
+    .stera-check-par { margin-left:8px; font-size:11px; font-weight:700; color:#1a5730; background:#e3efe6; border-radius:999px; padding:1px 8px; white-space:nowrap; }
+    .stera-check-more { margin-top:4px; font-size:12px; color:#666; }
+    .stera-check-more summary { cursor:pointer; padding:4px 0; }
+    .stera-check-more-in { display:flex; flex-wrap:wrap; gap:8px 14px; padding:4px 0 2px; }
+    .stera-check-more-in label { display:flex; align-items:center; gap:6px; }
+    #stera-check-card .stera-check-more-in input { width:64px; min-height:34px; text-align:center; font-size:16px; border:1px solid #bbb; border-radius:6px; }
     .stera-check-ok { color:#22703d; font-weight:700; }
     .stera-check-input { display:flex; flex-direction:column; align-items:center; gap:2px; flex-shrink:0; font-size:11px; color:#666; }
     #stera-check-card .stera-check-input input { width:72px; min-height:38px; text-align:center; font-size:16px; border:1px solid #bbb; border-radius:6px; }
@@ -4098,9 +4104,10 @@ const CHECKSHEET_SHOW_REMAINING_STOCK = false;
 // (CLAUDE.md 7.4)数字が古いまま残り、現場から「理論在庫：1個とあるが気にしなくてよいか」と質問が出たため。
 // 取込みを再開したら true に戻す(戻せばチェックシートに「ステラ商品(参考在庫・入力不要)」が再び出る)。
 const CHECKSHEET_SHOW_STERA_ESTIMATE = false;
-// ---- ステラ商品の数の確認(販売数と「いまの数」の突き合わせ、2026-11-24) ----
+// ---- ステラ商品の数の確認(定数と販売数の突き合わせ、2026-11-24。定数の形に 2026-11-25) ----
 // 使う店(設定 stera_check_stores)だけ、デイリーカウントの下に出す。計算はすべて GAS 側(getSteraStockCheck)。
-// 数えた数の記録はチェックシートの「保存する」とは別のボタン(saveSteraStockCount)で、押したときだけ送る。
+// 定数(棚に並べる数)は店が決める。補充のたびに「棚の残り」を入れ、棚を定数までそろえて記録する(saveSteraStockCount)。
+// チェックシートの「保存する」とは別のボタンで、押したときだけ送る。
 const STERA_CHECK_STORES_KEY = 'stera_check_stores';
 let _steraCheck = null;        // getSteraStockCheck の結果(使わない店は null)
 let _steraCheckStore = '';
@@ -4130,41 +4137,55 @@ function steraCheckCardHtml() {
   const groups = _steraCheckGroupsForStore();
   if (!groups.length) return '';
   const latest = _steraCheck.latestDate || '';
+  const num = (attr, prd, ph) => `<input type="number" min="0" step="1" inputmode="numeric" placeholder="${ph}" data-stera-${attr}="${esc(prd)}">`;
   const rows = groups.map(g => {
     const sold = (g.daily || []).filter(d => d.date <= latest);
     const total = sold.reduce((s, d) => s + d.qty, 0);
     const detail = sold.filter(d => d.qty > 0).map(d => `${_steraMd(d.date)} ${d.qty}個`).join('・');
+    const soldLine = `<div class="stera-check-note">この${sold.length}日で売れた数：<b>${total}個</b>${detail ? `（${esc(detail)}）` : ''}</div>`;
+    if (!(g.par > 0)) {
+      return `<div class="stera-check-row">
+        <div class="stera-check-main">
+          <div class="stera-check-name">${esc(g.label)}</div>
+          ${soldLine}
+          <div class="stera-check-note">まだ定数が決まっていません。棚に並べる数（定数）を決めて入れ、棚をその数にそろえてから記録してください</div>
+        </div>
+        <div class="stera-check-input"><span>定数</span>${num('par', g.prdId, '―')}</div>
+      </div>`;
+    }
     const b = g.base, last = g.last;
     const baseLine = b
-      ? `前回 ${esc(_steraMdHm(b.baseAt))} に ${b.baseQty}個 → その後 売れた ${b.sales}個・届いた ${b.delivery}個 → あるはずの数 <b>${b.expected}個</b>`
-      : 'まだ数えていません（最初に入れた数が基準になり、次に数えたときから差が出ます）';
+      ? `前回 ${esc(_steraMdHm(b.baseAt))} に ${b.baseQty}個にそろえた → その後 売れた ${b.sales}個 → 棚にあるはずの数 <b>${b.expected}個</b>`
+      : '棚を定数にそろえて記録すると、次から棚にあるはずの数が出ます';
     let lastLine = '';
     if (last && last.status === 'final' && last.diff !== null) {
-      lastLine = last.diff > 0 ? `<span class="stera-check-ng">${esc(_steraMd(last.at))} に数えた結果：${last.diff}個 足りません</span>（あるはず ${last.expected}個・数えた数 ${last.counted}個）`
-        : last.diff < 0 ? `${esc(_steraMd(last.at))} に数えた結果：計算より ${-last.diff}個 多い（届いた品の「納品済み」の押し忘れ・数え違いを確かめてください）`
-        : `<span class="stera-check-ok">${esc(_steraMd(last.at))} に数えた結果：計算どおりでした</span>`;
+      lastLine = last.diff > 0 ? `<span class="stera-check-ng">${esc(_steraMd(last.at))} の結果：${last.diff}個 足りません</span>（棚にあるはず ${last.expected}個・残っていた数 ${last.remain}個）`
+        : last.diff < 0 ? `${esc(_steraMd(last.at))} の結果：計算より ${-last.diff}個 多い（記録せずに補充していないか、数え違いがないか確かめてください）`
+        : `<span class="stera-check-ok">${esc(_steraMd(last.at))} の結果：計算どおりでした</span>`;
     } else if (last && last.status === 'pending') {
-      lastLine = `${esc(_steraMd(last.at))} に数えた結果は、あすの朝に確定します（その日に売れた数が入ってから計算します）`;
+      lastLine = `${esc(_steraMd(last.at))} の結果は、あすの朝に確定します（その日に売れた数が入ってから計算します）`;
     }
     return `<div class="stera-check-row">
       <div class="stera-check-main">
-        <div class="stera-check-name">${esc(g.label)}</div>
-        <div class="stera-check-note">この${sold.length}日で売れた数：<b>${total}個</b>${detail ? `（${esc(detail)}）` : ''}</div>
+        <div class="stera-check-name">${esc(g.label)}<span class="stera-check-par">定数 ${g.par}個</span></div>
+        ${soldLine}
         <div class="stera-check-note">${baseLine}</div>
         ${lastLine ? `<div class="stera-check-note">${lastLine}</div>` : ''}
+        <details class="stera-check-more"><summary>定数まで補充できなかった・定数を変える</summary>
+          <div class="stera-check-more-in"><label>補充後の数${num('after', g.prdId, String(g.par))}</label><label>新しい定数${num('par', g.prdId, String(g.par))}</label></div>
+        </details>
       </div>
-      <div class="stera-check-input"><span>いまの数</span><input type="number" min="0" step="1" inputmode="numeric" placeholder="―" data-stera-prd="${esc(g.prdId)}"></div>
+      <div class="stera-check-input"><span>棚の残り</span>${num('remain', g.prdId, '―')}</div>
     </div>`;
   }).join('');
   return `<div class="stera-check">
-    <div class="checksheet-today-group-hdr">お菓子・アイスの数の確認（売れた数とくらべます）</div>
-    <div class="stera-check-lead">ステラで売れた数は ${esc(_steraMd(latest))} の分まで入っています（きょうの分は、あすの朝に入ります）。<br>
-      棚とバックヤードを合わせた<b>店全体の数</b>を数えたときだけ、「いまの数」に入れてください。毎日でなくてかまいません。<br>
-      届いた品があるときは、先に発注タブで「納品済み」を押してください。</div>
+    <div class="checksheet-today-group-hdr">お菓子・アイスの数の確認（定数と売れた数をくらべます）</div>
+    <div class="stera-check-lead">補充するときは、<b>補充する前に棚に残っている数</b>を「棚の残り」に入れ、棚を<b>定数</b>までそろえてから記録してください。補充しない日は入れなくてかまいません。<br>
+      ステラで売れた数は ${esc(_steraMd(latest))} の分まで入っています（きょうの分は、あすの朝に入ります）。</div>
     ${rows}
     <div class="stera-check-foot">
       <span id="stera-check-msg">${esc(_steraCheckMsg)}</span>
-      <button id="stera-check-save" onclick="saveSteraCounts()" ${_steraCheckSaving ? 'disabled' : ''}>${_steraCheckSaving ? '記録しています…' : '数えた数を記録する'}</button>
+      <button id="stera-check-save" onclick="saveSteraCounts()" ${_steraCheckSaving ? 'disabled' : ''}>${_steraCheckSaving ? '記録しています…' : '記録する'}</button>
     </div>
   </div>`;
 }
@@ -4175,27 +4196,33 @@ function renderSteraCheckCard() {
 async function saveSteraCounts() {
   if (_steraCheckSaving) return;
   const storeId = storeTab;
-  const counts = [];
-  document.querySelectorAll('#stera-check-card input[data-stera-prd]').forEach(inp => {
-    const v = String(inp.value).trim();
-    if (v === '') return;
-    const n = Number(v);
-    if (Number.isFinite(n) && n >= 0) counts.push({ prdId: inp.dataset.steraPrd, counted: Math.round(n) });
+  const byPrd = {};
+  ['remain', 'after', 'par'].forEach(k => {
+    document.querySelectorAll(`#stera-check-card input[data-stera-${k}]`).forEach(inp => {
+      const v = String(inp.value).trim();
+      if (v === '') return;
+      const n = Number(v);
+      if (!Number.isFinite(n) || n < 0) return;
+      const prd = inp.getAttribute('data-stera-' + k);
+      (byPrd[prd] || (byPrd[prd] = { prdId: prd }))[k] = Math.round(n);
+    });
   });
-  if (!counts.length) { _steraCheckMsg = '数えた商品の「いまの数」を入れてから押してください'; renderSteraCheckCard(); return; }
+  const counts = Object.values(byPrd);
+  const msgEl = document.getElementById('stera-check-msg');
+  if (!counts.length) { if (msgEl) msgEl.textContent = '補充した商品の「棚の残り」（はじめての商品は定数）を入れてから押してください'; return; }
   _steraCheckSaving = true; _steraCheckMsg = '';
   const btn = document.getElementById('stera-check-save'); if (btn) { btn.disabled = true; btn.textContent = '記録しています…'; }
   try {
     const r = await gasPost('saveSteraStockCount', { storeId, counts });
     if (!r || r.error || !r.ok) throw new Error((r && r.error) || '記録できませんでした');
     if (storeTab === storeId && r.view && r.view.enabled) { _steraCheck = r.view; _steraCheckStore = storeId; }
-    _steraCheckMsg = `${r.saved}品の数を記録しました。結果はあすの朝に出ます`;
+    _steraCheckMsg = `${r.saved}品を記録しました。` + (r.pending ? '結果はあすの朝に出ます' : '次に補充するときから結果が出ます');
   } catch (e) {
     console.error('saveSteraStockCount error:', e);
     _steraCheckSaving = false;
-    const m = document.getElementById('stera-check-msg');
-    if (m) m.textContent = '記録できませんでした。通信を確かめて、もう一度押してください（入れた数は残っています）';
-    if (btn) { btn.disabled = false; btn.textContent = '数えた数を記録する'; }
+    const known = /定数を決めて|使っていません|混み合って/.test(String(e.message || ''));
+    if (msgEl) msgEl.textContent = known ? e.message : '記録できませんでした。通信を確かめて、もう一度押してください（入れた数は残っています）';
+    if (btn) { btn.disabled = false; btn.textContent = '記録する'; }
     return;
   }
   _steraCheckSaving = false;

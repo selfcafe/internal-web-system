@@ -9487,28 +9487,29 @@ function getSteraProductGroups() {
 }
 
 // ----------------------------------------------------------------
-// ステラ商品の数の確認(販売数と「いまの数」の突き合わせ) 2026-11-24
+// ステラ商品の数の確認(定数と販売数の突き合わせ) 2026-11-24、定数の形に 2026-11-25
 // ----------------------------------------------------------------
 // 塩川さん依頼(2026-11-20):「お菓子・アイスの万引きが多い。売れていないのに減っているとパートナーが気付けるようにしたい」。
-// 店の画面(チェックシート › デイリーカウントの下)に、商品ごとの日ごとの販売数を出し、パートナーが数えたときだけ
-// 「いまの数」(棚とバックヤードを合わせた店全体の数)を入れる。毎日でなくてよい。
-//   あるはずの数 = 前回数えた数 + その後に「納品済み」にした数 − その後にステラで売れた数
-//   不明 = あるはずの数 − いまの数
-// 前回数えた時刻から今回数えた時刻までを、ステラの注文の時刻(stera_sales_times)で分けるので、数えた日の途中の売上も正しく分かれる。
-// ただしステラの販売数は毎朝の取り込み(importSteraDailyFromBot)で入るので、数えた日の分は翌朝まで無い。そのため、
-// 数えた直後は「仮」(status=pending。きのうまでの販売で計算)とし、翌朝の取り込みのあと _finalizeSteraCounts_ が確定(final)にする。
-// 最初に数えた数は基準(status=base)で、差は出さない(棚卸の期末在庫は数えた時刻が分からず、基準にすると誤った差が出るため)。
-// 使う店は設定 stera_check_stores(store_id の配列。まず相川駅前・常滑)。水は補充数の入力が別にあるので対象外。
-// 店舗間の移動(recordInventoryTransfer)は計算に入れていない(移した分は不明に出る)。
+// 社長の案(2026-11-25):「陳列する商品ごとに定数を設ければ気付きやすい」。定数(棚に並べる数)は現場が決める(棚に何個置けるかは店で違うため)。
+// 店の画面(チェックシート › デイリーカウントの下)で、パートナーが補充のたびに「棚の残り」を入れ、棚を定数までそろえる。
+//   棚にあるはずの数 = 前回の補充後の数(ふつうは定数) − その後にステラで売れた数
+//   足りない数 = 棚にあるはずの数 − 棚の残り
+// 数えるのは棚だけ(バックヤードは数えない)なので、納品は計算に入らない。
+// 前回の記録の時刻から今回の時刻までを、ステラの注文の時刻(stera_sales_times)で分ける。ステラの販売数は毎朝の取り込み
+// (importSteraDailyFromBot)で入るので、記録した日の分は翌朝まで無い。そのため記録の直後は「仮」(status=pending)とし、
+// 翌朝の取り込みのあと _finalizeSteraCounts_ が確定(final)にする。
+// 最初の記録・棚の残りを入れなかった記録(定数を決めた/変えただけ)は基準(status=base)で、差は出さない。
+// 定数は記録の par 列に持つ(その商品のいちばん新しい記録の値が今の定数)。使う店は設定 stera_check_stores(store_id の配列)。
+// 水は補充数の入力が別にあるので対象外。補充したのに記録しないと、次の記録で「計算より多い」と出る。
 const STERA_CHECK_SETTING_KEY = 'stera_check_stores';
 const STERA_CHECK_SKIP_PRODUCTS = ['水'];
 const STERA_CHECK_DAILY_DAYS = 7;      // 画面に出す日ごとの販売数の日数
-const STERA_TIMES_KEEP_DAYS = 120;     // 注文の時刻を残す日数。これより前に数えたきりの商品は、数え直しが基準になる
+const STERA_TIMES_KEEP_DAYS = 120;     // 注文の時刻を残す日数。これより前に記録したきりの商品は、次の記録が基準になる
 const SHEET_STERA_TIMES = 'stera_sales_times';
 const STERA_TIMES_COLS = ['date', 'store_id', 'prd_id', 'at', 'qty'];
 const SHEET_STERA_COUNT = 'stera_stock_count';
-const STERA_COUNT_COLS = ['id', 'store_id', 'prd_id', 'label', 'counted_at', 'counted', 'by', 'status', 'expected', 'diff',
-  'base_at', 'base_qty', 'delivery_since', 'sales_since', 'finalized_at'];
+const STERA_COUNT_COLS = ['id', 'store_id', 'prd_id', 'label', 'counted_at', 'remain', 'after', 'par', 'by', 'status', 'expected', 'diff',
+  'base_at', 'base_qty', 'sales_since', 'finalized_at'];
 
 function _steraCheckSheet_(name, cols, sheetId) {
   const ss = SpreadsheetApp.openById(sheetId || INVENTORY_SHEET_ID);
@@ -9519,7 +9520,7 @@ function _steraCheckSheet_(name, cols, sheetId) {
   ensureHeaders(sheet, cols);
   return sheet;
 }
-// シートが日付型に変えてしまった値・ISO形式(納品の recorded_at)も "YYYY-MM-DD HH:MM:SS"(日本時間)にそろえる
+// シートが日付型に変えてしまった値・ISO形式も "YYYY-MM-DD HH:MM:SS"(日本時間)にそろえる
 function _steraTs_(v) {
   if (v instanceof Date) return Utilities.formatDate(v, 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss');
   const s = String(v === null || v === undefined ? '' : v);
@@ -9537,6 +9538,7 @@ function _steraAddDays_(dateStr, n) {
   d.setUTCDate(d.getUTCDate() + n);
   return Utilities.formatDate(d, 'UTC', 'yyyy-MM-dd');
 }
+function _steraNum_(v) { return (v === '' || v === null || v === undefined || !isFinite(Number(v))) ? null : Number(v); }
 function _steraCheckEnabled_(storeId) {
   const list = _settingJson_(STERA_CHECK_SETTING_KEY, []);
   return Array.isArray(list) && list.map(String).indexOf(String(storeId)) >= 0;
@@ -9570,14 +9572,12 @@ function _writeSteraSalesTimes_(timeRows, coveredDates) {
   return timeRows.length;
 }
 
-// その店の、計算に要るもの(注文の時刻・数えた記録・納品)を1回ずつ読む
+// その店の、計算に要るもの(注文の時刻・これまでの記録)を1回ずつ読む
 function _steraCheckContext_(storeId) {
   const nowStr = Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss');
   const today = nowStr.slice(0, 10);
   const cutoff = _steraAddDays_(today, -STERA_TIMES_KEEP_DAYS);
-  const ctx = { storeId: String(storeId), nowStr: nowStr, cutoff: cutoff, times: [], counts: [], deliveries: [], latestDate: '' };
-  const dsI = DELIVERY_AUTO_COLS.indexOf('store_id'), dpI = DELIVERY_AUTO_COLS.indexOf('product'),
-        dqI = DELIVERY_AUTO_COLS.indexOf('qty'), drI = DELIVERY_AUTO_COLS.indexOf('recorded_at');
+  const ctx = { storeId: String(storeId), nowStr: nowStr, cutoff: cutoff, times: [], counts: [], latestDate: '' };
   _steraSheetIdsForRange_(cutoff, today).forEach(sid => {
     sheetRows(_steraCheckSheet_(SHEET_STERA_TIMES, STERA_TIMES_COLS, sid), STERA_TIMES_COLS).forEach(r => {
       const d = _steraDateStr_(r.date);
@@ -9587,46 +9587,38 @@ function _steraCheckContext_(storeId) {
     sheetRows(_steraCheckSheet_(SHEET_STERA_COUNT, STERA_COUNT_COLS, sid), STERA_COUNT_COLS).forEach(r => {
       if (String(r.store_id) !== ctx.storeId) return;
       r.counted_at = _steraTs_(r.counted_at);
-      ctx.counts.push(r);
-    });
-    const ds = getDeliveryAutoSheet(sid), lr = ds.getLastRow();
-    if (lr > 1) ds.getRange(2, 1, lr - 1, DELIVERY_AUTO_COLS.length).getValues().forEach(row => {
-      if (_normalizeStoreId_(String(row[dsI])) !== ctx.storeId) return;
-      ctx.deliveries.push({ product: String(row[dpI]), qty: Number(row[dqI]) || 0, at: _steraTs_(row[drI]) });
+      if (r.counted_at) ctx.counts.push(r);
     });
   });
+  ctx.counts.sort((a, b) => (a.counted_at < b.counted_at ? 1 : a.counted_at > b.counted_at ? -1 : 0));   // 新しい順
   return ctx;
 }
+function _steraRecords_(ctx, m) { return ctx.counts.filter(c => String(c.prd_id) === m.prdId); }
 
-// atStr("YYYY-MM-DD HH:MM:SS")の時点であるはずの数。その前に数えた記録が無ければ null
+// atStr("YYYY-MM-DD HH:MM:SS")の時点で棚にあるはずの数。その前の記録が無ければ null
 function _steraExpectedAt_(ctx, m, atStr) {
-  const prev = ctx.counts.filter(c => String(c.prd_id) === m.prdId && c.counted_at && c.counted_at < atStr)
-    .sort((a, b) => (a.counted_at < b.counted_at ? 1 : -1))[0];
+  const prev = _steraRecords_(ctx, m).filter(c => c.counted_at < atStr && _steraNum_(c.after) !== null)[0];
   if (!prev || prev.counted_at.slice(0, 10) < ctx.cutoff) return null;
-  const baseQty = Number(prev.counted) || 0;
-  const delivery = ctx.deliveries.filter(d => m.ourProducts.indexOf(d.product) >= 0 && d.at > prev.counted_at && d.at <= atStr)
-    .reduce((s, d) => s + d.qty, 0);
-  const sales = ctx.times.filter(t => t.prd_id === m.prdId && t.at > prev.counted_at && t.at <= atStr)
-    .reduce((s, t) => s + t.qty, 0);
-  return { baseAt: prev.counted_at, baseQty: baseQty, delivery: delivery, sales: sales, expected: baseQty + delivery - sales };
+  const baseQty = _steraNum_(prev.after);
+  const sales = ctx.times.filter(t => t.prd_id === m.prdId && t.at > prev.counted_at && t.at <= atStr).reduce((s, t) => s + t.qty, 0);
+  return { baseAt: prev.counted_at, baseQty: baseQty, sales: sales, expected: baseQty - sales };
 }
 
 function _steraCheckView_(ctx) {
   const todayBiz = _steraBusinessDateFromDateTime_(ctx.nowStr);
   const days = [];
   for (let i = STERA_CHECK_DAILY_DAYS; i >= 1; i--) days.push(_steraAddDays_(todayBiz, -i));
-  const num = v => (v === '' || v === null || v === undefined) ? null : Number(v);
   const groups = _steraCheckGroups_().map(m => {
-    const e = _steraExpectedAt_(ctx, m, ctx.nowStr);
+    const recs = _steraRecords_(ctx, m);
+    const last = recs.filter(c => String(c.status) !== 'base')[0];
     const byDay = {};
     ctx.times.forEach(t => { if (t.prd_id === m.prdId) byDay[t.date] = (byDay[t.date] || 0) + t.qty; });
-    const last = ctx.counts.filter(c => String(c.prd_id) === m.prdId && c.counted_at)
-      .sort((a, b) => (a.counted_at < b.counted_at ? 1 : -1))[0];
     return {
       prdId: m.prdId, label: m.label, members: m.ourProducts,
       daily: days.map(d => ({ date: d, qty: byDay[d] || 0 })),
-      base: e,
-      last: last ? { at: last.counted_at, counted: num(last.counted), status: String(last.status || ''), expected: num(last.expected), diff: num(last.diff) } : null,
+      par: recs.length ? _steraNum_(recs[0].par) : null,
+      base: _steraExpectedAt_(ctx, m, ctx.nowStr),
+      last: last ? { at: last.counted_at, remain: _steraNum_(last.remain), status: String(last.status || ''), expected: _steraNum_(last.expected), diff: _steraNum_(last.diff) } : null,
     };
   });
   return { enabled: true, latestDate: ctx.latestDate, groups: groups };
@@ -9640,7 +9632,8 @@ function getSteraStockCheck(storeId) {
   return _steraCheckView_(_steraCheckContext_(storeId));
 }
 
-// 数えた数を記録する(POST {storeId, counts:[{prdId, counted}]})。返り値の view は記録後の画面用
+// 補充の記録(POST {storeId, counts:[{prdId, remain, after, par}]})。remain=補充前の棚の残り、after=補充後の数(省くと定数)、
+// par=定数(決める・変えるときだけ)。返り値の view は記録後の画面用
 function saveSteraStockCount(storeId, counts, by) {
   if (!storeId) return { error: 'storeIdは必須です' };
   storeId = _normalizeStoreId_(String(storeId));
@@ -9651,30 +9644,36 @@ function saveSteraStockCount(storeId, counts, by) {
   try {
     const ctx = _steraCheckContext_(storeId);
     const groups = _steraCheckGroups_();
-    const rows = [], seen = {};
+    const int = v => { const n = _steraNum_(v); return (n === null || n < 0) ? null : Math.round(n); };
+    const rows = [], seen = {}, noPar = [];
     counts.forEach(c => {
       const m = groups.find(x => x.prdId === String(c && c.prdId));
-      if (!m || seen[m.prdId] || c.counted === '' || c.counted === null || c.counted === undefined) return;
-      const n = Math.round(Number(c.counted));
-      if (!isFinite(n) || n < 0) return;
+      if (!m || seen[m.prdId]) return;
+      const remain = int(c.remain), afterIn = int(c.after), parIn = int(c.par);
+      if (remain === null && afterIn === null && parIn === null) return;
+      const recs = _steraRecords_(ctx, m);
+      const par = (parIn !== null && parIn > 0) ? parIn : (recs.length ? _steraNum_(recs[0].par) : null);
+      if (par === null || !(par > 0)) { noPar.push(m.label); return; }
       seen[m.prdId] = true;
-      const e = _steraExpectedAt_(ctx, m, ctx.nowStr);
-      rows.push([Utilities.getUuid(), storeId, m.prdId, m.label, ctx.nowStr, n, String(by || ''), e ? 'pending' : 'base',
-        e ? e.expected : '', e ? e.expected - n : '', e ? e.baseAt : '', e ? e.baseQty : '', e ? e.delivery : '', e ? e.sales : '', e ? '' : ctx.nowStr]);
+      const after = afterIn !== null ? afterIn : Math.max(par, remain === null ? 0 : remain);
+      const e = remain !== null ? _steraExpectedAt_(ctx, m, ctx.nowStr) : null;
+      rows.push([Utilities.getUuid(), storeId, m.prdId, m.label, ctx.nowStr, remain === null ? '' : remain, after, par, String(by || ''),
+        e ? 'pending' : 'base', e ? e.expected : '', e ? e.expected - remain : '', e ? e.baseAt : '', e ? e.baseQty : '', e ? e.sales : '', e ? '' : ctx.nowStr]);
     });
-    if (!rows.length) return { error: '数が入っていません' };
+    if (!rows.length) return { error: noPar.length ? '先に定数を決めてください（' + noPar.join('、') + '）' : '数が入っていません' };
     const sheet = _steraCheckSheet_(SHEET_STERA_COUNT, STERA_COUNT_COLS);
     const start = sheet.getLastRow() + 1;
     ['counted_at', 'base_at', 'finalized_at'].forEach(c => sheet.getRange(start, STERA_COUNT_COLS.indexOf(c) + 1, rows.length, 1).setNumberFormat('@'));
     sheet.getRange(start, 1, rows.length, STERA_COUNT_COLS.length).setValues(rows);
     SpreadsheetApp.flush();
-    return { ok: true, saved: rows.length, view: _steraCheckView_(_steraCheckContext_(storeId)) };
+    return { ok: true, saved: rows.length, pending: rows.filter(r => r[9] === 'pending').length, skippedNoPar: noPar,
+      view: _steraCheckView_(_steraCheckContext_(storeId)) };
   } finally {
     lock.releaseLock();
   }
 }
 
-// 毎朝の取り込みのあとに呼ぶ: 数えた日(営業日)の販売数が入った「仮」の記録を、数えた時刻までの販売数で計算し直して確定にする
+// 毎朝の取り込みのあとに呼ぶ: 記録した日(営業日)の販売数が入った「仮」の記録を、記録の時刻までの販売数で計算し直して確定にする
 function _finalizeSteraCounts_(maxDate) {
   const sheet = _steraCheckSheet_(SHEET_STERA_COUNT, STERA_COUNT_COLS);
   if (sheet.getLastRow() <= 1) return 0;
@@ -9692,12 +9691,11 @@ function _finalizeSteraCounts_(maxDate) {
     if (!m) continue;
     const ctx = ctxs[sid] || (ctxs[sid] = _steraCheckContext_(sid));
     const e = _steraExpectedAt_(ctx, m, at);
+    const remain = _steraNum_(data[i][col('remain')]);
     const set = (name, v) => sheet.getRange(i + 1, col(name) + 1).setValue(v);
-    if (e) {
-      set('expected', e.expected); set('diff', e.expected - (Number(data[i][col('counted')]) || 0));
-      set('delivery_since', e.delivery); set('sales_since', e.sales);
-    }
-    set('status', e ? 'final' : 'base');
+    const ok = e && remain !== null;
+    if (ok) { set('expected', e.expected); set('diff', e.expected - remain); set('sales_since', e.sales); }
+    set('status', ok ? 'final' : 'base');
     sheet.getRange(i + 1, col('finalized_at') + 1).setNumberFormat('@').setValue(Utilities.formatDate(new Date(), 'Asia/Tokyo', 'yyyy-MM-dd HH:mm:ss'));
     done++;
   }
