@@ -4151,14 +4151,32 @@ function steraCheckEnabled(storeId) {
   try { const l = JSON.parse(localStorage.getItem(STERA_CHECK_STORES_KEY) || '[]'); return Array.isArray(l) && l.map(String).includes(String(storeId)); }
   catch (_) { return false; }
 }
+// 返事に数秒かかる。その間と、読み込めなかったときは欄にそう出す(何も出ないと「消えた」ように見える。2026-11-25 塩川さん)
+let _steraCheckLoading = false;
+let _steraCheckErr = false;
 async function loadSteraCheck(storeId) {
-  if (window.__ONB || !steraCheckEnabled(storeId)) { _steraCheck = null; _steraCheckStore = storeId; return; }
+  if (window.__ONB || !steraCheckEnabled(storeId)) { _steraCheck = null; _steraCheckStore = storeId; _steraCheckErr = false; return; }
+  if (_steraCheckStore !== storeId) _steraCheck = null;
+  _steraCheckLoading = true; _steraCheckErr = false;
+  renderSteraCheckCard();
   try {
     const r = await gasGet('getSteraStockCheck', { storeId });
-    if (storeTab !== storeId) return;
-    _steraCheck = (r && r.enabled) ? r : null;
-  } catch (e) { console.error('getSteraStockCheck error:', e); _steraCheck = null; }
+    if (storeTab !== storeId) { _steraCheckLoading = false; return; }
+    if (r && r.enabled) _steraCheck = r;
+    else if (r && r.enabled === false) _steraCheck = null;
+    else _steraCheckErr = true;
+  } catch (e) { console.error('getSteraStockCheck error:', e); _steraCheckErr = true; }
+  _steraCheckLoading = false;
   _steraCheckStore = storeId;
+  renderSteraCheckCard();
+}
+async function retrySteraCheck() { await loadSteraCheck(storeTab); }
+function _steraCheckStateHtml() {
+  if (window.__ONB || !steraCheckEnabled(storeTab)) return '';
+  const box = inner => `<div class="stera-check"><div class="checksheet-today-group-hdr">お菓子・アイスの数の確認（減った数と売れた数をくらべます）</div><div class="stera-check-lead">${inner}</div></div>`;
+  if (_steraCheckLoading) return box('読み込み中です…（10秒ほどかかります）');
+  if (_steraCheckErr) return box('読み込めませんでした。<button type="button" onclick="retrySteraCheck()" style="margin-left:6px;padding:6px 12px;border:1px solid #22703d;border-radius:6px;background:white;color:#22703d;font-weight:700;font-family:inherit;cursor:pointer">もう一度読み込む</button>');
+  return '';
 }
 function _steraMd(dateStr) { const p = String(dateStr || '').slice(0, 10).split('-'); return p.length === 3 ? Number(p[1]) + '/' + Number(p[2]) : ''; }
 function _steraMdHm(ts) { const s = String(ts || ''); return _steraMd(s) + (s.length >= 16 ? ' ' + s.slice(11, 16) : ''); }
@@ -4169,7 +4187,7 @@ function _steraCheckGroupsForStore() {
 }
 function steraCheckCardHtml() {
   const groups = _steraCheckGroupsForStore();
-  if (!groups.length) return '';
+  if (!groups.length) return _steraCheckStateHtml();
   const latest = _steraCheck.latestDate || '';
   const num = (attr, prd, ph) => `<input type="number" min="0" step="1" inputmode="numeric" placeholder="${ph}" data-stera-${attr}="${esc(prd)}">`;
   const rows = groups.map(g => {
