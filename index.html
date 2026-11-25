@@ -11260,21 +11260,50 @@ async function rebuildProductLedger() {
    機械1台ずつ送る。撮った直後に端末でぼけ・暗さ・小ささを調べ(_checkPricePhotoQuality)、送ったあとは Claude が読み取って
    「読み取り済み」か「撮り直し(理由つき)」になる。台数は機械内写真の台数設定があればそれ、無ければ1台から「もう1台ある」で足す */
 let _pricePhotoState = null;      // {storeId, at, on, configuredCount, machines:[...]}
-let _pricePhotoExtra = 0;         // 「もう1台ある」で足した台数(この画面を開いている間だけ)
-// 「もう1台ある」は、押す前に設定の台数を見せて確かめる(2026-11-20、千種・御器所・新瑞橋で、2台とも送ったあとに
-// 「機械がもう1台ある場合はこちら」を押して3台目の「未提出」が出たまま残り、「うちは2台です」の報告が続いた)
-function addPricePhotoMachine() {
-  const st = _pricePhotoState; if (!st) return;
-  const maxSent = st.machines.reduce((a, m) => Math.max(a, m.machineIndex + 1), 0);
-  const cur = Math.max(st.configuredCount || 1, maxSent) + _pricePhotoExtra;
-  if (!confirm(`この店のドリンクマシンは${cur}台で登録しています。\n本当にもう1台（${cur + 1}台目）ありますか？\n\n無い場合は「キャンセル」を押してください。`)) return;
-  _pricePhotoExtra++;
-  renderPricePhotoCard();
+// 台数は店舗が自分で直す(2026-11-25。「うちは2台です」「1台しかない」を毎回バグ報告で本部に頼んでいた)。
+// 保存先は機械内写真と同じ台数設定(machine_photo_machine_counts)。設定があればその台数だけ並べる
+function _pricePhotoCount(st) {
+  if (st.configuredCount >= 1) return Number(st.configuredCount);
+  return Math.max(1, st.machines.reduce((a, m) => Math.max(a, m.machineIndex + 1), 0));
 }
-// 足した台を取り消す(まだ送っていない、足した分だけ)
-function removePricePhotoMachine() {
-  if (_pricePhotoExtra > 0) _pricePhotoExtra--;
-  renderPricePhotoCard();
+function openPricePhotoCountEdit() {
+  const box = document.getElementById('price-photo-count-edit');
+  if (box) box.style.display = box.style.display === 'none' ? '' : 'none';
+}
+let _pricePhotoCountSaving = false;
+async function savePricePhotoCount() {
+  const st = _pricePhotoState; if (!st || _pricePhotoCountSaving) return;
+  const sel = document.getElementById('price-photo-count-sel');
+  const n = parseInt(sel && sel.value, 10);
+  if (!(n >= 1 && n <= 6)) return;
+  if (n === _pricePhotoCount(st)) { openPricePhotoCountEdit(); return; }
+  if (!confirm(`この店のドリンクマシンの台数を ${n}台 にします。よろしいですか？\n（機械内写真の台数も ${n}台 になります）`)) return;
+  const msg = document.getElementById('price-photo-count-msg');
+  _pricePhotoCountSaving = true;
+  if (msg) { msg.style.color = '#888'; msg.textContent = '保存しています…'; }
+  try {
+    const sid = st.storeId;
+    const r = await gasPost('setStoreMachineCount', { storeId: sid, count: n });
+    if (!r || r.error) throw new Error((r && r.error) || '保存できませんでした');
+    try { const all = getMachinePhotoMachineCounts(); all[sid] = n; localStorage.setItem(MACHINE_PHOTO_COUNT_KEY, JSON.stringify(all)); } catch (_) {}
+    if (_pricePhotoState && _pricePhotoState.storeId === sid) _pricePhotoState.configuredCount = n;
+    renderPricePhotoCard();
+  } catch (e) {
+    if (msg) { msg.style.color = '#dc2626'; msg.textContent = '保存できませんでした: ' + e.message; }
+  } finally { _pricePhotoCountSaving = false; }
+}
+function _pricePhotoCountEditor(n) {
+  const opts = [1, 2, 3, 4, 5, 6].map(k => `<option value="${k}" ${k === n ? 'selected' : ''}>${k}台</option>`).join('');
+  return `<div style="font-size:12.5px;margin-top:4px">この店の機械は<b>${n}台</b>で登録しています。${n}台分を送れば完了です。
+      <a href="javascript:void(0)" onclick="openPricePhotoCountEdit()" style="color:#22703d;white-space:nowrap">台数が違うときはこちら</a></div>
+    <div id="price-photo-count-edit" style="display:none;background:white;border:1px solid #cbd5e1;border-radius:6px;padding:8px 10px;margin-top:4px;font-size:12.5px">
+      お店にあるドリンクマシンの台数を選んで「保存」を押してください。
+      <div style="display:flex;gap:8px;align-items:center;margin-top:6px">
+        <select id="price-photo-count-sel" style="padding:6px;font-size:14px;font-family:inherit">${opts}</select>
+        <button onclick="savePricePhotoCount()" style="padding:7px 14px;background:#22703d;color:white;border:none;border-radius:6px;font-weight:700;cursor:pointer;font-family:inherit;font-size:13px">保存</button>
+      </div>
+      <div id="price-photo-count-msg" style="margin-top:4px"></div>
+    </div>`;
 }
 let _pricePhotoBusy = false;
 async function loadPricePhotoCard(force) {
@@ -11300,15 +11329,12 @@ function renderPricePhotoCard() {
   _schedulePricePhotoPoll(st.machines.some(m => m.status === '読み取り中'));
   const byIdx = {};
   st.machines.forEach(m => { byIdx[m.machineIndex] = m; });
-  const maxSent = st.machines.reduce((a, m) => Math.max(a, m.machineIndex + 1), 0);
-  const base = Math.max(st.configuredCount || 1, maxSent);
-  const n = base + _pricePhotoExtra;
+  const n = _pricePhotoCount(st);
   const allDone = Array.from({ length: n }, (_, i) => byIdx[i]).every(m => m && m.status === '読み取り済み');
   const btn = 'padding:7px 14px;background:#22703d;color:white;border:none;border-radius:6px;font-weight:700;cursor:pointer;font-family:inherit;font-size:13px';
   const rows = Array.from({ length: n }, (_, i) => {
     const m = byIdx[i];
     let state, action = `<button onclick="pickPricePhoto(${i})" style="${btn}">📷 撮影する</button>`;
-    if (!m && i >= base) action += ` <button onclick="removePricePhotoMachine()" style="${btn};background:white;color:#64748b;border:1px solid #cbd5e1;font-weight:400">この台は無い</button>`;
     if (!m) state = '<span style="color:#b45309;font-weight:700">未提出</span>';
     else if (m.status === '読み取り済み') { state = '<span style="color:#16a34a;font-weight:700">✓ 届いています</span>'; action = `<button onclick="pickPricePhoto(${i})" style="${btn};background:white;color:#334155;border:1px solid #cbd5e1;font-weight:400">撮り直す</button>`; }
     else if (m.status === '撮り直し') state = `<span style="color:#c0392b;font-weight:700">撮り直しをお願いします</span><div style="font-size:12px;color:#c0392b;margin-top:2px">${esc(m.reason || '')}</div>`;
@@ -11319,7 +11345,7 @@ function renderPricePhotoCard() {
   card.style.display = '';
   card.innerHTML = allDone
     ? `<div style="font-size:13px;color:#16a34a;font-weight:700">✓ ドリンクマシンの料金の写真は届いています。ありがとうございました。</div>
-       <div style="font-size:12px;margin-top:4px;color:#555">この店の機械は${n}台で登録しています。これで完了です。<a href="javascript:void(0)" onclick="addPricePhotoMachine()" style="color:#64748b">（${n + 1}台目がある場合だけ）</a></div>`
+       ${_pricePhotoCountEditor(n)}`
     : `<b style="color:#22703d">【本部より】ドリンクマシンの料金の写真を送ってください</b>
        <div style="display:flex;gap:10px;align-items:flex-start;margin:4px 0 6px">
          <a href="machine-sample-price.jpg" target="_blank" rel="noopener" style="flex:0 0 auto;text-align:center;font-size:11px;color:#666;text-decoration:none"><img src="machine-sample-price.jpg" alt="お手本" style="width:84px;border-radius:4px;display:block;margin-bottom:2px">お手本（タップで拡大）</a>
@@ -11331,9 +11357,8 @@ function renderPricePhotoCard() {
          ・<b>ドリンクの値段</b><br>
          ・チェックシート・発注に出す<b>原料をメニューに合わせる</b>（「○○が無い」を無くすため）
        </div>
-       <div style="font-size:12.5px;font-weight:700;margin-top:4px">この店の機械は${base}台で登録しています。${base}台分を送れば完了です。</div>
+       ${_pricePhotoCountEditor(n)}
        ${rows}
-       <div style="font-size:12px;margin-top:6px"><a href="javascript:void(0)" onclick="addPricePhotoMachine()" style="color:#64748b">＋ 機械が${n + 1}台以上ある場合だけ</a></div>
        <input type="file" id="price-photo-input" accept="image/*" capture="environment" style="display:none" onchange="onPricePhotoPicked(this)">
        <div id="price-photo-msg" style="font-size:12.5px;margin-top:6px"></div>`;
 }
