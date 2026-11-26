@@ -7939,8 +7939,24 @@ async function prodInUseTap(rowId, name, label) {
     return;
   }
   if (st.key === 'denied') {
-    alert(`「${label || name}」は否認された依頼が残っているため選べません。\n「依頼済み履歴」で否認された依頼の備考を確かめ、「依頼取り下げ」を押すと、もう一度選べます。`);
-  } else if (st.key === 'pending') {
+    // 否認された依頼が残っていても、その場で取り下げて選び直せるようにする(2026-11-26 野並: 否認されたブレンドが残っていて
+    // 追加の依頼ができず、「依頼済み履歴で取り下げてから」の案内では進めなかった)。理由を見せてから、OK で前の依頼を消して選ぶ
+    const lines = String(row.note || '').split('\n').map(x => x.trim()).filter(Boolean);
+    const hit = lines.find(l => l.indexOf('【否認理由】') >= 0);
+    const reason = hit ? hit.replace('【否認理由】', '').replace('【自動で差し戻し】', '').trim() : '';
+    const ok = confirm(`「${label || name}」は、前の依頼が否認されています。`
+      + (reason ? `\n\n否認の理由：${reason}` : '')
+      + '\n\n否認された依頼を取り下げて、もう一度依頼しますか？\n（「OK」を押すと、前の依頼を消してこの商品を選びます）');
+    if (!ok) return;
+    storeRows = storeRows.filter(r => !(r.id !== rowId && r.product === name && r.denied));
+    saveA(storeTab, storeRows);
+    renderStore();
+    // 否認のほかに依頼中・発注済みの行もあれば、そちらの案内を出す
+    if (storeRows.some(r => r.id !== rowId && r.product === name)) { prodInUseTap(rowId, name, label); return; }
+    selectProd(rowId, name, label);
+    return;
+  }
+  if (st.key === 'pending') {
     alert(`「${label || name}」はすでに依頼していて、本部で確認中です。\n数を変えたいときは「依頼済み履歴」でその依頼を「取り下げ」てから、もう一度依頼してください。`);
   } else {
     alert(`「${label || name}」はこの依頼の別の行で選んでいます。数量はその行で変えてください。`);
