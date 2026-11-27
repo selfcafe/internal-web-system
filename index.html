@@ -1004,6 +1004,7 @@
     <button class="sub-tab"        id="sub-meter"    onclick="switchAdminView('meter')">集計表</button>
     <button class="sub-tab"        id="sub-toyoReorder" onclick="switchAdminView('toyoReorder')">トーヨー月初発注</button>
     <button class="sub-tab"        id="sub-patrol"   onclick="switchAdminView('patrol')">店舗巡回</button>
+    <button class="sub-tab"        id="sub-shiftGrid" onclick="switchAdminView('shiftGrid')">出勤表</button>
     <button class="sub-tab"        id="sub-bugreport" onclick="switchAdminView('bugreport')">バグ報告<span class="tab-badge" id="badge-bugreport" style="display:none"></span></button>
   </div>
 
@@ -7165,6 +7166,112 @@ function renderPatrolAdmin() {
       <div style="display:flex;flex-wrap:wrap;gap:8px">${sids.map(sid => `<button style="${btn}" onclick="startPatrol('${esc(sid)}')">${esc(STORES[sid])}</button>`).join('') || '<span style="color:#888;font-size:13px">このエリアに店舗がありません</span>'}</div>
     </div>`;
 }
+/* --- 出勤表(2026-11-27、ユーザー依頼「全員の出勤表。店舗を並べて出勤した日に〇」) ---
+   業務タブ「出勤表」。上のエリアタブのエリアの店を横に並べ、店の下にパートナーの名前、行は日付(営業日、AM4:30締め)。
+   業務開始の打刻がある日に〇(店から離れた打刻＝要確認はオレンジの〇)。名前は打刻のある人と、業務開始の設定のスタッフ一覧の人。
+   打刻はポータルが3か月で消すので、選べる月は今月と前の2か月。データは getAttendance(全店)をそのまま使う(サーバーの変更なし)。 */
+let _shiftGridRows = null;      // getAttendance(全店)の結果。タブを開き直すか「更新」で読み直す
+let _shiftGridMonth = '';       // 'yyyy-MM'
+function _shiftGridMonths() {
+  const out = [], d = new Date();
+  d.setDate(1);
+  for (let i = 0; i < 3; i++) { out.push(d.toLocaleDateString('sv').slice(0, 7)); d.setMonth(d.getMonth() - 1); }
+  return out;
+}
+async function renderShiftGridAdmin(forceReload) {
+  document.querySelector('#page-admin .table-wrap').style.display = 'none';
+  document.getElementById('pagination').style.display = 'none';
+  document.getElementById('admin-thead').innerHTML = '';
+  document.getElementById('admin-tbody').innerHTML = '';
+  document.getElementById('admin-summary').innerHTML = '';
+  const container = document.getElementById('settings-container');
+  container.style.display = 'block';
+  const months = _shiftGridMonths();
+  if (!months.includes(_shiftGridMonth)) _shiftGridMonth = months[0];
+  const region = REGIONS[adminRegion];
+  const monthBtn = m => {
+    const [y, mo] = m.split('-'), on = m === _shiftGridMonth;
+    return `<button onclick="_shiftGridMonth='${m}';renderShiftGridAdmin()" style="padding:7px 14px;font-size:13px;font-weight:700;border-radius:6px;cursor:pointer;font-family:inherit;border:1px solid #22703d;${on ? 'background:#22703d;color:white' : 'background:white;color:#22703d'}">${+y}年${+mo}月</button>`;
+  };
+  container.innerHTML = `<div class="settings-card">
+      <div class="settings-card-title">出勤表（${esc(region ? region.label : '')}）</div>
+      <div style="${_SP_NOTE}">業務開始を押した日に〇が付きます（<span style="color:#d97706;font-weight:700">〇</span>は店から離れた場所での打刻＝要確認）。日付は営業日（AM4:30締め）です。ほかのエリアは上のエリアのタブで切り替えます。打刻は3か月で消えるため、見られるのは3か月分です。</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
+        ${months.map(monthBtn).join('')}
+        <button onclick="renderShiftGridAdmin(true)" style="padding:7px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;background:#6b7280;color:white;cursor:pointer;font-family:inherit">更新</button>
+      </div>
+      <div id="shift-grid-wrap"><div style="color:#aaa;font-size:13px;padding:10px 0">読み込み中…</div></div>
+    </div>`;
+  if (forceReload || !_shiftGridRows) {
+    try { _shiftGridRows = await gasGet('getAttendance', {}); }
+    catch (e) { console.error('getAttendance error:', e); _shiftGridRows = null; }
+    if (adminView !== 'shiftGrid') return;
+  }
+  const wrap = document.getElementById('shift-grid-wrap');
+  if (!wrap) return;
+  if (!Array.isArray(_shiftGridRows)) { wrap.innerHTML = '<div style="color:#c0392b;font-size:13px;padding:10px 0">読み込めませんでした。「更新」を押してください。</div>'; return; }
+  wrap.innerHTML = _shiftGridTable(region ? region.stores.filter(sid => STORES[sid]) : [], _shiftGridMonth);
+}
+function _shiftGridTable(sids, ym) {
+  const [y, mo] = ym.split('-').map(Number);
+  const days = new Date(y, mo, 0).getDate();
+  const todayBiz = _businessDateFromDateTime(new Date().toLocaleString('sv').slice(0, 19)) || '';
+  // 店 → 名前 → 営業日 → 'ok' | 'check'
+  const marks = {};
+  _shiftGridRows.forEach(r => {
+    const sid = String(r.store_id || ''), name = String(r.name || '').trim();
+    const biz = _businessDateFromDateTime(r.clocked_at);
+    if (!sid || !name || !biz || biz.slice(0, 7) !== ym) return;
+    const byName = (marks[sid] = marks[sid] || {});
+    const byDay = (byName[name] = byName[name] || {});
+    if (byDay[biz] !== 'ok') byDay[biz] = r.within_range === false ? 'check' : 'ok';
+  });
+  const cols = [];   // [{sid, names:[...]}]
+  sids.forEach(sid => {
+    const names = getAttendanceStaffList(sid).map(n => String(n).trim()).filter(Boolean);
+    Object.keys(marks[sid] || {}).forEach(n => { if (!names.includes(n)) names.push(n); });
+    if (names.length) cols.push({ sid, names });
+  });
+  if (!cols.length) return '<div style="color:#aaa;font-size:13px;padding:10px 0">このエリアには、この月の打刻もスタッフの登録もありません</div>';
+  const W = '日月火水木金土';
+  const bd = 'border:1px solid #d9d9d9';
+  const th = `${bd};padding:4px 6px;font-size:12px;white-space:nowrap;background:#f3f8ef;color:#22703d`;
+  const stick = 'position:sticky;left:0;z-index:1';
+  let head1 = `<tr><th rowspan="2" style="${th};${stick};z-index:3;min-width:84px">日付</th>`;
+  let head2 = '<tr>';
+  cols.forEach(c => {
+    head1 += `<th colspan="${c.names.length}" style="${th};background:#fff1e0;color:#b45309;font-weight:700">${esc(STORES[c.sid])}</th>`;
+    c.names.forEach(n => { head2 += `<th style="${th};font-weight:600">${esc(n)}</th>`; });
+  });
+  head1 += '</tr>'; head2 += '</tr>';
+  let body = '';
+  for (let d = 1; d <= days; d++) {
+    const ds = `${ym}-${String(d).padStart(2, '0')}`;
+    const wd = new Date(y, mo - 1, d).getDay();
+    const bg = wd === 0 ? '#fde2e2' : wd === 6 ? '#dbeafe' : '#fff';
+    const fg = wd === 0 ? '#dc2626' : wd === 6 ? '#1d4ed8' : '#333';
+    const cellBg = todayBiz && ds > todayBiz ? '#fafafa' : (wd === 0 ? '#fff5f5' : wd === 6 ? '#f3f8ff' : '#fff');
+    body += `<tr><td style="${bd};${stick};background:${bg};color:${fg};padding:3px 8px;font-size:12px;white-space:nowrap;font-weight:${ds === todayBiz ? 700 : 400}">${mo}/${d}（${W[wd]}）</td>`;
+    cols.forEach(c => c.names.forEach(n => {
+      const m = ((marks[c.sid] || {})[n] || {})[ds];
+      const cell = m === 'ok' ? '<span style="color:#22703d;font-weight:700">〇</span>'
+                 : m === 'check' ? '<span style="color:#d97706;font-weight:700" title="店から離れた場所での打刻（要確認）">〇</span>' : '';
+      body += `<td style="${bd};text-align:center;font-size:13px;padding:3px 4px;background:${cellBg}">${cell}</td>`;
+    }));
+    body += '</tr>';
+  }
+  let foot = `<tr><td style="${bd};${stick};background:#f3f8ef;color:#22703d;padding:4px 8px;font-size:12px;font-weight:700">出勤日数</td>`;
+  cols.forEach(c => c.names.forEach(n => {
+    const cnt = Object.keys((marks[c.sid] || {})[n] || {}).length;
+    foot += `<td style="${bd};text-align:center;font-size:12.5px;font-weight:700;background:#f3f8ef;color:${cnt ? '#22703d' : '#bbb'}">${cnt}</td>`;
+  }));
+  foot += '</tr>';
+  return `<div style="overflow:auto;max-height:75vh;border:1px solid #d9d9d9;border-radius:6px">
+    <table style="border-collapse:separate;border-spacing:0;background:white">
+      <thead style="position:sticky;top:0;z-index:2">${head1}${head2}</thead>
+      <tbody>${body}</tbody><tfoot>${foot}</tfoot>
+    </table></div>`;
+}
 async function startPatrol(sid) {
   if (!STORES[sid]) return;
   sessionStorage.setItem('patrol', '1');
@@ -8871,7 +8978,8 @@ function switchAdminView(v) {
   if (v === 'lost') _lostForceRefresh = true;
   if (v === 'history') _historyForceRefresh = true;
   if (v === 'bugreport') _bugReportAdminForceRefresh = true;
-  ['overview','history','lost','machinePhoto','meter','toyoReorder','patrol','bugreport'].forEach(k => document.getElementById('sub-'+k)?.classList.toggle('active', k===v));
+  if (v === 'shiftGrid') _shiftGridRows = null;
+  ['overview','history','lost','machinePhoto','meter','toyoReorder','patrol','shiftGrid','bugreport'].forEach(k => document.getElementById('sub-'+k)?.classList.toggle('active', k===v));
   document.getElementById('admin-region-nav')?.classList.toggle('nav-disabled', v === 'lost' || v === 'bugreport' || v === 'toyoReorder');
   const hideFc = _fcTabHiddenForView_(v);
   const subFcEl = document.getElementById('sub-fc'), menuFcEl = document.getElementById('menu-fc');
@@ -8891,6 +8999,7 @@ function renderAdmin() {
   else if (adminView==='meter')      renderMeterAdmin();
   else if (adminView==='toyoReorder') renderToyoReorderAdmin();
   else if (adminView==='patrol')     renderPatrolAdmin();
+  else if (adminView==='shiftGrid')  renderShiftGridAdmin();
   else if (adminView==='attendance') renderAttendanceAdmin();
   else if (adminView==='bugreport')  renderBugReportAdmin();
   else                                renderSettings();
