@@ -4432,8 +4432,14 @@ function reportDeliveryMismatch(storeId, b) {
     '依頼日: ' + clip(b.requestDate) + '／発注日: ' + clip(b.orderDate)];
   if (b.note) lines.push('メモ: ' + clip(b.note));
   lines.push('業者に確かめて、足りない分の対応を決めてください（店舗では届いた数で納品済みになっています）');
-  sendBugReportToOwnerBot_(lines.join('\n'));
-  return { ok: true };
+  // バグ報告の一覧にも「修正依頼」として残す(2026-11-27 布袋駅。通知の見出しが「バグ報告」なのに一覧に無く、
+  // 返信も完了もできなかった)。業者への確認が要る内容なので、自動調査(dispatchBugTriage_)は動かさない
+  const content = lines.join('\n');
+  let r = null;
+  try { r = submitBugReport(storeId, 'request', content, 'partner', '', [], '', ''); } catch (e) { console.error('届いた数の違いを一覧に残せませんでした: ' + e.message); }
+  if (!r || r.error || !r._notify) { sendBugReportToOwnerBot_(content); return { ok: true }; }
+  r._notify.isNew = false;
+  return { ok: true, no: r.no, _notify: r._notify };
 }
 
 // 全店舗一括削除（clearAllOrders）からのみ呼ばれる想定。対象店舗の行をすべて削除する
