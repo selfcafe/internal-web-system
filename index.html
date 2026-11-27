@@ -1536,6 +1536,14 @@ function _initRealtime() {
           if (!f) return;
           r.isNew = f.isNew; r.denied = f.denied; r.orderDate = f.orderDate; r.deliveryDate = f.deliveryDate;
         });
+        // 本部が登録した行(発注書を作ったときの発注済みの行など)は、手元にも足す(2026-11-27)。足さないと、開いたままの画面には
+        // 出ず、次の保存で「手元に無い行」になる。この端末が消した行は足さない(保存がまだ届いていないだけのことがある)
+        const haveIds = new Set(storeRows.map(r => r.id));
+        fresh.forEach(f => {
+          if (!f.locked || haveIds.has(f.id) || _storeRowsDeletedIds.has(f.id)) return;
+          storeRows.push(f);
+          if (_storeRowsKnownFor === storeTab && _storeRowsKnownIds) _storeRowsKnownIds.add(f.id);
+        });
         renderStore();
       }
     } catch(e) { console.error('realtime reload error:', e); }
@@ -1958,11 +1966,22 @@ const loadA = id => migrateRows(ORDERS_CACHE[id] ? [...ORDERS_CACHE[id]] : []);
 // このクライアントが直前に知っていた行のうち、新しい配列に無くなったidだけを
 // 「削除された行」として明示的にサーバーへ伝える（他の、このクライアントが知らない
 // 行を巻き添えにしないため。詳細は_syncStoreToDbのコメント参照）
+// 店の画面の手元の行(storeRows)を保存するときに消してよいのは、手元に持っていた行だけ(2026-11-27)。
+// 以前は ORDERS_CACHE(サーバーから読み直した行)と比べていたため、画面を開いている間に本部が登録した行
+// (発注書を作ったときの「発注済み」の行)が ORDERS_CACHE にだけ入り、次に何かを保存したときに「消した行」として
+// サーバーから消えていた(2026-11-26 谷町九丁目: 本部が入れた発注済みの9行が、店が別の品を依頼した直後に消えた)
+let _storeRowsKnownFor = null, _storeRowsKnownIds = null;
+const _storeRowsDeletedIds = new Set();   // この端末が手元から消した行(サーバーの読み直しで生き返らせない)
+function _rememberStoreRows(id, rows) { _storeRowsKnownFor = id; _storeRowsKnownIds = new Set(rows.map(r => r.id)); }
 const saveA = (id, rows) => {
-  const prevIds = new Set((ORDERS_CACHE[id] || []).map(r => r.id));
+  const mine = rows === storeRows && _storeRowsKnownFor === id && !!_storeRowsKnownIds;
+  const prevIds = mine ? _storeRowsKnownIds : new Set((ORDERS_CACHE[id] || []).map(r => r.id));
   const newIds = new Set(rows.map(r => r.id));
   const deletedIds = [...prevIds].filter(pid => !newIds.has(pid));
-  ORDERS_CACHE[id] = rows;
+  // サーバーにはあるが手元に無かった行(本部が登録した行など)は消さず、手元の控えにも残す
+  const others = mine ? (ORDERS_CACHE[id] || []).filter(r => !prevIds.has(r.id) && !newIds.has(r.id)) : [];
+  if (mine) { deletedIds.forEach(x => _storeRowsDeletedIds.add(x)); _storeRowsKnownIds = newIds; }
+  ORDERS_CACHE[id] = others.length ? rows.concat(others) : rows;
   _syncStoreToDb(id, rows, deletedIds);
 };
 // 発注を「納品済み」にした履歴は、以前はlocalStorageにのみ保存していたため、
@@ -7798,6 +7817,7 @@ async function showPage(p) {
     if (authedStore && STORES[authedStore]) {
       storeTab = authedStore;
       storeRows = loadA(authedStore);
+      _rememberStoreRows(authedStore, storeRows);
       ensureBlankDraftRow(authedStore);
       const lbl = document.getElementById('active-store-label');
       if (lbl) lbl.textContent = STORES[authedStore] + '店';
@@ -8052,6 +8072,7 @@ function switchStore(id) {
   const lbl = document.getElementById('active-store-label');
   if (lbl) lbl.textContent = STORES[id] || id;
   storeRows = loadA(id);
+  _rememberStoreRows(id, storeRows);
   ensureBlankDraftRow(id);
   renderStore();
 }

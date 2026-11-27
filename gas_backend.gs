@@ -881,7 +881,7 @@ function doPost(e) {
     else if (_isLwCallback)                     result = _routeLineWorksCallback_(b, e.parameter.bot);
     else if (b.action === 'saveOrders')         result = saveOrders(b.storeId, b.rows);
     else if (b.action === 'upsertOrders')       result = upsertOrderRows(b.storeId, b.rows, b.__auth);
-    else if (b.action === 'deleteOrders')       result = deleteOrderRows(b.ids);
+    else if (b.action === 'deleteOrders')       result = deleteOrderRows(b.ids, b.__auth);
     else if (b.action === 'saveSetting')        result = saveSetting(b.key, b.value);
     else if (b.action === 'saveSettingMerge')   result = saveSettingMerge(b.key, b.value);
     else if (b.action === 'applyProductLedger') result = applyProductLedger(b.sig);
@@ -1692,19 +1692,41 @@ function _orderRuleRejectedText_(storeId, rows) {
 
 // 指定したidの行だけを個別に削除する。他の行（他店舗はもちろん、同じ店舗の
 // 他の行も）には一切触れない
-function deleteOrderRows(ids) {
+// auth: 店の画面(通行証 r='store')から呼ばれたときだけ渡す。店の画面からは、発注済み(発注日あり)でまだ納品済みにしていない行は
+// 消さない(2026-11-27)。店の画面は「手元に無い行」を消した行としてサーバーへ送るので、画面を開いている間に本部が登録した
+// 発注済みの行が巻き添えで消えていた(2026-11-26 谷町九丁目の9行。画面側も直したが、古い画面を開いたままの端末は直らない)。
+// 納品済みにした行は、先に納品の履歴(saveDeliveryHistory)に入るので消せる。本部(管理者・スクリプト)・GAS の中からの呼び出しは今までどおり
+function deleteOrderRows(ids, auth) {
   if (!ids || !ids.length) return { ok: true };
   const sheet = getSheet(SHEET_ORDERS);
   if (sheet.getLastRow() <= 1) return { ok: true };
   const idSet = new Set(ids.map(String));
   const data = sheet.getDataRange().getValues();
   const idIdx = ORDER_COLS.indexOf('id');
-  const toDelete = [];
+  const odIdx = ORDER_COLS.indexOf('order_date'), prIdx = ORDER_COLS.indexOf('product');
+  const guard = !!(auth && auth.r === 'store');
+  let delivered = null, historyOk = true;
+  const isProtected = row => {
+    if (!guard || !_dateStr(row[odIdx])) return false;
+    if (delivered === null && historyOk) {
+      try {
+        const set = new Set();
+        _deliveryHistoryRowsCached_().forEach(h => set.add(String(h.id) + '|' + String(h.product)));
+        delivered = set;
+      } catch (e) { historyOk = false; console.error('deleteOrderRows: 納品の履歴を読めません: ' + e.message); }
+    }
+    if (!historyOk) return false;   // 履歴を読めないときは、今までどおり消す(納品済みの行が残り続けないように)
+    return !delivered.has(String(row[idIdx]) + '|' + String(row[prIdx]));
+  };
+  const toDelete = [], kept = [];
   for (let i = 1; i < data.length; i++) {
-    if (idSet.has(String(data[i][idIdx]))) toDelete.push(i + 1);
+    if (!idSet.has(String(data[i][idIdx]))) continue;
+    if (isProtected(data[i])) { kept.push(String(data[i][idIdx])); continue; }
+    toDelete.push(i + 1);
   }
   toDelete.sort((a, b) => b - a).forEach(r => sheet.deleteRow(r));
-  return { ok: true };
+  if (kept.length) console.log('deleteOrderRows: 発注済みで未納品の行は消さなかった ' + kept.length + ' 行');
+  return kept.length ? { ok: true, kept: kept } : { ok: true };
 }
 
 // ----------------------------------------------------------------
