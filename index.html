@@ -7169,8 +7169,12 @@ function renderPatrolAdmin() {
 /* --- 出勤表(2026-11-27、ユーザー依頼「全員の出勤表。店舗を並べて出勤した日に〇」) ---
    業務タブ「出勤表」。上のエリアタブのエリアの店を横に並べ、店の下にパートナーの名前、行は日付(営業日、AM4:30締め)。
    業務開始の打刻がある日に〇(店から離れた打刻＝要確認はオレンジの〇)。名前は打刻のある人と、業務開始の設定のスタッフ一覧の人。
-   打刻はポータルが3か月で消すので、選べる月は今月と前の2か月。データは getAttendance(全店)をそのまま使う(サーバーの変更なし)。 */
+   打刻はポータルが3か月で消すので、選べる月は今月と前の2か月。データは getAttendance(全店)をそのまま使う(サーバーの変更なし)。
+   2026-11-27 追加: 休みの日はグレーの「-」(休み申請の日と、曜日で決めた人の出勤日でない曜日。「〇日に1回」の人は休みの曜日が決まっていないので申請の日だけ)。
+   名前の下に出勤の決まり(業務開始の設定の勤務スケジュール。毎日・2日に1回・月水金 など)。栄は「WDP」と出す。 */
 let _shiftGridRows = null;      // getAttendance(全店)の結果。タブを開き直すか「更新」で読み直す
+let _shiftGridLeaves = [];      // getLeaveRequests(全店)の結果
+const SHIFT_GRID_STORE_NAMES = { sakae: 'WDP' };   // 出勤表だけの呼び名
 let _shiftGridMonth = '';       // 'yyyy-MM'
 function _shiftGridMonths() {
   const out = [], d = new Date();
@@ -7195,7 +7199,7 @@ async function renderShiftGridAdmin(forceReload) {
   };
   container.innerHTML = `<div class="settings-card">
       <div class="settings-card-title">出勤表（${esc(region ? region.label : '')}）</div>
-      <div style="${_SP_NOTE}">業務開始を押した日に〇が付きます（<span style="color:#d97706;font-weight:700">〇</span>は店から離れた場所での打刻＝要確認）。日付は営業日（AM4:30締め）です。ほかのエリアは上のエリアのタブで切り替えます。打刻は3か月で消えるため、見られるのは3か月分です。</div>
+      <div style="${_SP_NOTE}">業務開始を押した日に〇が付きます（<span style="color:#d97706;font-weight:700">〇</span>は店から離れた場所での打刻＝要確認）。<span style="color:#9ca3af;font-weight:700">-</span>は休み（休み申請の日と、曜日で出勤日を決めた人の出勤日でない日）。名前の下は出勤の決まり（業務開始の設定の勤務スケジュール）です。日付は営業日（AM4:30締め）です。ほかのエリアは上のエリアのタブで切り替えます。打刻は3か月で消えるため、見られるのは3か月分です。</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
         ${months.map(monthBtn).join('')}
         <button onclick="renderShiftGridAdmin(true)" style="padding:7px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;background:#6b7280;color:white;cursor:pointer;font-family:inherit">更新</button>
@@ -7203,8 +7207,12 @@ async function renderShiftGridAdmin(forceReload) {
       <div id="shift-grid-wrap"><div style="color:#aaa;font-size:13px;padding:10px 0">読み込み中…</div></div>
     </div>`;
   if (forceReload || !_shiftGridRows) {
-    try { _shiftGridRows = await gasGet('getAttendance', {}); }
-    catch (e) { console.error('getAttendance error:', e); _shiftGridRows = null; }
+    const [att, leave] = await Promise.all([
+      gasGet('getAttendance', {}).catch(e => { console.error('getAttendance error:', e); return null; }),
+      gasGet('getLeaveRequests', {}).catch(e => { console.error('getLeaveRequests error:', e); return []; }),
+    ]);
+    _shiftGridRows = Array.isArray(att) ? att : null;
+    _shiftGridLeaves = Array.isArray(leave) ? leave : [];
     if (adminView !== 'shiftGrid') return;
   }
   const wrap = document.getElementById('shift-grid-wrap');
@@ -7226,12 +7234,33 @@ function _shiftGridTable(sids, ym) {
     const byDay = (byName[name] = byName[name] || {});
     if (byDay[biz] !== 'ok') byDay[biz] = r.within_range === false ? 'check' : 'ok';
   });
-  const cols = [];   // [{sid, names:[...]}]
-  sids.forEach(sid => {
-    const names = getAttendanceStaffList(sid).map(n => String(n).trim()).filter(Boolean);
-    Object.keys(marks[sid] || {}).forEach(n => { if (!names.includes(n)) names.push(n); });
-    if (names.length) cols.push({ sid, names });
+  // 店 → 名前 → 休み申請の日の Set
+  const leaves = {};
+  _shiftGridLeaves.forEach(r => {
+    const sid = String(r.store_id || ''), name = String(r.name || '').trim();
+    const ds = String(r.leave_date || '').replace(/\//g, '-').slice(0, 10);
+    if (!sid || !name || ds.slice(0, 7) !== ym) return;
+    ((leaves[sid] = leaves[sid] || {})[name] = leaves[sid][name] || new Set()).add(ds);
   });
+  const cols = [];   // [{sid, names:[...], sched:{名前:勤務スケジュール}}]
+  sids.forEach(sid => {
+    const staff = getAttendanceStaffList(sid).map(n => String(n).trim()).filter(Boolean);
+    const names = staff.slice();
+    Object.keys(marks[sid] || {}).forEach(n => { if (!names.includes(n)) names.push(n); });
+    // スタッフ登録のある店は人ごとの勤務スケジュール、無い店は店の既定(サーバーの未打刻の知らせと同じ決まり)
+    const sched = {};
+    names.forEach(n => { sched[n] = staff.length ? getAttendanceStaffSchedule(sid, n) : getAttendanceStoreDefaultSchedule(sid); });
+    if (names.length) cols.push({ sid, names, sched });
+  });
+  const schedLabel = sc => {
+    if (sc && sc.type === 'weekday' && Array.isArray(sc.weekdays) && sc.weekdays.length) {
+      if (sc.weekdays.length === 7) return '毎日';
+      return [1, 2, 3, 4, 5, 6, 0].filter(w => sc.weekdays.includes(w)).map(w => '日月火水木金土'[w]).join('');
+    }
+    const n = (sc && Number(sc.intervalDays)) || 1;
+    return n === 1 ? '毎日' : `${n}日に1回`;
+  };
+  const isOffDay = (sc, wd) => !!(sc && sc.type === 'weekday' && Array.isArray(sc.weekdays) && sc.weekdays.length && !sc.weekdays.includes(wd));
   if (!cols.length) return '<div style="color:#aaa;font-size:13px;padding:10px 0">このエリアには、この月の打刻もスタッフの登録もありません</div>';
   const W = '日月火水木金土';
   const bd = 'border:1px solid #d9d9d9';
@@ -7240,8 +7269,8 @@ function _shiftGridTable(sids, ym) {
   let head1 = `<tr><th rowspan="2" style="${th};${stick};z-index:3;min-width:84px">日付</th>`;
   let head2 = '<tr>';
   cols.forEach(c => {
-    head1 += `<th colspan="${c.names.length}" style="${th};background:#fff1e0;color:#b45309;font-weight:700">${esc(STORES[c.sid])}</th>`;
-    c.names.forEach(n => { head2 += `<th style="${th};font-weight:600">${esc(n)}</th>`; });
+    head1 += `<th colspan="${c.names.length}" style="${th};background:#fff1e0;color:#b45309;font-weight:700">${esc(SHIFT_GRID_STORE_NAMES[c.sid] || STORES[c.sid])}</th>`;
+    c.names.forEach(n => { head2 += `<th style="${th};font-weight:600">${esc(n)}<div style="font-size:10.5px;font-weight:400;color:#6b7280">${esc(schedLabel(c.sched[n]))}</div></th>`; });
   });
   head1 += '</tr>'; head2 += '</tr>';
   let body = '';
@@ -7254,9 +7283,12 @@ function _shiftGridTable(sids, ym) {
     body += `<tr><td style="${bd};${stick};background:${bg};color:${fg};padding:3px 8px;font-size:12px;white-space:nowrap;font-weight:${ds === todayBiz ? 700 : 400}">${mo}/${d}（${W[wd]}）</td>`;
     cols.forEach(c => c.names.forEach(n => {
       const m = ((marks[c.sid] || {})[n] || {})[ds];
+      const onLeave = !!((leaves[c.sid] || {})[n] && leaves[c.sid][n].has(ds));
+      const off = !m && (onLeave || isOffDay(c.sched[n], wd));
       const cell = m === 'ok' ? '<span style="color:#22703d;font-weight:700">〇</span>'
-                 : m === 'check' ? '<span style="color:#d97706;font-weight:700" title="店から離れた場所での打刻（要確認）">〇</span>' : '';
-      body += `<td style="${bd};text-align:center;font-size:13px;padding:3px 4px;background:${cellBg}">${cell}</td>`;
+                 : m === 'check' ? '<span style="color:#d97706;font-weight:700" title="店から離れた場所での打刻（要確認）">〇</span>'
+                 : off ? `<span style="color:#9ca3af;font-weight:700" title="${onLeave ? '休み申請' : '出勤日でない曜日'}">-</span>` : '';
+      body += `<td style="${bd};text-align:center;font-size:13px;padding:3px 4px;background:${off ? '#e5e7eb' : cellBg}">${cell}</td>`;
     }));
     body += '</tr>';
   }
