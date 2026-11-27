@@ -7170,7 +7170,7 @@ function renderPatrolAdmin() {
    業務タブ「出勤表」。上のエリアタブのエリアの店を横に並べ、店の下にパートナーの名前、行は日付(営業日、AM4:30締め)。
    業務開始の打刻がある日に〇(店から離れた打刻＝要確認はオレンジの〇)。名前は打刻のある人と、業務開始の設定のスタッフ一覧の人。
    打刻はポータルが3か月で消すので、選べる月は今月と前の2か月。データは getAttendance(全店)をそのまま使う(サーバーの変更なし)。
-   2026-11-27 追加: 休みの日はグレーの「-」(休み申請の日と、曜日で決めた人の出勤日でない曜日。「〇日に1回」の人は休みの曜日が決まっていないので申請の日だけ)。
+   2026-11-27 追加: 打刻がなかった日(昨日まで)はグレーの「-」、休み申請の日は紫の「休」(先の日も出す)。今日と先の日は空欄。
    名前の下に出勤の決まり(業務開始の設定の勤務スケジュール。毎日・2日に1回・月水金 など)。栄は「WDP」と出す。 */
 let _shiftGridRows = null;      // getAttendance(全店)の結果。タブを開き直すか「更新」で読み直す
 let _shiftGridLeaves = [];      // getLeaveRequests(全店)の結果
@@ -7199,7 +7199,7 @@ async function renderShiftGridAdmin(forceReload) {
   };
   container.innerHTML = `<div class="settings-card">
       <div class="settings-card-title">出勤表（${esc(region ? region.label : '')}）</div>
-      <div style="${_SP_NOTE}">業務開始を押した日に〇が付きます（<span style="color:#d97706;font-weight:700">〇</span>は店から離れた場所での打刻＝要確認）。<span style="color:#9ca3af;font-weight:700">-</span>は休み（休み申請の日と、曜日で出勤日を決めた人の出勤日でない日）。名前の下は出勤の決まり（業務開始の設定の勤務スケジュール）です。日付は営業日（AM4:30締め）です。ほかのエリアは上のエリアのタブで切り替えます。打刻は3か月で消えるため、見られるのは3か月分です。</div>
+      <div style="${_SP_NOTE}">業務開始を押した日に〇が付きます（<span style="color:#d97706;font-weight:700">〇</span>は店から離れた場所での打刻＝要確認）。<span style="background:#e5e7eb;color:#9ca3af;font-weight:700;padding:0 5px">-</span>は出勤がなかった日、<span style="background:#ede9fe;color:#7c3aed;font-weight:700;padding:0 4px">休</span>は休み申請の日です。名前の下は出勤の決まり（業務開始の設定の勤務スケジュール）です。日付は営業日（AM4:30締め）です。ほかのエリアは上のエリアのタブで切り替えます。打刻は3か月で消えるため、見られるのは3か月分です。</div>
       <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin-bottom:10px">
         ${months.map(monthBtn).join('')}
         <button onclick="renderShiftGridAdmin(true)" style="padding:7px 14px;font-size:12px;font-weight:600;border-radius:6px;border:none;background:#6b7280;color:white;cursor:pointer;font-family:inherit">更新</button>
@@ -7260,7 +7260,6 @@ function _shiftGridTable(sids, ym) {
     const n = (sc && Number(sc.intervalDays)) || 1;
     return n === 1 ? '毎日' : `${n}日に1回`;
   };
-  const isOffDay = (sc, wd) => !!(sc && sc.type === 'weekday' && Array.isArray(sc.weekdays) && sc.weekdays.length && !sc.weekdays.includes(wd));
   if (!cols.length) return '<div style="color:#aaa;font-size:13px;padding:10px 0">このエリアには、この月の打刻もスタッフの登録もありません</div>';
   const W = '日月火水木金土';
   const bd = 'border:1px solid #d9d9d9';
@@ -7284,11 +7283,14 @@ function _shiftGridTable(sids, ym) {
     cols.forEach(c => c.names.forEach(n => {
       const m = ((marks[c.sid] || {})[n] || {})[ds];
       const onLeave = !!((leaves[c.sid] || {})[n] && leaves[c.sid][n].has(ds));
-      const off = !m && (onLeave || isOffDay(c.sched[n], wd));
+      // 打刻なし: 休み申請の日は紫の「休」(先の日も出す)、それ以外で昨日までの日はグレーの「-」。今日・先の日は空欄
+      const leaveDay = !m && onLeave;
+      const off = !m && !onLeave && todayBiz && ds < todayBiz;
       const cell = m === 'ok' ? '<span style="color:#22703d;font-weight:700">〇</span>'
                  : m === 'check' ? '<span style="color:#d97706;font-weight:700" title="店から離れた場所での打刻（要確認）">〇</span>'
-                 : off ? `<span style="color:#9ca3af;font-weight:700" title="${onLeave ? '休み申請' : '出勤日でない曜日'}">-</span>` : '';
-      body += `<td style="${bd};text-align:center;font-size:13px;padding:3px 4px;background:${off ? '#e5e7eb' : cellBg}">${cell}</td>`;
+                 : leaveDay ? '<span style="color:#7c3aed;font-weight:700;font-size:12px" title="休み申請">休</span>'
+                 : off ? '<span style="color:#9ca3af;font-weight:700" title="出勤なし">-</span>' : '';
+      body += `<td style="${bd};text-align:center;font-size:13px;padding:3px 4px;background:${leaveDay ? '#ede9fe' : off ? '#e5e7eb' : cellBg}">${cell}</td>`;
     }));
     body += '</tr>';
   }
