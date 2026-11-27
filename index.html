@@ -2507,6 +2507,13 @@ function _prevPeriodLabel(label) {
 
 // デイリーカウント対象商品かどうか（チェックシートの補充対象と同じ基準を再利用。表示専用の
 // 参考値であり、2026-07-10に廃止した送信ブロック・不一致による送信不可は復活させない）
+// 棚卸で数える範囲の一言(2026-11-27 谷町九丁目 No.32)。補充した分はチェックシートで「使った分」になるので、
+// 冷蔵庫・トイレに出した分まで数えると消費量とデイリーカウントが合わなくなる
+function _inventoryCountNote(p) {
+  if (p.name === '水') return '<div style="font-size:10.5px;color:#b45309;margin-top:2px">バックヤードの分だけ数える（冷蔵庫に補充した分は数えない）</div>';
+  if (p.name === 'トイレットペーパー') return '<div style="font-size:10.5px;color:#b45309;margin-top:2px">バックヤードの分だけ数える（トイレに出した分は数えない）</div>';
+  return '';
+}
 function isDailyCountTracked(p) {
   if (CHECKSHEET_QTY_VENDOR_ALL.includes(p.vendor)) return true;
   if (p.vendor === 'other') return p.name === 'ペーパータオル';
@@ -2889,7 +2896,7 @@ function renderInventoryInputScreen(wrap, allProducts, period, periodData) {
         </td>`
         : `<td data-label="${colLabel}" style="padding:5px 6px;text-align:center;color:#bbb;font-size:11px">対象外</td>`;
       return `<tr style="border-bottom:1px solid #f0f0f0${isExpired ? ';background:#fffaf9' : ''}">
-        <td data-label="${COLS[0]}" style="padding:5px 6px;font-size:12px;position:sticky;left:0;z-index:1;background:${rowBg};border-right:1px solid #e5e7eb">${esc(p.label)}${isExpired ? ' <span style="color:#ef4444;font-size:11px" title="消費期限切れの商品があります">⏰期限切れ</span>' : (isNearing ? ' <span style="color:#b45309;font-size:11px" title="消費期限が近付いています">⚠まもなく期限</span>' : '')}</td>
+        <td data-label="${COLS[0]}" style="padding:5px 6px;font-size:12px;position:sticky;left:0;z-index:1;background:${rowBg};border-right:1px solid #e5e7eb">${esc(p.label)}${_inventoryCountNote(p)}${isExpired ? ' <span style="color:#ef4444;font-size:11px" title="消費期限切れの商品があります">⏰期限切れ</span>' : (isNearing ? ' <span style="color:#b45309;font-size:11px" title="消費期限が近付いています">⚠まもなく期限</span>' : '')}</td>
         <td data-label="${COLS[1]}" style="padding:5px 6px;font-size:11px;color:#666;white-space:nowrap">${esc(caseLabel)}</td>
         <td data-label="${COLS[2]}" style="padding:5px 6px;text-align:center">
           <input type="number" min="0" step="1" value="${esc(endStockRaw ?? '')}" placeholder="未入力"
