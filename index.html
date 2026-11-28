@@ -1042,7 +1042,7 @@
 <div id="attendance-reminder-overlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.45);z-index:2000;align-items:center;justify-content:center;padding:16px">
   <div style="background:white;border-radius:14px;max-width:380px;width:100%;padding:22px 20px">
     <div style="font-weight:700;font-size:16px;margin-bottom:10px;color:#22703d">業務開始の記録がまだです</div>
-    <div style="font-size:14px;color:#444;line-height:1.6;margin-bottom:18px">本日はまだ「業務開始」が記録されていません。お手すきの際に記録をお願いします。</div>
+    <div style="font-size:14px;color:#444;line-height:1.6;margin-bottom:18px">本日はまだ「業務開始」が記録されていません。お手すきの際に記録をお願いします。<div style="font-size:12.5px;color:#666;margin-top:8px">「後で」を押したときも、メニューの<b>「業務管理」</b>から業務開始の記録と、これまでの記録の確認ができます。</div></div>
     <div style="display:flex;gap:8px">
       <button onclick="goToAttendanceFromReminder()" style="flex:1;background:#22703d;color:white;padding:11px;font-size:14px;font-weight:700;border-radius:8px;border:none;cursor:pointer;font-family:inherit">業務開始</button>
       <button onclick="closeAttendanceReminder()" style="flex:1;background:#e0e0e0;color:#555;padding:11px;font-size:14px;border-radius:8px;border:none;cursor:pointer;font-family:inherit">後で</button>
@@ -5150,8 +5150,10 @@ let _attendanceReminderChecking = false;
 async function maybeShowAttendanceReminder() {
   if (!isAttendanceEnabled(storeTab)) return;
   const today = new Date().toLocaleDateString('sv');
-  const shownKey = `attendance_reminder_shown_${storeTab}_${today}`;
-  if (localStorage.getItem(shownKey)) return;
+  // 以前は1日1回だけ聞いていたが、家でマニュアルを見たときに「後で」を押すと、その日に店で開いても
+  // もう出なかった(2026-11-28 天満橋北 No.34)。打刻がまだなら、2時間たってから開いたときにもう一度聞く
+  const snoozeKey = `attendance_reminder_until_${storeTab}`;
+  try { if (Date.now() < (Number(localStorage.getItem(snoozeKey)) || 0)) return; } catch (_) {}
   if (_attendanceReminderChecking) return; // 判定中の連打でgetAttendanceが二重に飛ばないようにする
   _attendanceReminderChecking = true;
   try {
@@ -5162,7 +5164,9 @@ async function maybeShowAttendanceReminder() {
     const staffNames = getAttendanceStaffList(storeTab);
     // 登録スタッフがいる店舗は全員分の名前が揃っているか、未登録店舗は当日1件でも記録があればOK
     const allClockedIn = staffNames.length ? staffNames.every(n => clockedNamesToday.has(n)) : clockedNamesToday.size > 0;
-    localStorage.setItem(shownKey, '1'); // 記録済み/表示済みのどちらでも当日はもう確認しない
+    // 記録済みならその日はもう聞かない(翌日0時まで)。まだなら2時間あける
+    const tomorrow = new Date(); tomorrow.setHours(24, 0, 0, 0);
+    try { localStorage.setItem(snoozeKey, String(allClockedIn ? tomorrow.getTime() : Date.now() + 2 * 60 * 60 * 1000)); } catch (_) {}
     if (allClockedIn) return;
     const overlay = document.getElementById('attendance-reminder-overlay');
     if (overlay) overlay.style.display = 'flex';
@@ -5433,16 +5437,19 @@ function renderAttendanceHistory() {
     return;
   }
   const activeName = _attendanceActiveName();
-  const rows = ATTENDANCE_HISTORY_CACHE.filter(r => (r.name || '') === activeName);
+  // 名前を手で入れる店(スタッフ未登録)で名前の欄が空のときは、店の記録を名前つきで全部出す(2026-11-28 天満橋北 No.34。
+  // 別の端末や入れ直しで欄が空になると「まだ記録がありません」になり、記録できたか確かめられなかった)
+  const showAll = _attendanceNeedsFreeName() && !activeName;
+  const rows = showAll ? ATTENDANCE_HISTORY_CACHE.slice() : ATTENDANCE_HISTORY_CACHE.filter(r => (r.name || '') === activeName);
   if (!rows.length) {
     wrap.innerHTML = '<div style="color:#aaa;font-size:13px;padding:10px 0">まだ記録がありません</div>';
     return;
   }
   wrap.innerHTML = `<div class="table-wrap"><table style="width:100%;background:white;border-radius:8px;overflow:hidden;box-shadow:0 1px 4px rgba(0,0,0,.08)">
-    <thead><tr style="background:#22703d;color:white"><th style="padding:6px 10px;font-size:12px">日時</th><th style="padding:6px 10px;font-size:12px">判定</th></tr></thead>
+    <thead><tr style="background:#22703d;color:white"><th style="padding:6px 10px;font-size:12px">日時</th>${showAll ? '<th style="padding:6px 10px;font-size:12px">名前</th>' : ''}<th style="padding:6px 10px;font-size:12px">判定</th></tr></thead>
     <tbody>${rows.map(r => `
       <tr style="border-bottom:1px solid #eee">
-        <td style="padding:6px 10px;font-size:13px;white-space:nowrap">${_attendanceDisplayWithBizDay(r.clocked_at)}</td>
+        <td style="padding:6px 10px;font-size:13px;white-space:nowrap">${_attendanceDisplayWithBizDay(r.clocked_at)}</td>${showAll ? `<td style="padding:6px 10px;font-size:13px">${esc(r.name || '')}</td>` : ''}
         <td style="padding:6px 10px;font-size:13px;text-align:center">${r.within_range === false ? '<span style="color:#dc2626">要確認</span>' + (r.reported_start ? `<div style="font-size:11px;color:#888">開始 ${esc(r.reported_start)}</div>` : '') : (r.within_range === true ? '<span style="color:#22703d">✓</span>' : '<span style="color:#aaa">未判定</span>')}</td>
       </tr>`).join('')}
     </tbody></table></div>`;
